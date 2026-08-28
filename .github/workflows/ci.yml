@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Nothing in CI talks to a model or a Discord webhook: every AI feature has
+  # to degrade cleanly with these unset (DESIGN.md NG7 / Principle 5).
+  CI: 'true'
+
+jobs:
+  verify:
+    name: typecheck · build · test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        # Version comes from package.json "packageManager".
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm -r --workspace-concurrency=1 typecheck
+
+      - name: Build
+        run: pnpm -r --workspace-concurrency=1 build
+
+      # No Docker, no testcontainers: the server suites boot a throwaway PGlite
+      # per file under a temp DATA_DIR (BUILD_CONVENTIONS, "Ports, env, database").
+      - name: Test
+        run: pnpm -r --workspace-concurrency=1 test
+
+      - name: Smoke — boot the server and play through it
+        run: node .github/scripts/smoke.mjs
+
+  # Multi-arch by construction (§16): a dependency with an x86-only native
+  # binary must fail the build here, not at the venue. Build only — publishing
+  # is a tagged manual action, and the laptop builds its own image locally.
+  image:
+    name: image (amd64 + arm64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    needs: verify
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build both platforms
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          tags: safehouse/app:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

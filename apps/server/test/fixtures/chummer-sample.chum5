@@ -1,0 +1,356 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Synthetic Chummer5-style save used by the import tests (FR3.1).
+  ORIGINAL character, gear, and quality names only — no book content of any
+  kind (G6 / DESIGN.md §14.7). `source`/`page` are bare {book,page} citations.
+  Attribute totals satisfy metatypemin + base + karma = totalvalue so either
+  mapping path agrees; skill ratings are base + karma.
+-->
+<character>
+  <appversion>5.220.3</appversion>
+  <gameedition>SR5</gameedition>
+  <settings>default.xml</settings>
+  <buildmethod>Priority</buildmethod>
+  <created>True</created>
+  <name>Mireille Okonkwo</name>
+  <alias>Rivet</alias>
+  <metatype>Human</metatype>
+  <metavariant />
+  <sex>Female</sex>
+  <age>29</age>
+  <karma>12</karma>
+  <totalkarma>84</totalkarma>
+  <nuyen>4500</nuyen>
+  <essence>3.6</essence>
+  <notes>Cut loose from a corp security detail after a warehouse job went sideways. Pays her own way now, mostly.</notes>
+  <attributes>
+    <attribute>
+      <name>BOD</name>
+      <metatypemin>1</metatypemin>
+      <metatypemax>6</metatypemax>
+      <metatypeaugmax>9</metatypeaugmax>
+      <base>4</base>
+      <karma>0</karma>
+      <totalvalue>5</totalvalue>
+    </attribute>
+    <attribute>
+      <name>AGI</name>
+      <metatypemin>1</metatypemin>
+      <metatypemax>6</metatypemax>
+      <metatypeaugmax>9</metatypeaugmax>
+      <base>5</base>
+      <karma>0</karma>
+      <totalvalue>6</totalvalue>
+    </attribute>
+    <attribute>
+      <name>REA</name>
+      <metatypemin>1</metatypemin>
+      <metatypemax>6</metatypemax>
+      <metatypeaugmax>9</metatypeaugmax>
+      <base>3</base>
+      <karma>0</karma>
+      <totalvalue>4</totalvalue>
+    </attribute>
+    <attribute>
+      <name>STR</name>
+      <metatypemin>1</metatypemin>
+      <metatypemax>6</metatypemax>
+      <metatypeaugmax>9</metatypeaugmax>
+      <base>2</base>
+      <karma>1</karma>
+      <totalvalue>4</totalvalue>
+    </attribute>
+    <attribute>
+      <name>WIL</name>
+      <metatypemin>1</metatypemin>
+      <metatypemax>6</metatypemax>
+      <base>2</base>
+      <karma>0</karma>
+      <totalvalue>3</totalvalue>
+    </attribute>
+    <attribute>
+      <name>LOG</name>
+      <metatypemin>1</metatypemin>
+      <metatypemax>6</metatypemax>
+      <base>2</base>
+      <karma>0</karma>
+      <totalvalue>3</totalvalue>
+    </attribute>
+    <attribute>
+      <name>INT</name>
+      <metatypemin>1</metatypemin>
+      <metatypemax>6</metatypemax>
+      <base>3</base>
+      <karma>0</karma>
+      <totalvalue>4</totalvalue>
+    </attribute>
+    <attribute>
+      <name>CHA</name>
+      <metatypemin>1</metatypemin>
+      <metatypemax>6</metatypemax>
+      <base>1</base>
+      <karma>0</karma>
+      <totalvalue>2</totalvalue>
+    </attribute>
+    <attribute>
+      <name>EDG</name>
+      <metatypemin>1</metatypemin>
+      <metatypemax>7</metatypemax>
+      <base>2</base>
+      <karma>0</karma>
+      <totalvalue>3</totalvalue>
+    </attribute>
+    <attribute>
+      <name>MAG</name>
+      <metatypemin>0</metatypemin>
+      <base>0</base>
+      <karma>0</karma>
+      <totalvalue>0</totalvalue>
+    </attribute>
+    <attribute>
+      <name>RES</name>
+      <metatypemin>0</metatypemin>
+      <base>0</base>
+      <karma>0</karma>
+      <totalvalue>0</totalvalue>
+    </attribute>
+  </attributes>
+  <newskills>
+    <skills>
+      <skill>
+        <name>Automatics</name>
+        <skillgroup>Firearms</skillgroup>
+        <attribute>AGI</attribute>
+        <base>0</base>
+        <karma>6</karma>
+        <isknowledge>False</isknowledge>
+        <specs>
+          <spec><name>Carbines</name></spec>
+        </specs>
+      </skill>
+      <skill>
+        <name>Pistols</name>
+        <skillgroup>Firearms</skillgroup>
+        <attribute>AGI</attribute>
+        <base>4</base>
+        <karma>0</karma>
+        <isknowledge>False</isknowledge>
+      </skill>
+      <skill>
+        <name>Perception</name>
+        <skillgroup />
+        <attribute>INT</attribute>
+        <base>2</base>
+        <karma>1</karma>
+        <isknowledge>False</isknowledge>
+      </skill>
+      <skill>
+        <name>Sneaking</name>
+        <skillgroup>Stealth</skillgroup>
+        <attribute>AGI</attribute>
+        <base>3</base>
+        <karma>0</karma>
+        <isknowledge>False</isknowledge>
+      </skill>
+      <skill>
+        <name>Gymnastics</name>
+        <skillgroup>Athletics</skillgroup>
+        <attribute>AGI</attribute>
+        <base>2</base>
+        <karma>0</karma>
+        <isknowledge>False</isknowledge>
+      </skill>
+      <skill>
+        <name>Intimidation</name>
+        <skillgroup />
+        <attribute>CHA</attribute>
+        <base>2</base>
+        <karma>0</karma>
+        <isknowledge>False</isknowledge>
+      </skill>
+    </skills>
+    <knoskills>
+      <skill>
+        <name>Corporate Security Procedures</name>
+        <attribute>LOG</attribute>
+        <base>3</base>
+        <karma>0</karma>
+        <isknowledge>True</isknowledge>
+      </skill>
+    </knoskills>
+  </newskills>
+  <qualities>
+    <quality>
+      <name>Wire-Tight Nerves</name>
+      <qualitytype>Positive</qualitytype>
+      <karma>9</karma>
+      <source>SR5</source>
+      <page>72</page>
+    </quality>
+    <quality>
+      <name>Owes A Fixer Everything</name>
+      <qualitytype>Negative</qualitytype>
+      <karma>-10</karma>
+      <source>SR5</source>
+      <page>81</page>
+    </quality>
+  </qualities>
+  <cyberwares>
+    <cyberware>
+      <name>Nerve-Lace Reflex Rig</name>
+      <category>Bodyware</category>
+      <grade>Standard</grade>
+      <rating>2</rating>
+      <ess>2.0</ess>
+      <source>SR5</source>
+      <page>452</page>
+    </cyberware>
+    <cyberware>
+      <name>Neural Jack</name>
+      <category>Headware</category>
+      <grade>Standard</grade>
+      <rating>0</rating>
+      <ess>0.1</ess>
+      <source>SR5</source>
+      <page>453</page>
+    </cyberware>
+    <cyberware>
+      <name>Optical Suite</name>
+      <category>Headware</category>
+      <grade>Standard</grade>
+      <rating>3</rating>
+      <ess>0.3</ess>
+      <source>SR5</source>
+      <page>453</page>
+    </cyberware>
+  </cyberwares>
+  <weapons>
+    <weapon>
+      <name>Kestrel A4</name>
+      <category>Assault Rifles</category>
+      <type>Ranged</type>
+      <accuracy>5</accuracy>
+      <damage>9P</damage>
+      <ap>-2</ap>
+      <mode>SA/BF/FA</mode>
+      <rc>2</rc>
+      <ammo>30(c)</ammo>
+      <ammoremaining>30</ammoremaining>
+      <range>Assault Rifles</range>
+      <equipped>True</equipped>
+      <source>SR5</source>
+      <page>426</page>
+    </weapon>
+    <weapon>
+      <name>Talon HP-9</name>
+      <category>Heavy Pistols</category>
+      <type>Ranged</type>
+      <accuracy>5</accuracy>
+      <damage>8P</damage>
+      <ap>-1</ap>
+      <mode>SA</mode>
+      <rc>0</rc>
+      <ammo>15(c)</ammo>
+      <ammoremaining>15</ammoremaining>
+      <range>Heavy Pistols</range>
+      <equipped>True</equipped>
+      <source>SR5</source>
+      <page>426</page>
+    </weapon>
+    <weapon>
+      <name>Sliver Knife</name>
+      <category>Blades</category>
+      <type>Melee</type>
+      <accuracy>6</accuracy>
+      <damage>(STR+2)P</damage>
+      <ap>-1</ap>
+      <mode>0</mode>
+      <rc>0</rc>
+      <equipped>True</equipped>
+      <source>SR5</source>
+      <page>421</page>
+    </weapon>
+  </weapons>
+  <armors>
+    <armor>
+      <name>Ranger-Weave Coat</name>
+      <category>Armor</category>
+      <armor>12</armor>
+      <equipped>True</equipped>
+      <source>SR5</source>
+      <page>437</page>
+    </armor>
+    <armor>
+      <name>Slabline Vest</name>
+      <category>Armor</category>
+      <armor>9</armor>
+      <equipped>False</equipped>
+      <source>SR5</source>
+      <page>437</page>
+    </armor>
+  </armors>
+  <gears>
+    <gear>
+      <name>Sparrow-3 Commlink</name>
+      <category>Commlinks</category>
+      <rating>3</rating>
+      <qty>1</qty>
+      <source>SR5</source>
+      <page>438</page>
+    </gear>
+    <gear>
+      <name>Wake-Up Patch</name>
+      <category>Patches</category>
+      <rating>2</rating>
+      <qty>4</qty>
+      <source>SR5</source>
+      <page>450</page>
+    </gear>
+    <gear>
+      <name>Field Trauma Kit</name>
+      <category>Medical</category>
+      <rating>3</rating>
+      <qty>1</qty>
+      <source>SR5</source>
+      <page>450</page>
+    </gear>
+  </gears>
+  <lifestyles>
+    <lifestyle>
+      <name>Stacked container flat</name>
+      <baselifestyle>Low</baselifestyle>
+      <cost>2000</cost>
+      <months>2</months>
+    </lifestyle>
+  </lifestyles>
+  <spells />
+  <powers />
+  <complexforms />
+  <contacts>
+    <contact>
+      <name>Bellhop</name>
+      <role>Fixer</role>
+      <connection>4</connection>
+      <loyalty>2</loyalty>
+    </contact>
+  </contacts>
+  <limitmodifiers />
+  <martialarts />
+  <improvements>
+    <improvement>
+      <improvementsource>Cyberware</improvementsource>
+      <improvementtype>Attribute</improvementtype>
+      <imprname>Nerve-Lace Reflex Rig</imprname>
+      <val>1</val>
+    </improvement>
+  </improvements>
+  <expenses>
+    <expense>
+      <type>Nuyen</type>
+      <amount>-1200</amount>
+      <reason>Coat rewoven</reason>
+    </expense>
+  </expenses>
+  <calendar />
+  <mugshots />
+</character>

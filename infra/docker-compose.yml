@@ -1,0 +1,136 @@
+# Safehouse production stack (DESIGN.md §16) — one command before the session:
+#
+#   docker compose -f infra/docker-compose.yml --env-file .env up -d
+#
+# Services: `app` (server + built SPA) · `postgres:16` (named volume) ·
+# `backup` (nightly pg_dump + file-store sync). No reverse proxy: plain HTTP on
+# the LAN (§8), €0/mo, runs on the GM's laptop.
+#
+# The optional `llm` profile is the AWAY-GAME FALLBACK only. Normally
+# LLM_BASE_URL points at the dedicated inference box on the LAN (decided 0.8)
+# and this profile stays down:
+#
+#   docker compose -f infra/docker-compose.yml --profile llm up -d
+#
+# Multi-arch (§16) — build and push both platforms from the repo root:
+#   docker buildx build -f infra/Dockerfile \
+#     --platform linux/amd64,linux/arm64 -t safehouse/app:latest --push .
+
+# Project name comes from the directory (or -p safehouse) rather than a
+# top-level `name:`, which older Compose rejects.
+
+services:
+  app:
+    # `compose build` here produces the HOST platform, which is what the
+    # laptop wants. Both platforms are built by CI and by the buildx command
+    # in the header — `build.platforms` is deliberately not used, so this file
+    # still parses on the older Compose that ships with Docker Desktop.
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    image: ${APP_IMAGE:-safehouse/app:latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PORT: 8787
+      DATA_DIR: /data
+      # Drizzle migrations run on container start against this (§16).
+      DATABASE_URL: postgres://${POSTGRES_USER:-safehouse}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-safehouse}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
+      # Every AI env var is optional — unset disables the Fixer cleanly (NG7).
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL_PRIMARY: ${LLM_MODEL_PRIMARY:-}
+      LLM_MODEL_FAST: ${LLM_MODEL_FAST:-}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      # Bound on every interface: phones join over the venue Wi-Fi (§8).
+      - "${PORT:-8787}:8787"
+    volumes:
+      # Maps, token art, audio, and the book PDFs seeded by `pnpm seed:books`.
+      - files:/data
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8787/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-safehouse}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-safehouse}
+      # Deterministic collation so FTS ranking does not drift between hosts.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-safehouse} -d ${POSTGRES_DB:-safehouse}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    # Not published: only `app` and `backup` talk to it, on the compose network.
+
+  # Nightly pg_dump + file-store sync, retained 30 days (§15 data durability).
+  # Sketch, deliberately: the loop and the dump are real, but "copied off-box"
+  # is a bind mount the GM points at an external drive or a synced folder.
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-safehouse}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      PGDATABASE: ${POSTGRES_DB:-safehouse}
+      # Local time at which the nightly dump runs (HH:MM, 24h).
+      BACKUP_AT: ${BACKUP_AT:-04:30}
+      BACKUP_RETAIN_DAYS: ${BACKUP_RETAIN_DAYS:-30}
+    volumes:
+      - files:/data:ro
+      - ${BACKUP_DIR:-./backups}:/backups
+      - ./backup.sh:/usr/local/bin/backup.sh:ro
+    entrypoint: ["/bin/sh", "/usr/local/bin/backup.sh"]
+
+  # Away-game fallback ONLY (profile `llm`): llama.cpp's OpenAI-compatible
+  # server over a gitignored models/ folder. At home, LLM_BASE_URL points at
+  # the dedicated inference box instead and this never starts.
+  llm:
+    profiles: ["llm"]
+    image: ${LLM_IMAGE:-ghcr.io/ggml-org/llama.cpp:server}
+    restart: unless-stopped
+    command:
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8080"
+      - "--model"
+      - "/models/${LLM_MODEL_FILE:-primary.gguf}"
+      - "--alias"
+      - "${LLM_MODEL_PRIMARY:-safehouse-primary}"
+      - "--ctx-size"
+      - "${LLM_CTX_SIZE:-8192}"
+      - "--parallel"
+      - "2"
+    volumes:
+      # Models are large and licensed — gitignored, never baked into an image.
+      - ../models:/models:ro
+    ports:
+      - "${LLM_PORT:-8080}:8080"
+    # With this profile up, set LLM_BASE_URL=http://llm:8080/v1 in .env.
+
+volumes:
+  pgdata:
+  files:

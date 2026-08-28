@@ -1,0 +1,87 @@
+/* TV kiosk animations (FR9.20). Theme tokens come from src/index.css. */
+
+@keyframes tv-moment-in {
+  from {
+    opacity: 0;
+    transform: translateY(28px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.tv-moment {
+  animation: tv-moment-in 260ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes tv-die-in {
+  from {
+    opacity: 0;
+    transform: rotate(-14deg) scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: rotate(0) scale(1);
+  }
+}
+
+.tv-die {
+  animation: tv-die-in 220ms ease-out both;
+}
+
+@keyframes tv-glitch-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-6px); }
+  40% { transform: translateX(5px); }
+  60% { transform: translateX(-3px); }
+  80% { transform: translateX(2px); }
+}
+
+.tv-glitch {
+  animation: tv-glitch-shake 420ms ease-in-out 2;
+}
+
+@keyframes tv-crit-flash {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(255 77 94 / 0); }
+  50% { box-shadow: 0 0 80px 10px rgb(255 77 94 / 0.55); }
+}
+
+.tv-crit {
+  animation: tv-crit-flash 900ms ease-in-out 3;
+}
+
+@keyframes tv-acting-pulse {
+  0%, 100% { box-shadow: 0 0 12px 0 rgb(47 230 255 / 0.35); }
+  50% { box-shadow: 0 0 34px 6px rgb(47 230 255 / 0.65); }
+}
+
+.tv-acting {
+  animation: tv-acting-pulse 2.6s ease-in-out infinite;
+}
+
+@keyframes tv-takeover-in {
+  from { opacity: 0; transform: scale(1.04); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.tv-takeover {
+  animation: tv-takeover-in 320ms ease-out;
+}
+
+@keyframes tv-breathe {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+.tv-breathe {
+  animation: tv-breathe 4.5s ease-in-out infinite;
+}
+
+/* Kiosk: nothing is selectable or draggable — zero interaction (FR9.19). */
+.tv-kiosk {
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: none;
+  overflow: hidden;
+}

@@ -1,0 +1,123 @@
+@import "tailwindcss";
+
+/*
+ * Safehouse theme — dark cyberpunk-industrial (DESIGN.md §"Web architecture").
+ * Near-black blue ground, cyan + magenta accents, mono labels. Phone-first.
+ */
+@theme {
+  /* Ground + surfaces */
+  --color-ground: #060a12;
+  --color-deck: #0b0e14;
+  --color-panel: #10151f;
+  --color-raised: #161d2b;
+  --color-edge: #1e2837;
+  --color-edge-bright: #31415a;
+
+  /* Ink */
+  --color-ink: #d7e0ea;
+  --color-dim: #8494a7;
+  --color-faint: #55637a;
+
+  /* Accents */
+  --color-cyan: #2fe6ff;
+  --color-cyan-dim: #1596ab;
+  --color-magenta: #ff2d95;
+  --color-magenta-dim: #a11c62;
+  --color-warn: #ffc857;
+  --color-ok: #45e08c;
+  --color-danger: #ff4d5e;
+
+  --font-sans: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-label: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas,
+    "SF Mono", Menlo, monospace;
+
+  --shadow-glow-cyan: 0 0 12px rgb(47 230 255 / 0.35);
+  --shadow-glow-magenta: 0 0 12px rgb(255 45 149 / 0.35);
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100dvh;
+  background: var(--color-ground);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--color-cyan-dim);
+  color: #03131a;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-edge-bright) transparent;
+}
+
+@layer components {
+  /* Uppercase mono micro-label — section headers, chips, nav captions. */
+  .mono-label {
+    font-family: var(--font-label);
+    font-size: 0.6875rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-dim);
+  }
+
+  .panel {
+    background: var(--color-panel);
+    border: 1px solid var(--color-edge);
+    border-radius: 0.5rem;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    font-family: var(--font-label);
+    font-size: 0.6875rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    border: 1px solid var(--color-edge);
+    border-radius: 9999px;
+    padding: 0.125rem 0.625rem;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    font-family: var(--font-label);
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--color-ink);
+    background: var(--color-raised);
+    border: 1px solid var(--color-edge-bright);
+    border-radius: 0.375rem;
+    padding: 0.5rem 0.875rem;
+    cursor: pointer;
+    transition: border-color 120ms, color 120ms, box-shadow 120ms;
+  }
+  .btn:hover {
+    border-color: var(--color-cyan);
+    color: var(--color-cyan);
+  }
+  .btn:focus-visible {
+    outline: 2px solid var(--color-cyan);
+    outline-offset: 2px;
+  }
+  .btn-accent {
+    border-color: var(--color-cyan-dim);
+    color: var(--color-cyan);
+  }
+  .btn-accent:hover {
+    box-shadow: var(--shadow-glow-cyan);
+  }
+}

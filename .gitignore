@@ -14,6 +14,9 @@ data/
 uploads/
 *.log
 
+# Backups written by the compose `backup` sidecar (default BACKUP_DIR)
+backups/
+
 # Env & local config
 .env
 .env.*
