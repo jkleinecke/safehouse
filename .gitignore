@@ -1,0 +1,26 @@
+# Never commit the rulebooks or models (owned content / large binaries)
+*.pdf
+models/
+
+# Dependencies & build output
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Runtime data
+data/
+uploads/
+*.log
+
+# Env & local config
+.env
+.env.*
+!.env.example
+
+# Editor/OS noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
