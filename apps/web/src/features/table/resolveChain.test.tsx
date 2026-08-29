@@ -21,8 +21,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, apiPost } from '../../api/client.js';
 import { sendCommand } from './commands.js';
+import { ChainResultView } from './ResolveChainDialog.js';
 import {
-  ChainResultView,
   chainRequest,
   chainView,
   commitBoxes,
@@ -31,7 +31,7 @@ import {
   type ChainForm,
   type ChainResponse,
   type ChainState,
-} from './ResolveChainDialog.js';
+} from './resolveChain.js';
 
 vi.mock('../../api/client.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api/client.js')>();
@@ -210,12 +210,15 @@ describe('the dice are the server’s (G5)', () => {
 
   it('reports the server’s hit counts rather than recounting the faces', () => {
     const html = markup(ready());
-    // Attack shows limited hits (4 of 5 — the accuracy limit), defence 2, and
-    // soak the server's 5 even though only four of its twelve faces are 5+.
+    // Attack shows the LIMITED hits (4 of 5 — accuracy 5), defence the flat 2.
     expect(html).toContain('4 hits');
     expect(html).toContain('2 hits');
-    expect(html).toContain('5 hits');
-    expect(html).not.toContain('>4</span> hits');
+    // Soak is the row that can only have come off the wire: the server said 5,
+    // and a client recounting the twelve faces it just drew would say 4.
+    expect(SOAK_FACES.filter((f) => f >= 5)).toHaveLength(4);
+    const soakCard = html.slice(html.indexOf('4 · Soak'));
+    expect(soakCard).toContain('5 hits');
+    expect(soakCard).not.toContain('4 hits');
   });
 
   it('shows that the exchange is already on the record', () => {
@@ -224,17 +227,23 @@ describe('the dice are the server’s (G5)', () => {
     expect(html).toContain('ab12cd34');
   });
 
-  it('keeps no dice engine of its own', () => {
-    const src = readFileSync(
-      fileURLToPath(new URL('./ResolveChainDialog.tsx', import.meta.url)),
-      'utf8',
-    );
+  it('keeps no dice engine of its own, in either half of the feature', () => {
+    const read = (f: string) => readFileSync(fileURLToPath(new URL(f, import.meta.url)), 'utf8');
+    const store = read('./resolveChain.ts');
+    const dialog = read('./ResolveChainDialog.tsx');
+
     // The three ways browser dice could come back: the rules chain, a raw RNG,
-    // or the rules package at all.
-    expect(src).not.toContain('resolveAttackChain');
-    expect(src).not.toContain('Math.random');
-    expect(src).not.toContain('@safehouse/rules');
-    expect(src).toContain('/resolve-chain');
+    // or the rules package at all. Neither file may reach for any of them —
+    // splitting the store out must not open a back door in the half nothing
+    // else scans.
+    for (const src of [store, dialog]) {
+      expect(src).not.toContain('resolveAttackChain');
+      expect(src).not.toContain('Math.random');
+      expect(src).not.toContain('@safehouse/rules');
+    }
+    // The authoritative call lives in exactly one place.
+    expect(store).toContain('/resolve-chain');
+    expect(dialog).not.toContain('apiPost');
   });
 });
 
@@ -299,6 +308,45 @@ describe('the GM still overrides before anything lands (Principle 2 / FR10.8)', 
 
     expect(s.commit()).toBe(true);
     expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * A refused commit is NOT a refused roll. The dice are already in the log at
+   * this point, so the panel that says "nothing was rolled and nothing was
+   * recorded" would be a lie about the record — and it would take the commit
+   * button away with it, hiding the retry the store still allows.
+   */
+  it('keeps the recorded dice and the commit button when the socket refuses', async () => {
+    const s = store();
+    post.mockResolvedValue(chain());
+    await s.roll(chainRequest(FORM));
+
+    send.mockReturnValueOnce(false);
+    expect(s.commit()).toBe(false);
+
+    const html = markup(s.getState());
+    expect(html).toContain('role="alert"');
+    expect(html).toContain('Damage not applied');
+    expect(html).not.toContain('No server dice');
+    expect(html).not.toContain('nothing was recorded');
+    expect(renderedFaces(html)).toEqual([...ATTACK_FACES, ...DEFENSE_FACES, ...SOAK_FACES]);
+    expect(html).toContain('ab12cd34');
+    // Still pressable — the exchange stands, only the boxes are outstanding.
+    expect(html).toContain('Commit damage');
+    expect(html).not.toContain('disabled=""');
+  });
+
+  it('drops the refusal notice once the retry lands', async () => {
+    const s = store();
+    post.mockResolvedValue(chain());
+    await s.roll(chainRequest(FORM));
+
+    send.mockReturnValueOnce(false);
+    expect(s.commit()).toBe(false);
+    expect(s.commit()).toBe(true);
+
+    expect(s.getState().error).toBeNull();
+    expect(markup(s.getState())).not.toContain('Damage not applied');
   });
 });
 

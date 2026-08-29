@@ -157,39 +157,18 @@ export function spiritVisibility(spirit: Pick<SpiritRecord, 'characterId'>): Vis
 }
 
 /**
- * Every magic write announces itself as `magic.updated` (§11 is open-ended).
+ * Write the magic shelf and announce it as `magic.updated` in ONE transaction
+ * (§11 is open-ended about the type; §6.2 is not open-ended about the fate).
  *
- * NOT atomic with the shelf write it announces, and knowingly so — this is the
- * one emit the §6.2 sweep could not close in place. The pairing is always
- * `writeMagicState(db, …)` then `announceMagic(hub, …)`, two calls sequenced by
- * the CALLER (`services/magic.ts`, `services/magic-foci.ts`), so the
- * transaction has to span both of them and neither of those files was in this
- * pass's scope. `commitMagicState` below is that transaction, ready to use.
- *
- * The exposure is a spirit's service counter (or a focus, or a reagent count)
- * moving in `campaigns.settings.magic` with no frame on the wire: every open
- * client keeps drawing the old count until a refetch. Real, but it is stored
- * state a reload repairs, not a dice record — which is why it ranked last.
- *
- * INTEGRATION: replace each `writeMagicState(...)` + `announceMagic(...)` pair
- * in `services/magic.ts` (6) and `services/magic-foci.ts` (4) with one
- * `commitMagicState(...)` call. `magic.ts`'s quiet arm (`setSpiritSustaining`,
- * `opts.quiet`) keeps the bare `writeMagicState` — a write that announces
- * nothing has nothing to be inconsistent with.
- */
-export async function announceMagic(
-  hub: Hub,
-  campaignId: string,
-  payload: Record<string, unknown>,
-  visibility: Visibility = 'public',
-): Promise<void> {
-  await hub.emit(campaignId, { type: 'magic.updated', payload, visibility });
-}
-
-/**
- * Write the magic shelf and announce it in ONE transaction — `writeMagicState`
- * and `announceMagic` fused, which is the only way the two can share a fate
- * (see the note above).
+ * This replaces the old `writeMagicState(db, …)` + `announceMagic(hub, …)`
+ * pair, which was the last emit of the LIVE-4 sweep still sequenced by its
+ * callers: two statements, so a fault between them left a spirit's service
+ * counter (or a focus, or a reagent count) moved in `campaigns.settings.magic`
+ * with no frame on the wire, and every open client drawing the old count until
+ * someone refetched. `services/magic.ts` and `services/magic-foci.ts` now call
+ * only this; the sole survivor of the bare `writeMagicState` is `magic.ts`'s
+ * quiet arm (`setSpiritSustaining`, `opts.quiet`), because a write that
+ * announces nothing has nothing to be inconsistent with.
  *
  * The `settings` read is hoisted OUT of the block on purpose: PGlite is a
  * single embedded connection, so a query through `db` while the transaction is

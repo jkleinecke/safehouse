@@ -162,6 +162,78 @@ jobs:
           # and is why the variable is named for tests rather than DATABASE_URL.
           SAFEHOUSE_TEST_DATABASE_URL: postgres://safehouse:safehouse@localhost:5432/safehouse_move_test
 
+  # The two §15 numbers nothing measured until now: roll-to-visible latency and
+  # the Grid frame budget with 60 tokens (§17.4). Both were named in
+  # BUILD_REPORT §6 as "the two NFRs no test would catch regressing".
+  #
+  # `continue-on-error` is the point of the job, not a concession. A timing
+  # number from a shared runner is noisy in a way a correctness assertion is
+  # not, and a perf check that can turn `main` red on a busy afternoon gets
+  # switched off within a week — at which point it measures nothing at all. So
+  # this job PRINTS the numbers on every push and never blocks a merge. A
+  # regression shows up as a job that went from green to orange with the before
+  # and after in its log, which is what anyone would actually act on.
+  #
+  # Independent of `verify`, because it answers a different question and its
+  # failure means something different. Note the latency suite ALSO runs inside
+  # `verify`'s `pnpm -r test`, where it does gate: its budget has ~35× headroom,
+  # so it can afford to. The browser harness cannot, and skips itself unless
+  # SAFEHOUSE_PERF is set.
+  perf:
+    name: perf — the §15 numbers (non-blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm -r --workspace-concurrency=1 build
+
+      # p50/p95/p99 from `roll.request` received to `roll.created` on the wire,
+      # over 200 serial rolls with six sockets in the room. Excludes the network
+      # and the browser — the file's header says so, and so does its output.
+      - name: Latency — roll to visible on every client (§15)
+        run: pnpm --filter @safehouse/server exec vitest run test/latency.test.ts
+
+      # Same guard as `verify`: a runner that cannot fetch the browser binary
+      # must not turn this orange for a network problem.
+      - name: Install chromium for Playwright
+        continue-on-error: true
+        run: pnpm --filter @safehouse/web exec playwright install --with-deps chromium
+
+      # Frame times over the scripted 60-token scene, on a laptop-sized and a
+      # phone-sized canvas, against an empty-page control taken in the same
+      # browser so the log can show what is the renderer and what is the runner.
+      - name: Grid — frame budget with 60 tokens and fog (§15 / §17.4)
+        run: pnpm --filter @safehouse/web e2e -- perf.spec.ts
+        env:
+          SAFEHOUSE_PERF: '1'
+          # `Build` above already produced both dists.
+          SAFEHOUSE_E2E_NO_BUILD: '1'
+          # Its own port: this job may run alongside `verify`, which holds 8791.
+          SAFEHOUSE_E2E_PORT: '8793'
+
+      - name: Upload perf traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-perf
+          path: apps/web/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
   # Multi-arch by construction (§16): a dependency with an x86-only native
   # binary must fail the build here, not at the venue. Build only — publishing
   # is a tagged manual action, and the laptop builds its own image locally.

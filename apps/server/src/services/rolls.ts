@@ -4,7 +4,10 @@
  * Flow: authorize → recompute the pool with the SAME engine the client
  * previewed with (`deriveCharacter`) → CSPRNG faces via services/dice →
  * `resolveRoll` (limit + edge semantics) → persist the full request breakdown
- * and raw faces to `rolls` → `hub.emit('roll.created')` visibility-filtered.
+ * and raw faces to `rolls` AND append the visibility-filtered `roll.created`
+ * event, both inside one `Hub.atomic` block. That last "and" is LIVE-4's fix:
+ * as two statements the table got rolls in the database that no client was
+ * ever told about and no log would ever show.
  *
  * The client's `pool` is NEVER trusted for a sheet-backed roll (actor
  * characterId + `meta.poolRef`): it is recomputed and the claim is kept in the

@@ -48,7 +48,7 @@ import { requireCharacter, saveCharacter } from './characters.js';
 import { applySustainedOp } from './character-play.js';
 import { EncountersService } from './encounters.js';
 import {
-  announceMagic,
+  commitMagicState,
   MAX_SPIRITS,
   newMagicId,
   readMagicState,
@@ -140,8 +140,15 @@ export async function summonSpirit(
     note: input.note ?? '',
     createdAt: new Date().toISOString(),
   });
-  await writeMagicState(db, campaignId, { ...state, spirits: [...state.spirits, spirit] });
-  await announceMagic(hub, campaignId, { op: 'spirit.summoned', spirit }, spiritVisibility(spirit));
+  // The shelf and the frame that draws it, one fate (§6.2): a spirit stored
+  // with nobody told is one the GM summons a second time.
+  await commitMagicState(
+    db,
+    hub,
+    campaignId,
+    { ...state, spirits: [...state.spirits, spirit] },
+    { payload: { op: 'spirit.summoned', spirit }, visibility: spiritVisibility(spirit) },
+  );
   return spirit;
 }
 
@@ -183,8 +190,10 @@ export async function patchSpirit(
     return dismissSpirit(db, hub, campaignId, spiritId);
   }
   const next = SpiritRecordSchema.parse({ ...current, ...patch });
-  await writeMagicState(db, campaignId, replaceSpirit(state, next));
-  await announceMagic(hub, campaignId, { op: 'spirit.updated', spirit: next }, spiritVisibility(next));
+  await commitMagicState(db, hub, campaignId, replaceSpirit(state, next), {
+    payload: { op: 'spirit.updated', spirit: next },
+    visibility: spiritVisibility(next),
+  });
   return next;
 }
 
@@ -235,11 +244,10 @@ export async function spiritServiceOp(
     services: change.after.remaining,
     servicesInitial: change.after.initial,
   });
-  await writeMagicState(db, campaignId, replaceSpirit(state, next));
-  await announceMagic(
-    hub,
-    campaignId,
-    {
+  // A service is a spent resource: the counter and the announcement go
+  // together or the table argues about how many are left (§6.2).
+  await commitMagicState(db, hub, campaignId, replaceSpirit(state, next), {
+    payload: {
       op: `spirit.service.${op}`,
       spirit: next,
       spent: change.spent,
@@ -247,8 +255,8 @@ export async function spiritServiceOp(
       remaining: change.after.remaining,
       reason: input.reason ?? '',
     },
-    spiritVisibility(next),
-  );
+    visibility: spiritVisibility(next),
+  });
   return {
     spirit: next,
     spent: change.spent,
@@ -277,8 +285,10 @@ export async function dismissSpirit(
     status: 'dismissed',
     sustainingSpellId: null,
   });
-  await writeMagicState(db, campaignId, replaceSpirit(state, next));
-  await announceMagic(hub, campaignId, { op: 'spirit.dismissed', spirit: next }, spiritVisibility(next));
+  await commitMagicState(db, hub, campaignId, replaceSpirit(state, next), {
+    payload: { op: 'spirit.dismissed', spirit: next },
+    visibility: spiritVisibility(next),
+  });
   return next;
 }
 
@@ -336,14 +346,22 @@ export async function setSpiritSustaining(
     sustainingSpellId: sustainedId,
     sustainPriorExempt: priorExempt,
   });
-  await writeMagicState(db, campaignId, replaceSpirit(state, next));
-  if (!opts?.quiet) {
-    await announceMagic(
-      hub,
-      campaignId,
-      { op: 'spirit.sustaining', spirit: next, characterId: rec.id, sustained: play.sustained },
-      spiritVisibility(next),
-    );
+  // The quiet arm keeps the bare write: `dismissSpirit` calls it to release the
+  // spell and then announces the dismissal itself, and a write that announces
+  // nothing has nothing to be inconsistent with (§6.2).
+  const shelf = replaceSpirit(state, next);
+  if (opts?.quiet) {
+    await writeMagicState(db, campaignId, shelf);
+  } else {
+    await commitMagicState(db, hub, campaignId, shelf, {
+      payload: {
+        op: 'spirit.sustaining',
+        spirit: next,
+        characterId: rec.id,
+        sustained: play.sustained,
+      },
+      visibility: spiritVisibility(next),
+    });
   }
   return next;
 }
@@ -397,12 +415,14 @@ export async function spiritJoinsEncounter(
     combatantId: combatant.id,
     encounterId: input.encounterId,
   });
-  await writeMagicState(db, campaignId, replaceSpirit(after, next));
-  await announceMagic(
-    hub,
-    campaignId,
-    { op: 'spirit.joined', spirit: next, combatantId: combatant.id, encounterId: input.encounterId },
-    spiritVisibility(next),
-  );
+  await commitMagicState(db, hub, campaignId, replaceSpirit(after, next), {
+    payload: {
+      op: 'spirit.joined',
+      spirit: next,
+      combatantId: combatant.id,
+      encounterId: input.encounterId,
+    },
+    visibility: spiritVisibility(next),
+  });
   return { spirit: next, combatant };
 }

@@ -4,12 +4,13 @@
  * roll itself and live in `services/rolls.ts`.
  *
  * Shape of every action here:
- *   authorize → engine decides (pure, `@safehouse/rules`) → the point of Edge
- *   is debited from whichever ledger the actor has (a PC's sheet, an NPC's
- *   copilot Edge) → the tracker is updated so initiative ORDERING moves with
- *   the spend → one loud `log.posted` line naming the action, the actor and
- *   the Edge left (FR2.3: "Edge spend decrements the character's current Edge
- *   with a log entry").
+ *   authorize → engine decides (pure, `@safehouse/rules`) → the tracker is
+ *   updated so initiative ORDERING moves with the spend → the point of Edge is
+ *   debited from whichever ledger the actor has (a PC's sheet, an NPC's copilot
+ *   Edge) AND the loud `log.posted` line naming the action, the actor and the
+ *   Edge left is written in the SAME transaction (FR2.3: "Edge spend decrements
+ *   the character's current Edge *with a log entry*" — `spend()` below is what
+ *   makes that "with" mean one fate rather than two statements).
  *
  * Close Call never edits the roll row. A rolled record is immutable (G5), so
  * the negation lands as its own log event carrying `rollId` — the receipt of
@@ -32,7 +33,7 @@ import {
   type BlitzOutcome,
   type SeizeInitiativeOutcome,
 } from '@safehouse/rules';
-import type { Hub } from '../hub.js';
+import type { EventTx, Hub } from '../hub.js';
 import { httpError } from './auth.js';
 import { applyEdgeOp } from './character-play.js';
 import { loadCharacter, saveCharacter, type CharacterRecord } from './characters.js';
@@ -120,17 +121,15 @@ export class EdgeActionService {
       initScore: outcome.to,
       actedThisPass: false,
     });
-    const paid = await this.debit(opts.campaignId, payer);
-    const { edge } = paid;
-    const updated = paid.combatant ?? moved;
-    await this.announce(opts, payer, 'seize_initiative', {
+    const paid = await this.spend(opts, payer, 'seize_initiative', {
       detail:
         outcome.beat === null
           ? `initiative ${outcome.from} → ${outcome.to}`
           : `initiative ${outcome.from} → ${outcome.to}, ahead of ${outcome.beat}`,
-      edge,
       extra: { combatantId: combatant.id, initScore: outcome.to, from: outcome.from },
     });
+    const { edge } = paid;
+    const updated = paid.combatant ?? moved;
     return { action: 'seize_initiative', combatant: updated, outcome, edge };
   }
 
@@ -161,14 +160,12 @@ export class EdgeActionService {
       initScore: outcome.score,
       actedThisPass: false,
     });
-    const paid = await this.debit(opts.campaignId, payer);
-    const { edge } = paid;
-    const updated = paid.combatant ?? moved;
-    await this.announce(opts, payer, 'blitz', {
+    const paid = await this.spend(opts, payer, 'blitz', {
       detail: `${BLITZ_INITIATIVE_DICE}d6 [${outcome.rolls.join(', ')}] → initiative ${outcome.score}`,
-      edge,
       extra: { combatantId: combatant.id, initScore: outcome.score, rolls: outcome.rolls },
     });
+    const { edge } = paid;
+    const updated = paid.combatant ?? moved;
     return { action: 'blitz', combatant: updated, outcome, edge };
   }
 
@@ -192,12 +189,10 @@ export class EdgeActionService {
 
     const payer = await this.payerForRoll(opts.campaignId, roll, opts.combatantId);
     this.assertMaySpend(opts.viewer, payer);
-    const { edge } = await this.debit(opts.campaignId, payer);
     // The log line is as visible as the roll it answers — a Close Call on a
     // roll behind the screen must not announce itself to the table.
-    await this.announce(opts, payer, 'close_call', {
+    const { edge } = await this.spend(opts, payer, 'close_call', {
       detail: `${outcome.negated === 'critical' ? 'critical glitch' : 'glitch'} negated`,
-      edge,
       visibility: roll.visibility,
       ownerUserId: payer.kind === 'character' ? payer.rec.ownerUserId : null,
       extra: { rollId: roll.id, negated: outcome.negated },
@@ -284,37 +279,59 @@ export class EdgeActionService {
   }
 
   /**
-   * Debit one point, from the sheet (reusing the characters service's own
-   * arithmetic and writer, so live-play state rides along untouched) or from
-   * the combatant's copilot Edge.
+   * Debit one point AND say so, in one transaction (§6.2 / LIVE-4).
+   *
+   * The sheet arm is the one that matters, and it is why this item was ranked
+   * first: Edge is a real resource that does not grow back, and the debit used
+   * to be one transaction with the FR2.3 log line as a second. Torn either way
+   * the table is wrong and nothing says so — a point gone from the row with no
+   * line to point at (so the player argues it was never spent), or a line
+   * claiming a spend the sheet never took. Now the row, the `sheet.updated`
+   * frame that redraws every open phone, and the log line share a fate: all
+   * three, or none and a named 500.
+   *
+   * `applyEdgeOp` is pure arithmetic and `postLog` is handed `tx` — nothing
+   * inside the block touches `this.db`, which would wait forever on PGlite's
+   * single connection (the deadlock rule on `Hub.atomic`).
+   *
+   * The NPC arm cannot join it: copilot Edge lives on the combatant row, and
+   * the only writer is `InitiativeTracker.updateCombatant`, which opens its own
+   * block and takes no `tx` (it belongs to `EncountersService`). So an NPC's
+   * spend is still two transactions — the row-and-`encounter.updated` pair is
+   * atomic, the log line follows it. That is a GM-side number on a figure the
+   * GM can retype, not a player's sheet; closing it means widening the tracker
+   * port, and it is named here rather than left to be rediscovered.
    */
-  private async debit(
-    campaignId: string,
+  private async spend(
+    opts: { campaignId: string; viewer: RollViewer },
     payer: Payer,
+    action: 'seize_initiative' | 'blitz' | 'close_call',
+    detail: {
+      detail: string;
+      visibility?: Visibility;
+      ownerUserId?: string | null;
+      extra?: Record<string, unknown>;
+    },
   ): Promise<{ edge: EdgeState; combatant?: Combatant }> {
     this.assertCanPay(payer);
     if (payer.kind === 'character') {
       const rec = payer.rec;
-      // Pure arithmetic, hoisted OUT of the block: nothing inside may touch
-      // `this.db` while the transaction holds PGlite's single connection.
       const change = applyEdgeOp(rec.sheet, rec.play, { op: 'spend', amount: 1 }, rec.name);
-      // The debited sheet and the announcement share one fate. Split, the bad
-      // half is silent: the point is gone from the row and every open sheet —
-      // the player's own phone included — still shows it until a reload, so it
-      // gets spent twice (LIVE-4's shape, on a resource that does not grow back).
-      await this.hub.atomic(campaignId, async (tx) => {
+      await this.hub.atomic(opts.campaignId, async (tx) => {
         await saveCharacter(tx.db, rec.id, { sheet: change.sheet, play: change.play });
         await tx.emit({
           type: 'sheet.updated',
           payload: { characterId: rec.id, cause: 'edge.spent', edge: change.edge },
           visibility: 'public',
         });
+        await this.announce(opts, payer, action, { ...detail, edge: change.edge }, tx);
       });
       return { edge: change.edge };
     }
     const edge = payer.combatant.edge!;
     const next = { max: edge.max, current: edge.current - 1 };
     const combatant = await this.tracker.updateCombatant(payer.combatant.id, { edge: next });
+    await this.announce(opts, payer, action, { ...detail, edge: next });
     return { edge: next, combatant };
   }
 
@@ -330,6 +347,7 @@ export class EdgeActionService {
       ownerUserId?: string | null;
       extra?: Record<string, unknown>;
     },
+    tx?: EventTx,
   ): Promise<void> {
     const who = payer.kind === 'character' ? payer.rec.name : payer.combatant.name;
     await this.rolls.postLog({
@@ -340,6 +358,7 @@ export class EdgeActionService {
       ownerUserId: detail.ownerUserId ?? null,
       by: { userId: opts.viewer.userId },
       extra: { edgeAction: action, edge: detail.edge, ...(detail.extra ?? {}) },
+      ...(tx ? { tx } : {}),
     });
   }
 }

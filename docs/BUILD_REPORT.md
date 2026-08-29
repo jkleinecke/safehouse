@@ -6,11 +6,12 @@ row below was re-read in the source, and every number below was produced by
 running the command named beside it, not carried forward from a previous
 revision.
 
-- **Repo state:** 355 TS/TSX files of shipping source (~70.1k lines) across 5 workspace packages; 501 files / ~103.8k lines counting tests and the browser E2E suite. (`*.ts`/`*.tsx` under `apps/` and `packages/`, excluding `node_modules` and `dist`; seeds and scripts count as source, `test/`, `*.test.*` and `e2e/` do not.)
-- **Verified on:** 2026-08-29. `pnpm -r --workspace-concurrency=1 typecheck` → exit 0. `pnpm -r --workspace-concurrency=1 build` → exit 0. `pnpm -r --workspace-concurrency=1 test` → **1633 passed, 3 skipped, 0 failed** across **120 test files**.
-- **Scripted playthrough:** `pnpm playthrough` → **266 checks, 266 passed, 0 failed, 0 n/a**, 10.8 s (`docs/demo/SESSION_REPORT.md`). The count can move by one or two between runs because a handful of assertions are conditional on the night's dice; this run had no content-dependent skips.
-- **Browser E2E:** `pnpm --filter @safehouse/web e2e` → **38 passed** in chromium, **13 spec files**, 50.9 s. One of the 38 is a deliberate `test.fail` marking a live gap (§6.1) rather than a passing assertion.
-- **Bundle against §15:** initial JS **247.35 KB gz** (840.40 KB raw) against a < 500 KB gz budget, with PixiJS verified absent from the entry chunk. The Grid's lazy chunk is **107.07 KB gz** plus Pixi's own runtime splits (**76.7 KB gz** across eight files) — **≈184 KB gz** worst case against a < 900 KB gz budget. CSS 9.71 KB gz. Both budgets clear with roughly 2× and 5× headroom. Details and the one unmet sub-clause: §4.
+- **Repo state:** 358 TS/TSX files of shipping source (~71.4k lines) across 5 workspace packages; 512 files / ~108.2k lines counting tests and the browser E2E suite. (`*.ts`/`*.tsx` under `apps/` and `packages/`, excluding `node_modules` and `dist`; seeds and scripts count as source, `test/`, `*.test.*` and `e2e/` do not.)
+- **Verified on:** 2026-08-29. `pnpm -r --workspace-concurrency=1 typecheck` → exit 0. `pnpm -r --workspace-concurrency=1 build` → exit 0. `pnpm -r --workspace-concurrency=1 test` → **1733 passed, 3 skipped, 0 failed** across **127 test files**.
+- **Scripted playthrough:** `pnpm playthrough` → **267 checks, 267 passed, 0 failed, 0 n/a**, 10.6 s (`docs/demo/SESSION_REPORT.md`). The count can move by one or two between runs because a handful of assertions are conditional on the night's dice; this run had no content-dependent skips.
+- **Browser E2E:** `pnpm --filter @safehouse/web e2e` → **38 passed, 2 skipped**, chromium, **14 spec files**, 42.4 s. The two skips are the perf harness, which runs only under `SAFEHOUSE_PERF=1`. **There is no `test.fail` marker in the suite any more** — the one that stood in for the spoiler-guard gap came off with the fix, and its assertion passes on its own terms.
+- **The two §15 NFRs now have numbers.** Both were "no harness exists" last revision. Roll-to-visible: **p95 3.5 ms** client-visible over 200 rolls with six sockets in the room, against §15's 250 ms LAN budget — **71× headroom** (`apps/server/test/latency.test.ts`, in the ordinary suite). Grid frame budget with 60 tokens and fog: **main-thread p95 19.8–22.8 ms** across idle/pan/zoom/drag on both a laptop and a phone canvas under a 4× CPU throttle, inside §15's 33.3 ms floor, with camera gestures costing ~1.1× idle rather than an order of magnitude; the wall-clock interval misses in headless for a reason the harness measures rather than asserts (`apps/web/e2e/perf.spec.ts`). Full tables and the honest caveats: §4.
+- **Bundle against §15:** initial JS **236.63 KB gz** (798.66 KB raw) against a < 500 KB gz budget, with PixiJS verified absent from the entry chunk. The Grid's lazy chunk is **107.07 KB gz** plus Pixi's own runtime splits (**76.7 KB gz** across eight files) — **≈184 KB gz** worst case against a < 900 KB gz budget. CSS 9.70 KB gz. **Every §15 bundle sub-clause is now met in the letter**, the codex editor included. Details: §4.
 
 Status vocabulary:
 
@@ -71,7 +72,7 @@ Status vocabulary:
 | --- | --- | --- |
 | FR4.1 encounters from PCs / templates / generator / grunt groups; prep + launch, incl. from a scene | done | `plugins/encounters.ts`, `POST /api/scenes/:id/stage-encounter`. |
 | FR4.2 SR5 initiative incl. astral / cold-sim / hot-sim variants, wound mods | done | `rules/src/combat/initiative.ts`. Staged encounters derive through the engine too (FR9.10). |
-| FR4.3 native pass structure (−10 loop, re-roll on new turn) | done | `services/encounters.ts:369` — `rollInitiativeAll` opens on turn 1 / pass 1. |
+| FR4.3 native pass structure (−10 loop, re-roll on new turn) | done | `services/encounters.ts:365` — `rollInitiativeAll` opens on turn 1 / pass 1. |
 | FR4.4 interrupt menu with editable costs | done | `DEFAULT_INTERRUPTS` + custom cost. Seize/Blitz reachable from the sheet and stamped into the tracker's order (`services/rolls-edge.ts`). |
 | FR4.5 damage → monitor → overflow → wound recompute, one-tap undo | done | `services/encounters-damage.ts`, both write paths now inside `Hub.atomic`. |
 | FR4.6 grunt groups, shared PR + Group Edge | done | `professionalRating` on `AddCombatantBody` and `PATCH /api/combatants/:id`. Playthrough asserts `pressure 4 vs PR 3`. |
@@ -117,7 +118,7 @@ Status vocabulary:
 | FR10.5 party-aware threat readout with visible math | done | `GET /api/encounters/:id/threat`, `services/generator-threat.ts`. |
 | FR10.6 balance levers recompute live | done | `POST /api/encounters/:id/threat/recompute`. |
 | FR10.7 quick-roll rack | done | `GET /api/combatants/:id/quick-rolls`, `POST …/quick-roll`, stamped with the active session. |
-| FR10.8 resolved chains, card-per-step, override before commit | done | `services/encounters-rolls.ts` writes one `rolls` row per pool (attack / defence / soak) at `gm` visibility the moment the server throws them, linked by `request.meta.chainId`, inside a transaction; damage lands only on `…/resolve-chain/commit` (Principle 2). `test/encounters-chain-rolls.test.ts`. **Note:** the tracker's card UI still previews with local dice — see §6.2. |
+| FR10.8 resolved chains, card-per-step, override before commit | done | `services/encounters-rolls.ts` writes one `rolls` row per pool (attack / defence / soak) at `gm` visibility the moment the server throws them, linked by `request.meta.chainId`, inside a transaction; damage lands only on `…/resolve-chain/commit` (Principle 2). `test/encounters-chain-rolls.test.ts`. The tracker's card UI is now on that endpoint too: `web/features/table/resolveChain.ts` posts the exchange and reads every face off the response, with **no local fallback anywhere in the feature** — an unreachable endpoint draws no dice rather than browser ones. `resolveChain.test.tsx` (22) includes a source-level assertion that the feature does not import `resolveAttackChain`. |
 | FR10.9 morale from Professional Rating triggers | done | GM-only, never acts; measured against a real PR for hand-added rows too. |
 | FR10.10 tactical hints on the acting NPC's turn | **done** | `services/tactical-hints.ts` — one line of co-GM advice on the acting NPC's turn, derived from `roleTags` + condition. Three properties enforced in the module rather than trusted to callers: a hint is **text only** (no id, no verb, nothing to "apply"), it is **off unless `campaigns.settings.tacticalHints === true`**, and it is **GM-only**. `test/tactical-hints.test.ts` (12), web `hints.test.tsx` (8) + `trackerHints.test.tsx` (5) + `trackerHintsToggle.test.tsx` (4), `e2e/hints.spec.ts` (2 — off by default; with hints on, a player's device does not contain the line at all). |
 
@@ -154,8 +155,8 @@ Status vocabulary:
 | FR12.15 every generation an `ai_generation` draft; usage meter | **done** | `fixer/drafts.ts` for drafts; the meter is now durable — `ai_usage` (`schema.ts:432`, migration `0002_macros_and_usage.sql`) records every chat turn, `fixer/usage.ts` `persistTurnUsage` / `campaignUsage` read it back, and `GET /api/campaigns/:id/fixer/usage` reports both the durable total and the per-process live one. `test/fixer-usage.test.ts` (7) includes "reads the same number back from a fresh server on the same directory"; the playthrough asserts 4 turns / 1261 tokens survive a restart while the per-process half correctly reads zero. |
 | FR12.16 fast/primary slot discipline | done | `fast` defaults to `primary` when unconfigured. |
 | FR12.17 read-only state tool catalog | done | 26 tools registered plus the capability-flagged `read_map_image`: `get_campaign`, `list_characters`, `get_character`, `get_ledger`, `get_encounter`, `get_scene`, `get_session_log`, `search_books`, `get_page`, `search_codex`, `list_contacts`, `list_runs`/`get_run`, `get_calendar`, `list_npcs`, `get_npc`, `get_threat_readout`, `get_magic_state`, `get_matrix_state` — plus `generate_npc`, `draft_wiki_page`, `draft_recap`, `suggest_fog_reveal`, `check_fog_proximity`, `identify_tokens`, `propose_geometry`. `get_magic_state` now returns `spirits: { tracked: true, list }` because the tracker exists (FR8.3); `get_matrix_state` still returns `tracked: false` with a note for Overwatch and marks rather than a misleading zero — honest about M7 not existing. |
-| FR12.18 situation snapshot prefix during live sessions | done | `fixer/agent.ts:91`. |
-| FR12.19 spoiler guard on player-facing prose | **partial** | The guard itself is complete and server-side: `spoilerScan` (`fixer/drafts.ts:415`) matches GM-only names and returns `SpoilerFlag[]`; the tool result tells the model to name the flags and ask reveal-or-cut; the playthrough catches a GM-only name in a recap draft. **What is broken is the GM's view of it** — `web/features/gm/fixer/api.ts:124` `spoilerFlagsOf()` keeps only `typeof f === 'string'` entries, so the object-shaped flags the server sends are dropped and `DraftsInbox.tsx` renders no warning on the card the GM accepts from. Marked in the suite as a deliberate `test.fail` (`e2e/recap.spec.ts:235`). Top of §6. |
+| FR12.18 situation snapshot prefix during live sessions | done | `fixer/agent.ts:114` (`buildSituationSnapshot`). |
+| FR12.19 spoiler guard on player-facing prose | **done** | The guard is server-side: `spoilerScan` (`fixer/drafts.ts`) matches GM-only names and returns `SpoilerFlag[]` = `{name, why}`; the tool result tells the model to name the flags and ask reveal-or-cut; the playthrough catches a GM-only name in a recap draft. The GM now *sees* it: `spoilerFlagsOf()` (`web/features/gm/fixer/api.ts`) accepts the object form the server actually sends — and the legacy string form, and flags nested in `output` — and `DraftsInbox.tsx` renders the "spoiler guard — reveal or cut?" panel on the card the GM accepts from. `spoilerFlags.test.ts` (5) pins the wire shape; `e2e/recap.spec.ts:234` asserts the warning is on the card, as a plain passing test. The `test.fail` marker is gone. |
 
 ### M5 — Campaign codex *(P4)*
 
@@ -328,7 +329,7 @@ change is enforced in four places at once so no single edit can undo it: the
 QR payload (`joinUrl`, with `WEB_ORIGIN` for the dev split-port case and
 `.env.example` / `infra/docker-compose.yml` carrying it), the Vite proxy
 (`/join` deliberately absent, with the reason written in the config), the
-production SPA fallback (`app.ts:176–179`, `/join` not in `API_PREFIXES`), and
+production SPA fallback (`app.ts:178–181`, `/join` not in `API_PREFIXES`), and
 the client. `e2e/join.spec.ts` (6) covers all four — including one spec that
 asserts the dev server does *not* proxy `/join`, and one that checks the QR the
 GM holds up encodes the SPA route.
@@ -398,7 +399,7 @@ source of this: it is a nightly `pg_dump`, and a dump carries `setval` for every
 sequence.) So the honest summary is that the exact provenance of the reported
 directory is not proven; the state it was in, and the fact that the state is
 fatal and reachable, both are. **Both paths now have scripts and tests behind
-them** — see §5, item 7.
+them** — `restore-boot.test.ts` and `scripts/migrate-to-postgres.ts`.
 
 Two things made this cost days rather than minutes, and both are now fixed
 alongside the sequence itself. The error text — drizzle's
@@ -428,8 +429,9 @@ others:
   transaction handle, and broadcasts **only after COMMIT**. The method carries
   the PGlite deadlock rule in its own docblock (single embedded connection:
   every read inside the block must go through `tx.db`, never the service's `db`,
-  or it waits forever). It started as one call site on the roll path; **33
-  emissions across 7 files now go through it** — see §5, item 2.
+  or it waits forever). It started as one call site on the roll path; **all 44
+  emission sites across 13 files now go through it**, with one audited
+  exemption. See the paragraph that closes this section.
 - **A diagnosable error.** `appendEvent` wraps failures in `DbError` carrying
   PostgreSQL's own SQLSTATE, violated constraint and DETAIL, and the hub logs
   them with the campaign id and event type. The next person sees
@@ -508,7 +510,8 @@ SQLSTATE surfacing and the upgrade of a database that predates the guard;
 `apps/server/test/seed-durability.test.ts` drives seeder-child → probe-child →
 POST-roll → GET-log with the vitest process never touching the directory
 (PGlite is single-writer: a second opener hangs rather than erroring);
-`core-atomicity.test.ts` (9) and `core-atomicity-domains.test.ts` (16) block a
+`core-atomicity.test.ts` (9), `core-atomicity-domains.test.ts` (19) and
+`core-atomicity-emits.test.ts` (22) block a
 named event type with a real CHECK constraint and assert **both** halves — a
 named error to the caller *and* no domain row; `core-shutdown.test.ts` (8) pins
 that a server closed through `shutdownServer` reopens with
@@ -516,17 +519,32 @@ that a server closed through `shutdownServer` reopens with
 from the composer in a real browser and checks it is still in the log after a
 reload.
 
-**Still open, honestly.** 14 `hub.emit` call sites remain outside a
-transaction — see §6.2. Every path LIVE-4 actually damaged is inside one.
+**Now closed the whole way.** The sweep this defect started is finished:
+**exactly one** `hub.emit` in the entire server runs outside a transaction, and
+it is an audited exemption with no domain row to be inconsistent with
+(`plugins/scenes.ts:730`, `display.set` — the event *is* the state). The other
+44 emission sites go through `tx.emit` inside a `Hub.atomic` block, across 13
+files. `core-atomicity-emits.test.ts` (22) proves the
+paths the second half of the sweep converted, each by blocking its event type
+with a real CHECK constraint and asserting both halves; its last two tests scan
+`src/` for a bare `hub.emit(` and allow that one call, by file and by name, so
+the sweep stays swept as the code moves.
 
 ### What changed structurally
 
-`apps/web/e2e/` exists: Playwright, chromium, 13 spec files, 38 tests, run
+`apps/web/e2e/` exists: Playwright, chromium, 14 spec files, 40 tests, run
 against the **real** stack (built server + built SPA on one origin, throwaway
 `DATA_DIR`, PGlite, the demo campaign, no model, no network). It runs in CI
 after the unit suite and the smoke playthrough. The runner (`e2e/run.mjs`) skips
 with a message when no browser binary is present rather than turning CI red for
 a download failure; `e2e:strict` fails instead, for when you mean it.
+
+The newest spec is a different animal from the other thirteen and is worth
+naming here rather than in the tables: `perf.spec.ts` does not assert what is
+drawn, it asserts how long drawing took. It is the first harness in the repo
+whose failure mode is "the app got slower", and it skips itself unless
+`SAFEHOUSE_PERF=1` because a throttled timing run has no business gating a
+merge. §4 carries its output.
 
 The cross-process seam has its own layer, separate from the browser one:
 `seeded-boot.test.ts`, `restore-boot.test.ts` and `seed-durability.test.ts` on
@@ -673,6 +691,25 @@ so. Away-game fallback: `docker compose --profile llm up -d`.
 HTTP server speaking chat-completions with real SSE framing. It is what the
 server tests and the playthrough use; nothing imports it at runtime.
 
+### Measuring the §15 numbers
+
+```bash
+# roll-to-visible latency — 200 rolls, six sockets. Also runs in `pnpm -r test`.
+pnpm --filter @safehouse/server exec vitest run test/latency.test.ts
+
+# Grid frame budget — 60 tokens + fog, laptop and phone canvases, 4× CPU throttle.
+pnpm build
+SAFEHOUSE_PERF=1 SAFEHOUSE_E2E_NO_BUILD=1 pnpm --filter @safehouse/web e2e -- perf.spec.ts
+```
+
+The latency suite is cheap (≈6 s) and gates: its budget has ~70× headroom, so
+it can afford to. The browser harness costs ≈2.5 min and does not; it is
+skipped unless `SAFEHOUSE_PERF=1`, and CI's `perf` job is `continue-on-error`
+on purpose — a timing check that can turn `main` red on a busy afternoon gets
+switched off within a week, at which point it measures nothing at all. Both
+print their tables whether or not they pass. `SAFEHOUSE_PERF_CPU_THROTTLE`
+overrides the 4× default.
+
 ### Production
 
 ```bash
@@ -694,9 +731,9 @@ LAN, no reverse proxy.
 | `@safehouse/contracts` | 7 | 52 |
 | `@safehouse/db` | 4 | 34 |
 | `@safehouse/rules` | 11 | 175 |
-| `@safehouse/server` | 46 | 605 (602 passed, 3 skipped) |
-| `@safehouse/web` | 52 | 770 |
-| **Total** | **120** | **1633 passed, 3 skipped, 0 failed** |
+| `@safehouse/server` | 48 | 634 (631 passed, 3 skipped) |
+| `@safehouse/web` | 57 | 841 |
+| **Total** | **127** | **1733 passed, 3 skipped, 0 failed** |
 
 `pnpm -r --workspace-concurrency=1 typecheck` → exit 0 across all five packages.
 `pnpm -r --workspace-concurrency=1 build` → exit 0.
@@ -712,25 +749,107 @@ rather than on a developer laptop (BUILD_CONVENTIONS: never require Docker).
 
 | Chunk | Raw | gzip | Budget |
 | --- | --- | --- | --- |
-| `index-BB_GQb4n.js` — the entry | 840.40 KB | **247.35 KB** | initial JS < 500 KB gz ✅ |
-| `index-BKXK2HK4.css` | 51.84 KB | 9.71 KB | — |
-| `index-CryW729h.js` — the Grid's lazy chunk (PixiJS) | 339.21 KB | 107.07 KB | Grid chunk < 900 KB gz ✅ |
+| `index-BCO3Iz3T.js` — the entry | 798.66 KB | **236.63 KB** | initial JS < 500 KB gz ✅ |
+| `index-BMxhWpBE.css` | 51.79 KB | 9.70 KB | — |
+| `index-CiBAUt_0.js` — the Grid's lazy chunk (PixiJS) | 339.21 KB | 107.07 KB | Grid chunk < 900 KB gz ✅ |
 | Pixi's own runtime splits (WebGL/WebGPU renderers, render targets, `browserAll`, canvas, bitmap fonts, buffers, worker) — 8 files | 269.78 KB | 76.71 KB | counted against the same 900 KB |
-| `PdfSurface-BThIEcd4.js` — the reader surface | 6.79 KB | 2.85 KB | — |
+| the codex tree — `CodexPage` 6.35, `RunsBoard` 2.75, `Markdown` 2.27, `CalendarView` 1.73, plus two shared leaves | 45.79 KB | 15.26 KB | codex editor lazy-loaded ✅ |
+| `PdfSurface-W0WP8vTv.js` — the reader surface | 6.88 KB | 2.89 KB | — |
 
 Pixi is verified **absent** from the entry chunk (`grep pixi` finds nothing in
-it and 11 hits in the Grid chunk), which is the condition §15's "no Pixi"
+it and 5 hits in the Grid chunk), which is the condition §15's "no Pixi"
 clause attaches to. Worst-case Grid cost is ≈184 KB gz against 900. pdf.js is
 not in any chunk at all: `pdfjs-dist` is copied to `public/pdfjs/` (`pdf.mjs`
 389 KB, `pdf.worker.mjs` 1.4 MB raw) and imported at runtime from our own
-origin, costing zero bytes until a ref chip is tapped. **The one sub-clause not
-met in the letter:** "codex editor lazy-loaded" — `features/codex/` rides the
-entry chunk rather than a dynamic import. The budget that clause exists to
-protect is met with ~2× headroom, so this is a tidiness item, not a latency
-one; it is item 5 in §6.
+origin, costing zero bytes until a ref chip is tapped.
 
-**Browser E2E** — `pnpm --filter @safehouse/web e2e`, chromium, **38 passed**,
-50.9 s, one worker against one shared live table:
+**Every §15 bundle sub-clause is now met in the letter.** The last one open —
+"codex editor lazy-loaded" — closed by moving `CodexPage` / `RunsBoard` /
+`CalendarView` behind `React.lazy` in `router.tsx`; the entry chunk lost
+10.7 KB gz for it (247.35 → 236.63). The interesting part is not the bytes but
+the tripwire: `src/router.chunks.test.ts` (4) scans every source file and fails
+if `features/codex/` is reached from outside itself by anything other than a
+dynamic `import()`. That is the way this clause actually regresses — someone
+adds one ordinary import of `Markdown.tsx` to the table log, rollup silently
+hoists the whole subtree back into the entry, and the suite stays green.
+
+**NFR — roll-to-visible latency (§15).** First measurement in the project's
+life. `apps/server/test/latency.test.ts`, 200 serial rolls, six live sockets in
+the room (GM + four players + the display), PGlite, loopback, four
+`performance.now()` stamps per roll taken in one process so there is no clock
+skew:
+
+| Span | n | p50 | p95 | p99 | max |
+| --- | --- | --- | --- | --- | --- |
+| server received → broadcast | 200 | 2.1 ms | **2.8 ms** | 3.1 ms | 4.3 ms |
+| client-visible send → last socket | 200 | 2.5 ms | **3.5 ms** | 5.0 ms | 8.0 ms |
+| fan-out spread (first → last socket) | 200 | 0.1 ms | 0.2 ms | 0.3 ms | 0.4 ms |
+
+Against §15's 250 ms LAN / 500 ms WAN budget that is **71× headroom** on the
+LAN figure, which is why this one gates in the ordinary suite. The number to
+quote is the middle row: it is a strict superset of the server span, WS framing
+included. **What it excludes, in the file's own words:** the network (both ends
+are on 127.0.0.1 — add the venue's Wi-Fi RTT to everything here, so this is a
+floor on real latency and not an estimate of it), the browser (nothing parses
+the frame, reconciles a store or paints a die), Postgres, and a busy table. The
+instrumentation lives in the test, not in `src/` — the two stamps are taken by
+wrapping the registered command handler and the hub's `broadcast` on the live
+instance, so no production file carries a timing hook only a test reads.
+
+**NFR — Grid frame budget with 60 tokens (§15 / §17.4).** Also a first.
+`apps/web/e2e/perf.spec.ts`, `SAFEHOUSE_PERF=1`, 4× CDP CPU throttle, a
+scripted 40×30 m scene with exactly 60 tokens, 8 fog regions (3 revealed), 24
+walls, 4 doors and 6 pins, driven on the real `/c/:id/grid` with the real Pixi
+renderer and the real socket. **p95 of main-thread cost per frame** — Pixi's
+update and ~133 draw submissions plus React — measured over four phases:
+
+| Phase | laptop 1280×720 | phone 390×844 | vs the 33.3 ms floor |
+| --- | --- | --- | --- |
+| idle | 20.5 ms | 19.8 ms | ✅ |
+| pan | 22.8 ms | 22.4 ms | ✅ |
+| zoom | 22.3 ms | 21.5 ms | ✅ |
+| drag (a token, one `token.drag` per move) | 22.7 ms | 21.5 ms | ✅ |
+
+Camera gestures cost **~1.1× idle**, not an order of magnitude — which is the
+assertion most likely to catch a real regression, because it is the one that
+would trip if a pan started re-tessellating the grid, fog or geometry.
+`stage/index.ts` has claimed content-hashed layer redraws since it was written;
+until now nothing tested the claim.
+
+**The wall-clock frame interval, by contrast, misses the floor in headless, and
+the harness proves why rather than arguing it.** Before staging anything, the
+same sampler runs for two seconds on an empty page in the same browser at the
+same viewport under the same throttle: it comes back at a flat 60 fps
+(interval p95 16.7 ms) with 2.0–2.2 ms of sampler lag, so the pipeline is
+capable and the sampler is free. Against that control the Grid's interval p95
+is 66.7 ms on the laptop canvas and 33.4 ms on the phone canvas — ~2× worse on
+~2.5× the pixels with an *identical* draw count (132–134 per frame either way),
+which is the signature of fill rate, not of the app. In headless chromium that
+fill rate is SwiftShader painting the WebGL surface on the CPU. Asserting it
+would assert a property of the runner's software rasteriser, be red on every
+machine forever, and be switched off inside a week. So the honest reading is:
+**the Grid holds §15's floor on the cost this repo owns, and misses it on wall
+clock in headless, where the deficit is rasterisation.** One caveat on the
+asserted number, since it is the one that will be quoted — "main-thread cost"
+includes time the main thread spends *blocked inside* a WebGL call, so with a
+software rasteriser underneath it is an upper bound on real main-thread work
+rather than an estimate of it. That makes the assertion conservative, which is
+the right direction for a floor.
+
+Four ways a frame harness lies, each closed in the file: a WebGL draw-call
+counter installed before the page's own scripts (a renderer that stopped
+drawing would still tick at 60 Hz and look perfect); a `MIN_FRAMES_PER_PHASE`
+floor of 30 intervals (a three-frame sample has a meaningless p95); the dragged
+token parked at the exact map centre at 3×3 with the server's record read back
+afterwards (a drag that missed its token is just a pan); and a hard failure if
+the empty-page control cannot hold 30 fps (a machine too loaded to measure
+anything should not be allowed to blame the Grid). **What it does not measure:**
+a real GPU, a real display's vsync, a real device (the CPU throttle moves these
+numbers by ~2 ms between 1× and 4×, because the bottleneck is not on the main
+thread), the network, or a table with a second GM authoring underneath.
+
+**Browser E2E** — `pnpm --filter @safehouse/web e2e`, chromium, **38 passed, 2
+skipped**, 42.4 s, one worker against one shared live table:
 
 | Spec | Tests | Covers |
 | --- | --- | --- |
@@ -744,22 +863,30 @@ one; it is item 5 in §6.
 | `magic.spec.ts` | 2 | FR8.3/8.4 — spending a spirit service drops the count on screen and on the record; toggling a bonded focus moves a pool **and** its provenance |
 | `pool-parity.spec.ts` | 2 | LIVE-2 — sheet pool = dialog dice = persisted pool, scene counted once; a situational bump still reaches the server |
 | `reader.spec.ts` | 3 | FR11.3 — a ref chip opens the printed page in the in-app pdf.js viewer over byte ranges; the jump box moves the page under it; pinch and the zoom controls both change scale |
-| `recap.spec.ts` | 3 | FR12.12 — the Fixer drafts one and the session is untouched; accepting applies it and publishing is a separate confirmed tap; **one deliberate `test.fail`** marking the spoiler-warning gap (§6.1) |
+| `recap.spec.ts` | 3 | FR12.12 — the Fixer drafts one and the session is untouched; **the spoiler-guard warning is on the card the GM accepts from** (FR12.19, formerly the suite's one `test.fail`); accepting applies it and publishing is a separate confirmed tap |
 | `secrecy.spec.ts` | 4 | Principle 4 in the browser: log, tracker, grid and the raw payloads behind them |
 | `tv.spec.ts` | 3 | FR9.20 map stage + ribbon; a rebooted TV returns to the scene; the kiosk holds no GM-only state |
+| `perf.spec.ts` | 2, skipped | the §15 / §17.4 frame budget on a laptop and a phone canvas. Runs only under `SAFEHOUSE_PERF=1`; its output is above |
 
 **Scripted playthrough** — `pnpm playthrough`, report at
 `docs/demo/SESSION_REPORT.md`:
 
-- **266 checks: 266 passed, 0 failed, 0 not applicable**, 10.8 s.
+- **267 checks: 267 passed, 0 failed, 0 not applicable**, 10.6 s.
 - Boots the real Fastify app on a loopback port against a fresh PGlite database,
   seeds SR5 (55 pages indexed) and the demo campaign, then plays a whole session
   from five devices — the GM's laptop, three phones and the TV.
-- New beats this revision: a summoner's spirit tracked by Force and services,
-  spending one, and the spirit joining the encounter as a combatant; a bonded
-  focus toggled with its provenance following the pool; the reagent tin; a
-  personal macro rack that survives a restart; the Fixer drafting the recap
-  through `draft_recap` after reading the log, spoiler-scanned; the usage meter
+- The one new beat this revision is the check that closed the resolve-chain
+  item, and it is a single line: **"…and the faces on the record are the faces
+  on the card"** —
+  the dice the GM reads out mid-chain are byte-for-byte the dice in the roll
+  log. That is G5 stated as an equality rather than as an intention, and it is
+  the assertion that would have failed against the old locally-previewing
+  dialog.
+- Standing beats, unchanged: a summoner's spirit tracked by Force and services
+  joining the encounter as a combatant; a bonded focus toggled with its
+  provenance following the pool; the reagent tin; a personal macro rack that
+  survives a restart; the Fixer drafting the recap through `draft_recap` after
+  reading the log, spoiler-scanned (it catches a GM-only name); the usage meter
   read back across a server restart (4 turns / 1261 tokens durable, per-process
   half correctly zero); tactical hints on and off; and a probe that makes
   `ledger.changed`, `combatant.damaged` and `clock.advanced` unrecordable in
@@ -775,31 +902,33 @@ test · `.github/scripts/smoke.mjs` (boots the built server on a throwaway
 `DATA_DIR`, runs the playthrough against it, confirms the SPA is served) · the
 browser E2E suite (traces uploaded on failure) · a separate `restore-postgres`
 job with a `postgres:16` service that runs the PGlite → Postgres move over
-node-postgres · a multi-arch image build. `LLM_BASE_URL` and
+node-postgres · **a `perf` job that prints both §15 numbers on every push and
+never blocks a merge** (`continue-on-error`, deliberately: a timing check that
+can turn `main` red on a busy afternoon gets switched off within a week, and a
+regression is legible as a job that went green → orange with the before and
+after in its log) · a multi-arch image build. `LLM_BASE_URL` and
 `DISCORD_WEBHOOK_URL` are unset in CI on purpose.
 
 ---
 
 ## 5. The previous gap list, resolved
 
-Every item from the last revision's §6 — the ranked list this round was worked
-from — with what closed it or why it did not. **Eleven of twelve are closed
-outright; the twelfth is closed on every path that ever failed.**
+Every item from the last revision's §6 — the five-item ranked list this round
+was worked from — with what closed it, verified by reading the code rather than
+by taking the claim. **Four of the five are closed in code. The fifth was never
+a code item**: the Matrix tab is a decision the table has not made, it stays
+deferred, and it carries forward to §6 unchanged rather than being quietly
+retired here.
 
-| # | Item | State | Evidence |
+| # | Item | State | What closed it |
 | --- | --- | --- | --- |
-| 1 | Personal macros that follow the person (FR2.8) | **closed** | `packages/db/src/schema.ts:466` `user_macros` + migration `0002_macros_and_usage.sql` (unique on `(user, campaign, label)`); `apps/server/src/plugins/macros.ts` (GET/PUT/POST/PATCH/DELETE, every read fenced by the authenticated user — there is no user id in the path, so no request can address someone else's rack); `apps/web/src/features/sheet/macroStore.ts` migrates the legacy device key with additive POST rather than PUT, so a stale handset converges instead of deleting. `test/macros.test.ts` (20), `packages/db/test/macros-usage.test.ts`, web `macroStore.test.ts` (26) + `macroRack.test.tsx` (6), `e2e/macros.spec.ts` (2). |
-| 2 | Move the remaining domain writes inside `Hub.atomic` | **closed on every path that failed; 14 sites remain** | 33 emissions across 7 files now run inside a transaction: ledger (`plugins/ledger.ts`), encounter damage (`services/encounters-damage.ts`, 4), the clock (`plugins/campaigns.ts:123`), encounters (`services/encounters.ts`, 3 + the service's own 9 `atomic` blocks), scene/token/fog/drawings (`plugins/scenes.ts`, 19) and the roll and chain paths. `test/core-atomicity-domains.test.ts` (16) makes each path's event type fail with a **real CHECK constraint through the real driver** and asserts both halves — a named error *and* no domain row — because "the request failed" is otherwise compatible with the bug. Remaining: §6.2. |
-| 3 | AI recap drafting (FR12.12) | **closed** | `apps/server/src/fixer/tools-recap.ts` (`draft_recap`) + `apps/server/src/fixer/recap.ts` (`assembleRecap`). The model writes prose only and is told never to state a number; the server adds tallies, casualties, reveals and awards from the log. The spoiler guard runs unconditionally. `test/fixer-recap.test.ts` (8), `e2e/recap.spec.ts` (3). |
-| 4 | Spirit tracker (FR8.3) | **closed** | `apps/server/src/plugins/magic.ts` (9 spirit routes incl. spend-a-service, dismiss, sustain, join-an-encounter), `services/magic.ts` / `magic-derive.ts` / `magic-store.ts`, `apps/web/src/features/sheet/magic/SpiritList.tsx`. GM-side spirits are `gm`-visible by construction (`spiritVisibility`). `test/magic.test.ts` (31), `e2e/magic.spec.ts`. |
-| 5 | pdf.js viewer (FR11.3) | **closed** | `apps/web/scripts/vendor-pdfjs.mjs` + `apps/web/src/features/reader/*`; `pdfjs-dist ^4.10.38` in `apps/web/package.json`. Self-hosted, byte-ranged, page-accurate, with the browser viewer kept as a documented three-way fallback. `test/reader-route.test.ts` (9), 6 web unit files, `e2e/reader.spec.ts` (3) against a real generated PDF (`e2e/fixtures/pdf.ts`). |
-| 6 | Foci and reagents (FR8.4) | **closed** | `apps/server/src/services/magic-foci.ts`, `/api/characters/:id/foci` + `…/reagents` + `…/magic/derived`, `apps/web/src/features/sheet/magic/FociRack.tsx` + `ReagentCounter.tsx`. Bonding and activation are separate gates; an active bonded focus emits real `Modifier` rows so the pool moves with provenance. |
-| 7 | Restore-and-boot in CI, not just seed-and-boot | **closed** | `apps/server/test/restore-boot.test.ts` (19) drives both real paths: a byte-copy restore of `DATA_DIR` booted on the copy (file store included), and a move through the **new** `apps/server/scripts/migrate-to-postgres.ts`, with a counterfactual proving the sequence pass is load-bearing. CI runs it as its own step, plus a `restore-postgres` job with a `postgres:16` service for the node-postgres half. The gap named in the old item — "the PGlite → Postgres move has no script at all" — is closed by that script existing. |
-| 8 | Map vision for the Fixer (the open half of FR12.11) | **closed** | `apps/server/src/fixer/vision.ts` + `vision-probe.ts`; `read_map_image` is offered only when a cached probe says the model reads images (`agent.ts:363`), and `POST /api/fixer/propose-geometry`'s vision lane answers `501 vision_unsupported` for a text-only box rather than pretending it is off. `test/fixer-vision.test.ts` (17). Output is still a draft — the scene is untouched until the GM accepts (Principle 8). |
-| 9 | FR5.6 — templates in the codex | **closed** | Migration `0003_npc_template_wiki_link.sql` adds `npc_templates.wiki_page_id`; `services/codex-templates.ts`, `POST/DELETE /api/wiki/:id/templates`, and `GET /api/wiki/:id` returning `page.templates`. `web/features/codex/TemplatePanel.tsx`. `test/codex-templates.test.ts` (10), web `templates.test.tsx` (13). Pins, templates and pages are one graph now. |
-| 10 | Tactical hints on the acting NPC's turn (FR10.10) | **closed** | `apps/server/src/services/tactical-hints.ts`, surfaced through the GM-only quick-roll rack in `plugins/encounters.ts:419`. Off unless `campaigns.settings.tacticalHints === true`; a hint is text with no id and no verb, so there is deliberately nothing to "apply". `test/tactical-hints.test.ts` (12), 3 web test files, `e2e/hints.spec.ts` (2). |
-| 11 | Make the usage meter survive a restart (FR12.15) | **closed** | `ai_usage` (`schema.ts:432`, migration 0002) + `fixer/usage.ts` `persistTurnUsage` / `campaignUsage`. `test/fixer-usage.test.ts` (7) reads the number back from a fresh server on the same directory; the playthrough asserts the durable and live halves agree on tokens and disagree on process-lifetime counts, which is exactly what each is for. |
-| 12 | Seed the demo `runs` row through its route | **closed** | `apps/server/seed/demo.ts:351` posts to `/api/campaigns/:id/runs`. The file's docblock now names the only two remaining raw writes (campaign creation and the wipe) and why each has to be. `test/seed-demo-run.test.ts` (11). |
+| 1 | The spoiler-guard warning never reached the GM's eyes (FR12.19) | **closed** | `apps/web/src/features/gm/fixer/api.ts` — `spoilerFlagsOf()` now normalises the `{name, why}` objects the server actually sends, keeps the legacy string form, and still looks inside `output`; `DraftsInbox.tsx` renders the warning panel on the card the GM accepts from. `spoilerFlags.test.ts` (5) pins all four shapes including malformed entries. `e2e/recap.spec.ts:234` lost its `test.fail` marker and passes on its own terms. **Fixed by hand, outside the swarm.** |
+| 2 | The last 14 non-atomic emits | **closed** | The 13 that could be were converted (`plugins/characters.ts`, `codex.ts`, `generator.ts`, `campaigns-admin.ts`, `services/rolls-edge.ts`, `magic-store.ts`, `rolls.ts`'s `postLog` fallback arm). **Exactly one bare `hub.emit` remains in the whole server** — `plugins/scenes.ts:730`, `display.set`, an audited exemption with no domain row to be inconsistent with, named as such in its own docblock. `core-atomicity-emits.test.ts` (22) blocks each converted path's event type with a real CHECK constraint and asserts both halves; its last two tests scan `src/` and allow that one call by file and by name. |
+| 3 | The resolve-chain dialog previewed with browser dice (FR10.8 / G5) | **closed** | `web/features/table/resolveChain.ts` posts to `POST /api/encounters/:id/resolve-chain` and reads every face off the response; `ResolveChainDialog.tsx` renders it. There is **no local fallback in the feature at all** — an unreachable endpoint draws no dice rather than browser ones. `resolveChain.test.tsx` (22) includes a source-level assertion that `resolveAttackChain` is not imported here, and the playthrough adds the equality that matters: "the faces on the record are the faces on the card". |
+| 4 | A Matrix tab, if and only if someone rolls a decker | **open, and correctly so** | Unchanged and deliberately unbuilt (Q3). `SHEET_TABS` has seven tabs and no Matrix; `get_matrix_state` still answers `tracked: false` with a note rather than a zero. This is the one FR row whose status is set by a table decision. |
+| 5a | Lazy-load `features/codex/` (§15's letter) | **closed** | `router.tsx` puts `CodexPage` / `RunsBoard` / `CalendarView` behind `React.lazy`; the entry chunk dropped 247.35 → **236.63 KB gz**. `src/router.chunks.test.ts` (4) is the tripwire: `features/codex/` may be reached from outside itself only through a dynamic `import()`. |
+| 5b | The stale "spirit services not built" comment | **closed** | `apps/server/src/fixer/state-codex.ts` now says the opposite, and says why: spirit services *used* to be on the not-tracked list and no longer are, because `state-play.ts` returns `tracked: true` from the real tracker. |
+| 5c | The two §15 NFRs nothing measured | **closed — and these are the first real numbers for either** | `apps/server/test/latency.test.ts` (4): roll-to-visible **p95 3.5 ms** over 200 rolls with six sockets, 71× inside the 250 ms LAN budget, gating in the ordinary suite. `apps/web/e2e/perf.spec.ts` (2) + `features/grid/perf/frames.ts` (24 tests) + `perf/scene.ts` (16 tests): **main-thread p95 19.8–22.8 ms** with 60 tokens and fog on laptop and phone canvases, inside the 33.3 ms floor, with camera gestures at ~1.1× idle. Both tabulated in §4, both honest about what they exclude. |
 
 And the four browser/terminal findings from §2, unchanged since they closed:
 
@@ -808,81 +937,81 @@ And the four browser/terminal findings from §2, unchanged since they closed:
 | L1 | The web UI never backfilled state on mount | **closed** | `live/hydrate.ts` at the `useLiveConnection` chokepoint; 39 unit tests + `e2e/hydration.spec.ts` (4). |
 | L2 | Scene environment modifier applied twice | **closed** | `features/sheet/rollDialogState.ts`; `rollDialogState.test.ts` (18), `e2e/pool-parity.spec.ts` (2). |
 | L3 | `/join/:code` served JSON to a scanning player | **closed** | One path, one owner, enforced in four places; `e2e/join.spec.ts` (6). |
-| L4 | Event log frozen on a seeded database | **closed** | Sequence guard + `Hub.atomic` + `DbError` surfacing + clean shutdown everywhere, now with both real restore paths under test. `seeded-boot.test.ts` (10), `restore-boot.test.ts` (19), `durability.test.ts`, `core-atomicity.test.ts` (9), `core-atomicity-domains.test.ts` (16), `core-shutdown.test.ts` (8), `seed-durability.test.ts` (1), `e2e/log-append.spec.ts` (2). |
+| L4 | Event log frozen on a seeded database | **closed** | Sequence guard + `Hub.atomic` + `DbError` surfacing + clean shutdown everywhere, now with both real restore paths under test. `seeded-boot.test.ts` (10), `restore-boot.test.ts` (19), `durability.test.ts`, `core-atomicity.test.ts` (9), `core-atomicity-domains.test.ts` (19), `core-atomicity-emits.test.ts` (22), `core-shutdown.test.ts` (8), `seed-durability.test.ts` (1), `e2e/log-append.spec.ts` (2). |
 
 **Deferred by design and not defects:** the Matrix toolkit (M7, Q3 — no decker
 at the table) and with it the sheet's Matrix tab, token vision and dynamic
-lighting (FR9.16, Q9 — manual fog is the permanent plan), the Matrix overlay
-(FR9.17), native priority char-gen (FR3.9, D5 — Chummer is the builder), the
-advancement editor (FR3.7), stagecraft audio (FR12.10 / FR9.18), the prop/tile
-stamp library (FR9.2's P3+ half), the image-gen adapter, the PWA offline cache,
-and campaign export. They stay unbuilt until the table asks.
+lighting (FR9.16, Q9), the Matrix overlay (FR9.17), native priority char-gen
+(FR3.9, D5), the advancement editor (FR3.7), stagecraft audio (FR12.10 /
+FR9.18), the prop/tile stamp library (FR9.2's P3+ half), the image-gen adapter,
+the PWA offline cache, and campaign export. The full list with its reasons is
+§6, item 3; none of it is work anyone should start unsolicited.
 
 ---
 
 ## 6. What is still worth doing
 
-**The list is genuinely short now, and saying so is the point.** Every one of
-the twelve items this round was working from is closed, all four LIVE defects
-stayed closed, P0 through P5 are done bar two deliberate deferrals, and the
-Roll20 exit checklist has no red rows and no asterisks. What follows is five
-real items, only one of which a player would notice at the table, plus a
-half-page of tidiness. Padding it would be dishonest about where the project is.
+**Nothing on this list is a defect, and that is the finding.** Every item the
+last two revisions were working from is closed — the twelve before, the five
+this round, verified here by reading the code rather than by taking the claim.
+All four LIVE defects stayed closed. P0 through P5 are done bar two deliberate
+deferrals. The Roll20 exit checklist has no red rows and no asterisks. No suite
+carries a `test.fail` marker any more — the string survives in exactly one
+place, the docblock in `recap.spec.ts` recording that it came off and why; the
+only skips are the three
+environmental ones in §4 and the two perf specs behind `SAFEHOUSE_PERF`; and a
+grep for `TODO`, `FIXME` and `// INTEGRATION:` across `apps/*/src`,
+`packages/*/src`, both test trees and `e2e/` returns nothing. Both §15 NFRs
+that had no harness now print numbers, and both are inside budget.
 
-1. **The spoiler-guard warning never reaches the GM's eyes (FR12.19).** This is
-   the one item with a table cost. The server-side guard is complete —
-   `spoilerScan` (`apps/server/src/fixer/drafts.ts:415`) finds the GM-only names
-   in a player-facing draft and returns `SpoilerFlag[]` = `{name, why}` (the
-   type is declared at `:405`). The web
-   client throws them away: `spoilerFlagsOf()`
-   (`apps/web/src/features/gm/fixer/api.ts:124`) keeps only entries where
-   `typeof f === 'string'`, so `DraftsInbox.tsx:36` renders nothing and the GM
-   accepts a recap with no warning on the card. Accept the object form and
-   render `f.name`, keeping the string form for anything that still sends one.
-   `apps/web/e2e/recap.spec.ts:235` already asserts the fixed behaviour behind a
-   `test.fail` marker — when the fix lands it trips as an unexpected pass and
-   the marker comes off with it. Half an hour, and it is the difference between
-   a guard that works and a guard the GM can see working.
-2. **The last 14 non-atomic emits.** Down from 44. Every path LIVE-4 actually
-   broke — rolls, ledger, encounter damage, the clock, scene/token/fog — is
-   inside `Hub.atomic` and pinned by `core-atomicity-domains.test.ts`. What is
-   left, by file: `plugins/characters.ts` (4 — `sheet.updated` after a sheet or
-   play-state save), `plugins/codex.ts` (2 — `wiki.revealed` after the page
-   update), `plugins/generator.ts` (2 — `encounter.updated` after a build),
-   `plugins/campaigns-admin.ts` (2 — the ownership-transfer log line),
-   `services/rolls-edge.ts` (1 — the Edge debit's `sheet.updated`),
-   `services/magic-store.ts` (1 — `magic.updated`), `services/rolls.ts:379` (the
-   fallback arm of a helper that prefers `tx.emit` when handed one), and
-   `plugins/scenes.ts:724` (`display.set`, which has no domain row to be
-   inconsistent with). The Edge debit is the one worth doing first: it spends a
-   real resource and announces it separately. Each conversion is small — hoist
-   the reads out of the block per the PGlite deadlock rule in `Hub.atomic`'s
-   docblock — and the harness for proving it already exists.
-3. **The resolve-chain dialog previews with browser dice (FR10.8 / G5).**
-   `apps/web/src/features/table/ResolveChainDialog.tsx:7` says so in its own
-   docblock. The authoritative endpoint exists and is complete —
-   `POST /api/encounters/:id/resolve-chain` server-rolls attack, defence and
-   soak, persists one `rolls` row per pool at `gm` visibility inside a
-   transaction, and waits for `/commit` before any damage lands. The dialog
-   still runs `resolveAttackChain` locally and commits only the final boxes. The
-   damage that lands is server-applied, so the guarantee holds on the record;
-   what is wrong is that the dice the GM reads out mid-chain are the browser's
-   and never reach the log. Swapping the preview for that endpoint keeps the
-   card UI and the commit path unchanged.
-4. **A Matrix tab, if and only if someone rolls a decker.** This is the only
-   thing holding FR3.2 at `partial`, and it should stay unbuilt until Q3 changes
-   — but it is worth naming as the one FR row whose status is set by a table
-   decision rather than by us. `get_matrix_state` already answers `tracked:
-   false` with a note so nothing invents an Overwatch score in the meantime.
-5. **Tidiness, in one batch.** (a) Lazy-load `features/codex/` to satisfy §15's
-   letter — the budget is met with 2× headroom, so this buys clarity, not
-   latency. (b) `apps/server/src/fixer/state-codex.ts:7` still names "spirit
-   services FR8.3" as not built; `state-play.ts:114` now returns `tracked:
-   true`, so the comment is stale and misleading to the next reader. (c) The
-   §15 clauses nothing measures yet — Grid frame budget with 60 tokens
-   (DESIGN §17.4), and the p95 roll-to-visible latency — have no harness. Not
-   urgent at 7 users on a LAN, but they are the two NFRs no test would catch
-   regressing.
+So the ranked list below is short, and three of its four entries are decisions
+for the table rather than work for a build agent. Ranked by the order in which
+they would actually matter:
+
+1. **The Matrix tab, if and only if someone rolls a decker (FR3.2 / M7).** The
+   single FR row not at `done`, and the only one whose status is set by a table
+   decision instead of by us. Q3 says there is no decker; `SHEET_TABS` has seven
+   tabs and no Matrix; `get_matrix_state` answers `tracked: false` with a note
+   so nothing invents an Overwatch score in the meantime. If a player rolls a
+   decker, this becomes real work (FR7.1–7.6 plus the tab). Until then, building
+   it would be the most expensive way to make one table in this document read
+   `done`.
+2. **Measure the NFRs once on real hardware.** Both harnesses are honest about
+   being floors rather than estimates, and both gaps are the same shape: the
+   roll-latency figure (p95 3.5 ms) is loopback, so the venue's Wi-Fi RTT is
+   simply not in it; the Grid's wall-clock frame interval misses the 30 fps
+   floor in headless because SwiftShader rasterises the WebGL surface on the
+   CPU. Neither can be closed by more test code — the honest close is one
+   evening: run the GM's laptop and a player's phone on the actual AP, with the
+   actual scene, and write the two numbers down beside these. That converts
+   "inside budget on the cost this repo owns" into "inside budget", which is
+   what §15 actually claims. The same evening settles the one §15 clause that
+   still has no measurement of any kind: "other clients see interim motion
+   ≤ 200 ms behind; final position authoritative < 500 ms" for a token drag.
+   `token.drag` (ephemeral) and `token.move` (authoritative) are both
+   contracted, tested for *correctness*, and exercised by the frame harness's
+   drag phase — but nobody has ever timed the gap between the two devices,
+   because timing it needs two devices.
+3. **The rest of P6, when the table asks.** Deferred by design and not defects:
+   the Matrix toolkit (M7, Q3), token vision and dynamic lighting (FR9.16, Q9 —
+   manual fog is the permanent plan, not a placeholder), the Matrix overlay
+   (FR9.17), native priority char-gen (FR3.9, D5 — Chummer is the builder), the
+   advancement editor (FR3.7), stagecraft audio (FR12.10 / FR9.18), the
+   prop/tile stamp library (FR9.2's P3+ half), the image-gen adapter, the PWA
+   offline cache, and campaign export. Each stays unbuilt until someone at the
+   table wants it, which is the only signal worth building on.
+4. **Taste.** Two standing exemptions that are correct today and worth
+   re-reading if the code around them moves: the single audited bare
+   `hub.emit` (`plugins/scenes.ts:730` — `display.set` has no domain row, and
+   the docblock says the day a `display_state` row appears it becomes an
+   `atomic` block), and the three environmental test skips (one PDF the repo
+   does not ship, two that need a real Postgres and run in CI's own job).
+
+**And that is the whole list.** There is no fifth item, and inventing one would
+be worse than useless: it would put work in front of the next reader that the
+code does not need, and quietly devalue the four entries that are real. The
+project is in the state where the next genuinely useful input is a session at
+the table, not another pass over the source.
 
 **The standing lesson from LIVE-1 through LIVE-4.** Each of the four was
 invisible to harnesses that were individually correct and collectively blind in
@@ -895,7 +1024,22 @@ else constructs" — and the answer for most suites, honestly, is "the happy one
 All four defects were found in ten minutes of ordinary use against a fully green
 build.
 
-That lesson is why item 1 above is item 1. It was found the same way: not by a
-failing assertion, but by reading what the GM's screen actually renders and
-noticing that a guarantee the server keeps perfectly never arrives anywhere a
-human can see it. A guard nobody is shown is a guard that does not exist.
+That lesson kept earning through this round. The spoiler-guard item — the last
+one with a cost at the table — was found the same way the LIVE defects were:
+not by a failing assertion, but by reading what the GM's screen actually renders
+and noticing that a guarantee the server keeps perfectly never arrived anywhere
+a human could see it. The root cause is worth one sentence, because it is a
+mechanism and not an accident: the client's own type declared `spoilerFlags` as
+`string[]` while the server sent `{name, why}` objects, so a filter that
+discarded every real flag typechecked, read correctly, and was wrong. **A lying
+type makes a wrong filter look right**, and no amount of strictness helps when
+the lie is at the boundary — only a test that pins the shape the wire actually
+carries does, which is what `spoilerFlags.test.ts` now is. A guard nobody is
+shown is a guard that does not exist.
+
+The two NFR harnesses are the same lesson pointed forward rather than back. Every
+Grid test in this repo asserts *what* is drawn — hidden tokens absent, fog
+occluding, the acting token glowing — and not one of them asked how long a frame
+took, so a change that re-tessellated the fog on every pan could have halved the
+framerate at the table with the whole suite green. That is not a seam and not a
+state; it is a whole *dimension* nothing measured. It has two numbers in it now.

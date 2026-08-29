@@ -1,7 +1,14 @@
 /**
  * Route table (BUILD_CONVENTIONS "Web architecture").
- * Feature stubs live one-per-file under src/features/* so feature agents
- * replace their own files without touching this one.
+ *
+ * One route element per feature entry file under `src/features/*`, so work on
+ * a feature stays inside that feature's own directory and this file only needs
+ * an edit when a route is added, removed, or moved between chunks.
+ *
+ * These are all built features now, with one deliberate exception: `gm/scenes`
+ * still renders a placeholder card, because scene authoring actually lives in
+ * the Grid's GM panel — see `features/gm/ScenesPage.tsx` before assuming that
+ * route is unfinished work.
  */
 import { Suspense, lazy, type ReactNode } from 'react';
 import { createBrowserRouter } from 'react-router-dom';

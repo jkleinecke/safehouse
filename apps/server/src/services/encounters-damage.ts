@@ -205,9 +205,18 @@ export class CombatDamageService {
 
   /**
    * FR4.5 "propagate": the PC's own sheet view mirrors the tracker's monitors.
-   * INTEGRATION: there is no character play-state column yet (schema §9.2 keeps
-   * only `sheet`), so the mirror rides as a `sheet.updated` event scoped to the
-   * owner; point it at the play-state row once the characters agent lands one.
+   *
+   * This deliberately emits rather than writes. Play state does exist now — it
+   * is the `play` key of the characters `sheet` JSONB (`services/characters.ts`
+   * `PlayState` / `splitStoredSheet`) — but copying the combatant's filled
+   * boxes into it would create a second copy of a number the tracker already
+   * owns. `liveWounds()` resolves that for us: while an encounter is `live` it
+   * reads the combatant row and ignores `play.monitors` entirely, falling back
+   * to the character's own boxes only out of combat. So the sheet is already
+   * correct the moment it re-reads, and all this event has to do is tell the
+   * owner's device to re-read — which `features/sheet/useSheetLive.ts` does on
+   * `sheet.updated`. Writing the play row here would not fix anything and
+   * would put two writers on one number.
    */
   private async mirrorToCharacter(
     tx: EventTx,

@@ -707,9 +707,12 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
    * here. The event IS the state — `displayState` reads it back with
    * `latestEventOfType` — so this is a single write with nothing to be
    * inconsistent with, and wrapping it would buy a transaction for one insert.
-   * AUDITED EXEMPTION (§6.2, the LIVE-4 sweep): this is one of the two emits
-   * left outside a transaction on purpose, not one that was missed. Should a
+   * AUDITED EXEMPTION (§6.2, the LIVE-4 sweep): with `magic.updated` folded
+   * into `commitMagicState`, this is now the ONLY emit in the server left
+   * outside a transaction on purpose — not one that was missed. Should a
    * `display_state` row ever appear, this becomes an `atomic` block that day.
+   * `test/core-atomicity-domains.test.ts` pins the exemption from the other
+   * side: it asserts the whole `src/` tree has no other bare `hub.emit`.
    */
   app.hub.onCommand('display.set', async (msg, ctx) => {
     if (ctx.auth.role !== 'gm') {

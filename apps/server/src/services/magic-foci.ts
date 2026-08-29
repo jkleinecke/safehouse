@@ -40,7 +40,7 @@ import {
   spiritSustainers,
 } from './magic-derive.js';
 import {
-  announceMagic,
+  commitMagicState,
   fociFor,
   FocusRecordSchema,
   MAX_FOCI,
@@ -48,7 +48,6 @@ import {
   readMagicState,
   reagentsFor,
   spiritsOf,
-  writeMagicState,
   type FocusRecord,
   type MagicState,
   type SpiritRecord,
@@ -88,8 +87,15 @@ export async function addFocus(
     characterId,
     createdAt: new Date().toISOString(),
   });
-  await writeMagicState(db, campaignId, { ...state, foci: [...state.foci, focus] });
-  await announceMagic(hub, campaignId, { op: 'focus.added', focus, characterId });
+  // An active bonded focus emits real `Modifier` rows, so the shelf write moves
+  // a pool: stored with no frame, the sheet keeps rolling the old number (§6.2).
+  await commitMagicState(
+    db,
+    hub,
+    campaignId,
+    { ...state, foci: [...state.foci, focus] },
+    { payload: { op: 'focus.added', focus, characterId } },
+  );
   return focus;
 }
 
@@ -110,15 +116,13 @@ export async function patchFocus(
   const state = await readMagicState(db, campaignId);
   const current = requireFocus(state, focusId);
   const next = FocusRecordSchema.parse({ ...current, ...patch });
-  await writeMagicState(db, campaignId, {
-    ...state,
-    foci: state.foci.map((f) => (f.id === focusId ? next : f)),
-  });
-  await announceMagic(hub, campaignId, {
-    op: 'focus.updated',
-    focus: next,
-    characterId: next.characterId,
-  });
+  await commitMagicState(
+    db,
+    hub,
+    campaignId,
+    { ...state, foci: state.foci.map((f) => (f.id === focusId ? next : f)) },
+    { payload: { op: 'focus.updated', focus: next, characterId: next.characterId } },
+  );
   return next;
 }
 
@@ -130,15 +134,13 @@ export async function removeFocus(
 ): Promise<FocusRecord> {
   const state = await readMagicState(db, campaignId);
   const current = requireFocus(state, focusId);
-  await writeMagicState(db, campaignId, {
-    ...state,
-    foci: state.foci.filter((f) => f.id !== focusId),
-  });
-  await announceMagic(hub, campaignId, {
-    op: 'focus.removed',
-    focusId,
-    characterId: current.characterId,
-  });
+  await commitMagicState(
+    db,
+    hub,
+    campaignId,
+    { ...state, foci: state.foci.filter((f) => f.id !== focusId) },
+    { payload: { op: 'focus.removed', focusId, characterId: current.characterId } },
+  );
   return current;
 }
 
@@ -175,17 +177,21 @@ export async function reagentOp(
       : input.op === 'set'
         ? setReagents(before, amount)
         : spendReagents(before, amount);
-  await writeMagicState(db, campaignId, {
-    ...state,
-    reagents: { ...state.reagents, [characterId]: change.after },
-  });
   const result = {
     characterId,
     before: change.before,
     after: change.after,
     shortfall: change.shortfall,
   };
-  await announceMagic(hub, campaignId, { op: `reagents.${input.op ?? 'spend'}`, ...result });
+  // Drams are a consumable: a spend that lands with no frame is a counter the
+  // mage's own phone still shows at the old total, and spends again (§6.2).
+  await commitMagicState(
+    db,
+    hub,
+    campaignId,
+    { ...state, reagents: { ...state.reagents, [characterId]: change.after } },
+    { payload: { op: `reagents.${input.op ?? 'spend'}`, ...result } },
+  );
   return result;
 }
 

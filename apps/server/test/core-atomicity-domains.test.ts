@@ -13,6 +13,10 @@
  * land. The second is the one that matters — without it "the request failed"
  * is compatible with the bug, because LIVE-4's roll returned 500 *and*
  * persisted.
+ *
+ * Sibling: `core-atomicity-emits.test.ts` finishes the sweep (sheets, codex,
+ * generator, ownership, the magic shelf, the `postLog` fallback) and pins the
+ * one audited exemption by scanning `src/` for any other bare `hub.emit`.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { eq, sql } from 'drizzle-orm';
@@ -144,6 +148,24 @@ async function tokenRow(id: string) {
 
 async function combatantRow(id: string) {
   return (await t.db.select().from(combatants).where(eq(combatants.id, id)).limit(1))[0]!;
+}
+
+/** Edge as the stored sheet has it — the row a player's phone renders from. */
+async function edgeOnSheet(): Promise<{ max: number; current: number }> {
+  const row = (
+    await t.db.select().from(characters).where(eq(characters.id, characterId)).limit(1)
+  )[0]!;
+  return (row.sheet as SheetV1).attributes.edg;
+}
+
+/** The FR2.3 announcements: `log.posted` lines whose `kind` is `edge`. */
+async function edgeLogLines(): Promise<string[]> {
+  const body = await gmJson(
+    'GET',
+    `/api/campaigns/${boot.campaignId}/log?types=log.posted&limit=200`,
+  );
+  const events = body['events'] as unknown as { payload: Record<string, unknown> }[];
+  return events.filter((e) => e.payload['kind'] === 'edge').map((e) => String(e.payload['text']));
 }
 
 beforeAll(async () => {
@@ -522,5 +544,110 @@ describe('scene, fog and token writes are atomic with their events', () => {
 
     const revealed = await gmJson('POST', `/api/scenes/${sceneId}/fog`, { op: 'reveal', regionId });
     expect((revealed['fog'] as unknown as { revealed: string[] }).revealed).toContain(regionId);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5. The Edge debit (services/rolls-edge.ts) — the resource that does not
+//    grow back, and the highest-cost half-commit left after §6.2's first pass
+// ---------------------------------------------------------------------------
+
+/**
+ * Seize the Initiative and Blitz spend a point of Edge and say so out loud
+ * (FR2.3: "Edge spend decrements the character's current Edge *with* a log
+ * entry"). Three rows used to be three statements: the sheet, the
+ * `sheet.updated` frame that redraws every open phone, and the log line.
+ *
+ * Both torn shapes cost the table something no reload repairs. A debit with no
+ * frame is a point gone from the row while the player's own phone still shows
+ * it — so it gets spent twice. A debit with no log line is a point gone with
+ * nothing to point at — so the player says it never happened, and they are
+ * arguing from the only record there is.
+ *
+ * The NPC arm is deliberately NOT covered here: copilot Edge lives on the
+ * combatant row and its only writer is `EncountersService.updateCombatant`,
+ * which takes no `tx`, so an NPC's spend is still two transactions. That is
+ * named in `spend()`'s docblock rather than silently tested around.
+ */
+describe('an Edge spend is atomic with the sheet AND its log line (FR2.3)', () => {
+  let encounterId: string;
+
+  beforeAll(async () => {
+    const enc = await gmJson('POST', `/api/campaigns/${boot.campaignId}/encounters`, {
+      name: 'Alley behind the noodle stand',
+    });
+    encounterId = (enc['encounter'] as unknown as { id: string }).id;
+    // Source `character`: the payer is the PC's SHEET, which is the arm that
+    // costs a player something when it tears.
+    await gmJson('POST', `/api/encounters/${encounterId}/combatants`, {
+      source: 'character',
+      sourceId: characterId,
+      initScore: 11,
+    });
+    await gmJson('POST', `/api/encounters/${encounterId}/combatants`, {
+      source: 'manual',
+      name: 'Doorway watcher',
+      initBase: 9,
+      initDice: 2,
+      initScore: 22,
+      visibility: 'public',
+      monitors: MONITORS,
+    });
+  }, 60_000);
+
+  /** The combatant the PC drives, looked up fresh (the roster can grow). */
+  async function pcCombatantId(): Promise<string> {
+    const enc = await gmJson('GET', `/api/encounters/${encounterId}`);
+    const list = enc['combatants'] as unknown as Array<{ id: string; sourceId: string | null }>;
+    return list.find((c) => c.sourceId === characterId)!.id;
+  }
+
+  it('costs no Edge when `sheet.updated` cannot be recorded', async () => {
+    const before = await edgeOnSheet();
+    const linesBefore = await edgeLogLines();
+    await blockEventType('sheet.updated');
+
+    const res = await call('POST', '/api/edge/seize-initiative', {
+      combatantId: await pcCombatantId(),
+    });
+
+    expectAppendFailure(res, 'sheet.updated');
+    // The whole point: the point of Edge is still on the sheet.
+    expect(await edgeOnSheet()).toEqual(before);
+    // …and nothing claimed it was spent, either.
+    await unblockEvents();
+    expect(await edgeLogLines()).toEqual(linesBefore);
+  });
+
+  it('costs no Edge when the FR2.3 log line is what fails', async () => {
+    // This is the half the first §6.2 pass left open: the debit was already
+    // inside a transaction, but `postLog` opened a SECOND one after it, so a
+    // fault here used to leave the point spent and unannounced.
+    const before = await edgeOnSheet();
+    await blockEventType('log.posted');
+
+    const res = await call('POST', '/api/edge/blitz', { combatantId: await pcCombatantId() });
+
+    expectAppendFailure(res, 'log.posted');
+    expect(await edgeOnSheet()).toEqual(before);
+  });
+
+  it('spends exactly one point, with its line, once the fault clears', async () => {
+    const before = await edgeOnSheet();
+    const linesBefore = await edgeLogLines();
+
+    const res = await call('POST', '/api/edge/seize-initiative', {
+      combatantId: await pcCombatantId(),
+    });
+    expect(res.statusCode).toBe(200);
+
+    const after = await edgeOnSheet();
+    expect(after.current).toBe(before.current - 1);
+    const lines = await edgeLogLines();
+    expect(lines.length).toBe(linesBefore.length + 1);
+    expect(lines.some((l) => l.includes('spends 1 Edge'))).toBe(true);
+    // The line quotes what is LEFT, so it has to agree with the row it rode in
+    // with — that agreement is the thing the transaction buys.
+    expect(lines.some((l) => l.includes(`(${after.current}/${after.max} left)`))).toBe(true);
   });
 });
