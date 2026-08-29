@@ -45,6 +45,10 @@ services:
       LLM_MODEL_FAST: ${LLM_MODEL_FAST:-}
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Origin the join QR encodes. Empty is correct here — this container
+      # serves the SPA itself, so the server's own LAN address is the one a
+      # phone should scan. Only a split dev setup (Vite on 5173) needs it.
+      WEB_ORIGIN: ${WEB_ORIGIN:-}
     ports:
       # Bound on every interface: phones join over the venue Wi-Fi (§8).
       - "${PORT:-8787}:8787"

@@ -4,7 +4,7 @@
  * Mounts the live WS connection for the whole campaign subtree.
  */
 import { useState } from 'react';
-import { Outlet, useParams } from 'react-router-dom';
+import { Link, Outlet, useParams } from 'react-router-dom';
 import { useCampaign, useMyCharacterId } from '../../api/campaigns.js';
 import { getSession } from '../../api/session.js';
 import FixerDock from '../../features/gm/fixer/FixerDock.js';
@@ -13,6 +13,7 @@ import BottomNav from './BottomNav.js';
 import ConnectionChip from './ConnectionChip.js';
 import GmSidebar from './GmSidebar.js';
 import JoinQrModal from './JoinQrModal.js';
+import SessionMenu from './SessionMenu.js';
 
 function NoSession() {
   return (
@@ -21,8 +22,12 @@ function NoSession() {
         <div className="mono-label text-cyan">Safehouse</div>
         <h1 className="mt-4 text-lg font-semibold">No device token</h1>
         <p className="mt-2 text-sm text-dim">
-          This device hasn't joined the campaign. Scan the GM's join QR to get in.
+          This device hasn't joined the campaign. Scan the GM's join QR, or sign in from the front
+          door — a GM can start a campaign or pair with a code there (FR1.1).
         </p>
+        <Link className="btn btn-accent mt-5 w-full" to="/">
+          go to sign-in
+        </Link>
       </div>
     </main>
   );
@@ -51,11 +56,11 @@ export default function CampaignLayout() {
             <h1 className="truncate text-sm font-semibold tracking-wide">{name}</h1>
             <div className="mono-label text-faint">
               {campaign?.ingameDate ?? '2076-??-??'}
-              <span className="mx-1.5 text-edge-bright">/</span>
-              {session.role}
             </div>
           </div>
           <ConnectionChip status={status} />
+          {/* Which device this tab is, and how to hop to another (FR1.1/1.3). */}
+          <SessionMenu role={session.role} displayName={session.displayName} />
           {isGm && (
             <button
               className="btn btn-accent px-3 py-1.5"

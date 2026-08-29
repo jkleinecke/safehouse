@@ -90,11 +90,24 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
 
   // --- error envelope (§12) ----------------------------------------------
   app.setErrorHandler((err: unknown, _req, reply) => {
-    const e = (err ?? {}) as { statusCode?: unknown; code?: unknown; details?: unknown; message?: unknown };
+    const e = (err ?? {}) as {
+      statusCode?: unknown;
+      code?: unknown;
+      details?: unknown;
+      message?: unknown;
+      expose?: unknown;
+    };
     const statusCode = typeof e.statusCode === 'number' && e.statusCode >= 400 ? e.statusCode : 500;
     if (statusCode >= 500) app.log.error(err);
-    const code =
-      typeof e.code === 'string' && e.code.length > 0 && statusCode < 500
+    // A 5xx `code` is normally collapsed to `internal`: an exception out of a
+    // driver must never turn its own `code` into API surface. An error built by
+    // `httpError` is different — somebody chose that envelope, and the web app
+    // switches on codes like `ai_disabled` / `ai_unreachable` to tell "the
+    // Fixer is off" from "the box is down". `expose` keeps those intact.
+    const deliberate = e.expose === true && typeof e.code === 'string' && e.code.length > 0;
+    const code = deliberate
+      ? (e.code as string)
+      : typeof e.code === 'string' && e.code.length > 0 && statusCode < 500
         ? e.code
         : statusCode >= 500
           ? 'internal'
@@ -160,7 +173,10 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   if (webRoot && existsSync(webRoot)) {
     await app.register(fastifyStatic, { root: webRoot, prefix: '/', wildcard: true });
   }
-  const API_PREFIXES = ['/api', '/ws', '/files', '/read', '/join', '/healthz'];
+  // `/join/:code` is deliberately absent: it is an SPA route (the QR target),
+  // and the token-minting endpoint moved to `/api/join/:code` (LIVE-3). Keeping
+  // `/join` here would 404 the join screen in production instead of serving it.
+  const API_PREFIXES = ['/api', '/ws', '/files', '/read', '/healthz'];
   app.setNotFoundHandler((req, reply) => {
     const spaEligible =
       webRoot !== null &&

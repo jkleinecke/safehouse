@@ -78,6 +78,28 @@
   animation: tv-breathe 4.5s ease-in-out infinite;
 }
 
+/* Staged fog reveal (FR9.14/FR9.20): a light sweep, then the region's name. */
+@keyframes tv-reveal-sweep {
+  0% { opacity: 0; transform: translateX(-25%); }
+  20% { opacity: 1; }
+  100% { opacity: 0; transform: translateX(25%); }
+}
+
+.tv-reveal-sweep {
+  animation: tv-reveal-sweep 2200ms ease-out both;
+}
+
+@keyframes tv-reveal-name {
+  0% { opacity: 0; transform: scale(0.94); letter-spacing: 0.2em; }
+  22% { opacity: 1; transform: scale(1); letter-spacing: normal; }
+  80% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.tv-reveal-name {
+  animation: tv-reveal-name 4200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
 /* Kiosk: nothing is selectable or draggable — zero interaction (FR9.19). */
 .tv-kiosk {
   user-select: none;

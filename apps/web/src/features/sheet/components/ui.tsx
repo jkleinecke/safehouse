@@ -1,9 +1,20 @@
 /** Small shared UI atoms for the sheet feature (phone-first, dark theme). */
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
 import type { Ref } from '@safehouse/contracts';
+import { isDismissKey } from '../a11y.js';
 import { readerHref } from '../lib.js';
 
-/** Bottom-sheet modal — thumb-reach on a 390px phone, centered on desktop. */
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * Bottom-sheet modal — thumb-reach on a 390px phone, centered on desktop.
+ *
+ * Keyboard contract (found missing live: the provenance popover could be
+ * opened but not escaped): Escape closes it, focus moves inside on open, Tab
+ * cycles within the panel instead of wandering into the sheet behind it, and
+ * focus returns to whatever opened it on close.
+ */
 export function Sheet({
   open,
   onClose,
@@ -15,14 +26,56 @@ export function Sheet({
   title?: ReactNode;
   children: ReactNode;
 }) {
+  const panel = useRef<HTMLDivElement | null>(null);
+  const returnTo = useRef<Element | null>(null);
+  const closeRef = useRef(onClose);
+  const titleId = useId();
+
+  useEffect(() => {
+    closeRef.current = onClose;
+  });
+
+  // Focus in on open, focus back on close. This effect depends on `open`
+  // ALONE on purpose: callers pass a fresh `onClose` closure every render, and
+  // including it would re-run this on every keystroke — yanking focus back to
+  // the opener and then to the panel between one character and the next.
+  useEffect(() => {
+    if (!open) return;
+    returnTo.current = document.activeElement;
+    const node = panel.current;
+    // Nothing inside has claimed focus (the roll dialog claims its own button)
+    // → park it on the panel so a reader starts at the title, not at the page.
+    if (node && !node.contains(document.activeElement)) node.focus();
+    return () => {
+      const back = returnTo.current;
+      if (back instanceof HTMLElement && back.isConnected) back.focus();
+    };
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (isDismissKey(e.key)) {
+        closeRef.current();
+        return;
+      }
+      if (e.key !== 'Tab' || !panel.current) return;
+      const items = Array.from(panel.current.querySelectorAll<HTMLElement>(FOCUSABLE));
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (!first || !last) return;
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || active === panel.current)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
   return (
@@ -32,15 +85,25 @@ export function Sheet({
       role="presentation"
     >
       <div
-        className="max-h-[85dvh] w-full overflow-y-auto rounded-t-xl border border-edge bg-panel p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:max-w-md sm:rounded-xl"
+        ref={panel}
+        tabIndex={-1}
+        className="max-h-[85dvh] w-full overflow-y-auto rounded-t-xl border border-edge bg-panel p-4 pb-[max(1rem,env(safe-area-inset-bottom))] outline-none sm:max-w-md sm:rounded-xl"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
+        {...(title !== undefined ? { 'aria-labelledby': titleId } : {})}
       >
         {title !== undefined && (
           <div className="mb-3 flex items-center justify-between gap-3">
-            <div className="mono-label text-cyan">{title}</div>
-            <button className="text-dim hover:text-ink" onClick={onClose} aria-label="Close">
+            <div className="mono-label text-cyan" id={titleId}>
+              {title}
+            </div>
+            <button
+              type="button"
+              className="text-dim hover:text-ink"
+              onClick={onClose}
+              aria-label="Close"
+            >
               ✕
             </button>
           </div>
@@ -69,23 +132,30 @@ export function Stepper({
   max?: number;
   label?: string;
 }) {
+  const name = label ?? 'value';
   return (
-    <div className="inline-flex items-center gap-1">
+    <div
+      className="inline-flex items-center gap-1"
+      role="group"
+      aria-label={label ? `${label}, ${value}` : undefined}
+    >
       {label && <span className="mono-label mr-1">{label}</span>}
       <button
         type="button"
         className="btn h-8 w-8 p-0"
         onClick={() => onChange(Math.max(min, value - 1))}
-        aria-label={`decrease ${label ?? 'value'}`}
+        aria-label={`decrease ${name}`}
       >
         −
       </button>
-      <span className="w-9 text-center font-label text-sm text-ink">{value}</span>
+      <span className="w-9 text-center font-label text-sm text-ink" aria-hidden>
+        {value}
+      </span>
       <button
         type="button"
         className="btn h-8 w-8 p-0"
         onClick={() => onChange(Math.min(max, value + 1))}
-        aria-label={`increase ${label ?? 'value'}`}
+        aria-label={`increase ${name}`}
       >
         +
       </button>
@@ -103,6 +173,7 @@ export function RefChip({ refInfo }: { refInfo: Ref | undefined }) {
       target="_blank"
       rel="noreferrer"
       onClick={(e) => e.stopPropagation()}
+      aria-label={`Open ${refInfo.book} page ${refInfo.page} in the reader`}
     >
       {refInfo.book} p.{refInfo.page}
     </a>
@@ -112,4 +183,36 @@ export function RefChip({ refInfo }: { refInfo: Ref | undefined }) {
 /** Inline empty-state note. */
 export function Empty({ children }: { children: ReactNode }) {
   return <p className="py-4 text-center text-sm text-faint">{children}</p>;
+}
+
+/**
+ * A whole list row whose job is one action (roll this skill, cast this spell).
+ * A real `<button>`, not a `div` with a click handler: Enter and Space, focus
+ * ring and the "button" role all come for free, and the accessible name is
+ * mandatory rather than optional.
+ */
+export function RowButton({
+  label,
+  onActivate,
+  className,
+  children,
+}: {
+  label: string;
+  onActivate: () => void;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      onClick={onActivate}
+      className={
+        className ??
+        'flex min-w-0 flex-1 items-center gap-2 rounded py-2.5 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan active:bg-raised/60'
+      }
+    >
+      {children}
+    </button>
+  );
 }

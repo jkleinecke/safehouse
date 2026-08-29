@@ -1,12 +1,15 @@
 /**
- * /join/:code — QR-join flow (DESIGN.md FR1.1/1.3).
- * Calls GET /join/:code (anonymous), stores token+role+campaign, then routes
- * by role: display → /tv/:id, player/gm/observer → /c/:id.
+ * /join/:code — QR-join flow (DESIGN.md FR1.1/1.3). This is the SPA route the
+ * QR encodes; the token endpoint is GET /api/join/:code (LIVE-3 — they used to
+ * share a path, so scanning showed raw JSON).
+ * Calls GET /api/join/:code (anonymous), stores token+role+campaign, then
+ * routes by role: display → /tv/:id, player/gm/observer → /c/:id.
  */
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api, ApiError } from '../../api/client.js';
-import { saveSession, type JoinResponse } from '../../api/session.js';
+import { saveSession, sessionFrom, type JoinResponse } from '../../api/session.js';
+import { destinationFor } from './signin.js';
 
 export default function JoinPage() {
   const { code } = useParams<{ code: string }>();
@@ -17,20 +20,14 @@ export default function JoinPage() {
     if (!code) return;
     let cancelled = false;
 
-    api<JoinResponse>(`/join/${code}`, { anonymous: true })
+    api<JoinResponse>(`/api/join/${code}`, { anonymous: true })
       .then((join) => {
         if (cancelled) return;
-        saveSession({
-          token: join.token,
-          role: join.role,
-          campaignId: join.campaignId,
-          deviceId: join.deviceId,
-          userId: join.user?.id,
-          displayName: join.user?.displayName,
-        });
-        const dest =
-          join.role === 'display' ? `/tv/${join.campaignId}` : `/c/${join.campaignId}`;
-        navigate(dest, { replace: true });
+        // Stored in this role's own slot, so pairing a player view on the GM's
+        // laptop no longer clobbers the GM session (see api/session.ts).
+        const session = sessionFrom(join);
+        saveSession(session);
+        navigate(destinationFor(session), { replace: true });
       })
       .catch((err: unknown) => {
         if (cancelled) return;

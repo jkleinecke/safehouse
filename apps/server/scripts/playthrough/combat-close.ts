@@ -233,6 +233,12 @@ export async function closeFight(fight: Fight): Promise<void> {
     (morale?.['reasons'] as string[] | undefined)?.join(', ') ?? 'none',
     ((morale?.['reasons'] as string[] | undefined) ?? []).includes('at half strength'),
   );
+  checks.record(
+    '…and it is measured against a real Professional Rating, not 0 (FR4.6)',
+    'a non-zero threshold on a hand-added NPC row',
+    `pressure ${String(morale?.['pressure'])} vs PR ${String(morale?.['threshold'])}`,
+    typeof morale?.['threshold'] === 'number' && (morale['threshold'] as number) > 0,
+  );
   const moraleLog = gmLive.frames.filter((f) => f.type === 'log.posted' && (f.payload as Dict)['kind'] === 'morale');
   checks.record('the suggestion is logged GM-only, never acted on', 'a gm-visibility log line', `${moraleLog.length} line(s), visibility ${moraleLog[0]?.visibility}`, moraleLog.length > 0 && moraleLog.every((f) => f.visibility === 'gm'));
   const playersSawMorale = [tv.live, ...Object.values(phones).map((p) => p.live)].some((l) =>

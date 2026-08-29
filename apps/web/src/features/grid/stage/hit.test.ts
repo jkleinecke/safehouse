@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Scene, Token } from '@safehouse/contracts';
 import { metricsFor } from '../geometry.js';
-import { gridTolerance, hitDoor, hitToken, isDoubleTap } from './hit.js';
+import { gridTolerance, hitDoor, hitPin, hitToken, hitWall, isDoubleTap } from './hit.js';
 
 function token(id: string, x: number, y: number, size = 1): Token {
   return {
@@ -63,6 +63,36 @@ describe('hitDoor', () => {
 
   it('misses when nothing is near', () => {
     expect(hitDoor(scene, { x: 2, y: 4 })).toBeNull();
+  });
+});
+
+describe('hitPin / hitWall (FR9.2/9.3 authoring)', () => {
+  const scene = {
+    geometry: {
+      doors: [],
+      zones: [],
+      walls: [
+        { id: 'w1', a: { x: 0, y: 0 }, b: { x: 8, y: 0 } },
+        { id: 'w2', a: { x: 8, y: 0 }, b: { x: 8, y: 6 } },
+      ],
+      pins: [
+        { id: 'p1', at: { x: 3, y: 3 }, visibility: 'gm' },
+        { id: 'p2', at: { x: 3, y: 3 }, visibility: 'public' },
+        { id: 'p3', at: { x: 9, y: 1 }, visibility: 'public' },
+      ],
+    },
+  } as unknown as Scene;
+
+  it('picks the pin under the click, latest on top when they stack', () => {
+    expect(hitPin(scene, { x: 3.1, y: 3.05 })).toBe('p2');
+    expect(hitPin(scene, { x: 8.9, y: 1.1 })).toBe('p3');
+    expect(hitPin(scene, { x: 7, y: 7 })).toBeNull();
+  });
+
+  it('finds a wall segment near the click', () => {
+    expect(hitWall(scene, { x: 4, y: 0.2 })).toBe('w1');
+    expect(hitWall(scene, { x: 8.1, y: 3 })).toBe('w2');
+    expect(hitWall(scene, { x: 4, y: 3 })).toBeNull();
   });
 });
 

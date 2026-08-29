@@ -5,8 +5,10 @@
  * in GRID UNITS; `Grid.offset` shifts the grid origin relative to the map
  * image. The map image is stretched to cover cols×rows squares (calibration =
  * tuning cols/rows/offset until the drawn grid matches the image's own grid).
- * INTEGRATION: grid↔map-pixel mapping assumed; align with server scenes agent
- * if it stores a px-per-square calibration instead.
+ *
+ * The server stores exactly that — `Grid { cols, rows, offset, unitM }` in
+ * `scenes.grid` — and no px-per-square figure, so this mapping is the whole
+ * calibration and there is nothing on the other side to disagree with it.
  */
 import type { Grid, Point } from '@safehouse/contracts';
 
@@ -70,6 +72,23 @@ export function snapCenter(p: Point, size: number): Point {
 /** Euclidean distance between grid points, in grid units. */
 export function gridDist(a: Point, b: Point): number {
   return Math.hypot(b.x - a.x, b.y - a.y);
+}
+
+/**
+ * Snap a VERTEX to the nearest grid intersection (FR9.2 authoring). Walls and
+ * doors run along cell edges, not through cell centres — this is deliberately
+ * not `snapCenter`.
+ */
+export function snapVertex(p: Point, enabled = true): Point {
+  if (!enabled) return { x: p.x, y: p.y };
+  return { x: Math.round(p.x), y: Math.round(p.y) };
+}
+
+/** Shorter than this (grid units) a wall/door drag was a click, not a segment. */
+export const MIN_SEGMENT = 0.25;
+
+export function isDegenerateSegment(a: Point, b: Point): boolean {
+  return gridDist(a, b) < MIN_SEGMENT;
 }
 
 /** Ruler distance in meters (FR9.8): grid distance × meters-per-square. */

@@ -21,6 +21,7 @@ import {
   nextActor,
   type MoraleReport,
 } from '@safehouse/rules';
+import { OWNED_BY_VIEWER } from '../../live/merge.js';
 
 export interface Viewer {
   role: Role;
@@ -32,8 +33,16 @@ export interface Viewer {
 // Who may read what
 // ---------------------------------------------------------------------------
 
-/** A row driven by this viewer's own PC. */
+/**
+ * A row driven by this viewer's own PC.
+ *
+ * Two ways to know. A GM-scoped payload carries `sourceId`, so ownership is
+ * derivable. The reduced player payload drops `sourceId` (FR4.9) and instead
+ * states `own` outright — hydration records that as `copilot.ownedByViewer`,
+ * and the server's word beats a guess we cannot make.
+ */
 export function isOwnCombatant(c: Combatant, viewer: Viewer): boolean {
+  if (c.copilot?.[OWNED_BY_VIEWER] === true) return true;
   return (
     viewer.characterId !== undefined &&
     c.source === 'character' &&
@@ -186,8 +195,12 @@ const rec = (v: unknown): Record<string, unknown> =>
  * is a GM flag (the engine can't know who the leader was); setting
  * `copilot.morale = false` silences a group entirely.
  *
- * INTEGRATION: `copilot.leaderDown` / `copilot.morale` flag names assumed —
- * align with the encounters + generator agents' copilot payload.
+ * The server's own morale pass (`services/encounters-damage.ts evaluateMorale`)
+ * reads `copilot.leader` — the GM's "this row is the leader" flag, settable
+ * through `POST /api/encounters/:id/combatants` and `PATCH /api/combatants/:id`
+ * — so that is the authority and this reads it first. The older client-side
+ * `copilot.leaderDown` spelling is still honoured, because a GM who set it on
+ * a row mid-session should not watch the prompt quietly stop firing.
  */
 export function moralePrompts(combatants: Combatant[]): MoralePrompt[] {
   const out: MoralePrompt[] = [];
@@ -196,7 +209,7 @@ export function moralePrompts(combatants: Combatant[]): MoralePrompt[] {
     if (!grunt) continue;
     const copilot = rec(c.copilot);
     if (copilot['morale'] === false) continue;
-    const leaderDown = copilot['leaderDown'] === true;
+    const leaderDown = copilot['leader'] === true || copilot['leaderDown'] === true;
     const triggers = gruntMoraleTriggers(grunt, { leaderDown });
     const report = moraleReport(grunt.professionalRating, triggers);
     if (report.suggestion === 'fight_on') continue;

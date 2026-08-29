@@ -30,8 +30,15 @@ export default function RollTablesPanel({ campaignId }: { campaignId: string }) 
       </header>
 
       <div className="max-h-64 overflow-y-auto">
-        {isLoading && <p className="p-3 text-sm text-faint">Loading tables…</p>}
-        {isError && <p className="p-3 text-sm text-faint">No tables endpoint yet.</p>}
+        {isLoading && (
+          <p className="p-3 text-sm text-faint" aria-busy="true">
+            Loading tables…
+          </p>
+        )}
+        {/* A failed read is not an empty table list — say which one it is. */}
+        {isError && (
+          <p className="p-3 text-sm text-warn">Could not load the rollable tables.</p>
+        )}
         {tables && tables.length === 0 && (
           <p className="p-3 text-sm text-faint">No tables — the GM can add complications, loot, weather…</p>
         )}

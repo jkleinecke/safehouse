@@ -16,9 +16,13 @@ import {
   useUpdateCampaign,
   type InviteResult,
 } from './home/api.js';
+import PairPanel from './pairing/PairPanel.js';
 import { ErrorNote, Field, GmGuard, inputClass, SectionTitle, Spinner } from './ui.js';
 
-const TOOL_LINKS = ['scenes', 'generator', 'fixer', 'books', 'sessions'] as const;
+/** Prep screens that live under /c/:id/gm/*. */
+const TOOL_LINKS = ['runs', 'scenes', 'generator', 'fixer', 'books', 'sessions'] as const;
+/** Table-wide screens (players see a filtered view of the same route). */
+const TABLE_LINKS = ['codex', 'calendar'] as const;
 
 function SettingsPanel({ campaignId }: { campaignId: string }) {
   const { data: campaign } = useCampaign(campaignId);
@@ -201,6 +205,11 @@ export default function GmHome() {
       <div className="p-6">
         <SectionTitle hint="prep between sessions, run the table during them">GM console</SectionTitle>
         <div className="mt-2 flex flex-wrap gap-2">
+          {TABLE_LINKS.map((t) => (
+            <Link key={t} to={`/c/${campaignId}/${t}`} className="chip text-dim hover:text-cyan">
+              {t}
+            </Link>
+          ))}
           {TOOL_LINKS.map((t) => (
             <Link key={t} to={`/c/${campaignId}/gm/${t}`} className="chip text-dim hover:text-cyan">
               {t}
@@ -212,6 +221,7 @@ export default function GmHome() {
           <SettingsPanel campaignId={campaignId} />
           <div className="space-y-4">
             <InvitePanel campaignId={campaignId} onShowQr={() => setQrOpen(true)} />
+            <PairPanel campaignId={campaignId} />
             <DevicesPanel campaignId={campaignId} />
           </div>
         </div>

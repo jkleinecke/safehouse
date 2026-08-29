@@ -1,11 +1,28 @@
 /**
- * Live campaign state fed by the WS client (DESIGN.md §11).
- * Persisted events land in a ring buffer (the session log tail); a few
- * well-known types also project into dedicated slices. Ephemeral messages
- * (presence, drags, pings, fixer stream) never touch the event buffer.
+ * Live campaign state (DESIGN.md §11).
+ *
+ * Two inputs, one state:
+ *   `hydrate(snapshot)` — a REST read of what the server already holds, run on
+ *      mount and again after every reconnect (LIVE-1). Without it the UI only
+ *      ever knew about events that happened to arrive while it was mounted, so
+ *      a refresh mid-session showed an empty log and an empty tracker.
+ *   `applyEvent(event)` — the live WS stream and the hub's `last_event_id`
+ *      replay, merged on top.
+ *
+ * Both funnel through `mergeEvents`, so backfill, replay and live traffic are
+ * idempotent and order-insensitive: an event that arrives twice applies once.
+ * Ephemeral messages (presence, drags, pings, fixer stream) never touch the
+ * event window.
  */
 import { create } from 'zustand';
 import type { Encounter, WsEphemeral, WsEvent } from '@safehouse/contracts';
+import {
+  isEncounterDeleted,
+  mergeEncounter,
+  mergeEvents,
+  normalizeEncounter,
+  type EventWindow,
+} from './merge.js';
 
 export type SocketStatus = 'idle' | 'connecting' | 'online' | 'offline';
 
@@ -28,6 +45,13 @@ export interface PingMarker {
   x: number;
   y: number;
   sceneId?: string;
+  /**
+   * How to render the mark (FR9.15): a `ping` flashes, a `pointer` extends a
+   * trail, a `focus` recentres the camera. The server stamps it on every
+   * ephemeral mark, so nothing downstream has to guess from cadence — a wrong
+   * guess pans the table's shared screen off the action.
+   */
+  kind?: 'ping' | 'pointer' | 'focus';
   ts: number;
 }
 
@@ -38,10 +62,50 @@ export interface FixerChunk {
   ts: number;
 }
 
+/** The slices a live view can wait on before it may claim "nothing yet". */
+export type HydrationSlice = 'campaign' | 'log' | 'encounter' | 'session' | 'tables';
+
+export const HYDRATION_SLICES: HydrationSlice[] = [
+  'campaign',
+  'log',
+  'encounter',
+  'session',
+  'tables',
+];
+
+/**
+ * `idle` means we have not asked yet — an empty view under `idle` or `loading`
+ * must say "loading", never "nothing here". `error` is its own word so a 403
+ * or a dead server never masquerades as a quiet table.
+ */
+export type HydrationStatus = 'idle' | 'loading' | 'ready' | 'error';
+
+export type HydrationMap = Record<HydrationSlice, HydrationStatus>;
+
+/** A REST read of server-held state, merged onto whatever the socket brought. */
+export interface LiveSnapshot {
+  /** Persisted events in any order; deduplicated against the window. */
+  events?: readonly unknown[];
+  encounter?: Encounter | null;
+  activeSceneId?: string | null;
+  activeSessionId?: string | null;
+  sessionLive?: boolean;
+  connectedCount?: number;
+  /**
+   * The store's `lastEventId` when the fetch that produced this snapshot was
+   * ISSUED. A projected slice (encounter, active scene) is only accepted when
+   * no newer WS event has already written it — a snapshot in flight must never
+   * roll the table back.
+   */
+  asOfEventId?: number;
+}
+
 export interface LiveState {
   status: SocketStatus;
   /** Highest persisted event id seen — sent on reconnect for gap replay. */
   lastEventId: number;
+  /** Highest id that has aged out of the ring buffer. */
+  floorEventId: number;
   /** Ring buffer of persisted events, oldest → newest. */
   events: WsEvent[];
   presence: Record<string, PresenceEntry>;
@@ -52,8 +116,26 @@ export interface LiveState {
   lastPing: PingMarker | null;
   fixerStream: FixerChunk[];
 
+  /** Live-mode readout from `GET /api/campaigns/:id/live` (FR6.2). */
+  activeSessionId: string | null;
+  sessionLive: boolean;
+  connectedCount: number;
+
+  /** Per-slice hydration state — what powers honest empty states. */
+  hydration: HydrationMap;
+  /** Bumped on every reconnect (online after having been online). */
+  reconnectEpoch: number;
+  /** Whether the socket has ever reached `online` in this campaign. */
+  hasBeenOnline: boolean;
+
+  /** WS event id that last wrote `encounter` / `activeSceneId`. */
+  encounterEventId: number;
+  sceneEventId: number;
+
   setStatus: (status: SocketStatus) => void;
   applyEvent: (event: WsEvent) => void;
+  hydrate: (snapshot: LiveSnapshot) => void;
+  setHydration: (slice: HydrationSlice, status: HydrationStatus) => void;
   handleEphemeral: (msg: WsEphemeral) => void;
   clearFixerStream: () => void;
   reset: () => void;
@@ -63,9 +145,14 @@ function asRecord(v: unknown): Record<string, unknown> {
   return typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : {};
 }
 
+function idleHydration(): HydrationMap {
+  return { campaign: 'idle', log: 'idle', encounter: 'idle', session: 'idle', tables: 'idle' };
+}
+
 const initialState = {
   status: 'idle' as SocketStatus,
   lastEventId: 0,
+  floorEventId: 0,
   events: [] as WsEvent[],
   presence: {} as Record<string, PresenceEntry>,
   activeSceneId: null as string | null,
@@ -73,34 +160,81 @@ const initialState = {
   drags: {} as Record<string, DragPosition>,
   lastPing: null as PingMarker | null,
   fixerStream: [] as FixerChunk[],
+  activeSessionId: null as string | null,
+  sessionLive: false,
+  connectedCount: 0,
+  hydration: idleHydration(),
+  reconnectEpoch: 0,
+  hasBeenOnline: false,
+  encounterEventId: 0,
+  sceneEventId: 0,
 };
+
+function windowOf(state: LiveState): EventWindow {
+  return { events: state.events, lastEventId: state.lastEventId, floorEventId: state.floorEventId };
+}
 
 export const useLiveStore = create<LiveState>()((set, get) => ({
   ...initialState,
 
-  setStatus: (status) => set({ status }),
+  setStatus: (status) =>
+    set((s) => {
+      if (s.status === status) return s;
+      if (status !== 'online') return { status };
+      // A reconnect is the second and every later arrival at `online`. It is
+      // the cue to re-read REST: the hub replays persisted events from
+      // `last_event_id`, but derived state (the encounter, the active scene)
+      // is a snapshot the client can only get by asking.
+      return s.hasBeenOnline
+        ? { status, reconnectEpoch: s.reconnectEpoch + 1 }
+        : { status, hasBeenOnline: true };
+    }),
 
   applyEvent: (event) => {
     const state = get();
-    // Replay can resend events we already hold — ids are monotonic per campaign.
-    if (event.id <= state.lastEventId) return;
+    const win = windowOf(state);
+    const merged = mergeEvents(win, [event], EVENT_BUFFER_SIZE);
+    // The same object back means we already hold this event (a replay, or a
+    // duplicate broadcast). Projections must not re-run: a replayed
+    // `encounter.updated` would clobber a newer optimistic patch
+    // (BUILD_CONVENTIONS "replay from last_event_id").
+    if (merged === win) return;
 
-    const events = [...state.events, event];
-    if (events.length > EVENT_BUFFER_SIZE) events.splice(0, events.length - EVENT_BUFFER_SIZE);
-
-    const patch: Partial<LiveState> = { events, lastEventId: event.id };
+    const patch: Partial<LiveState> = {
+      events: merged.events,
+      lastEventId: merged.lastEventId,
+      floorEventId: merged.floorEventId,
+    };
     const payload = asRecord(event.payload);
 
     switch (event.type) {
       case 'scene.activated': {
         const sceneId = payload['sceneId'] ?? payload['id'];
-        if (typeof sceneId === 'string') patch.activeSceneId = sceneId;
+        if (typeof sceneId === 'string' && event.id >= state.sceneEventId) {
+          patch.activeSceneId = sceneId;
+          patch.sceneEventId = event.id;
+        }
         break;
       }
       case 'encounter.updated': {
-        // Payload is the encounter (or `{ encounter }` delta wrapper).
-        const enc = 'encounter' in payload ? payload['encounter'] : event.payload;
-        patch.encounter = (enc ?? null) as Encounter | null;
+        if (event.id < state.encounterEventId) break;
+        if (isEncounterDeleted(event.payload)) {
+          const gone = normalizeEncounter(event.payload);
+          if (!gone || !state.encounter || gone.id === state.encounter.id) {
+            patch.encounter = null;
+            patch.encounterEventId = event.id;
+          }
+          break;
+        }
+        // The broadcast nests the row under `payload.encounter` but keeps
+        // `combatants` and `activeCombatantId` at the top level — reading the
+        // nested object alone drops the whole roster. `mergeEncounter` also
+        // stops a roster-less delta from emptying a populated tracker.
+        const next = normalizeEncounter(event.payload);
+        if (next) {
+          patch.encounter = mergeEncounter(state.encounter, next);
+          patch.encounterEventId = event.id;
+        }
         break;
       }
       case 'token.moved': {
@@ -119,6 +253,50 @@ export const useLiveStore = create<LiveState>()((set, get) => ({
 
     set(patch);
   },
+
+  /**
+   * Fold a REST snapshot in. Events merge (never replacing the live window);
+   * projected slices are only accepted when no NEWER socket event has already
+   * written them, so a slow response can never roll the table back.
+   */
+  hydrate: (snapshot) => {
+    const state = get();
+    const patch: Partial<LiveState> = {};
+
+    if (snapshot.events && snapshot.events.length > 0) {
+      const win = windowOf(state);
+      const merged = mergeEvents(win, snapshot.events, EVENT_BUFFER_SIZE);
+      if (merged !== win) {
+        patch.events = merged.events;
+        patch.lastEventId = merged.lastEventId;
+        patch.floorEventId = merged.floorEventId;
+      }
+    }
+
+    const asOf = snapshot.asOfEventId ?? Number.POSITIVE_INFINITY;
+
+    if (snapshot.encounter !== undefined && asOf >= state.encounterEventId) {
+      // A snapshot normally carries the whole roster and simply replaces what
+      // is there; `mergeEncounter` covers the case where the detail read fell
+      // back to a list row that has no combatants on it. An explicit `null`
+      // is the server saying there is no fight — that must clear, not merge.
+      patch.encounter =
+        snapshot.encounter === null ? null : mergeEncounter(state.encounter, snapshot.encounter);
+    }
+    if (snapshot.activeSceneId !== undefined && asOf >= state.sceneEventId) {
+      patch.activeSceneId = snapshot.activeSceneId;
+    }
+    if (snapshot.activeSessionId !== undefined) patch.activeSessionId = snapshot.activeSessionId;
+    if (snapshot.sessionLive !== undefined) patch.sessionLive = snapshot.sessionLive;
+    if (snapshot.connectedCount !== undefined) patch.connectedCount = snapshot.connectedCount;
+
+    if (Object.keys(patch).length > 0) set(patch);
+  },
+
+  setHydration: (slice, status) =>
+    set((s) =>
+      s.hydration[slice] === status ? s : { hydration: { ...s.hydration, [slice]: status } },
+    ),
 
   handleEphemeral: (msg) => {
     const payload = asRecord(msg.payload);
@@ -146,7 +324,16 @@ export const useLiveStore = create<LiveState>()((set, get) => ({
       const y = payload['y'];
       if (typeof x !== 'number' || typeof y !== 'number') return;
       const sceneId = typeof payload['sceneId'] === 'string' ? (payload['sceneId'] as string) : undefined;
-      set({ lastPing: { x, y, sceneId, ts } });
+      // The server stamps `kind`; fall back to the wire type for anything
+      // older, which is exactly what the two names already mean.
+      const raw = payload['kind'];
+      const kind =
+        raw === 'ping' || raw === 'pointer' || raw === 'focus'
+          ? raw
+          : msg.type === 'pointer'
+            ? 'pointer'
+            : 'ping';
+      set({ lastPing: { x, y, sceneId, kind, ts } });
       return;
     }
 
@@ -162,5 +349,21 @@ export const useLiveStore = create<LiveState>()((set, get) => ({
 
   clearFixerStream: () => set({ fixerStream: [] }),
 
-  reset: () => set({ ...initialState }),
+  reset: () => set({ ...initialState, hydration: idleHydration() }),
 }));
+
+// ---------------------------------------------------------------------------
+// Selectors — one place that decides what "we have nothing" means
+// ---------------------------------------------------------------------------
+
+/** True once the server has answered for this slice (with rows or with none). */
+export function isHydrated(state: Pick<LiveState, 'hydration'>, slice: HydrationSlice): boolean {
+  const s = state.hydration[slice];
+  return s === 'ready' || s === 'error';
+}
+
+/** True while we have not yet heard back — the view must not say "empty". */
+export function isHydrating(state: Pick<LiveState, 'hydration'>, slice: HydrationSlice): boolean {
+  const s = state.hydration[slice];
+  return s === 'idle' || s === 'loading';
+}

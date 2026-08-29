@@ -10,6 +10,9 @@ import JoinPage from './components/shell/JoinPage.js';
 import Landing from './components/shell/Landing.js';
 import NotFound from './components/shell/NotFound.js';
 import ReaderPage from './components/shell/ReaderPage.js';
+import CalendarView from './features/codex/CalendarView.js';
+import CodexPage from './features/codex/CodexPage.js';
+import RunsBoard from './features/codex/RunsBoard.js';
 import BooksPage from './features/gm/BooksPage.js';
 import FixerPage from './features/gm/FixerPage.js';
 import GeneratorPage from './features/gm/GeneratorPage.js';
@@ -34,10 +37,16 @@ export const router = createBrowserRouter([
       { path: 'sheet/:characterId', element: <SheetPage /> },
       { path: 'table', element: <TablePage /> },
       { path: 'grid', element: <GridPage /> },
+      // M5 codex + calendar are table-wide: players browse shared lore during
+      // sessions (§4). The server filters what each device receives.
+      { path: 'codex', element: <CodexPage /> },
+      { path: 'codex/:pageId', element: <CodexPage /> },
+      { path: 'calendar', element: <CalendarView /> },
       {
         path: 'gm',
         children: [
           { index: true, element: <GmHome /> },
+          { path: 'runs', element: <RunsBoard /> },
           { path: 'scenes', element: <ScenesPage /> },
           { path: 'generator', element: <GeneratorPage /> },
           { path: 'fixer', element: <FixerPage /> },

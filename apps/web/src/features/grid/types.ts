@@ -11,7 +11,21 @@ export type GridTool =
   | 'aoe' // place AoE circle template (FR9.12)
   | 'pointer' // pointer trail broadcast (FR9.15)
   | 'fogdef' // GM: click vertices to define a named fog region (FR9.14)
-  | 'focus'; // GM: next click broadcasts "focus here" (FR9.15)
+  | 'focus' // GM: next click broadcasts "focus here" (FR9.15)
+  | 'wall' // GM: drag to draw a wall segment (FR9.2)
+  | 'door' // GM: drag to draw a door segment (FR9.2)
+  | 'zone' // GM: click vertices to draw a named zone (FR9.2)
+  | 'pin'; // GM: click to drop a map pin (FR9.3)
+
+/** GM drawing tools that author scene geometry rather than play with it. */
+export const GEOMETRY_TOOLS: readonly GridTool[] = ['wall', 'door', 'zone', 'pin'];
+
+/** In-progress wall/door rubber band, reported by the stage while dragging. */
+export interface SegmentDraft {
+  kind: 'wall' | 'door';
+  a: Point;
+  b: Point;
+}
 
 /** Live ruler measurement, reported by the stage to the DOM readout. */
 export interface RulerState {
@@ -47,7 +61,11 @@ export interface ScatterResult {
   summary: string;
 }
 
-/** In-progress fog polygon definition (grid units). */
+/**
+ * In-progress polygon definition (grid units). Shared by the fog-region tool
+ * (FR9.14) and the zone tool (FR9.2) — only one is ever active, and the stage
+ * draws the same rubber-band polygon for both.
+ */
 export interface FogDraft {
   points: Point[];
 }
@@ -78,6 +96,8 @@ export interface StageSceneState {
   aoe: AoeTemplate | null;
   scatter: ScatterResult | null;
   fogDraft: FogDraft | null;
+  /** Pin currently open in the GM's pin editor — drawn ringed (FR9.3). */
+  selectedPinId?: string | null;
 }
 
 /** Callbacks the stage raises back into React land. */
@@ -97,10 +117,20 @@ export interface StageCallbacks {
   onDoorToggle(doorId: string): void;
   /** AoE tool click (grid units). */
   onAoePlace(x: number, y: number): void;
-  /** fogdef tool click — append a vertex (grid units). */
+  /** fogdef/zone tool click — append a polygon vertex (grid units). */
   onFogVertex(x: number, y: number): void;
   /** focus tool click — broadcast "focus here" (grid units). */
   onFocus(x: number, y: number): void;
+
+  // -- GM geometry authoring (FR9.2/9.3). Optional so other stages (the TV
+  // kiosk) can implement the play-side callbacks alone.
+
+  /** wall/door drag finished — endpoints in grid units, already snapped. */
+  onSegmentDraw?(kind: 'wall' | 'door', a: Point, b: Point): void;
+  /** pin tool click — drop a pin at grid coords (FR9.3). */
+  onPinPlace?(x: number, y: number): void;
+  /** select-tool click on an existing pin — open it in the editor. */
+  onPinSelect?(pinId: string): void;
 }
 
 /** Imperative API of the lazily-loaded pixi stage. */

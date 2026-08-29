@@ -93,26 +93,27 @@ export function throttle<T>(
 }
 
 /**
- * Commands the Grid sends that BUILD_CONVENTIONS/contracts do not name yet.
- * INTEGRATION: `pointer` (FR9.15 pointer trail) and `scene.focus` (FR9.15
- * "focus here") have ephemeral *event* types reserved (`pointer`) or implied,
- * but no client→server command schema. Add `PointerCommandSchema` /
- * `SceneFocusCommandSchema` to `@safehouse/contracts` and drop this union.
+ * The three table-feel commands (FR9.15/FR9.21) are now in the contracts'
+ * `WsCommandSchema` union and handled server-side:
+ *
+ *   `pointer`      → ephemeral `pointer` `{ sceneId, x, y, kind: 'pointer' }`
+ *   `scene.focus`  → ephemeral ping-family mark carrying `kind: 'focus'`,
+ *                    GM-only; every viewer recentres ONCE and keeps panning
+ *   `display.set`  → PERSISTED `display.updated` `{ blank, ribbon }`, GM-only,
+ *                    public visibility, full state (not a patch) so the newest
+ *                    event is the whole answer for a TV that just rebooted
+ *
+ * Nothing local remains: `WsCommandInput` covers all of them.
  */
-export type GridExtraCommand =
-  | { cmd: 'pointer'; sceneId?: string; x: number; y: number }
-  | { cmd: 'scene.focus'; sceneId?: string; x: number; y: number };
-
-export type GridCommand = WsCommandInput | GridExtraCommand;
+export type GridCommand = WsCommandInput;
 
 export interface CommandSink {
   send(cmd: WsCommandInput): boolean;
 }
 
-/** Narrow escape hatch for the not-yet-contracted commands above. */
 function post(socket: CommandSink | null, cmd: GridCommand): boolean {
   if (!socket) return false;
-  return socket.send(cmd as WsCommandInput);
+  return socket.send(cmd);
 }
 
 export class GridCommands {
@@ -163,6 +164,15 @@ export class GridCommands {
 
   focus(x: number, y: number): void {
     post(this.socket, { cmd: 'scene.focus', sceneId: this.sceneId ?? undefined, x, y });
+  }
+
+  /**
+   * GM steering of the table display (FR9.21): blank the table, or hide the
+   * initiative ribbon during pure roleplay. Returns false when the socket is
+   * down so the panel can say so instead of pretending it landed.
+   */
+  display(patch: { blank?: boolean; ribbon?: boolean }): boolean {
+    return post(this.socket, { cmd: 'display.set', ...patch });
   }
 
   fogReveal(sceneId: string, regionId: string, announce = false): void {

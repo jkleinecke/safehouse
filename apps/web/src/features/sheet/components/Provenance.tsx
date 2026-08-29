@@ -5,6 +5,7 @@
  */
 import { useRef, useState } from 'react';
 import type { LimitRef, ProvenanceEntry } from '@safehouse/contracts';
+import { breakdownLabel } from '../a11y.js';
 import { hasOverrideEntry, signed } from '../lib.js';
 import { Sheet } from './ui.js';
 
@@ -33,6 +34,11 @@ export interface BreakdownButtonProps {
 /**
  * A tappable derived value: tap → breakdown sheet; long-press → straight to
  * the override editor. Shows a flag when an override is in play.
+ *
+ * Long-press is a touch shortcut, never the only path: the breakdown sheet it
+ * opens always carries an "Override…" button, so a keyboard user reaches the
+ * same editor with Enter then Tab. The sheet itself traps Tab and closes on
+ * Escape (see `Sheet`), which is what made this popover escapable at all.
  */
 export function BreakdownButton(props: BreakdownButtonProps) {
   const [open, setOpen] = useState(false);
@@ -79,7 +85,9 @@ export function BreakdownButton(props: BreakdownButtonProps) {
           setEditing(true);
           setOpen(true);
         }}
-        aria-label={`${props.title}: ${props.value}${overridden ? ' (overridden)' : ''}`}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label={breakdownLabel(props.title, props.value, overridden)}
       >
         {props.children ?? props.value}
         {overridden && (
@@ -185,6 +193,7 @@ function OverrideEditor({
         <div className="flex gap-2">
           {override.current && (
             <button
+              type="button"
               className="btn"
               onClick={() => {
                 override.clear();
@@ -194,7 +203,7 @@ function OverrideEditor({
               Clear
             </button>
           )}
-          <button className="btn btn-accent" onClick={() => setEditing(true)}>
+          <button type="button" className="btn btn-accent" onClick={() => setEditing(true)}>
             Override…
           </button>
         </div>
@@ -215,6 +224,7 @@ function OverrideEditor({
           value={value}
           onChange={(e) => setValue(e.target.value)}
           placeholder="value"
+          aria-label="Override value"
           autoFocus
         />
         <input
@@ -222,13 +232,15 @@ function OverrideEditor({
           value={note}
           onChange={(e) => setNote(e.target.value)}
           placeholder="because… (optional)"
+          aria-label="Override note"
         />
       </div>
       <div className="mt-3 flex justify-end gap-2">
-        <button className="btn" onClick={() => setEditing(false)}>
+        <button type="button" className="btn" onClick={() => setEditing(false)}>
           Cancel
         </button>
         <button
+          type="button"
           className="btn btn-accent"
           disabled={!valid}
           onClick={() => {

@@ -25,6 +25,7 @@ export {
 
 export {
   FIXER_TOOLS,
+  READ_ONLY_TOOLS,
   TOOLS_BY_NAME,
   executeTool,
   toolDefinitions,
@@ -33,6 +34,44 @@ export {
   type ToolContext,
   type ToolRunResult,
 } from './tools.js';
+
+export { CODEX_TOOLS } from './tools-codex.js';
+export { TABLE_TOOLS } from './tools-table.js';
+
+export { default as fixerToolRoutes } from './routes.js';
+
+export {
+  LayoutDoorSchema,
+  LayoutProposalSchema,
+  LayoutRoomSchema,
+  ROOM_KINDS,
+  compileLayout,
+  layoutJsonSchema,
+  type CompiledLayout,
+  type CompiledRoom,
+  type LayoutDoor,
+  type LayoutProposal,
+  type LayoutRoom,
+} from './geometry.js';
+
+export {
+  DEFAULT_PROXIMITY_M,
+  distanceToPolygon,
+  emitFogProximity,
+  fogProximityPrompts,
+  fogProximityState,
+  pointInPolygon,
+  resetProximityMemory,
+  type ProximityPrompt,
+  type ProximityState,
+} from './proximity.js';
+
+export {
+  baseName,
+  identifyTokensState,
+  type TokenIdentification,
+  type TokenIdentificationState,
+} from './token-id.js';
 
 export {
   FIXER_SYSTEM_PROMPT,
@@ -102,5 +141,29 @@ export {
   type LedgerState,
   type SceneState,
 } from './state.js';
+
+export {
+  readContactFavors,
+  getBookPageState,
+  getCalendarState,
+  getRunState,
+  listContactsState,
+  listRunsState,
+  searchCodexState,
+  type BookPageState,
+  type CalendarState,
+  type CodexSearchState,
+  type ContactsState,
+  type Favors,
+  type RunState,
+  type RunSummary,
+} from './state-codex.js';
+
+export {
+  getMagicState,
+  getMatrixState,
+  type MagicState,
+  type MatrixState,
+} from './state-play.js';
 
 export { MockLlmServer, type MockResponder, type MockTurn } from './mock-llm.js';

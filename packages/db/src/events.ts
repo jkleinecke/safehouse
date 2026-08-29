@@ -6,6 +6,7 @@
 import { and, asc, desc, eq, gt, sql } from 'drizzle-orm';
 import type { Visibility } from '@safehouse/contracts';
 import type { Db } from './client.js';
+import { DbError, wrapDbError } from './errors.js';
 import { wsEvents } from './schema.js';
 
 export type WsEventRow = typeof wsEvents.$inferSelect;
@@ -19,20 +20,43 @@ export interface AppendEventInput {
   ownerUserId?: string | null;
 }
 
-/** Append one persisted event; returns the stored row (with its event id). */
+/**
+ * Append one persisted event; returns the stored row (with its event id).
+ *
+ * All or nothing: this is a single `INSERT … RETURNING`, so it either commits a
+ * row and hands back its id, or commits nothing and throws. There is no path
+ * that stores an event and reports failure, or reports success without an id.
+ *
+ * Failures throw a `DbError` carrying PostgreSQL's own diagnosis — SQLSTATE,
+ * violated constraint, DETAIL — rather than drizzle's `Failed query: <sql>`,
+ * which is identical for every possible cause and has cost real debugging time.
+ */
 export async function appendEvent(db: Db, input: AppendEventInput): Promise<WsEventRow> {
-  const rows = await db
-    .insert(wsEvents)
-    .values({
+  let rows: WsEventRow[];
+  try {
+    rows = await db
+      .insert(wsEvents)
+      .values({
+        campaignId: input.campaignId,
+        type: input.type,
+        payload: input.payload,
+        visibility: input.visibility ?? 'public',
+        ownerUserId: input.ownerUserId ?? null,
+      })
+      .returning();
+  } catch (err) {
+    throw wrapDbError('appendEvent', err, {
       campaignId: input.campaignId,
       type: input.type,
-      payload: input.payload,
-      visibility: input.visibility ?? 'public',
-      ownerUserId: input.ownerUserId ?? null,
-    })
-    .returning();
+    });
+  }
   const row = rows[0];
-  if (!row) throw new Error('appendEvent: insert returned no row');
+  if (!row) {
+    throw new DbError('appendEvent failed: insert returned no row', 'appendEvent', {}, {
+      campaignId: input.campaignId,
+      type: input.type,
+    });
+  }
   return row;
 }
 
@@ -76,6 +100,28 @@ export async function pruneEventsBefore(db: Db, campaignId: string, cutoff: Date
     .where(and(eq(wsEvents.campaignId, campaignId), sql`${wsEvents.createdAt} < ${cutoff}`))
     .returning({ id: wsEvents.id });
   return rows.length;
+}
+
+/**
+ * The newest event of one type, or undefined.
+ *
+ * Some state is only ever stored as its event — the GM's table-display
+ * steering (`display.updated`, FR9.21) has no table of its own, and the newest
+ * event carrying the full state IS the state. This is the read that lets a
+ * kiosk which rebooted mid-session come back the way the GM left it.
+ */
+export async function latestEventOfType(
+  db: Db,
+  campaignId: string,
+  type: string,
+): Promise<WsEventRow | undefined> {
+  const rows = await db
+    .select()
+    .from(wsEvents)
+    .where(and(eq(wsEvents.campaignId, campaignId), eq(wsEvents.type, type)))
+    .orderBy(desc(wsEvents.id))
+    .limit(1);
+  return rows[0];
 }
 
 /** Most recent events first (log views). */

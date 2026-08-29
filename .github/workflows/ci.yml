@@ -41,6 +41,24 @@ jobs:
       - name: Build
         run: pnpm -r --workspace-concurrency=1 build
 
+      # The shared log's regression guard, and the only check that meets a
+      # database it did not create: `seed:demo` runs in a child process, exits,
+      # and only then does the server open the directory it left behind.
+      #
+      # `ws_events.id` is a bigserial, and a serial keeps its next value in a
+      # sequence BESIDE the table. Separate the two — a file-copy restore, a
+      # move between backends that carries the rows and not the sequence — and
+      # every append collides on a primary key the server never chose: rolls
+      # commit but never broadcast, the log freezes on whatever the seeder
+      # wrote, and FR2.9 is dead on a campaign that looks fine. Nothing caught
+      # it, because a suite that builds its own database can never be handed
+      # one in that state. So this file builds it on purpose.
+      #
+      # It runs ahead of everything slower because it is ten seconds and a
+      # failure here invalidates every result after it.
+      - name: Regression — seed in one process, serve from the next
+        run: pnpm --filter @safehouse/server exec vitest run test/seeded-boot.test.ts
+
       # No Docker, no testcontainers: the server suites boot a throwaway PGlite
       # per file under a temp DATA_DIR (BUILD_CONVENTIONS, "Ports, env, database").
       - name: Test
@@ -48,6 +66,33 @@ jobs:
 
       - name: Smoke — boot the server and play through it
         run: node .github/scripts/smoke.mjs
+
+      # The browser suite (apps/web/e2e). It catches what the API-level
+      # playthrough structurally cannot: mount-time hydration (LIVE-1), the
+      # sheet↔dialog↔record pool parity (LIVE-2), and `/join/:code` serving the
+      # join screen rather than JSON (LIVE-3).
+      #
+      # `continue-on-error` on the download, plus the guard in e2e/run.mjs, is
+      # deliberate: a runner that cannot fetch the browser binary SKIPS the
+      # suite with a message instead of turning CI red for a network problem.
+      - name: Install chromium for Playwright
+        continue-on-error: true
+        run: pnpm --filter @safehouse/web exec playwright install --with-deps chromium
+
+      - name: E2E — drive the real SPA in a browser
+        run: pnpm --filter @safehouse/web e2e
+        env:
+          # `Build` above already produced apps/web/dist and apps/server/dist.
+          SAFEHOUSE_E2E_NO_BUILD: '1'
+
+      - name: Upload Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-e2e
+          path: apps/web/test-results
+          if-no-files-found: ignore
+          retention-days: 7
 
   # Multi-arch by construction (§16): a dependency with an x86-only native
   # binary must fail the build here, not at the venue. Build only — publishing

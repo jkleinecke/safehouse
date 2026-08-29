@@ -14,9 +14,10 @@ import {
   sustainedSpells,
   toggleSustain,
 } from '../lib.js';
+import { spellRowLabel } from '../a11y.js';
 import { useSheetPlayStore, type DrainAttr } from '../playState.js';
 import { BreakdownButton } from '../components/Provenance.js';
-import { Empty, RefChip, SectionLabel, Sheet, Stepper } from '../components/ui.js';
+import { Empty, RefChip, RowButton, SectionLabel, Sheet, Stepper } from '../components/ui.js';
 import type { TabProps } from './shared.js';
 import DrainApplyPanel, { type PendingDrain } from './DrainApply.js';
 
@@ -75,7 +76,12 @@ export default function MagicTab(props: TabProps) {
         baseTotal: pool?.total ?? 0,
         baseBreakdown: pool?.breakdown ?? [],
         limit: { kind: 'force', value: force },
-        meta: { poolKey: `spell.${spell.name}`, spell: spell.name, force },
+        meta: {
+          poolRef: `spell.${spell.name}`,
+          poolKey: `spell.${spell.name}`,
+          spell: spell.name,
+          force,
+        },
       },
       () => {
         if (sustain && !isSustained(sheet, spell.name)) patchSheet(toggleSustain(sheet, spell.name));
@@ -98,7 +104,7 @@ export default function MagicTab(props: TabProps) {
                 type="button"
                 className="chip border-magenta-dim text-magenta"
                 onClick={() => patchSheet(toggleSustain(sheet, name))}
-                title="Tap to drop this spell"
+                aria-label={`Stop sustaining ${name} and remove its −2`}
               >
                 {name} −2 ✕
               </button>
@@ -126,17 +132,12 @@ export default function MagicTab(props: TabProps) {
         {sheet.spells.map((spell) => {
           const pool = derived.pools[`spell.${spell.name}`];
           return (
-            <li key={spell.name}>
-              <div
-                className="flex cursor-pointer items-center gap-2 py-2.5 active:bg-raised/60"
-                role="button"
-                tabIndex={0}
-                onClick={() => setCasting(spell)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') setCasting(spell);
-                }}
+            <li key={spell.name} className="flex items-center gap-2">
+              <RowButton
+                label={spellRowLabel(spell.name, pool?.total, spell.drain)}
+                onActivate={() => setCasting(spell)}
               >
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0 flex-1" aria-hidden>
                   <div className="truncate text-sm text-ink">{spell.name}</div>
                   <div className="mono-label">
                     {spell.category ?? 'spell'}
@@ -144,16 +145,16 @@ export default function MagicTab(props: TabProps) {
                     {isSustained(sheet, spell.name) ? ' · sustaining' : ''}
                   </div>
                 </div>
-                <RefChip refInfo={spell.ref} />
-                {pool && (
-                  <BreakdownButton
-                    title={`${spell.name} pool`}
-                    value={pool.total}
-                    breakdown={pool.breakdown}
-                    override={props.overrideFor(`pool.spell.${spell.name}`)}
-                  />
-                )}
-              </div>
+              </RowButton>
+              <RefChip refInfo={spell.ref} />
+              {pool && (
+                <BreakdownButton
+                  title={`${spell.name} pool`}
+                  value={pool.total}
+                  breakdown={pool.breakdown}
+                  override={props.overrideFor(`pool.spell.${spell.name}`)}
+                />
+              )}
             </li>
           );
         })}
@@ -183,6 +184,8 @@ export default function MagicTab(props: TabProps) {
               {toggleable ? (
                 <button
                   type="button"
+                  aria-pressed={on}
+                  aria-label={`${power.name}, ${on ? 'active — activate to switch off' : 'inactive — activate to switch on'}`}
                   className={`chip ${on ? 'border-cyan-dim text-cyan' : 'text-faint'}`}
                   onClick={() => patchSheet(setPowerActive(sheet, power.name, !on))}
                 >

@@ -9,7 +9,12 @@
  */
 import type { Encounter, WsEvent } from '@safehouse/contracts';
 import { parseRoll, rec, type GlitchState } from '../table/views.js';
-import { conditionBand, visibleCombatants, type ConditionBand } from '../table/initiative.js';
+import {
+  TV_RIBBON_CAP,
+  tvEncounterFrom,
+  tvRibbonRows,
+  type TvRibbonRow,
+} from './encounterState.js';
 
 const str = (v: unknown): string | undefined =>
   typeof v === 'string' && v.length > 0 ? v : undefined;
@@ -33,6 +38,19 @@ export interface TvMoment {
   bought: boolean;
   burnedEdge: boolean;
   edge?: string | null;
+  /**
+   * The GM asked for this one on the big screen (FR9.20 "dice results the GM
+   * flags"). The canonical flag is `meta.tv`; `meta.spotlight` and `meta.big`
+   * are accepted as synonyms so a roll posted by hand with a plausible name
+   * still lands. Emphasis only — every public roll already reaches the TV, so
+   * an unflagged one is shown, just not shouted.
+   */
+  flagged: boolean;
+}
+
+/** Did the GM flag this roll for the table display? */
+export function isFlaggedMeta(meta: Record<string, unknown>): boolean {
+  return meta['tv'] === true || meta['spotlight'] === true || meta['big'] === true;
 }
 
 /** How many recent moments the kiosk keeps around at once. */
@@ -64,6 +82,7 @@ export function tvMoments(events: WsEvent[], cap: number = TV_MOMENT_CAP): TvMom
       bought: roll.bought,
       burnedEdge: roll.burnedEdge,
       edge: roll.edge,
+      flagged: isFlaggedMeta(roll.meta),
     });
     if (out.length > cap) out.shift();
   }
@@ -101,9 +120,11 @@ export interface TvTakeover {
 /**
  * The newest reveal, or null.
  *
- * INTEGRATION: payload field names assumed (`title`/`name`, `text`/`body`,
- * `attachmentId`) — align with the scenes/codex agents. P1 renders a
- * placeholder region; P2 drops the real asset in.
+ * The two events name things differently, which is why this reads a list
+ * rather than one field: `wiki.revealed` carries `title` (plugins/codex.ts),
+ * `handout.revealed` carries `pageTitle` and an optional `note`. `name` /
+ * `text` / `body` are tolerated so a hand-posted reveal still shows something
+ * better than "Handout".
  */
 export function tvTakeover(events: WsEvent[]): TvTakeover | null {
   for (let i = events.length - 1; i >= 0; i -= 1) {
@@ -112,14 +133,14 @@ export function tvTakeover(events: WsEvent[]): TvTakeover | null {
     if (e.type !== 'handout.revealed' && e.type !== 'wiki.revealed') continue;
     if (e.visibility !== 'public') continue;
     const p = rec(e.payload);
+    const title = str(p['title']) ?? str(p['pageTitle']) ?? str(p['name']);
+    const body = str(p['body']) ?? str(p['text']) ?? str(p['note']);
     return {
       id: e.id,
       ts: e.ts,
       kind: e.type === 'handout.revealed' ? 'handout' : 'codex',
-      title: str(p['title']) ?? str(p['name']) ?? (e.type === 'handout.revealed' ? 'Handout' : 'Codex page'),
-      ...(str(p['body']) ?? str(p['text'])
-        ? { body: (str(p['body']) ?? str(p['text'])) as string }
-        : {}),
+      title: title ?? (e.type === 'handout.revealed' ? 'Handout' : 'Codex page'),
+      ...(body ? { body } : {}),
       ...(str(p['attachmentId']) ? { attachmentId: str(p['attachmentId']) as string } : {}),
     };
   }
@@ -165,41 +186,20 @@ export function tvIngameDate(events: WsEvent[]): string | null {
 // Initiative ribbon (FR9.20)
 // ---------------------------------------------------------------------------
 
-export interface TvRibbonRow {
-  id: string;
-  name: string;
-  score: number;
-  order: number;
-  acting: boolean;
-  acted: boolean;
-  band: ConditionBand;
-}
-
-/** Ribbon width — a TV shows the top of the order, not a spreadsheet. */
-export const TV_RIBBON_CAP = 10;
+/**
+ * The ribbon itself lives in `encounterState.ts`, because on a display device
+ * the roster does NOT arrive inside the encounter object — it rides beside it
+ * in the public `encounter.updated` delta and in `GET /api/encounters/:id`.
+ * These two are the typed-`Encounter` doorway into it.
+ */
+export { TV_RIBBON_CAP, type TvRibbonRow } from './encounterState.js';
 
 /** Public combatants in acting order; the acting one is flagged for the glow. */
 export function tvRibbon(
   encounter: Encounter | null | undefined,
   cap: number = TV_RIBBON_CAP,
 ): TvRibbonRow[] {
-  const all = visibleCombatants(encounter?.combatants ?? [], { role: 'display' });
-  const live = all.filter((c) => c.initScore > 0);
-  const pool = live.length > 0 ? live : all;
-  const sorted = [...pool].sort(
-    (a, b) => b.initScore - a.initScore || b.initBase - a.initBase || (a.id < b.id ? -1 : 1),
-  );
-  const actingId =
-    encounter?.activeCombatantId ?? sorted.find((c) => !c.actedThisPass)?.id ?? null;
-  return sorted.slice(0, cap).map((c, i) => ({
-    id: c.id,
-    name: c.name,
-    score: c.initScore,
-    order: i + 1,
-    acting: c.id === actingId,
-    acted: c.actedThisPass,
-    band: conditionBand(c.monitors),
-  }));
+  return tvRibbonRows(tvEncounterFrom(encounter), cap);
 }
 
 /** True when the TV should switch from the idle card to the fight. */
@@ -226,9 +226,10 @@ export const DEFAULT_TV_CONTROLS: TvControls = { blank: false, ribbon: true };
 /**
  * GM steering state from the newest `display.updated` event.
  *
- * INTEGRATION: `display.updated` is not in the §11 catalog yet — the GM
- * console agent should emit it (payload `{ blank?: boolean, ribbon?: boolean }`)
- * for FR9.21. Until then the TV just runs with the defaults.
+ * `display.updated` is emitted by the hub's `display.set` handler (GM-only,
+ * public visibility) carrying the FULL state, so the newest event is always
+ * the whole answer — which is what lets a kiosk that rebooted mid-session come
+ * back blanked if that is how the GM left it.
  */
 export function tvControls(events: WsEvent[]): TvControls {
   for (let i = events.length - 1; i >= 0; i -= 1) {

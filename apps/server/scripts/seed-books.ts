@@ -23,6 +23,7 @@ import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ensureMigrations, getDb } from '@safehouse/db';
+import { closeDatabase } from '../src/shutdown.js';
 import { guessBookFromFilename, seedBooks, type SeedBooksOptions } from '../src/services/books.js';
 
 /** Repo root — three levels up from apps/server/scripts. */
@@ -104,27 +105,35 @@ export async function main(): Promise<number> {
   // PGlite wants its parent directory to exist before it opens the data dir.
   mkdirSync(process.env['DATA_DIR'] ?? './data', { recursive: true });
   const db = getDb();
-  await ensureMigrations(db);
+  // This script exists to hand a populated DATA_DIR to another process (the
+  // playthrough seeds books, exits, then boots the server on the same
+  // directory). Whatever happens below, checkpoint and close on the way out —
+  // src/shutdown.ts has the measurements.
+  try {
+    await ensureMigrations(db);
 
-  const opts: SeedBooksOptions = { dir: cli.dir, log: (line) => console.log(line) };
-  if (cli.only !== undefined) opts.only = cli.only;
-  if (cli.maxPages !== undefined) opts.maxPages = cli.maxPages;
-  if (cli.dataDir !== undefined) opts.dataDir = cli.dataDir;
+    const opts: SeedBooksOptions = { dir: cli.dir, log: (line) => console.log(line) };
+    if (cli.only !== undefined) opts.only = cli.only;
+    if (cli.maxPages !== undefined) opts.maxPages = cli.maxPages;
+    if (cli.dataDir !== undefined) opts.dataDir = cli.dataDir;
 
-  const started = Date.now();
-  const results = await seedBooks(db, opts);
-  if (results.length === 0) {
-    console.error(
-      `[seed:books] nothing matched${cli.only ? ` --only ${cli.only}` : ''} in ${cli.dir}`,
+    const started = Date.now();
+    const results = await seedBooks(db, opts);
+    if (results.length === 0) {
+      console.error(
+        `[seed:books] nothing matched${cli.only ? ` --only ${cli.only}` : ''} in ${cli.dir}`,
+      );
+      return 1;
+    }
+    const pages = results.reduce((n, r) => n + r.pagesInserted, 0);
+    console.log(
+      `[seed:books] done: ${results.length} book(s), ${pages} page(s) indexed in ${Math.round((Date.now() - started) / 1000)}s`,
     );
-    return 1;
+    console.log('[seed:books] confirm codes and calibrate page offsets in the app (FR11.1).');
+    return 0;
+  } finally {
+    await closeDatabase(db);
   }
-  const pages = results.reduce((n, r) => n + r.pagesInserted, 0);
-  console.log(
-    `[seed:books] done: ${results.length} book(s), ${pages} page(s) indexed in ${Math.round((Date.now() - started) / 1000)}s`,
-  );
-  console.log('[seed:books] confirm codes and calibrate page offsets in the app (FR11.1).');
-  return 0;
 }
 
 // Run only as a CLI; tests import `parseArgs`/`main` without side effects.

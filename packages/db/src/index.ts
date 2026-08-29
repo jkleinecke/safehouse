@@ -7,12 +7,21 @@ export * from './schema.js';
 export {
   getDb,
   ensureMigrations,
+  closeDb,
   createPgliteDb,
   createNodePgDb,
   migrationsFolder,
   resetDbSingleton,
   type Db,
 } from './client.js';
+export { ensureSequences, type SequenceRepair } from './sequences.js';
+export {
+  DbError,
+  isDbError,
+  wrapDbError,
+  pgDiagnostics,
+  type PgDiagnostics,
+} from './errors.js';
 export {
   searchBookPages,
   searchCodex,
@@ -27,6 +36,7 @@ export {
   eventsSince,
   pruneEventsBefore,
   recentEvents,
+  latestEventOfType,
   type AppendEventInput,
   type WsEventRow,
 } from './events.js';

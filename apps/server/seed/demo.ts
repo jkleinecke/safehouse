@@ -29,12 +29,13 @@
  * table), `assets/pier23.ts` (the scene, its geometry and its map), and
  * `assets/png.ts` (the stdlib PNG writer that map is drawn with).
  */
-import { mkdir, unlink } from 'node:fs/promises';
+import { unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { and, eq, inArray, notExists, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { attachments, campaigns, characters, memberships, runs, users, type Db } from '@safehouse/db';
 import { buildApp } from '../src/app.js';
+import { closeDatabase } from '../src/shutdown.js';
 import { filesDir } from '../src/services/scenes.js';
 import { DOCKLANDS_COMPLICATIONS, RATCHET_TEMPLATE, RUSTED_HALO_TEMPLATE } from './assets/opposition.js';
 import {
@@ -207,7 +208,7 @@ async function seed(app: FastifyInstance): Promise<void> {
     const device = await call<{ token: string; user: { id: string } }>(
       inj,
       'GET',
-      `/join/${invite.code}?name=${encodeURIComponent(alias)}&label=${encodeURIComponent(`${alias}'s phone`)}`,
+      `/api/join/${invite.code}?name=${encodeURIComponent(alias)}&label=${encodeURIComponent(`${alias}'s phone`)}`,
     );
     joined.push({ alias, code: invite.code, token: device.token, userId: device.user.id });
 
@@ -375,20 +376,22 @@ async function seed(app: FastifyInstance): Promise<void> {
   console.log('');
 }
 
-// INTEGRATION: getDb() opens PGlite at `DATA_DIR/pglite` but does not create
-// the parent directory, so a fresh clone (where `data/` is gitignored and
-// absent) fails inside migrate() with ENOENT. Created here so `pnpm seed:demo`
-// is the first thing that works after a checkout.
-await mkdir(process.env.DATA_DIR ?? './data', { recursive: true });
-
+// `getDb()` creates `DATA_DIR` itself now, so a fresh clone (where `data/` is
+// gitignored and therefore absent) boots without a mkdir here.
 const app = await buildApp({ webDist: false, logger: false });
+let exitCode = 0;
 try {
   await seed(app);
   console.log('seed:demo complete');
 } catch (err) {
   console.error(`seed:demo failed — ${(err as Error).message}`);
-  await app.close();
-  process.exit(1);
+  exitCode = 1;
 }
 await app.close();
-process.exit(0);
+// The whole point of this script is the directory it leaves behind for
+// `pnpm dev:server` to open, and `app.close()` does not touch the database.
+// Checkpoint and close it before exiting — see src/shutdown.ts for what an
+// unclean hand-off actually costs. Failure paths close too: a half-written
+// seed is exactly when the next process most needs a consistent directory.
+await closeDatabase(app.db);
+process.exit(exitCode);

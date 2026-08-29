@@ -30,6 +30,9 @@ export { default as FixerChat } from './fixer/FixerChat.js';
 export { default as DraftsInbox } from './fixer/DraftsInbox.js';
 export { aiDisabledFrom, isAiDisabled, useFixerStatus } from './fixer/api.js';
 
+export { default as PairPanel } from './pairing/PairPanel.js';
+export type { PairPanelProps } from './pairing/PairPanel.js';
+
 export { default as ThreatReadout } from './generator/ThreatReadout.js';
 export type { ThreatReadoutProps } from './generator/ThreatReadout.js';
 export { actionEconomy, profileFromSheet, readoutRows } from './generator/readout.js';

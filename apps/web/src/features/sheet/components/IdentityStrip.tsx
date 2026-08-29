@@ -7,7 +7,7 @@ import type { DerivedCharacter } from '@safehouse/contracts';
 import { woundModifierFor } from '@safehouse/rules';
 import { clampFill, signed, type ConditionState, type EdgeOp } from '../lib.js';
 import type { CharacterRecord } from '../api.js';
-import EdgeControl from './EdgeControl.js';
+import EdgeControl, { type EdgeActionsApi } from './EdgeControl.js';
 import MonitorRow from './MonitorRow.js';
 import type { OverrideApi } from './Provenance.js';
 
@@ -18,6 +18,8 @@ export interface IdentityStripProps {
   onEdgeOp: (op: EdgeOp) => void;
   overrideFor: (target: string) => OverrideApi;
   busy?: boolean;
+  /** Seize the Initiative / Blitz, offered only while in a live encounter. */
+  edgeActions?: EdgeActionsApi;
 }
 
 export default function IdentityStrip({
@@ -27,6 +29,7 @@ export default function IdentityStrip({
   onEdgeOp,
   overrideFor,
   busy,
+  edgeActions,
 }: IdentityStripProps) {
   const { sheet, condition } = character;
   const physMax = Math.max(0, derived.monitors.physical.value);
@@ -49,9 +52,9 @@ export default function IdentityStrip({
         <span className="mono-label">{sheet.identity.metatype}</span>
         <span
           className={`chip ${wound < 0 ? 'border-danger/60 text-danger' : 'text-faint'}`}
-          title="Wound modifier — applied to pools and initiative"
+          aria-label={`Wound modifier ${signed(wound)}, applied to pools and initiative`}
         >
-          wounds {signed(wound)}
+          <span aria-hidden>wounds {signed(wound)}</span>
         </span>
       </div>
 
@@ -85,7 +88,13 @@ export default function IdentityStrip({
           override={overrideFor('monitor.stun')}
           onSetFilled={(f) => onCondition({ ...condition, stun: f })}
         />
-        <EdgeControl edge={sheet.attributes.edg} onOp={onEdgeOp} busy={busy} />
+        <EdgeControl
+          edge={sheet.attributes.edg}
+          burned={character.edgeBurned}
+          onOp={onEdgeOp}
+          busy={busy}
+          {...(edgeActions ? { actions: edgeActions } : {})}
+        />
       </div>
     </div>
   );

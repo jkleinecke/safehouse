@@ -16,20 +16,20 @@ import {
   fileUrl,
   useCharacter,
   useGridLiveSync,
-  usePatchScene,
+  usePatchGeometry,
+  useRefetchOnReconnect,
   useScene,
   useSceneTokens,
   useScenes,
 } from './api.js';
 import { GridCommands } from './commands.js';
 import { rollScatter } from './geometry.js';
+import { addDoor, addPin, addWall, toggleDoor } from './geometryEdit.js';
 import GmPanel from './gm/GmPanel.js';
 import MeasurePanel from './hud/MeasurePanel.js';
 import Toolbar from './hud/Toolbar.js';
+import { composeStageState, resolveSceneId } from './hydration.js';
 import {
-  actingTokenId,
-  barsByToken,
-  draggableTokenIds,
   movementFrom,
   rangeReadout,
   rangedWeapons,
@@ -37,7 +37,13 @@ import {
 } from './projection.js';
 import { useGridStore } from './store.js';
 import type { RulerState, StageApi, StageCallbacks, StageSceneState } from './types.js';
-import { useActiveSceneId, useLiveEncounter, useMarkStream, useRemoteDrags } from './useGridLive.js';
+import {
+  useActiveSceneId,
+  useFocusStream,
+  useHydratedEncounter,
+  useMarkStream,
+  useRemoteDrags,
+} from './useGridLive.js';
 import { useStage } from './useStage.js';
 
 function EmptyState({ title, body }: { title: string; body: string }) {
@@ -71,20 +77,32 @@ export default function GridPage() {
   const scenesQuery = useScenes(campaignId);
 
   // Which scene is on screen: the GM may stage another privately (FR9.1);
-  // everyone else follows the campaign's active scene.
-  const activeSceneId =
-    liveActiveSceneId ?? scenesQuery.data?.find((s) => s.state === 'active')?.id ?? null;
-  const sceneId = (isGm ? store.viewSceneId : null) ?? activeSceneId;
+  // everyone else follows the campaign's active scene. LIVE-1 — the REST scene
+  // list is the cold-start answer, so a refresh mid-session still lands on the
+  // right map instead of waiting for the next `scene.activated`.
+  const { activeSceneId, sceneId } = useMemo(
+    () =>
+      resolveSceneId({
+        isGm,
+        viewSceneId: store.viewSceneId,
+        liveActiveSceneId,
+        scenes: scenesQuery.data,
+      }),
+    [isGm, store.viewSceneId, liveActiveSceneId, scenesQuery.data],
+  );
 
   const sceneQuery = useScene(sceneId);
   const tokensQuery = useSceneTokens(sceneId);
   useGridLiveSync(sceneId);
+  useRefetchOnReconnect(campaignId, sceneId);
 
   const scene: Scene | null = sceneQuery.data ?? null;
   const tokens: Token[] = useMemo(() => tokensQuery.data ?? [], [tokensQuery.data]);
-  const encounter = useLiveEncounter();
+  // Hydrated from REST, then merged with live `encounter.updated` (LIVE-1):
+  // the acting-token glow and condition bars survive a page refresh.
+  const encounter = useHydratedEncounter(campaignId, sceneId);
   const drags = useRemoteDrags();
-  const patchScene = usePatchScene();
+  const patchGeometry = usePatchGeometry();
 
   // -- commands -------------------------------------------------------------
 
@@ -101,10 +119,6 @@ export default function GridPage() {
   useEffect(() => () => commandsRef.current?.dispose(), []);
 
   // -- projections ----------------------------------------------------------
-
-  const draggableIds = useMemo(() => draggableTokenIds(tokens, viewer), [tokens, viewer]);
-  const bars = useMemo(() => barsByToken(encounter, tokens, viewer), [encounter, tokens, viewer]);
-  const actingId = useMemo(() => actingTokenId(encounter), [encounter]);
 
   // Ruler source: the token the measurement started on drives walk/run + bands.
   const rulerToken = useMemo(
@@ -134,36 +148,35 @@ export default function GridPage() {
     [store.ruler, weapon, sheet],
   );
 
-  const stageState: StageSceneState | null = useMemo(() => {
-    if (!scene) return null;
-    return {
+  const stageState: StageSceneState | null = useMemo(
+    () =>
+      composeStageState({
+        scene,
+        tokens,
+        viewer,
+        encounter,
+        selectedTokenId: store.selectedTokenId,
+        tool: store.tool,
+        snapEnabled: store.snapEnabled,
+        aoe: store.aoe,
+        scatter: store.scatter,
+        fogDraft: store.fogDraft,
+        selectedPinId: store.selectedPinId,
+      }),
+    [
       scene,
       tokens,
-      role: viewer.role,
-      draggableIds,
-      bars,
-      actingTokenId: actingId,
-      selectedTokenId: store.selectedTokenId,
-      tool: store.tool,
-      snapEnabled: store.snapEnabled,
-      aoe: store.aoe,
-      scatter: store.scatter,
-      fogDraft: store.fogDraft,
-    };
-  }, [
-    scene,
-    tokens,
-    viewer.role,
-    draggableIds,
-    bars,
-    actingId,
-    store.selectedTokenId,
-    store.tool,
-    store.snapEnabled,
-    store.aoe,
-    store.scatter,
-    store.fogDraft,
-  ]);
+      viewer,
+      encounter,
+      store.selectedTokenId,
+      store.tool,
+      store.snapEnabled,
+      store.aoe,
+      store.scatter,
+      store.fogDraft,
+      store.selectedPinId,
+    ],
+  );
 
   // -- stage callbacks ------------------------------------------------------
 
@@ -180,13 +193,7 @@ export default function GridPage() {
       onRuler: (r: RulerState | null) => useGridStore.getState().setRuler(r),
       onDoorToggle: (doorId) => {
         if (!scene || !isGm) return;
-        const doors = scene.geometry.doors.map((d) =>
-          d.id === doorId ? { ...d, open: !d.open } : d,
-        );
-        patchScene.mutate({
-          sceneId: scene.id,
-          patch: { geometry: { ...scene.geometry, doors } },
-        });
+        patchGeometry.mutate({ sceneId: scene.id, geometry: toggleDoor(scene.geometry, doorId) });
       },
       onAoePlace: (x, y) => {
         const s = useGridStore.getState();
@@ -199,8 +206,32 @@ export default function GridPage() {
         setFocusNotice('focus pushed to the table');
         window.setTimeout(() => setFocusNotice(null), 1800);
       },
+      // -- GM geometry authoring (FR9.2/9.3) --------------------------------
+      onSegmentDraw: (kind, a, b) => {
+        if (!scene || !isGm) return;
+        const geometry =
+          kind === 'door' ? addDoor(scene.geometry, a, b) : addWall(scene.geometry, a, b);
+        if (geometry === scene.geometry) return; // degenerate drag, nothing drawn
+        patchGeometry.mutate({ sceneId: scene.id, geometry });
+      },
+      onPinPlace: (x, y) => {
+        if (!scene || !isGm) return;
+        const geometry = addPin(scene.geometry, { x, y });
+        const placed = geometry.pins[geometry.pins.length - 1];
+        patchGeometry.mutate({ sceneId: scene.id, geometry });
+        const s = useGridStore.getState();
+        if (placed) s.selectPin(placed.id);
+        s.setGmTab('pins');
+        s.openGmPanel();
+      },
+      onPinSelect: (pinId) => {
+        const s = useGridStore.getState();
+        s.selectPin(pinId);
+        s.setGmTab('pins');
+        s.openGmPanel();
+      },
     }),
-    [commands, scene, isGm, patchScene],
+    [commands, scene, isGm, patchGeometry],
   );
 
   const urlFor = useCallback((id: string) => fileUrl(id), []);
@@ -226,6 +257,9 @@ export default function GridPage() {
     else if (kind === 'focus') stage.centerOn(x, y);
     else stage.flashPing(x, y);
   });
+
+  // …and the persisted route for the same gesture (FR9.15/FR9.21).
+  useFocusStream(sceneId, (x, y) => apiRef.current?.centerOn(x, y));
 
   const onScatter = useCallback(() => {
     const s = useGridStore.getState();

@@ -24,6 +24,13 @@ export const WS_EVENT_TYPES = [
   'wiki.revealed',
   'os.changed',
   'clock.advanced',
+  /**
+   * GM steering of the table display (FR9.21): `{ blank?, ribbon?, focus? }`.
+   * Persisted so a TV that reboots mid-session comes back blanked if that is
+   * what the GM left it as — the §11 catalog calls itself representative and
+   * the display's state is exactly the kind of thing replay has to restore.
+   */
+  'display.updated',
 ] as const;
 export type WsEventType = (typeof WS_EVENT_TYPES)[number];
 
@@ -129,6 +136,45 @@ export const PingCommandSchema = z.object({
 });
 export type PingCommand = z.infer<typeof PingCommandSchema>;
 
+/**
+ * Pointer trail (FR9.15) — a stream of positions relayed as ephemeral
+ * `pointer`, throttled by the sender, never stored. A ping is one flash; a
+ * pointer is "look, along here".
+ */
+export const PointerCommandSchema = z.object({
+  cmd: z.literal('pointer'),
+  sceneId: z.string().optional(),
+  x: z.number(),
+  y: z.number(),
+});
+export type PointerCommand = z.infer<typeof PointerCommandSchema>;
+
+/**
+ * "Focus here" (FR9.15/FR9.21) — the GM recentres every viewer's camera once.
+ * Relayed as an ephemeral ping-family mark carrying `kind: 'focus'`, so a
+ * client that only understands pings still flashes the right spot.
+ */
+export const SceneFocusCommandSchema = z.object({
+  cmd: z.literal('scene.focus'),
+  sceneId: z.string().optional(),
+  x: z.number(),
+  y: z.number(),
+});
+export type SceneFocusCommand = z.infer<typeof SceneFocusCommandSchema>;
+
+/**
+ * GM steering of the table display (FR9.21): blank the TV, or drop the
+ * initiative ribbon during pure roleplay. GM-only; persisted as
+ * `display.updated` with public visibility (the TV is a `display` device and
+ * must receive it).
+ */
+export const DisplaySetCommandSchema = z.object({
+  cmd: z.literal('display.set'),
+  blank: z.boolean().optional(),
+  ribbon: z.boolean().optional(),
+});
+export type DisplaySetCommand = z.infer<typeof DisplaySetCommandSchema>;
+
 export const WsCommandSchema = z.discriminatedUnion('cmd', [
   RollRequestCommandSchema,
   TokenMoveCommandSchema,
@@ -137,6 +183,9 @@ export const WsCommandSchema = z.discriminatedUnion('cmd', [
   EncounterAdvanceCommandSchema,
   DamageApplyCommandSchema,
   PingCommandSchema,
+  PointerCommandSchema,
+  SceneFocusCommandSchema,
+  DisplaySetCommandSchema,
 ]);
 export type WsCommand = z.infer<typeof WsCommandSchema>;
 export type WsCommandInput = z.input<typeof WsCommandSchema>;
@@ -149,5 +198,15 @@ export const WS_COMMANDS = [
   'encounter.advance',
   'damage.apply',
   'ping',
+  'pointer',
+  'scene.focus',
+  'display.set',
 ] as const;
 export type WsCommandName = (typeof WS_COMMANDS)[number];
+
+/**
+ * How a client should render an incoming ephemeral mark. Carried as
+ * `payload.kind` on `ping` / `pointer` so nothing has to guess from cadence.
+ */
+export const MARK_KINDS = ['ping', 'pointer', 'focus'] as const;
+export type MarkKind = (typeof MARK_KINDS)[number];

@@ -4,16 +4,17 @@
  * next / end-pass / new-turn, and the per-row copilot rack, damage dialog,
  * and interrupt menu.
  *
- * The live store's `encounter` (fed by `encounter.updated`) is authoritative;
- * the REST list only bootstraps a client that joined mid-fight.
+ * State comes from REST on mount and after every reconnect (LIVE-1), with
+ * `encounter.updated` merged on top — `useTrackerEncounter` owns that join.
+ * Before hydration the tracker says so: "no combatants yet" is a claim about
+ * the server's answer, not about whether we bothered to ask.
  */
 import { useMemo, useState } from 'react';
 import type { Combatant } from '@safehouse/contracts';
 import { useMyCharacterId } from '../../api/campaigns.js';
 import { getSession } from '../../api/session.js';
-import { useLiveStore } from '../../live/store.js';
 import CombatantRow from './CombatantRow.js';
-import { postEndPass, postNewTurn, sendCommand, useEncounterList } from './commands.js';
+import { postEndPass, postNewTurn, sendCommand, useTrackerEncounter } from './commands.js';
 import DamageDialog from './DamageDialog.js';
 import MoraleToasts from './MoraleToasts.js';
 import ResolveChainDialog from './ResolveChainDialog.js';
@@ -23,17 +24,46 @@ export interface TrackerProps {
   campaignId: string;
 }
 
+/**
+ * The line under an empty roster. Four distinct truths, never conflated:
+ * still asking · the read failed · no fight exists · a fight with no rows.
+ */
+export function TrackerEmptyLine({
+  asked,
+  failed,
+  hasEncounter,
+}: {
+  asked: boolean;
+  failed: boolean;
+  hasEncounter: boolean;
+}) {
+  if (failed) {
+    return (
+      <li className="p-4 text-center text-sm text-warn">
+        Could not read the encounter from the server. Retrying on reconnect.
+      </li>
+    );
+  }
+  if (!asked) {
+    return (
+      <li className="p-4 text-center text-sm text-faint" aria-busy="true">
+        Loading the encounter…
+      </li>
+    );
+  }
+  return (
+    <li className="p-4 text-center text-sm text-faint">
+      {hasEncounter
+        ? 'No combatants yet — the GM stages them from a scene or the encounter list.'
+        : 'No live encounter. The tracker wakes up when the GM starts one.'}
+    </li>
+  );
+}
+
 export default function Tracker({ campaignId }: TrackerProps) {
   const session = getSession();
   const isGm = session?.role === 'gm';
-  const live = useLiveStore((s) => s.encounter);
-  const { data: list } = useEncounterList(campaignId);
-
-  // Live event > REST bootstrap. The REST fallback picks the running fight.
-  const encounter = useMemo(
-    () => live ?? list?.find((e) => e.state === 'live') ?? list?.[0] ?? null,
-    [live, list],
-  );
+  const { encounter, asked, failed } = useTrackerEncounter(campaignId);
 
   const myCharacterId = useMyCharacterId(campaignId);
   const viewer: Viewer = useMemo(
@@ -116,11 +146,7 @@ export default function Tracker({ campaignId }: TrackerProps) {
 
       <ul className="min-h-0 flex-1 overflow-y-auto">
         {rows.length === 0 && (
-          <li className="p-4 text-center text-sm text-faint">
-            {encounter
-              ? 'No combatants yet — the GM stages them from a scene or the encounter list.'
-              : 'No live encounter. The tracker wakes up when the GM starts one.'}
-          </li>
+          <TrackerEmptyLine asked={asked} failed={failed} hasEncounter={encounter !== null} />
         )}
         {rows.map((row) => (
           <CombatantRow

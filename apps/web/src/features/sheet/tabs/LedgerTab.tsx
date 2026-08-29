@@ -89,11 +89,12 @@ export default function LedgerTab({ character }: TabProps) {
 
       <SectionLabel>Propose a spend</SectionLabel>
       <div className="panel p-3">
-        <div className="flex gap-1.5">
+        <div className="flex gap-1.5" role="group" aria-label="Currency">
           {(['nuyen', 'karma'] as Currency[]).map((c) => (
             <button
               key={c}
               type="button"
+              aria-pressed={currency === c}
               className={`chip ${currency === c ? 'border-cyan text-cyan' : 'text-dim'}`}
               onClick={() => setCurrency(c)}
             >

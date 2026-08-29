@@ -1,13 +1,23 @@
 /**
- * Beat four — the extraction firefight, front half.
+ * Beat five — the extraction firefight, front half.
  *
  * Stages the encounter off the map (FR9.10), swaps the token placeholders for
  * statblocks the generator rolled (FR10.2), rolls initiative and walks the
  * FR4.3 pass loop, then resolves Torque's exchange card by card (FR10.8) and
  * her Edge-pushed follow-up. The rest of the fight is `./combat-close.ts` —
  * one continuous encounter, split for file length.
+ *
+ * Four defects the build report ranked are pinned here as ordinary assertions,
+ * because each of them was found by playing rather than by reading:
+ * staging used to read initiative off the RAW sheet (wired reflexes and adept
+ * powers vanished, and every PC came out on one flat line); a rolled encounter
+ * used to sit at turn 0 / pass 0; a hand-added NPC had nowhere to carry a
+ * Professional Rating, so morale measured pressure against PR 0; and a
+ * resolved chain threw three real pools and persisted none of them.
  */
 import { closeFight } from './combat-close.js';
+import { chainOnTheRecord, copilotDiceInSession } from './combat-record.js';
+import { edgeActions } from './edge.js';
 import { diceLine, type Api, type Live } from './harness.js';
 import type { World } from './setup.js';
 import {
@@ -34,9 +44,9 @@ export async function combat(
   gmScene: SceneView,
   hiddenNames: string[],
 ): Promise<void> {
-  const { checks, story, gaps } = ctx;
-  checks.beat('4 · The extraction firefight');
-  story.beat('Beat four — the extraction, 02:31');
+  const { checks, story } = ctx;
+  checks.beat('5 · The extraction firefight');
+  story.beat('Beat three — the extraction, 02:31');
   const cid = world.campaignId;
 
   // --- stage from the map (FR9.10) -----------------------------------------
@@ -58,30 +68,45 @@ export async function combat(
 
   let roster = (await gm.get<{ combatants: Combatant[] }>(`/api/encounters/${eid}`)).combatants;
 
-  // Staging knows a token, not a sheet: the NPC rows land without statblocks
-  // and every initiative line reads REA+INT off the RAW sheet, so augments and
-  // adept powers are missing. The GM fixes both before the first die.
+  // Staging knows a token, not a sheet — which is exactly why it used to read
+  // `REA + INT` and one die straight off the raw JSON and hand three very
+  // different runners the same initiative line. Nothing is repaired by hand
+  // here any more: what the map staged is what gets rolled.
   const torqueDerived = await gm.get<Derived>(`/api/characters/${phones['Torque']!.characterId}/derived`);
-  const stagedTorque = roster.find((c) => c.name === 'Torque')!;
-  const trueBase = torqueDerived.derived.initiative.physical.base.value;
-  const trueDice = torqueDerived.derived.initiative.physical.dice.value;
-  if (stagedTorque.initDice !== trueDice || stagedTorque.initBase !== trueBase) {
-    gaps.push(
-      '`POST /api/scenes/:id/stage-encounter` builds initiative lines from the raw sheet ' +
-        `(\`REA + INT\`, 1d6): it staged Torque at ${stagedTorque.initBase} + ${stagedTorque.initDice}d6 where the ` +
-        `engine derives ${trueBase} + ${trueDice}d6 — wired reflexes and adept powers are dropped. ` +
-        '`services/scenes.ts stageEncounter` should call `deriveFor(sheet, kind)` the way `addCombatant` does.',
-    );
-  }
+  const lines: Record<string, { base: number; dice: number; true: { base: number; dice: number } }> = {};
   for (const alias of ['Torque', 'Whisper', 'Sparrow'] as const) {
     const d = await gm.get<Derived>(`/api/characters/${phones[alias]!.characterId}/derived`);
     const row = roster.find((c) => c.name === alias)!;
-    await gm.post(`/api/combatants/${row.id}/initiative`, {
-      base: d.derived.initiative.physical.base.value,
-      dice: d.derived.initiative.physical.dice.value,
-      kind: 'physical',
-    });
+    lines[alias] = {
+      base: row.initBase,
+      dice: row.initDice,
+      true: {
+        base: d.derived.initiative.physical.base.value,
+        dice: d.derived.initiative.physical.dice.value,
+      },
+    };
   }
+  const trueBase = torqueDerived.derived.initiative.physical.base.value;
+  const trueDice = torqueDerived.derived.initiative.physical.dice.value;
+  const torqueLine = lines['Torque']!;
+  checks.record(
+    'a PC staged off the map keeps her augmented initiative dice',
+    `Torque ${trueBase} + ${trueDice}d6, as the engine derives her`,
+    `${torqueLine.base} + ${torqueLine.dice}d6`,
+    torqueLine.base === trueBase && torqueLine.dice === trueDice,
+  );
+  checks.record(
+    "…and every staged line is the engine's, not REA + INT + 1d6",
+    'three lines matching GET /derived',
+    Object.entries(lines).map(([a, s]) => `${a} ${s.base}+${s.dice}d6`).join(' · '),
+    Object.values(lines).every((s) => s.base === s.true.base && s.dice === s.true.dice),
+  );
+  checks.record(
+    '…so the three of them are not one flat number',
+    'more than one distinct initiative line',
+    [...new Set(Object.values(lines).map((s) => `${s.base}+${s.dice}`))].join(', '),
+    new Set(Object.values(lines).map((s) => `${s.base}+${s.dice}`)).size > 1,
+  );
 
   // --- swap the placeholders for rolled statblocks (FR10.2) ----------------
   const gangerTokens = gmScene.tokens.filter((t) => t.name.startsWith('Halo ganger'));
@@ -89,6 +114,7 @@ export async function combat(
   for (const row of placeholders) await gm.del(`/api/combatants/${row.id}`);
   const gangers: Combatant[] = [];
   const gangerGuns: Record<string, { name: string; modes: string[] }> = {};
+  let gangerPr = 0;
   for (let i = 0; i < gangerTokens.length; i++) {
     const token = gangerTokens[i]!;
     const gen = await gm.post<{ npc: { name: string; sheet: { weapons: { name: string; modes: string[] }[] }; professionalRating: number } }>(
@@ -102,7 +128,11 @@ export async function combat(
       sheet: gen.npc.sheet,
       tokenId: token.id,
       visibility: token.hidden ? 'gm' : 'public',
+      // FR4.6: the row carries its own Professional Rating, so FR10.9 morale
+      // has a threshold to measure against instead of a flat 0.
+      professionalRating: gen.npc.professionalRating,
     });
+    if (i === 0) gangerPr = gen.npc.professionalRating;
     gangers.push(created.combatant);
     const gun = gen.npc.sheet.weapons[0];
     if (gun) gangerGuns[created.combatant.id] = { name: gun.name, modes: gun.modes };
@@ -118,10 +148,15 @@ export async function combat(
     gangers.map((g) => g.monitors.physical.max).join('/'),
     gangers.every((g) => g.monitors.physical.max >= 9),
   );
-  gaps.push(
-    '`POST /api/encounters/:id/combatants` has no way to carry a Professional Rating onto the row ' +
-      '(`copilot.generator` is set only by the generator\'s own encounter builder), so FR10.9 morale for ' +
-      'hand-added NPCs measures pressure against PR 0. `AddCombatantBody` needs a `professionalRating` field.',
+  checks.record(
+    'a hand-added NPC carries its own Professional Rating (FR4.6)',
+    `the template's blooded PR (${gangerPr}), on the row`,
+    JSON.stringify(
+      (gangers[0]!.copilot as { generator?: { professionalRating?: number } } | undefined)?.generator ?? null,
+    ),
+    gangerPr > 0 &&
+      (gangers[0]!.copilot as { generator?: { professionalRating?: number } } | undefined)?.generator
+        ?.professionalRating === gangerPr,
   );
 
   await gm.patch(`/api/encounters/${eid}`, { state: 'live' });
@@ -136,9 +171,16 @@ export async function combat(
   );
 
   // --- initiative (FR4.2) ---------------------------------------------------
-  const init = await gm.post<{ details: { combatantId: string; base: number; dice: number; rolls: number[]; score: number }[] }>(
-    `/api/encounters/${eid}/roll-initiative`,
-    {},
+  const staleCounters = (await gm.get<{ encounter: { turn: number; pass: number } }>(`/api/encounters/${eid}`)).encounter;
+  const init = await gm.post<{
+    encounter: { turn: number; pass: number };
+    details: { combatantId: string; base: number; dice: number; rolls: number[]; score: number }[];
+  }>(`/api/encounters/${eid}/roll-initiative`, {});
+  checks.record(
+    'a freshly-rolled encounter is on turn 1, pass 1 (FR4.3)',
+    'turn 1 / pass 1',
+    `staged at turn ${staleCounters.turn} / pass ${staleCounters.pass} → rolled to turn ${init.encounter.turn} / pass ${init.encounter.pass}`,
+    init.encounter.turn === 1 && init.encounter.pass === 1,
   );
   roster = (await gm.get<{ combatants: Combatant[] }>(`/api/encounters/${eid}`)).combatants;
   const byId = (id: string): Combatant => roster.find((c) => c.id === id)!;
@@ -188,14 +230,12 @@ export async function combat(
   const dropped = passEnd.combatants.every((c) => c.initScore === Math.max(0, (scoresBefore.get(c.id) ?? 0) - 10));
   checks.record('end of pass takes 10 off every score', 'score − 10, floored at 0', dropped ? 'every row' : 'mismatch', dropped);
   checks.eq('the pass counter advances', passBefore.pass + 1, passEnd.encounter.pass);
-  if (passBefore.turn === 0 || passBefore.pass === 0) {
-    gaps.push(
-      'An encounter that is staged (or created through `POST /api/campaigns/:id/encounters`) and then rolled ' +
-        `starts at turn ${passBefore.turn} / pass ${passBefore.pass}: only \`newTurn\` ever initialises those columns, ` +
-        'so the tracker reads a pass behind for the whole first turn (FR4.3 "the UI always shows current pass"). ' +
-        '`rollInitiativeAll` should set `turn = max(1, turn)` and `pass = 1` when the encounter has not started.',
-    );
-  }
+  checks.record(
+    '…from a first pass the tracker was counting all along',
+    'turn 1 / pass 1 before the drop',
+    `turn ${passBefore.turn} / pass ${passBefore.pass}`,
+    passBefore.turn === 1 && passBefore.pass === 1,
+  );
 
   story.say(
     'Everyone above zero acts once, then every score in the shed drops by ten and the ones still standing above ' +
@@ -218,6 +258,9 @@ export async function combat(
     cards: { step: string; label: string; data: Dict }[];
     suggested: { boxes: number; track: string } | null;
     notes: string[];
+    /** The dice the chain threw, on the record before the GM decides (G5). */
+    chainId: string;
+    rolls: { step: string; rollId: string }[];
   };
   const shoot = (): Promise<Chain> =>
     gm.post<Chain>(`/api/encounters/${eid}/resolve-chain`, {
@@ -297,18 +340,20 @@ export async function combat(
     story.say('The shot goes wide of the aisle and buries itself in a pallet.');
   }
 
-  const rollsAfterChain = (await gm.get<{ rolls: { id: string }[] }>(`/api/campaigns/${cid}/rolls?limit=200`)).rolls.length;
-  if (rollsAfterChain === rollsBeforeChain) {
-    gaps.push(
-      "`POST /api/encounters/:id/resolve-chain` rolls three server-side pools (attack, defence, soak) and " +
-        'persists none of them: the roll log gained 0 rows across the whole exchange. The damage staying ' +
-        'uncommitted is deliberate (Principle 2), but G5/FR2.1 want the dice themselves on the immutable record — ' +
-        'the cards should write `rolls` rows (visibility `gm`) as they are produced, or on commit.',
-    );
-  }
+  // --- the chain's dice go on the record as they are thrown (G5/FR2.1) -----
+  await chainOnTheRecord({
+    ctx,
+    gm,
+    phones,
+    campaignId: cid,
+    chain,
+    hit: chain.suggested !== null,
+    attackRoll,
+    rollsBefore: rollsBeforeChain,
+  });
 
   // --- push the limit: Torque's second action ------------------------------
-  const push = await gm.post<{ entry: { pool: number }; request: { pool: number; limit?: { value: number } }; result: RollResult }>(
+  const push = await gm.post<{ rollId: string; entry: { pool: number }; request: { pool: number; limit?: { value: number } }; result: RollResult }>(
     `/api/combatants/${torque.id}/quick-roll`,
     { key: 'attack:Hammer', edge: 'push_pre', edgeDice: 3 },
   );
@@ -326,8 +371,17 @@ export async function combat(
   );
   story.roll('Torque — Push the Limit', `${push.request.pool}+3 dice ${diceLine(push.result)}`);
 
-  const g1Defense = await gm.post<{ result: RollResult }>(`/api/combatants/${ganger1.id}/quick-roll`, { key: 'defense' });
-  const g1Soak = await gm.post<{ result: RollResult }>(`/api/combatants/${ganger1.id}/quick-roll`, { key: 'soak' });
+  const g1Defense = await gm.post<{ rollId: string; result: RollResult }>(`/api/combatants/${ganger1.id}/quick-roll`, { key: 'defense' });
+  const g1Soak = await gm.post<{ rollId: string; result: RollResult }>(`/api/combatants/${ganger1.id}/quick-roll`, { key: 'soak' });
+
+  // --- every copilot die belongs to the session it was thrown in (FR6.1) ---
+  await copilotDiceInSession({
+    ctx,
+    gm,
+    campaignId: cid,
+    rollIds: [push.rollId, g1Defense.rollId, g1Soak.rollId, ...chain.rolls.map((r) => r.rollId)],
+  });
+
   const netHits = Math.max(0, push.result.limitedHits - g1Defense.result.hits);
   const second = await gm.post<{ combatant: Combatant; boxes: number; morale: Dict | null }>(`/api/encounters/${eid}/damage/from-roll`, {
     targetId: ganger1.id,
@@ -355,6 +409,18 @@ export async function combat(
     'Ganger-1 — the receipt',
     `physical ${second.combatant.monitors.physical.filled}/${second.combatant.monitors.physical.max}, wound modifier ${rackAfter.woundModifier}, defence ${defBefore} → ${defAfter}`,
   );
+
+  // --- Edge beyond the dice: Seize, Blitz, Close Call (FR2.3/FR4.4) --------
+  await edgeActions({
+    ctx,
+    gm,
+    gmLive,
+    phones,
+    campaignId: cid,
+    encounterId: eid,
+    torque,
+    sparrow,
+  });
 
   // The fight continues in combat-close.ts (length only; same encounter).
   await closeFight({

@@ -12,6 +12,11 @@
  *   GET    /api/books/:id/pages/:printed   extracted page text (GM; retrieval)
  *   GET    /read/:code?p=426          → { fileUrl, pdfPage } for the web viewer
  *   GET    /files/books/:code         the PDF, with Range support (206)
+ *   GET    /api/campaigns/:id/library            bookmarks + recent-refs trail
+ *   POST   /api/campaigns/:id/bookmarks          GM: name a page (FR11.6)
+ *   PATCH  /api/campaigns/:id/bookmarks/:bmId    GM: rename / pin / re-page
+ *   DELETE /api/campaigns/:id/bookmarks/:bmId    GM
+ *   POST   /api/campaigns/:id/library/recent     push a ref onto the trail
  *
  * Access: every route is behind a device token; `books.shared === false` is the
  * FR11.5 per-book GM-only toggle, and a campaign-scoped book is only visible to
@@ -30,6 +35,14 @@ import {
   printedToPdfPage,
   type BookRow,
 } from '../services/books.js';
+import {
+  addBookmark,
+  readLibrary,
+  recordRecentRef,
+  removeBookmark,
+  updateBookmark,
+  type Bookmark,
+} from '../services/bookmarks.js';
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -59,6 +72,30 @@ const SearchQuery = z.object({
   q: z.string().min(1).max(400),
   book: z.string().min(1).max(8).optional(),
   limit: z.coerce.number().int().min(1).max(50).default(10),
+});
+
+/** FR11.6 — a named page the table keeps arguing about. */
+const CreateBookmarkBody = z.object({
+  book: z.string().min(1).max(8),
+  page: z.number().int().min(1).max(2000),
+  label: z.string().min(1).max(120),
+  note: z.string().max(500).optional(),
+  pinned: z.boolean().optional(),
+});
+
+const PatchBookmarkBody = z
+  .object({
+    label: z.string().min(1).max(120).optional(),
+    note: z.string().max(500).optional(),
+    pinned: z.boolean().optional(),
+    page: z.number().int().min(1).max(2000).optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'no fields to update' });
+
+const RecentRefBody = z.object({
+  book: z.string().min(1).max(8),
+  page: z.number().int().min(1).max(2000),
+  label: z.string().max(120).optional(),
 });
 
 function parse<T extends z.ZodType>(schema: T, value: unknown): z.output<T> {
@@ -307,5 +344,103 @@ export default async function booksPlugin(app: FastifyInstance): Promise<void> {
       .header('content-range', `bytes ${range.start}-${range.end}/${size}`)
       .header('content-length', String(range.end - range.start + 1))
       .send(createReadStream(path, { start: range.start, end: range.end }));
+  });
+
+  // --- bookmarks + the recently-opened trail (FR11.6) ----------------------
+
+  /** GM-only books keep their bookmarks GM-only too (FR11.5). */
+  async function visibleCodes(req: FastifyRequest): Promise<Set<string>> {
+    return svc.visibleBookCodes(scopeOf(req));
+  }
+
+  /** A bookmark plus the one-tap open URL a ref chip uses (FR11.3). */
+  async function decorate(rows: Bookmark[]): Promise<unknown[]> {
+    const registry = await svc.booksByCodes([...new Set(rows.map((b) => b.book))]);
+    return rows.map((b) => {
+      const book = registry.get(b.book);
+      return {
+        ...b,
+        ref: `${b.book} p.${b.page}`,
+        title: book?.title ?? b.book,
+        pdfPage: printedToPdfPage(b.page, book?.pageOffset ?? 0),
+        readUrl: `/read/${encodeURIComponent(b.book)}?p=${b.page}`,
+      };
+    });
+  }
+
+  /** The campaign this request may touch — bookmarks are per campaign. */
+  function campaignOf(req: FastifyRequest, id: string): string {
+    assertCampaign(requireAuth(req), id);
+    return id;
+  }
+
+  app.get('/api/campaigns/:id/library', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const campaignId = campaignOf(req, id);
+    const codes = await visibleCodes(req);
+    const library = await readLibrary(app.db, campaignId);
+    return reply.send({
+      bookmarks: await decorate(library.bookmarks.filter((b) => codes.has(b.book))),
+      recentRefs: library.recentRefs
+        .filter((r) => codes.has(r.book))
+        .map((r) => ({
+          ...r,
+          ref: `${r.book} p.${r.page}`,
+          readUrl: `/read/${encodeURIComponent(r.book)}?p=${r.page}`,
+        })),
+    });
+  });
+
+  app.post('/api/campaigns/:id/bookmarks', async (req, reply) => {
+    requireRole(req, 'gm');
+    const { id } = req.params as { id: string };
+    const campaignId = campaignOf(req, id);
+    const body = parse(CreateBookmarkBody, req.body);
+    // Bookmarking a book this device cannot open would be a dead chip.
+    const book = await readableBook(req, { code: body.book });
+    const { bookmark } = await addBookmark(app.db, campaignId, {
+      book: book.code,
+      page: body.page,
+      label: body.label,
+      ...(body.note !== undefined ? { note: body.note } : {}),
+      ...(body.pinned !== undefined ? { pinned: body.pinned } : {}),
+    });
+    const [decorated] = await decorate([bookmark]);
+    return reply.status(201).send(decorated);
+  });
+
+  app.patch('/api/campaigns/:id/bookmarks/:bookmarkId', async (req, reply) => {
+    requireRole(req, 'gm');
+    const { id, bookmarkId } = req.params as { id: string; bookmarkId: string };
+    const campaignId = campaignOf(req, id);
+    const patch = parse(PatchBookmarkBody, req.body);
+    const { bookmark } = await updateBookmark(app.db, campaignId, bookmarkId, patch);
+    const [decorated] = await decorate([bookmark]);
+    return reply.send(decorated);
+  });
+
+  app.delete('/api/campaigns/:id/bookmarks/:bookmarkId', async (req, reply) => {
+    requireRole(req, 'gm');
+    const { id, bookmarkId } = req.params as { id: string; bookmarkId: string };
+    const campaignId = campaignOf(req, id);
+    await removeBookmark(app.db, campaignId, bookmarkId);
+    return reply.send({ deleted: true, id: bookmarkId });
+  });
+
+  /**
+   * The trail: any member who opens a ref adds to it, so "what were we just
+   * reading?" survives the argument. Only books this device may open count.
+   */
+  app.post('/api/campaigns/:id/library/recent', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const campaignId = campaignOf(req, id);
+    const body = parse(RecentRefBody, req.body);
+    const book = await readableBook(req, { code: body.book });
+    const library = await recordRecentRef(app.db, campaignId, {
+      book: book.code,
+      page: body.page,
+      ...(body.label !== undefined ? { label: body.label } : {}),
+    });
+    return reply.status(201).send({ recentRefs: library.recentRefs });
   });
 }

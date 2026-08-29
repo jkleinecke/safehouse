@@ -10,6 +10,7 @@ import {
   SheetV1Schema,
   type Glitch,
   type Modifier,
+  type ProvenanceEntry,
   type RollRequest,
   type RollResult,
   type SheetV1,
@@ -61,6 +62,43 @@ export function parseModifiers(raw: unknown): Modifier[] {
     if (parsed.success) mods.push(parsed.data);
   }
   return mods;
+}
+
+export interface SceneReceipt {
+  /** The receipt with duplicate scene lines removed. */
+  entries: ProvenanceEntry[];
+  /** The lines that were dropped — kept so the log can say what was refused. */
+  dropped: ProvenanceEntry[];
+}
+
+/**
+ * ONE authority per scene modifier, receipt side (LIVE-2).
+ *
+ * A sheet roll's base breakdown comes from `GET /api/characters/:id/derived`,
+ * which has ALREADY applied the active scene's environment. A dialog that also
+ * offers the scene as a removable chip and adds it again sends a receipt with
+ * the same scene line twice and a pool one step too low. The server keeps the
+ * first line of each `(source, label)` scene pair and drops the rest; callers
+ * add the dropped values back to the pool so the receipt still sums to it.
+ */
+export function dedupeSceneEntries(breakdown: readonly ProvenanceEntry[]): SceneReceipt {
+  const seen = new Set<string>();
+  const entries: ProvenanceEntry[] = [];
+  const dropped: ProvenanceEntry[] = [];
+  for (const entry of breakdown) {
+    if (entry.source !== 'scene') {
+      entries.push(entry);
+      continue;
+    }
+    const key = `${entry.source}|${entry.label}`;
+    if (seen.has(key)) {
+      dropped.push(entry);
+      continue;
+    }
+    seen.add(key);
+    entries.push(entry);
+  }
+  return { entries, dropped };
 }
 
 export function parseWounds(raw: unknown): { physical: number; stun: number } | null {

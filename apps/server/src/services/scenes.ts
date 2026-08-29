@@ -19,6 +19,7 @@ import {
   SceneEnvironmentSchema,
   SceneGeometrySchema,
   FogStateSchema,
+  SheetV1Schema,
   TokenAuraSchema,
   type FogRegion,
   type FogState,
@@ -39,6 +40,7 @@ import {
   combatants,
   drawings,
   encounters,
+  latestEventOfType,
   npcTemplates,
   scenes,
   tokens,
@@ -46,6 +48,9 @@ import {
 } from '@safehouse/db';
 import { rollDie } from './dice.js';
 import { httpError } from './auth.js';
+// Pure row-model helper (no db, no hub): the one place an initiative line is
+// derived from a sheet, shared with the encounters domain (FR4.2).
+import { deriveFor } from './encounters-model.js';
 
 export type SceneRow = typeof scenes.$inferSelect;
 export type TokenRow = typeof tokens.$inferSelect;
@@ -85,9 +90,9 @@ export function normalizeFog(raw: unknown): FogState {
 
 /**
  * The `scenes.geometry` jsonb column also carries `mapAttachmentIds` and
- * `notes` (the §9.2 table has no dedicated columns; the Zod geometry schema
- * strips them back out on read). INTEGRATION: if the db agent adds columns,
- * lift these.
+ * `notes`: §9.2 gives them no columns of their own, and the Zod geometry
+ * schema strips them back out on read. Should the table ever grow the
+ * columns, this is a straight lift — nothing else reads the envelope.
  */
 function geometryColumn(geometry: SceneGeometry, mapAttachmentIds: string[], notes?: string) {
   return { ...geometry, mapAttachmentIds, ...(notes !== undefined ? { notes } : {}) };
@@ -295,9 +300,12 @@ export function filesDir(): string {
 
 /**
  * Environmental modifiers of the campaign's ACTIVE scene, for injection into
- * roll pools (FR9.11 — provenance carries the scene note; removable per-roll).
- * INTEGRATION: rolls agent — import { activeSceneModifiers } from
- * '../services/scenes.js' and call with (db, campaignId).
+ * roll pools (FR9.11 — provenance carries the scene note).
+ *
+ * This is the ONLY authority for the scene's contribution to a pool (LIVE-2):
+ * `services/rolls.ts` calls it during its recompute, and a client that also
+ * sent the scene as a situational chip has that chip dropped rather than
+ * summed, so a dim-light −1 can never land in a receipt twice.
  */
 export async function activeSceneModifiers(db: Db, campaignId: string): Promise<Modifier[]> {
   const rows = await db
@@ -646,8 +654,11 @@ export class ScenesService {
     await mkdir(dir, { recursive: true });
     const fileName = `${randomUUID()}${ext}`;
     const dest = join(dir, fileName);
-    // INTEGRATION: §13 wants sharp re-encode + metadata strip; sharp is not in
-    // the dependency budget — stored verbatim for now.
+    // §13 asks for a sharp re-encode + metadata strip. `sharp` is a native
+    // dependency and outside the budget, so the byte stream is stored verbatim
+    // and the mime allowlist above is what stands between the store and a
+    // surprise. Uploads are GM-only on a LAN, which is why that trade is
+    // acceptable here and would not be on the open internet.
     await pipeline(opts.file, createWriteStream(dest));
     const size = (await stat(dest)).size;
     return (
@@ -731,20 +742,29 @@ export class ScenesService {
       createdEncounter = true;
     }
 
-    // Stats for character tokens (monitor sizes + initiative base).
+    // Stats for character tokens (monitor sizes + initiative line).
     const charIds = stageable
       .filter((t) => t.source === 'character' && t.sourceId)
       .map((t) => t.sourceId!) ;
     const charRows = charIds.length
       ? await this.db.select().from(characters).where(inArray(characters.id, charIds))
       : [];
-    const statsById = new Map(charRows.map((c) => [c.id, c.sheet as StatShape]));
+    const sheetById = new Map(charRows.map((c) => [c.id, c.sheet]));
 
     const combatantIds: string[] = [];
     for (const t of stageable) {
-      const stats = t.sourceId ? statsById.get(t.sourceId) : undefined;
-      const rea = stats?.attributes?.rea ?? 0;
-      const intu = stats?.attributes?.int ?? 0;
+      const raw = t.sourceId ? sheetById.get(t.sourceId) : undefined;
+      // FR9.10/FR4.2: derive the initiative line through the ENGINE, exactly as
+      // `EncountersService.addCombatant` does — REA + INT + 1d6 is only the
+      // unaugmented case, and reading the sheet raw silently dropped wired
+      // reflexes, adept powers and every other `initiative.*` modifier (staged
+      // PCs all came out at a flat REA+INT with a single die).
+      const parsed = raw !== undefined && raw !== null ? SheetV1Schema.safeParse(raw) : null;
+      const derived = parsed?.success ? deriveFor(parsed.data, 'physical') : null;
+      const stats = (raw ?? undefined) as StatShape | undefined;
+      const initBase = derived
+        ? derived.base
+        : (stats?.attributes?.rea ?? 0) + (stats?.attributes?.int ?? 0);
       const row = (
         await this.db
           .insert(combatants)
@@ -754,9 +774,13 @@ export class ScenesService {
             source: t.source === 'character' ? 'character' : 'npc_template',
             sourceId: t.sourceId,
             name: t.name,
-            initBase: rea + intu,
-            monitors: monitorsFrom(stats),
+            initBase,
+            initKind: 'physical',
+            monitors: derived ? derived.monitors : monitorsFrom(stats),
             visibility: t.hidden ? 'gm' : 'public',
+            // `initDice` rides in the copilot JSONB (no column of its own); a
+            // missing value would default to 1 die and lose the augmentation.
+            copilot: { initDice: derived ? derived.dice : 1 },
           })
           .returning()
       )[0]!;
@@ -768,4 +792,34 @@ export class ScenesService {
   async activeSceneModifiers(campaignId: string): Promise<Modifier[]> {
     return activeSceneModifiers(this.db, campaignId);
   }
+
+  /**
+   * Current table-display steering (FR9.21). There is no `display` table: the
+   * newest `display.updated` event carries the whole state, so this reads it
+   * back. Anything unset falls to the defaults a fresh TV boots with.
+   */
+  async displayState(campaignId: string): Promise<DisplayState> {
+    const row = await latestEventOfType(this.db, campaignId, 'display.updated');
+    return readDisplayState(row?.payload);
+  }
+}
+
+/** GM steering of the table display (FR9.21). */
+export interface DisplayState {
+  /** Blank the big screen entirely (a between-scenes curtain). */
+  blank: boolean;
+  /** Show the initiative ribbon. Off during pure roleplay. */
+  ribbon: boolean;
+}
+
+export const DEFAULT_DISPLAY_STATE: DisplayState = { blank: false, ribbon: true };
+
+/**
+ * Read a `display.updated` payload tolerantly. `ribbon` defaults to ON and
+ * `blank` to OFF, so a malformed or absent event leaves the table looking at
+ * the game rather than at a black screen.
+ */
+export function readDisplayState(payload: unknown): DisplayState {
+  if (!isRecord(payload)) return DEFAULT_DISPLAY_STATE;
+  return { blank: payload['blank'] === true, ribbon: payload['ribbon'] !== false };
 }

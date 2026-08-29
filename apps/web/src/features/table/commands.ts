@@ -3,9 +3,11 @@
  * REST helpers for what the command catalog doesn't cover, and small
  * optimistic patches on the live store (server events overwrite them).
  */
-import { useQuery } from '@tanstack/react-query';
-import type { Combatant, RollTable, WsCommandInput } from '@safehouse/contracts';
+import { useEffect, useMemo, useRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import type { Combatant, Encounter, RollTable, WsCommandInput } from '@safehouse/contracts';
 import { apiGet, apiPatch, apiPost } from '../../api/client.js';
+import { fetchLiveEncounter, fetchRollTables, liveKeys } from '../../api/live.js';
 import { getSession } from '../../api/session.js';
 import { getLiveSocket } from '../../live/socket.js';
 import { useLiveStore } from '../../live/store.js';
@@ -84,12 +86,12 @@ export function patchCombatant(combatantId: string, patch: Partial<Combatant>): 
 // ---------------------------------------------------------------------------
 
 /** Campaign tables plus the shipped defaults (`campaign_id IS NULL`), already
- *  visibility-filtered server-side. */
+ *  visibility-filtered server-side. Shares its key with the hydration pass, so
+ *  the pane is populated on first paint rather than after a round trip. */
 export function useRollTables(campaignId: string | undefined) {
-  return useQuery({
-    queryKey: ['roll-tables', campaignId],
-    queryFn: async () =>
-      (await apiGet<{ tables: RollTable[] }>(`/api/campaigns/${campaignId}/roll-tables`)).tables,
+  return useQuery<RollTable[]>({
+    queryKey: liveKeys.rollTables(campaignId ?? ''),
+    queryFn: () => fetchRollTables(campaignId as string),
     enabled: Boolean(campaignId),
     staleTime: 60_000,
   });
@@ -106,20 +108,80 @@ export function rollOnTable(tableId: string): Promise<RollTableResult> {
 }
 
 // ---------------------------------------------------------------------------
-// Encounter bootstrap — the store only hears future `encounter.updated`s
+// Encounter hydration (LIVE-1)
 // ---------------------------------------------------------------------------
 
-/** Encounters for the campaign, combatants included. */
+/**
+ * Encounter rows for the campaign. NOTE: this route serialises the encounter
+ * WITHOUT its combatants, so it can pick which fight is live but can never
+ * populate the tracker — reaching for it alone is what made a live encounter
+ * with eight staged combatants render "no combatants yet".
+ */
 export function useEncounterList(campaignId: string | undefined) {
   return useQuery({
-    queryKey: ['encounters', campaignId],
+    queryKey: liveKeys.encounters(campaignId ?? ''),
     queryFn: async () =>
       (
-        await apiGet<{ encounters: import('@safehouse/contracts').Encounter[] }>(
-          `/api/campaigns/${campaignId}/encounters`,
-        )
+        await apiGet<{ encounters: Encounter[] }>(`/api/campaigns/${campaignId}/encounters`)
       ).encounters,
     enabled: Boolean(campaignId),
     staleTime: 30_000,
   });
+}
+
+export interface TrackerEncounter {
+  encounter: Encounter | null;
+  /** False only while the first REST read is still in flight. */
+  asked: boolean;
+  failed: boolean;
+}
+
+/**
+ * The fight the tracker draws, hydrated from REST and kept current by
+ * `encounter.updated` on top.
+ *
+ * Precedence: a live event wins on the turn structure (it is newer than any
+ * read), but a delta payload that carries no combatants must not blank the
+ * roster — the hydrated rows are merged back under it. When the GM switches to
+ * a different encounter mid-session the id changes and the read is redone.
+ */
+export function useTrackerEncounter(campaignId: string | undefined): TrackerEncounter {
+  const qc = useQueryClient();
+  const live = useLiveStore((s) => s.encounter);
+  const query = useQuery({
+    queryKey: liveKeys.encounter(campaignId ?? ''),
+    queryFn: () => fetchLiveEncounter(campaignId as string),
+    enabled: Boolean(campaignId),
+    staleTime: 15_000,
+  });
+  const rest = query.data ?? null;
+  const liveId = live?.id ?? null;
+  const refetchedFor = useRef<string | null>(null);
+
+  // A fight we have no roster for arrived over the socket: re-read once so its
+  // combatants land. Once per id — the read may legitimately keep answering
+  // with a different encounter (the socket can announce a PREP fight while a
+  // different one is live), and retrying on every render would spin.
+  useEffect(() => {
+    if (!campaignId || !liveId) return;
+    if (rest && rest.id === liveId) return;
+    if (refetchedFor.current === liveId) return;
+    refetchedFor.current = liveId;
+    void qc.invalidateQueries({ queryKey: liveKeys.encounter(campaignId) });
+  }, [campaignId, liveId, rest, qc]);
+
+  const encounter = useMemo<Encounter | null>(() => {
+    if (!live) return rest;
+    if (live.combatants && live.combatants.length > 0) return live;
+    if (rest && rest.id === live.id) {
+      return { ...rest, ...live, ...(rest.combatants ? { combatants: rest.combatants } : {}) };
+    }
+    return live;
+  }, [live, rest]);
+
+  return {
+    encounter,
+    asked: query.isFetched || live !== null,
+    failed: query.isError,
+  };
 }

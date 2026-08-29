@@ -1,13 +1,42 @@
 import { describe, expect, it } from 'vitest';
-import type { RollRequest } from '@safehouse/contracts';
+import type { Combatant, RollRequest } from '@safehouse/contracts';
 import {
+  BLITZ_INITIATIVE_DICE,
+  blitzInitiative,
   buyHits,
+  closeCall,
   d6,
+  EDGE_ACTION_LABELS,
   resolveExtendedTest,
   resolveRoll,
   resolveTeamwork,
   rollDice,
+  seizeInitiative,
+  turnOrder,
+  type EdgeActionKind,
 } from '../src/index.js';
+
+/** Minimal tracker row — enough for `turnOrder` to sort it. */
+function combatant(id: string, initScore: number): Combatant {
+  return {
+    id,
+    encounterId: 'enc',
+    source: 'manual',
+    name: id,
+    initBase: 8,
+    initDice: 1,
+    initScore,
+    initKind: 'physical',
+    monitors: {
+      physical: { max: 10, filled: 0 },
+      stun: { max: 10, filled: 0 },
+      overflow: { max: 4, filled: 0 },
+    },
+    effects: [],
+    visibility: 'public',
+    actedThisPass: false,
+  };
+}
 
 /** rng that deals a fixed sequence of faces; throws when over-drawn. */
 function seqRng(faces: number[]): () => number {
@@ -255,5 +284,100 @@ describe('statistical sanity (§17.1, seeded rng)', () => {
     const rate = r.hits / 10_000; // E = (1/3)/(1 - 1/6) = 0.4
     expect(rate).toBeGreaterThan(0.4 - 0.02);
     expect(rate).toBeLessThan(0.4 + 0.02);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Edge actions that are not extra dice (FR2.3, FR4.4)
+// ---------------------------------------------------------------------------
+
+describe('Seize the Initiative (FR2.3/FR4.4)', () => {
+  it('lifts the actor strictly above every other score in the pass', () => {
+    const out = seizeInitiative(9, [21, 14, 3]);
+    expect(out.from).toBe(9);
+    expect(out.beat).toBe(21);
+    expect(out.to).toBe(22);
+    expect(out.changed).toBe(true);
+    // …and the tracker's own ordering agrees the seizer now leads.
+    const order = turnOrder([
+      combatant('seizer', out.to),
+      combatant('lead', 21),
+      combatant('mid', 14),
+    ]);
+    expect(order.map((c) => c.id)).toEqual(['seizer', 'lead', 'mid']);
+  });
+
+  it('leaves a leader where they are (Edge still buys the guarantee)', () => {
+    const out = seizeInitiative(30, [21, 14]);
+    expect(out.to).toBe(30);
+    expect(out.changed).toBe(false);
+  });
+
+  it('puts a spent actor back into the pass when nobody else is up', () => {
+    const out = seizeInitiative(0, []);
+    expect(out.to).toBe(1); // turnOrder drops scores <= 0
+    expect(out.beat).toBeNull();
+  });
+});
+
+describe('Blitz (FR2.3/FR4.4)', () => {
+  it('rolls the maximum five initiative dice whatever the actor normally has', () => {
+    const out = blitzInitiative({ base: 8, dice: 1 }, seqRng([6, 6, 6, 6, 6]));
+    expect(out.dice).toBe(BLITZ_INITIATIVE_DICE);
+    expect(out.rolls).toEqual([6, 6, 6, 6, 6]);
+    expect(out.addedDice).toBe(4);
+    expect(out.score).toBe(38);
+  });
+
+  it('still pays the wound modifier, and never buys dice it already has', () => {
+    const out = blitzInitiative(
+      { base: 10, dice: 5, woundModifier: -3 },
+      seqRng([1, 1, 1, 1, 1]),
+    );
+    expect(out.addedDice).toBe(0);
+    expect(out.score).toBe(12); // 10 + 5 - 3
+  });
+});
+
+describe('Close Call (FR2.3)', () => {
+  it('negates a critical glitch without touching the dice (G5)', () => {
+    const rolled = resolveRoll(req({ pool: 4 }), seqRng([1, 1, 1, 1]));
+    expect(rolled.glitch).toBe('critical');
+    const out = closeCall(rolled);
+    expect(out.applied).toBe(true);
+    expect(out.negated).toBe('critical');
+    expect(out.result.glitch).toBe('none');
+    expect(out.result.faces).toEqual(rolled.faces);
+    expect(out.result.hits).toBe(rolled.hits);
+    // The input is untouched — the stored record is what it always was.
+    expect(rolled.glitch).toBe('critical');
+  });
+
+  it('negates an ordinary glitch too', () => {
+    const out = closeCall({ faces: [1, 1, 1, 5], hits: 1, ones: 3, glitch: 'glitch', limitedHits: 1 });
+    expect(out.negated).toBe('glitch');
+    expect(out.result.glitch).toBe('none');
+  });
+
+  it('buys nothing when the roll did not glitch', () => {
+    const clean = { faces: [5, 5], hits: 2, ones: 0, glitch: 'none' as const, limitedHits: 2 };
+    const out = closeCall(clean);
+    expect(out.applied).toBe(false);
+    expect(out.negated).toBe('none');
+    expect(out.result).toBe(clean);
+  });
+});
+
+describe('Edge action labels (FR2.3)', () => {
+  it('names every action the engine knows', () => {
+    const kinds: EdgeActionKind[] = [
+      'push_pre',
+      'push_post',
+      'second_chance',
+      'seize_initiative',
+      'blitz',
+      'close_call',
+    ];
+    for (const kind of kinds) expect(EDGE_ACTION_LABELS[kind].length).toBeGreaterThan(0);
   });
 });

@@ -71,6 +71,8 @@ export interface World {
   dataDir: string;
   campaignId: string;
   gmToken: string;
+  /** The GM's user id — a `gm` pairing code must bind to THIS identity (FR1.2). */
+  gmUserId: string;
   /** Character rows of the seeded party, keyed by alias. */
   characterIds: Record<string, string>;
   booksSeeded: string;
@@ -132,9 +134,11 @@ export async function boot(opts: BootOptions): Promise<World> {
   // its sha256 hash lands in `devices`). The GM's laptop reconnecting therefore
   // means a NEW device row for the same user — exactly what the app does when
   // the GM re-pairs a machine.
-  // INTEGRATION: there is no "re-pair the GM's own laptop" route (invites are
-  // role-scoped to player/observer/display, FR1.3), so this writes the device
-  // row directly. A `POST /api/campaigns/:id/gm-device` would remove it.
+  //
+  // `POST /api/campaigns/:id/gm-device` is that route, but it is GM-authed and
+  // the playthrough is standing up the very first GM device, so there is no
+  // token to authenticate it with. It writes the row the route would write, and
+  // every check after this point goes through the real HTTP surface.
   const gmToken = mintToken();
   await app.db.insert(devices).values({
     userId: campaign.gmUserId,
@@ -158,25 +162,32 @@ export async function boot(opts: BootOptions): Promise<World> {
     dataDir,
     campaignId: campaign.id,
     gmToken,
+    gmUserId: campaign.gmUserId,
     characterIds,
     booksSeeded,
   };
 }
 
+/** The slice of the harness's `Api` this module needs (avoids a cycle). */
+export interface PatchCaller {
+  patch<T>(path: string, body: unknown): Promise<T>;
+}
+
 /**
  * Hand a seeded sheet to the phone that just scanned a code (FR1.1: the join
  * link binds a device, and the GM says which runner it is holding).
- * INTEGRATION: there is no "claim this sheet" route yet — `POST /api/characters`
- * takes `ownerUserId` at creation and `PATCH` does not — so the playthrough
- * writes the column directly. A `PATCH /api/characters/:id { ownerUserId }`
- * (GM-only) would close this.
+ *
+ * This goes through the real GM-only route (`PATCH /api/characters/:id/owner`,
+ * `plugins/campaigns-admin.ts`) rather than writing the column — the whole
+ * point of the playthrough is that every beat crosses the HTTP surface a phone
+ * would cross.
  */
 export async function assignCharacter(
-  app: FastifyInstance,
+  gm: PatchCaller,
   characterId: string,
   ownerUserId: string,
 ): Promise<void> {
-  await app.db.update(characters).set({ ownerUserId }).where(eq(characters.id, characterId));
+  await gm.patch(`/api/characters/${characterId}/owner`, { ownerUserId });
 }
 
 export async function teardown(world: World, keepData: boolean): Promise<void> {

@@ -227,6 +227,18 @@ describe('moralePrompts', () => {
     expect(withLeader[0]?.report.reasons).toContain('leader down');
   });
 
+  /**
+   * The server's morale pass keys off `copilot.leader` (the flag its own
+   * routes write). Reading a different name here meant the GM could set the
+   * leader through the API and watch the tracker's prompt never mention it.
+   */
+  it('reads the server’s own copilot.leader flag', () => {
+    const withLeader = moralePrompts([squad(1, 1, { copilot: { leader: true } })]);
+    expect(withLeader[0]?.report.reasons).toContain('leader down');
+    const without = moralePrompts([squad(1, 1, { copilot: { leader: false } })]);
+    expect(without[0]?.report.reasons ?? []).not.toContain('leader down');
+  });
+
   it('ignores rows that are not grunt groups', () => {
     expect(moralePrompts([combatant({ id: 'pc', source: 'character' })])).toEqual([]);
   });

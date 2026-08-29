@@ -13,6 +13,14 @@
  *   GET  /api/campaigns/:id/rolls        paginated roll log (?session=&limit=&before=)
  *   POST /api/campaigns/:id/log          table talk / scene marker (FR2.9)
  *   GET  /api/campaigns/:id/log          interleaved log slice, server-filtered
+ *   POST /api/edge/seize-initiative      Edge → act first this pass (FR2.3/4.4)
+ *   POST /api/edge/blitz                 Edge → 5d6 initiative (FR2.3/4.4)
+ *   POST /api/edge/close-call            Edge → negate a glitch after the fact
+ *
+ * The three Edge actions sit under `/api/edge/*` rather than
+ * `/api/combatants/:id/*`: the encounters plugin already owns that namespace,
+ * and Fastify refuses to boot on a duplicate route, so the split is structural
+ * rather than stylistic.
  */
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -20,6 +28,8 @@ import { VisibilitySchema } from '@safehouse/contracts';
 import { recentEvents } from '@safehouse/db';
 import { canSee } from '../hub.js';
 import { assertCampaign, httpError, requireAuth } from '../services/auth.js';
+import { EncountersService } from '../services/encounters.js';
+import { EdgeActionService } from '../services/rolls-edge.js';
 import { getRollService, type RollViewer } from '../services/rolls.js';
 
 const LogPostBody = z.object({
@@ -30,9 +40,18 @@ const LogPostBody = z.object({
 });
 
 const ListQuery = z.object({
-  session: z.string().optional(),
+  /** A session id, or `current`/`active`/`live` for the running one. */
+  session: z.string().min(1).max(64).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
   before: z.string().optional(),
+});
+
+const CombatantBody = z.object({ combatantId: z.string().uuid() });
+
+const CloseCallBody = z.object({
+  rollId: z.string().uuid(),
+  /** Whose Edge pays, when the roll names no character (a GM's NPC roll). */
+  combatantId: z.string().uuid().optional(),
 });
 
 /** The campaign this device is bound to (§13 — one campaign per token). */
@@ -50,6 +69,9 @@ function parse<T extends z.ZodType>(schema: T, value: unknown): z.output<T> {
 
 export default async function rollsPlugin(app: FastifyInstance): Promise<void> {
   const svc = getRollService(app.db, app.hub, app.log);
+  // Seize/Blitz move initiative SCORES, so they go through the tracker's own
+  // writer — which emits `encounter.updated` and keeps the ordering honest.
+  const edge = new EdgeActionService(app.db, app.hub, new EncountersService(app.db, app.hub), svc);
 
   // --- WS: roll.request (§10.1) -------------------------------------------
   app.hub.onCommand('roll.request', async (msg, ctx) => {
@@ -98,16 +120,48 @@ export default async function rollsPlugin(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     assertCampaign(auth, id);
     const q = parse(ListQuery, req.query);
+    // `?session=` is resolved (and validated) before it reaches SQL: a bogus
+    // id used to be a 500, and one from another campaign an empty page that
+    // looked exactly like a quiet session (FR6.1).
+    const sessionId = q.session ? await svc.resolveSessionId(id, q.session) : null;
     const page = await svc.listRolls(
       id,
       { userId: auth.userId, role: auth.role },
       {
-        ...(q.session ? { sessionId: q.session } : {}),
+        ...(sessionId ? { sessionId } : {}),
         ...(q.limit !== undefined ? { limit: q.limit } : {}),
         ...(q.before ? { before: q.before } : {}),
       },
     );
-    return reply.send(page);
+    return reply.send({ ...page, sessionId });
+  });
+
+  // --- Edge actions beyond the dice (FR2.3, FR4.4) -------------------------
+
+  app.post('/api/edge/seize-initiative', async (req, reply) => {
+    const { campaignId, viewer } = campaignOf(req);
+    const body = parse(CombatantBody, req.body);
+    const out = await edge.seize({ campaignId, viewer, combatantId: body.combatantId });
+    return reply.send(out);
+  });
+
+  app.post('/api/edge/blitz', async (req, reply) => {
+    const { campaignId, viewer } = campaignOf(req);
+    const body = parse(CombatantBody, req.body);
+    const out = await edge.blitz({ campaignId, viewer, combatantId: body.combatantId });
+    return reply.send(out);
+  });
+
+  app.post('/api/edge/close-call', async (req, reply) => {
+    const { campaignId, viewer } = campaignOf(req);
+    const body = parse(CloseCallBody, req.body);
+    const out = await edge.closeCall({
+      campaignId,
+      viewer,
+      rollId: body.rollId,
+      ...(body.combatantId ? { combatantId: body.combatantId } : {}),
+    });
+    return reply.send(out);
   });
 
   // Table talk and scene markers — the log's non-dice half (FR2.9).

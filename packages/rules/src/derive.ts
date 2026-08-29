@@ -31,6 +31,31 @@ export function woundModifierFor(wounds: { physical: number; stun: number }): nu
 
 const CORE_ATTRS = ['bod', 'agi', 'rea', 'str', 'wil', 'log', 'int', 'cha'] as const;
 
+/**
+ * ONE authority per scene modifier. The active scene's environment is derived
+ * server-side and can reach the engine a second time as a client-side "chip"
+ * for the same scene — which silently doubled the penalty (a −1 scene applied
+ * as −2, with the note printed twice in the receipt). Collapse `scene`
+ * modifiers that name the same `(source.kind, source.ref, target)` triple,
+ * whoever assembled the list; everything else passes through untouched, in
+ * order.
+ */
+export function dedupeSceneModifiers(mods: readonly Modifier[]): Modifier[] {
+  const seen = new Set<string>();
+  const out: Modifier[] = [];
+  for (const mod of mods) {
+    if (mod.source.kind !== 'scene') {
+      out.push(mod);
+      continue;
+    }
+    const key = `${mod.source.kind}|${mod.source.ref ?? ''}|${mod.target}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(mod);
+  }
+  return out;
+}
+
 /** All active-able modifiers carried on the sheet itself, in pipeline terms. */
 function collectSheetModifiers(sheet: SheetV1): Modifier[] {
   const mods: Modifier[] = [];
@@ -109,8 +134,12 @@ function initiativeLine(spec: InitLineSpec, mods: readonly Modifier[]): Initiati
  * wounds → scene/range/situational → override (§7.2).
  */
 export function deriveCharacter(sheet: SheetV1, ctx?: DeriveContext): DerivedCharacter {
-  const mods: Modifier[] = collectSheetModifiers(sheet);
-  if (ctx?.situational) mods.push(...ctx.situational);
+  // Scene modifiers are deduped here so no caller can double-count the active
+  // scene, whether it arrived from the db or bounced off a client.
+  const mods: Modifier[] = dedupeSceneModifiers([
+    ...collectSheetModifiers(sheet),
+    ...(ctx?.situational ?? []),
+  ]);
 
   // Wound modifier → ordinary pipeline modifiers in the 'wound' phase.
   let woundModifier: DerivedValue | undefined;

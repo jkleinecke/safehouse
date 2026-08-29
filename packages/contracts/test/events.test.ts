@@ -6,6 +6,7 @@ import {
   WS_EVENT_TYPES,
   WS_EPHEMERAL_TYPES,
   WS_COMMANDS,
+  MARK_KINDS,
   ApiErrorSchema,
 } from '../src/index.js';
 
@@ -49,13 +50,34 @@ describe('WsCommandSchema (client→server)', () => {
       { cmd: 'encounter.advance', encounterId: 'enc_1' },
       { cmd: 'damage.apply', combatantId: 'cbt_3', monitor: 'stun', boxes: 4 },
       { cmd: 'ping', sceneId: 'scn_1', x: 10, y: 12 },
+      { cmd: 'pointer', sceneId: 'scn_1', x: 10.5, y: 12.5 },
+      { cmd: 'scene.focus', sceneId: 'scn_1', x: 3, y: 4 },
+      { cmd: 'display.set', blank: true },
     ];
     for (const c of cmds) {
       const parsed = WsCommandSchema.parse(c);
       expect(parsed.cmd).toBe(c.cmd);
       expect(WsCommandSchema.parse(parsed)).toEqual(parsed);
     }
-    expect(WS_COMMANDS).toHaveLength(7);
+    expect(WS_COMMANDS).toHaveLength(10);
+  });
+
+  it('carries the FR9.15/FR9.21 table gestures', () => {
+    // A pointer trail may omit the scene (the sender's active one is implied).
+    expect(WsCommandSchema.safeParse({ cmd: 'pointer', x: 1, y: 2 }).success).toBe(true);
+    // display.set is a patch: either half alone is a legal frame.
+    expect(WsCommandSchema.safeParse({ cmd: 'display.set', ribbon: false }).success).toBe(true);
+    expect(WsCommandSchema.safeParse({ cmd: 'display.set' }).success).toBe(true);
+    expect(WsCommandSchema.safeParse({ cmd: 'display.set', blank: 'yes' }).success).toBe(false);
+    expect(WsCommandSchema.safeParse({ cmd: 'scene.focus', x: 1 }).success).toBe(false);
+    expect(MARK_KINDS).toEqual(['ping', 'pointer', 'focus']);
+  });
+
+  it('names display.updated in the persisted catalog (FR9.21)', () => {
+    // The TV's steering has no table of its own: the newest event IS the state,
+    // so it has to be persisted and replayable, not ephemeral.
+    expect(WS_EVENT_TYPES).toContain('display.updated');
+    expect(WS_EPHEMERAL_TYPES).not.toContain('display.updated');
   });
 
   it('fog.reveal defaults op to reveal and accepts define with a region', () => {

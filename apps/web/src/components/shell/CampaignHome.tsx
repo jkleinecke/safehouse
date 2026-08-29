@@ -30,8 +30,22 @@ export default function CampaignHome() {
       )}
       <Card to={`${c}/table`} title="Table" blurb="Shared roll log and the initiative tracker." />
       <Card to={`${c}/grid`} title="Grid" blurb="The tactical map — tokens, fog, pings." />
+      <Card
+        to={`${c}/codex`}
+        title="Codex"
+        blurb="NPCs, factions, locations, lore — what the team actually knows."
+      />
+      <Card
+        to={`${c}/calendar`}
+        title="Calendar"
+        blurb="The Sixth World clock: runs, sessions, rent coming due."
+      />
       {session?.role === 'gm' && (
-        <Card to={`${c}/gm`} title="GM console" blurb="Scenes, generator, Fixer, books, sessions." />
+        <Card
+          to={`${c}/gm`}
+          title="GM console"
+          blurb="Runs, scenes, generator, Fixer, books, sessions."
+        />
       )}
     </div>
   );

@@ -10,9 +10,19 @@
  */
 import { useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Scene, SceneInput, SheetV1, Token, TokenInput } from '@safehouse/contracts';
+import type {
+  Encounter,
+  Scene,
+  SceneGeometry,
+  SceneInput,
+  SheetV1,
+  Token,
+  TokenInput,
+} from '@safehouse/contracts';
 import { apiDelete, apiGet, apiPatch, apiPost, queryClient } from '../../api/client.js';
 import { useLiveStore } from '../../live/store.js';
+import { normalizeGeometry } from './geometryEdit.js';
+import { mapImageId } from './mapImage.js';
 
 // ---------------------------------------------------------------------------
 // Queries
@@ -208,9 +218,99 @@ export function useUploadAttachment() {
   });
 }
 
-/** URL for a stored attachment (map images, token art). */
+/**
+ * URL for a stored attachment (map images, token art). Map refs may carry a
+ * `#rot=…` adjustment fragment (see `mapImage.ts`); the file route wants the
+ * bare id.
+ */
 export function fileUrl(attachmentId: string): string {
-  return `/files/${attachmentId}`;
+  return `/files/${mapImageId(attachmentId)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Geometry authoring (FR9.2 walls/doors/zones, FR9.3 pins)
+// ---------------------------------------------------------------------------
+
+/**
+ * Whole-object geometry replacement — that is the shape `PATCH /api/scenes/:id`
+ * takes. Everything is normalised through the contract first, so a half-typed
+ * editor field can never post a body the server rejects.
+ */
+export function usePatchGeometry() {
+  return useMutation({
+    mutationFn: async ({ sceneId, geometry }: { sceneId: string; geometry: SceneGeometry }) =>
+      (
+        await apiPatch<{ scene: Scene }>(`/api/scenes/${sceneId}`, {
+          geometry: normalizeGeometry(geometry),
+        })
+      ).scene,
+    onSuccess: (_data, vars) => invalidateScene(vars.sceneId),
+  });
+}
+
+/** Codex pages a pin can link to (FR9.3 → FR5.3). GM-facing picker. */
+export interface WikiPageSummary {
+  id: string;
+  title: string;
+  kind: string;
+  visibility: string;
+}
+
+export function useWikiPages(campaignId: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ['wiki-pages', campaignId],
+    queryFn: async () =>
+      (await apiGet<{ pages: WikiPageSummary[] }>(`/api/campaigns/${campaignId}/wiki`)).pages,
+    enabled: Boolean(campaignId) && enabled,
+    // The codex module may not be mounted on every deployment; a 404 here must
+    // degrade the pin editor to "paste an id", not spam retries.
+    retry: 0,
+    staleTime: 60_000,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Hydrate-on-mount (LIVE-1): the encounter behind the token decorations
+// ---------------------------------------------------------------------------
+
+/** Encounter headers for the campaign (no combatants — see `useEncounter`). */
+export function useCampaignEncounters(campaignId: string | undefined) {
+  return useQuery({
+    queryKey: ['encounters', campaignId],
+    queryFn: async () =>
+      (await apiGet<{ encounters: Encounter[] }>(`/api/campaigns/${campaignId}/encounters`))
+        .encounters,
+    enabled: Boolean(campaignId),
+    staleTime: 30_000,
+  });
+}
+
+/**
+ * One encounter with its combatants. The route hoists `state/turn/pass` and
+ * `combatants` alongside the encounter object; we fold them back into a single
+ * `Encounter` so the grid's projections take the same shape as the live
+ * store's `encounter.updated` payload.
+ */
+interface EncounterDetailDto {
+  encounter: Encounter;
+  combatants?: Encounter['combatants'];
+  activeCombatantId?: string | null;
+}
+
+export function useEncounter(encounterId: string | null | undefined) {
+  return useQuery({
+    queryKey: ['encounter', encounterId],
+    queryFn: async (): Promise<Encounter> => {
+      const dto = await apiGet<EncounterDetailDto>(`/api/encounters/${encounterId}`);
+      return {
+        ...dto.encounter,
+        combatants: dto.combatants ?? dto.encounter.combatants ?? [],
+        activeCombatantId: dto.activeCombatantId ?? dto.encounter.activeCombatantId ?? null,
+      };
+    },
+    enabled: Boolean(encounterId),
+    staleTime: 5_000,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -279,4 +379,34 @@ export function useGridLiveSync(sceneId: string | null | undefined): void {
     if (refetchScene) void qc.invalidateQueries({ queryKey: ['scene', sceneId] });
     if (refetchList) void qc.invalidateQueries({ queryKey: ['scenes'] });
   }, [events, sceneId, qc]);
+}
+
+/**
+ * LIVE-1, second half: a socket that dropped and came back replays persisted
+ * events, but anything the client only ever learned by REST (the scene body,
+ * the token list, the encounter roster) is now however stale the outage was.
+ * Every offline→online transition re-reads them.
+ */
+export function useRefetchOnReconnect(
+  campaignId: string | undefined,
+  sceneId: string | null | undefined,
+): void {
+  const qc = useQueryClient();
+  const status = useLiveStore((s) => s.status);
+  const wasOffline = useRef(false);
+
+  useEffect(() => {
+    // Only a real drop arms the refetch — the first `connecting → online` of a
+    // mount must not re-fire the queries that just resolved.
+    if (status === 'offline') {
+      wasOffline.current = true;
+      return;
+    }
+    if (status !== 'online' || !wasOffline.current) return;
+    wasOffline.current = false;
+    void qc.invalidateQueries({ queryKey: ['scenes', campaignId] });
+    void qc.invalidateQueries({ queryKey: ['encounters', campaignId] });
+    void qc.invalidateQueries({ queryKey: ['encounter'] });
+    if (sceneId) void qc.invalidateQueries({ queryKey: ['scene', sceneId] });
+  }, [status, campaignId, sceneId, qc]);
 }

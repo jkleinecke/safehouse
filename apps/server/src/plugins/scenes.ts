@@ -19,6 +19,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import '@fastify/multipart';
 import { z } from 'zod';
 import {
+  DisplaySetCommandSchema,
   FogRegionSchema,
   GridSchema,
   PointSchema,
@@ -35,6 +36,7 @@ import {
   requireRole,
   type AuthContext,
 } from '../services/auth.js';
+import { emitFogProximity } from '../fixer/proximity.js';
 import {
   PerKeyThrottle,
   ScenesService,
@@ -590,6 +592,15 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       ...(parsed.data.rotation !== undefined ? { rotation: parsed.data.rotation } : {}),
     });
     await emitTokenChange(scene, token, after, { positional: true, nonPositional: false });
+    // "They're at the lab door, reveal?" (FR12.8). On the COMMIT only, never on
+    // drag frames — a nudge per interim position would be a strobe. GM-only and
+    // ephemeral inside `emitFogProximity`, and wrapped because a suggestion
+    // failing must never turn a legal move into an error.
+    try {
+      await emitFogProximity(app.db, app.hub, ctx.campaignId, { sceneId: scene.id });
+    } catch (err) {
+      app.log.debug({ err }, 'fog proximity prompt failed after token.move');
+    }
   });
 
   app.hub.onCommand('fog.reveal', async (msg, ctx) => {
@@ -601,5 +612,35 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     const scene = await svc.sceneRow(parsed.data.sceneId);
     if (scene.campaignId !== ctx.campaignId) return;
     await applyFog(scene, parsed.data);
+  });
+
+  /**
+   * GM steering of the table display (FR9.21): blank the TV between scenes, or
+   * hide the initiative ribbon during pure roleplay.
+   *
+   * Persisted, not ephemeral, and public: the TV is a `display` device, and a
+   * kiosk that reboots (or joins late) has to come back in the state the GM
+   * left it in — which it can only do by replaying the last `display.updated`.
+   * The payload carries the FULL state, not the patch, so the newest event is
+   * always the whole answer.
+   */
+  app.hub.onCommand('display.set', async (msg, ctx) => {
+    if (ctx.auth.role !== 'gm') {
+      return ctx.reply({ type: 'error', payload: { code: 'forbidden', message: 'the table display is GM-only' }, ephemeral: true });
+    }
+    const parsed = DisplaySetCommandSchema.safeParse({ ...msg, cmd: 'display.set' });
+    if (!parsed.success) {
+      return ctx.reply({ type: 'error', payload: { code: 'bad_request', message: 'invalid display.set' }, ephemeral: true });
+    }
+    const current = await svc.displayState(ctx.campaignId);
+    const next = {
+      blank: parsed.data.blank ?? current.blank,
+      ribbon: parsed.data.ribbon ?? current.ribbon,
+    };
+    await app.hub.emit(ctx.campaignId, {
+      type: 'display.updated',
+      payload: next,
+      visibility: 'public',
+    });
   });
 }

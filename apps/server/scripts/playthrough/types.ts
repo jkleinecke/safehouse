@@ -22,12 +22,17 @@ export interface RollResult {
 }
 export interface RollRecord {
   id: string;
-  request: { pool: number; breakdown: Entry[]; limit?: { kind: string; value: number } };
+  request: { pool: number; breakdown: Entry[]; limit?: { kind: string; value: number }; meta?: Dict };
   faces: number[];
   hits: number;
   ones: number;
   glitch: string;
   limitedHits: number;
+}
+/** A roll read back from `GET /api/rolls/:id` — the immutable record (G5). */
+export interface PersistedRoll extends RollRecord {
+  sessionId: string | null;
+  visibility: string;
 }
 export interface Monitors {
   physical: { max: number; filled: number };
@@ -45,6 +50,8 @@ export interface Combatant {
   visibility: string;
   monitors: Monitors;
   tokenId: string | null;
+  /** Generator/grunt state: `initDice`, `generator.professionalRating`, morale. */
+  copilot?: Dict;
 }
 export interface TokenDto {
   id: string;

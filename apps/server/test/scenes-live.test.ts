@@ -265,6 +265,138 @@ describe('fog over the wire (FR9.13/9.14)', () => {
   });
 });
 
+/**
+ * FR12.8 proximity prompts. The geometry was built and unit-tested, but no
+ * caller existed: nothing ever nudged the GM, because the scene layer never
+ * called it after a move.
+ */
+describe('fog proximity prompts ride the token.move commit (FR12.8)', () => {
+  it('nudges the GM when a token lands at an unrevealed region, and only the GM', async () => {
+    gmWs.send({
+      cmd: 'fog.reveal',
+      sceneId,
+      op: 'define',
+      region: {
+        id: 'server-room',
+        name: 'the server room',
+        polygon: [
+          { x: 40, y: 40 },
+          { x: 46, y: 40 },
+          { x: 46, y: 46 },
+          { x: 40, y: 46 },
+        ],
+      },
+    });
+    // A `define` event deliberately carries no geometry, not even to the GM —
+    // the op is the whole payload (see `applyFog`).
+    await gmWs.next(
+      (f) =>
+        f.type === 'fog.updated' &&
+        (f.payload as { op?: string; sceneId?: string }).op === 'define' &&
+        (f.payload as { sceneId?: string }).sceneId === sceneId,
+    );
+
+    // A player walking their own token up to the door is the trigger.
+    playerWs.send({ cmd: 'token.move', tokenId: ownTokenId, x: 39, y: 43 });
+    const nudge = await gmWs.next(
+      (f) => f.type === 'fixer.suggestion' && JSON.stringify(f.payload).includes('server-room'),
+    );
+    expect(nudge.ephemeral).toBe(true);
+    const payload = nudge.payload as { kind: string; action: { tool: string } };
+    expect(payload.kind).toBe('fog_proximity');
+    // A suggestion, never an action (Principle 8): nothing revealed itself.
+    expect(payload.action.tool).toBe('suggest_fog_reveal');
+
+    await settle();
+    // The unrevealed region's very name is what a player must not learn.
+    for (const ws of [playerWs, displayWs]) {
+      expect(ws.frames.some((f) => f.type === 'fixer.suggestion')).toBe(false);
+      expect(ws.frames.some((f) => JSON.stringify(f).includes('the server room'))).toBe(false);
+    }
+    // Ephemeral: a replay must not leak it either.
+    expect(await persistedTypes()).not.toContain('fixer.suggestion');
+  });
+
+  it('does not nag while the token stays inside the ring', async () => {
+    const before = gmWs.frames.filter((f) => f.type === 'fixer.suggestion').length;
+    playerWs.send({ cmd: 'token.move', tokenId: ownTokenId, x: 39.5, y: 43.5 });
+    await gmWs.next(
+      (f) => f.type === 'token.moved' && (f.payload as { x?: number }).x === 39.5,
+    );
+    await settle();
+    expect(gmWs.frames.filter((f) => f.type === 'fixer.suggestion')).toHaveLength(before);
+  });
+});
+
+/**
+ * The three table-feel commands (FR9.15/FR9.21). Before this round they had no
+ * schema and no handler, so the GM's display console and the pointer trail were
+ * client-only gestures that died at the socket.
+ */
+describe('table gestures: pointer, focus, display (FR9.15/FR9.21)', () => {
+  it('relays a pointer trail to everyone, ephemeral and labelled', async () => {
+    playerWs.send({ cmd: 'pointer', sceneId, x: 3.25, y: 4.75 });
+    for (const ws of [gmWs, displayWs]) {
+      const frame = await ws.next((f) => f.type === 'pointer');
+      expect(frame.ephemeral).toBe(true);
+      expect(frame.id).toBeUndefined();
+      expect(frame.payload).toMatchObject({ x: 3.25, y: 4.75, sceneId, kind: 'pointer' });
+    }
+    await settle();
+    expect(await persistedTypes()).not.toContain('pointer');
+  });
+
+  it('stamps kind on a plain ping too, so nothing downstream guesses', async () => {
+    playerWs.send({ cmd: 'ping', sceneId, x: 1, y: 2 });
+    const frame = await gmWs.next((f) => f.type === 'ping');
+    expect(frame.payload).toMatchObject({ kind: 'ping' });
+  });
+
+  it('carries "focus here" as a ping-family mark with kind: focus', async () => {
+    gmWs.send({ cmd: 'scene.focus', sceneId, x: 12, y: 13 });
+    for (const ws of [playerWs, displayWs]) {
+      const frame = await ws.next(
+        (f) => f.type === 'ping' && (f.payload as { kind?: string }).kind === 'focus',
+      );
+      expect(frame.ephemeral).toBe(true);
+      expect(frame.payload).toMatchObject({ x: 12, y: 13, sceneId });
+    }
+  });
+
+  it('refuses focus from a player — nobody yanks the table camera but the GM', async () => {
+    playerWs.send({ cmd: 'scene.focus', sceneId, x: 50, y: 50 });
+    const err = await playerWs.next((f) => f.type === 'error');
+    expect((err.payload as { code: string }).code).toBe('forbidden');
+  });
+
+  it('persists display.set as a public display.updated carrying the FULL state', async () => {
+    gmWs.send({ cmd: 'display.set', blank: true });
+    for (const ws of [gmWs, playerWs, displayWs]) {
+      const frame = await ws.next((f) => f.type === 'display.updated');
+      expect(frame.visibility).toBe('public');
+      expect(typeof frame.id).toBe('number');
+      // `ribbon` was never sent, but the event still answers for it: a TV that
+      // reboots reads one event, not a patch history.
+      expect(frame.payload).toMatchObject({ blank: true, ribbon: true });
+    }
+    expect(await persistedTypes()).toContain('display.updated');
+  });
+
+  it('merges the next patch onto the stored state instead of resetting it', async () => {
+    gmWs.send({ cmd: 'display.set', ribbon: false });
+    const frame = await displayWs.next(
+      (f) => f.type === 'display.updated' && (f.payload as { ribbon?: boolean }).ribbon === false,
+    );
+    expect(frame.payload).toMatchObject({ blank: true, ribbon: false });
+  });
+
+  it('refuses display.set from a player socket', async () => {
+    playerWs.send({ cmd: 'display.set', blank: true });
+    const err = await playerWs.next((f) => f.type === 'error');
+    expect((err.payload as { code: string }).code).toBe('forbidden');
+  });
+});
+
 describe('PerKeyThrottle (the ~15 Hz drag relay budget)', () => {
   it('passes the leading edge and swallows the rest of the window, per key', () => {
     let now = 1_000;

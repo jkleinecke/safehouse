@@ -7,7 +7,12 @@ import {
   type SheetV1,
   type SheetV1Input,
 } from '@safehouse/contracts';
-import { deriveCharacter, environment, woundModifierFor } from '../src/index.js';
+import {
+  dedupeSceneModifiers,
+  deriveCharacter,
+  environment,
+  woundModifierFor,
+} from '../src/index.js';
 
 let nextId = 0;
 function mod(partial: Partial<Modifier> & { target: string; value: number }): Modifier {
@@ -443,5 +448,71 @@ describe('deriveCharacter: pipeline properties (§17.1)', () => {
       expect(pool.total).toBeGreaterThanOrEqual(0);
     }
     expect(d.monitors.overflow.value).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// One authority per scene modifier (LIVE-2)
+// ---------------------------------------------------------------------------
+
+describe('scene modifiers are counted exactly once', () => {
+  /** What the server derives for an active scene with dim light. */
+  const sceneMods = environment({ light: 1, visibility: 0, glare: 0, wind: 0 });
+
+  it('collapses the same scene modifier arriving twice', () => {
+    const once = deriveCharacter(makeSheet(), { situational: sceneMods });
+    // The client echoes the chip back with its own id and note — same scene,
+    // same target: the penalty must not double (the live bug: pool 4 with the
+    // environment line printed twice while the sheet showed 5).
+    const echoed = deriveCharacter(makeSheet(), {
+      situational: [
+        ...sceneMods,
+        {
+          id: 'client.env.copy',
+          source: { kind: 'scene' },
+          target: 'pool.all',
+          op: 'add',
+          value: -1,
+          active: true,
+          note: 'environment: light 1 → light (-1)',
+        },
+      ],
+    });
+    const pool = echoed.pools['skill.perception']!;
+    expect(pool.total).toBe(once.pools['skill.perception']!.total);
+    expect(pool.breakdown.filter((e) => e.source === 'scene')).toHaveLength(1);
+    expect(sumBreakdown(pool)).toBe(pool.total);
+  });
+
+  it('keeps two genuinely different scene modifiers', () => {
+    const d = deriveCharacter(makeSheet(), {
+      situational: [
+        ...sceneMods,
+        {
+          id: 'scene.noise',
+          source: { kind: 'scene', ref: 'crowd noise' },
+          target: 'pool.all',
+          op: 'add',
+          value: -2,
+          active: true,
+          note: 'crowd noise (−2)',
+        },
+      ],
+    });
+    const pool = d.pools['skill.perception']!;
+    expect(pool.breakdown.filter((e) => e.source === 'scene')).toHaveLength(2);
+    expect(sumBreakdown(pool)).toBe(pool.total);
+  });
+
+  it('exposes the collapse as a helper the server can reuse', () => {
+    const doubled = [...sceneMods, ...sceneMods];
+    expect(dedupeSceneModifiers(doubled)).toHaveLength(1);
+    // Non-scene sources are never touched, and order is preserved.
+    const mixed = dedupeSceneModifiers([
+      mod({ target: 'pool.all', value: -1, source: { kind: 'situational' } }),
+      ...doubled,
+      mod({ target: 'pool.all', value: -2, source: { kind: 'situational' } }),
+    ]);
+    expect(mixed.map((m) => m.source.kind)).toEqual(['situational', 'scene', 'situational']);
   });
 });

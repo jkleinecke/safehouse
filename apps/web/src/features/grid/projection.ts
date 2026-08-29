@@ -162,10 +162,9 @@ export interface MarkSample {
   y: number;
   ts: number;
   /**
-   * Present once the live store carries the ephemeral's own type.
-   * INTEGRATION: `src/live/store.ts` currently collapses `ping` and `pointer`
-   * (and any `focus` relay) into one `lastPing` slot with no kind. When it
-   * grows a `kind` field this classifier stops guessing — see below.
+   * The server's own label for the mark, carried through `live/store.ts` on
+   * every `ping` / `pointer` ephemeral. Optional only so the cadence fallback
+   * below stays reachable for a mark from an older server.
    */
   kind?: string;
 }
@@ -183,4 +182,35 @@ export function classifyMark(prev: MarkSample | null, next: MarkSample): MarkKin
   const dist = Math.hypot(next.x - prev.x, next.y - prev.y);
   if (dt <= 260 && dist <= 6) return 'pointer';
   return 'ping';
+}
+
+/**
+ * "Focus here" (FR9.15/FR9.21) read out of a PERSISTED event.
+ *
+ * The live wiring is the ephemeral one — `scene.focus` relays a ping-family
+ * mark with `kind: 'focus'`, which `classifyMark` above reads. This is the
+ * belt to that brace: if a deployment ever persists the gesture instead (as
+ * `scene.focus`, or as a `display.updated` carrying `focus: {x, y}` so the TV
+ * steers from the same event), the camera still follows.
+ */
+export function focusFromEvent(
+  event: { type: string; payload: unknown },
+  sceneId: string | null,
+): { x: number; y: number } | null {
+  if (event.type !== 'scene.focus' && event.type !== 'display.updated') return null;
+  const payload =
+    typeof event.payload === 'object' && event.payload !== null
+      ? (event.payload as Record<string, unknown>)
+      : {};
+  const inner =
+    typeof payload['focus'] === 'object' && payload['focus'] !== null
+      ? (payload['focus'] as Record<string, unknown>)
+      : payload;
+  const x = inner['x'];
+  const y = inner['y'];
+  if (typeof x !== 'number' || typeof y !== 'number') return null;
+  const target = payload['sceneId'] ?? inner['sceneId'];
+  // A focus aimed at another scene is not for this canvas.
+  if (typeof target === 'string' && sceneId && target !== sceneId) return null;
+  return { x, y };
 }

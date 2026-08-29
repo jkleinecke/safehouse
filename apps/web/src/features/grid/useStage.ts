@@ -68,6 +68,9 @@ export function useStage(params: UseStageParams): UseStageResult {
       onAoePlace: (x, y) => cbRef.current.onAoePlace(x, y),
       onFogVertex: (x, y) => cbRef.current.onFogVertex(x, y),
       onFocus: (x, y) => cbRef.current.onFocus(x, y),
+      onSegmentDraw: (kind, a, b) => cbRef.current.onSegmentDraw?.(kind, a, b),
+      onPinPlace: (x, y) => cbRef.current.onPinPlace?.(x, y),
+      onPinSelect: (id) => cbRef.current.onPinSelect?.(id),
     };
 
     void import('./stage/index.js')

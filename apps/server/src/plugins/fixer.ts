@@ -22,6 +22,7 @@ import { runFixerChat, runNpcConverse } from '../fixer/agent.js';
 import { listConversations, loadConversation } from '../fixer/conversations.js';
 import { acceptDraft, listDrafts, rejectDraft } from '../fixer/drafts.js';
 import { usageMeter } from '../fixer/usage.js';
+import fixerToolRoutes from '../fixer/routes.js';
 
 const ChatBody = z.object({
   campaignId: z.string().optional(),
@@ -61,11 +62,14 @@ function llmOrNull(): LlmClient | null {
 }
 
 /**
- * app.ts's error handler collapses every 5xx envelope code to `internal`, but
- * the disabled/unreachable states are exactly what the web app switches on —
- * so AI routes send their 5xx envelopes themselves.
- * INTEGRATION: if server-core ever preserves 5xx codes, these can go back to
- * plain `throw httpError(...)`.
+ * The disabled/unreachable states are exactly what the web app switches on, so
+ * AI routes send their 5xx envelopes themselves rather than trusting the
+ * generic path with them.
+ *
+ * `app.ts` now preserves the code of any error built by `httpError` (it marks
+ * them `expose`), so these could be plain `throw httpError(...)` — kept
+ * explicit because a route that must not lose its code is better off saying so
+ * than relying on a flag set three files away.
  */
 function sendAiError(
   reply: FastifyReply,
@@ -146,6 +150,13 @@ async function draftUsage(db: Db, campaignId: string) {
 }
 
 export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
+  /**
+   * The deterministic table tools (FR12.8/12.9/12.11) — token identification,
+   * the layout copilot and fog proximity. They need no inference box, so they
+   * are registered unconditionally.
+   */
+  await app.register(fixerToolRoutes);
+
   // --- capability probe: lets the web app hide AI entry points cleanly ------
   app.get('/api/fixer/status', async (req) => {
     requireRole(req, 'gm');

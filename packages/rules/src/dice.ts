@@ -1,5 +1,24 @@
 import type { Glitch, LimitRef, RollRequest, RollResult } from '@safehouse/contracts';
 
+/** Every Edge action the engine knows (FR2.3) — dice-side and tracker-side. */
+export type EdgeActionKind =
+  | 'push_pre'
+  | 'push_post'
+  | 'second_chance'
+  | 'seize_initiative'
+  | 'blitz'
+  | 'close_call';
+
+/** Table-facing names, so a log line reads the same everywhere (FR2.3). */
+export const EDGE_ACTION_LABELS: Record<EdgeActionKind, string> = {
+  push_pre: 'Push the Limit',
+  push_post: 'Push the Limit (after the roll)',
+  second_chance: 'Second Chance',
+  seize_initiative: 'Seize the Initiative',
+  blitz: 'Blitz',
+  close_call: 'Close Call',
+};
+
 /**
  * Dice resolution (FR2.1–2.5, §10.2). Pure — the caller supplies the RNG:
  * `rng` returns a float in [0, 1) (the server passes a CSPRNG-backed one,
@@ -156,6 +175,100 @@ export function resolveExtendedTest(
     success: totalHits >= opts.threshold,
     intervalsUsed: rolls.length,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Edge actions that are not extra dice (FR2.3, FR4.4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Seize the Initiative (FR2.3/FR4.4): spend Edge to act first in the current
+ * pass, whatever the roll said.
+ *
+ * The tracker orders by Initiative Score (`turnOrder`), so "first" is expressed
+ * as a score strictly above everyone else still in the pass — one number the
+ * whole table can see, rather than a hidden priority flag the ordering would
+ * have to special-case. `otherScores` is every OTHER combatant's current score.
+ */
+export interface SeizeInitiativeOutcome {
+  /** Score before the spend. */
+  from: number;
+  /** Score after: strictly above every other score in the pass. */
+  to: number;
+  /** The score that had to be beaten, or null when nobody else is up. */
+  beat: number | null;
+  /** False when the actor already led — the Edge still buys the guarantee. */
+  changed: boolean;
+}
+
+export function seizeInitiative(
+  actorScore: number,
+  otherScores: readonly number[],
+): SeizeInitiativeOutcome {
+  const from = Math.floor(actorScore);
+  const beat = otherScores.length > 0 ? Math.max(...otherScores.map((s) => Math.floor(s))) : null;
+  // At least 1, so the actor is in `turnOrder` at all (it drops scores ≤ 0).
+  const to = Math.max(from, (beat ?? 0) + 1, 1);
+  return { from, to, beat, changed: to !== from };
+}
+
+/** SR5 ceiling on initiative dice — Blitz buys straight to it (FR2.3/§10.2). */
+export const BLITZ_INITIATIVE_DICE = 5;
+
+export interface BlitzOutcome {
+  base: number;
+  /** Always BLITZ_INITIATIVE_DICE. */
+  dice: number;
+  /** Dice bought over the actor's normal allowance (0 when already at 5d6). */
+  addedDice: number;
+  rolls: number[];
+  woundModifier: number;
+  score: number;
+}
+
+/**
+ * Blitz (FR2.3/FR4.4): spend Edge to roll the maximum initiative dice — 5d6 —
+ * instead of the actor's usual allowance. Same arithmetic as a normal
+ * initiative roll (`base + Σd6 + wound modifier`), only the dice count is
+ * forced, so the tracker can drop the score straight into the pass.
+ */
+export function blitzInitiative(
+  input: { base: number; dice?: number; woundModifier?: number },
+  rng: () => number,
+): BlitzOutcome {
+  const base = Math.floor(input.base);
+  const normal = Math.max(0, Math.floor(input.dice ?? 1));
+  const woundModifier = Math.floor(input.woundModifier ?? 0);
+  const rolls = rollDice(BLITZ_INITIATIVE_DICE, rng);
+  const score = base + rolls.reduce((sum, r) => sum + r, 0) + woundModifier;
+  return {
+    base,
+    dice: BLITZ_INITIATIVE_DICE,
+    addedDice: Math.max(0, BLITZ_INITIATIVE_DICE - normal),
+    rolls,
+    woundModifier,
+    score,
+  };
+}
+
+export interface CloseCallOutcome {
+  /** The roll as it stands after the spend — the glitch cleared. */
+  result: RollResult;
+  /** What was negated; 'none' when there was nothing to negate. */
+  negated: Glitch;
+  /** True when Edge actually bought something. */
+  applied: boolean;
+}
+
+/**
+ * Close Call (FR2.3): spend Edge AFTER the fact to negate a glitch or critical
+ * glitch. The faces are untouched — Edge buys off the consequence, not the
+ * dice (G5: the rolled record is immutable; callers persist this as a new,
+ * linked event rather than editing the roll).
+ */
+export function closeCall(result: RollResult): CloseCallOutcome {
+  if (result.glitch === 'none') return { result, negated: 'none', applied: false };
+  return { result: { ...result, glitch: 'none' }, negated: result.glitch, applied: true };
 }
 
 export interface TeamworkResult {

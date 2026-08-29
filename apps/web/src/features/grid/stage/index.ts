@@ -16,10 +16,11 @@ import {
   type SceneMetrics,
 } from '../geometry.js';
 import type { MovementThresholds, StageApi, StageOptions, StageSceneState } from '../types.js';
+import { parserSafeUrlFor, type AssetRegistry } from './assetUrl.js';
 import { Camera } from './camera.js';
 import { C } from './colors.js';
 import { FxLayer } from './fx.js';
-import { drawFog, drawGeometry, drawGrid } from './layers.js';
+import { drawFog, drawGeometry, drawGrid, drawPins } from './layers.js';
 import { MapLayer } from './mapLayer.js';
 import { PointerController, type PointerHost } from './pointer.js';
 import { TokenView } from './tokenView.js';
@@ -41,9 +42,22 @@ function geometryKey(state: StageSceneState): string {
   const geo = state.scene.geometry;
   return [
     state.role === 'gm' ? 'gm' : 'pc',
-    geo.walls.length,
-    geo.zones.length,
-    geo.doors.map((d) => `${d.id}:${d.open ? 1 : 0}`).join(','),
+    // Endpoints, not just counts: editing a wall in place must redraw it.
+    geo.walls.map((w) => `${w.id}:${w.a.x},${w.a.y},${w.b.x},${w.b.y}`).join(','),
+    geo.zones.map((z) => `${z.id}:${z.name}:${z.color ?? ''}:${z.polygon.length}`).join(','),
+    geo.doors.map((d) => `${d.id}:${d.open ? 1 : 0}:${d.a.x},${d.a.y},${d.b.x},${d.b.y}`).join(','),
+  ].join('|');
+}
+
+/** Pins redraw on any label/position/visibility edit, and on selection. */
+function pinKey(state: StageSceneState): string {
+  const geo = state.scene.geometry;
+  return [
+    state.role === 'gm' ? 'gm' : 'pc',
+    state.selectedPinId ?? '',
+    geo.pins.map((p) => `${p.id}:${p.at.x},${p.at.y}:${p.visibility}:${p.label ?? ''}`).join(','),
+    // Zone names render into the same label layer for the GM.
+    geo.zones.map((z) => `${z.id}:${z.name}`).join(','),
   ].join('|');
 }
 
@@ -58,6 +72,9 @@ class Stage implements StageApi, PointerHost {
   private readonly fogG = new Graphics();
   private readonly fogLabels = new Container();
   private readonly fogLabelPool = new Map<string, Text>();
+  private readonly pinG = new Graphics();
+  private readonly pinLabels = new Container();
+  private readonly pinLabelPool = new Map<string, Text>();
   private readonly tokenLayer = new Container();
   private readonly fx = new FxLayer();
   private readonly map: MapLayer;
@@ -75,6 +92,7 @@ class Stage implements StageApi, PointerHost {
   private lastMetricsKey = '';
   private lastFogKey = '';
   private lastGeoKey = '';
+  private lastPinKey = '';
   private lastMapKey = '';
   private lastAoeKey = '';
   private lastFogDraftKey = '';
@@ -113,10 +131,15 @@ class Stage implements StageApi, PointerHost {
 
     // Fog sits ABOVE tokens: unrevealed area must occlude, not merely tint
     // (hidden tokens are already absent — the server filtered them, FR9.7).
+    // Pins sit under the fog cover: a pin inside an unrevealed room must not
+    // give its position away on a player screen (its data is filtered out
+    // server-side, but the GM's own view has to occlude too).
     this.world.addChild(
       this.map.root,
       this.gridG,
       this.geoG,
+      this.pinG,
+      this.pinLabels,
       this.tokenLayer,
       this.fogG,
       this.fogLabels,
@@ -181,6 +204,14 @@ class Stage implements StageApi, PointerHost {
     this.fx.clearRuler();
   }
 
+  drawSegment(kind: 'wall' | 'door', from: Point, to: Point): void {
+    this.fx.setSegmentDraft(this.m, kind, from, to);
+  }
+
+  clearSegment(): void {
+    this.fx.clearSegmentDraft();
+  }
+
   // -- StageApi --------------------------------------------------------------
 
   update(next: StageSceneState): void {
@@ -193,8 +224,9 @@ class Stage implements StageApi, PointerHost {
       this.lastMetricsKey = mk;
       drawGrid(this.gridG, m);
       this.map.fitAll(m, next.scene.mapAttachmentIds.length === 0);
-      this.lastFogKey = ''; // fog/geometry are metric-dependent
+      this.lastFogKey = ''; // fog/geometry/pins are metric-dependent
       this.lastGeoKey = '';
+      this.lastPinKey = '';
     }
 
     const mapKey = next.scene.mapAttachmentIds.join(',');
@@ -213,6 +245,20 @@ class Stage implements StageApi, PointerHost {
     if (gk !== this.lastGeoKey) {
       this.lastGeoKey = gk;
       drawGeometry(this.geoG, next.scene, m, next.role === 'gm');
+    }
+
+    const pk = pinKey(next);
+    if (pk !== this.lastPinKey) {
+      this.lastPinKey = pk;
+      drawPins(
+        this.pinG,
+        this.pinLabels,
+        this.pinLabelPool,
+        next.scene,
+        m,
+        next.selectedPinId ?? null,
+        next.role === 'gm',
+      );
     }
 
     const aoeKey = next.aoe
@@ -377,6 +423,8 @@ class Stage implements StageApi, PointerHost {
     this.views.clear();
     for (const label of this.fogLabelPool.values()) label.destroy();
     this.fogLabelPool.clear();
+    for (const label of this.pinLabelPool.values()) label.destroy();
+    this.pinLabelPool.clear();
     this.map.destroy();
     this.fx.destroy();
     try {
@@ -389,7 +437,13 @@ class Stage implements StageApi, PointerHost {
 
 /** Build and mount the stage. Awaited by `useStage`'s dynamic import. */
 export async function createStage(opts: StageOptions): Promise<StageApi> {
-  const stage = new Stage(opts);
+  // Every stage — the GM's Grid, a player's phone, the table TV — loads art
+  // through this one door, so the file store's extension-less URLs are made
+  // parser-safe here rather than per feature (see `assetUrl.ts`).
+  const stage = new Stage({
+    ...opts,
+    urlFor: parserSafeUrlFor(opts.urlFor, Assets as unknown as AssetRegistry),
+  });
   await stage.init();
   return stage;
 }

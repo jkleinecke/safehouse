@@ -187,15 +187,23 @@ export class Api {
     return (text.length > 0 ? JSON.parse(text) : {}) as T;
   }
 
-  /** Same as `call`, but hands back the status instead of throwing (403 probes). */
-  async status(method: string, path: string, body?: unknown): Promise<number> {
+  /**
+   * Status + raw body, without throwing. Used by the probes that assert the
+   * SHAPE of a refusal (a 403, a 404 that must not carry a token) rather than
+   * a success — LIVE-3's "`/join/:code` is not an API route" is exactly that.
+   */
+  async raw(method: string, path: string, body?: unknown): Promise<{ status: number; body: string }> {
     const res = await fetch(`${this.base}${path}`, {
       method,
       headers: this.headers(body),
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
-    await res.text();
-    return res.status;
+    return { status: res.status, body: await res.text() };
+  }
+
+  /** Same as `call`, but hands back the status instead of throwing (403 probes). */
+  async status(method: string, path: string, body?: unknown): Promise<number> {
+    return (await this.raw(method, path, body)).status;
   }
 
   get<T>(path: string): Promise<T> {
@@ -403,19 +411,28 @@ export async function writeReport(input: ReportInput): Promise<void> {
     '',
     '| Who | Where |',
     '| --- | --- |',
-    '| GM | paste the **GM device token** the seed printed (join codes are role-scoped to player / observer / display, so there is no GM code) |',
+    '| GM | paste the **GM device token** the seed printed, or — from a laptop already signed in as GM — `POST /api/campaigns/:id/gm-pair` and scan the code it returns at `http://localhost:5173/join/<code>` |',
     '| Player | `http://localhost:5173/join/<player-code>` — one code per phone, and the seed prints three |',
     '| The TV | `http://localhost:5173/join/<display-code>`, then `/tv/<campaignId>` |',
+    '',
+    'Ordinary invites are role-scoped to player / observer / display and refuse `gm`',
+    'outright; a GM device comes only from the bootstrap, `gm-device`, or a',
+    'single-use `gm-pair` code. Every one of those redeems at **`/api/join/:code`** —',
+    '`/join/:code` is the SPA screen the QR points a camera at.',
     '',
     '`pnpm seed:demo` prints all of those codes and tokens; it is idempotent, so',
     'running it again wipes *Static on the Line* and rebuilds it from scratch',
     'without touching any other campaign.',
     '',
-    'To play the same beats by hand: activate **Pier 23 Warehouse**, roll a',
-    'Perception from a phone (the dim light is already in the pool), reveal',
-    '*Main Floor*, launch the encounter from the scene, build the opposition from',
-    'the *Rusted Halo* template at **blooded**, and settle karma and nuyen in the',
-    'housekeeping beat before you close the session.',
+    'To play the same beats by hand: write a codex page with one GM-only section',
+    'and open it on a phone before and after revealing it; activate **Pier 23',
+    'Warehouse** and roll a Perception from a phone (the dim light is already in',
+    'the pool — the dialog shows it as context, never as a chip you add again);',
+    'reveal *Main Floor*; drag a token to the office door and watch the GM-only',
+    'nudge appear; launch the encounter from the scene, build the opposition from',
+    'the *Rusted Halo* template at **blooded**; spend Edge on Seize the Initiative,',
+    'Blitz and a Close Call; then post the run award and settle karma and nuyen in',
+    'the housekeeping beat before you close the session.',
     '',
     'Optional extras:',
     '',

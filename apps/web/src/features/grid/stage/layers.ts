@@ -155,3 +155,97 @@ export function drawGeometry(g: Graphics, scene: Scene, m: SceneMetrics, isGm: b
       .stroke({ width: 1.5, color: C.ground, alpha: 1 });
   }
 }
+
+/** Pooled label text — one per annotation id, created on first sight. */
+function ensureLabel(
+  layer: Container,
+  pool: Map<string, Text>,
+  key: string,
+  anchorX: number,
+): Text {
+  const existing = pool.get(key);
+  if (existing) return existing;
+  const label = new Text({
+    text: '',
+    style: {
+      fill: C.cyan,
+      fontSize: 12,
+      fontFamily: 'Inter, sans-serif',
+      stroke: { color: C.ground, width: 3 },
+    },
+  });
+  label.anchor.set(anchorX, 0.5);
+  pool.set(key, label);
+  layer.addChild(label);
+  return label;
+}
+
+/**
+ * Map pins (FR9.3): a teardrop head at the pin point with its label beside it.
+ *
+ * Principle 4 — GM-only pins never reach a player payload (the scenes service
+ * filters `geometry.pins` by visibility), so this draws everything it is given.
+ * The GM's own view marks private pins with a hollow head so they can tell at
+ * a glance what the table can already see.
+ */
+export function drawPins(
+  g: Graphics,
+  labelLayer: Container,
+  labelPool: Map<string, Text>,
+  scene: Scene,
+  m: SceneMetrics,
+  selectedPinId: string | null,
+  isGm = false,
+): void {
+  g.clear();
+  const seen = new Set<string>();
+  const r = Math.max(6, m.cell * 0.16);
+
+  // Zone names double as the GM's map labels (FR9.2 "…, labels").
+  if (isGm) {
+    for (const zone of scene.geometry.zones) {
+      const key = `zone:${zone.id}`;
+      seen.add(key);
+      const at = worldFromGrid(m, polygonCenter(zone.polygon));
+      const label = ensureLabel(labelLayer, labelPool, key, 0.5);
+      label.text = zone.name;
+      label.style.fill = parseColor(zone.color, C.cyanDim);
+      label.x = at.x;
+      label.y = at.y;
+    }
+  }
+
+  for (const pin of scene.geometry.pins) {
+    const at = worldFromGrid(m, pin.at);
+    const isPublic = pin.visibility === 'public';
+    const color = isPublic ? C.warn : C.cyan;
+
+    // Stem down to the exact point, head above it — the point is the anchor.
+    g.moveTo(at.x, at.y)
+      .lineTo(at.x, at.y - r * 1.9)
+      .stroke({ width: 2, color, alpha: 0.9 });
+    const head = g.circle(at.x, at.y - r * 2.4, r);
+    if (isPublic) head.fill({ color, alpha: 0.95 });
+    else head.fill({ color: C.ground, alpha: 0.9 });
+    head.stroke({ width: 2, color, alpha: 1 });
+    g.circle(at.x, at.y, 2).fill({ color, alpha: 1 });
+
+    if (pin.id === selectedPinId) {
+      g.circle(at.x, at.y - r * 2.4, r * 1.9).stroke({ width: 2, color: C.magenta, alpha: 0.95 });
+    }
+
+    if (!pin.label) continue;
+    seen.add(pin.id);
+    const label = ensureLabel(labelLayer, labelPool, pin.id, 0);
+    label.text = pin.label;
+    label.style.fill = color;
+    label.x = at.x + r * 1.6;
+    label.y = at.y - r * 2.4;
+  }
+
+  for (const [id, label] of labelPool) {
+    if (seen.has(id)) continue;
+    label.destroy();
+    labelPool.delete(id);
+  }
+}

@@ -18,6 +18,8 @@ import booksPlugin from './books.js';
 import fixerPlugin from './fixer.js';
 import ledgerPlugin from './ledger.js';
 import sessionsPlugin from './sessions.js';
+import codexPlugin from './codex.js';
+import contactsPlugin from './contacts.js';
 
 const domainPlugins = [
   authPlugin,
@@ -32,6 +34,8 @@ const domainPlugins = [
   fixerPlugin,
   ledgerPlugin,
   sessionsPlugin,
+  codexPlugin,
+  contactsPlugin,
 ] as const;
 
 /** Register every domain plugin (called once from buildApp). */

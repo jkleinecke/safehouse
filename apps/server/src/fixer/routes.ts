@@ -1,0 +1,170 @@
+/**
+ * HTTP surface for the at-the-table Fixer tools (FR12.8, FR12.9, FR12.11).
+ *
+ * These are the same tools the model calls, exposed so the GM's own buttons —
+ * "who is this?", "lay this place out", "are they at the door yet?" — reach
+ * them without a chat turn. That matters: all three are deterministic, so they
+ * work with **no inference box configured at all** (NG7). Only the wording
+ * around them needs a model.
+ *
+ * Everything is GM-only (§13). The two write-shaped routes produce
+ * `ai_generations` drafts exactly like the tool path — nothing they return has
+ * touched a token or a scene.
+ *
+ * Registered from `src/plugins/fixer.ts` (two lines: the import and one
+ * `app.register`). That registration is load-bearing: these routes are the
+ * GM's only way to reach FR12.8/12.9/12.11 with no model configured, which is
+ * a supported posture (NG7), not a degraded one.
+ */
+import type { FastifyInstance, FastifyRequest } from 'fastify';
+import { z } from 'zod';
+import { assertCampaign, httpError, requireRole } from '../services/auth.js';
+import { layoutJsonSchema, LayoutDoorSchema, LayoutRoomSchema } from './geometry.js';
+import { emitFogProximity, fogProximityState } from './proximity.js';
+import { identifyTokensState } from './token-id.js';
+import { FIXER_TOOLS, TOOLS_BY_NAME, toolParameters } from './tools.js';
+import type { ToolContext } from './tool-kit.js';
+
+const IdentifyBody = z.object({
+  campaignId: z.string().optional(),
+  sceneId: z.string().optional(),
+  note: z.string().max(400).optional(),
+  /** Draft by default; `false` answers "who is this?" without writing a row. */
+  draft: z.boolean().default(true),
+});
+
+const GeometryBody = z.object({
+  campaignId: z.string().optional(),
+  sceneId: z.string().optional(),
+  title: z.string().min(1).max(120),
+  rooms: z.array(LayoutRoomSchema).min(1).max(60),
+  doors: z.array(LayoutDoorSchema).max(160).default([]),
+  notes: z.string().max(2000).default(''),
+  mode: z.enum(['merge', 'replace']).default('merge'),
+});
+
+const ProximityQuery = z.object({
+  campaignId: z.string().optional(),
+  sceneId: z.string().optional(),
+  radiusM: z.coerce.number().min(0).max(50).optional(),
+  /**
+   * Also push the GM-only `fixer.suggestion` frame to the panel. Spelled out
+   * rather than `z.coerce.boolean()`, which reads the string "false" as true.
+   */
+  announce: z
+    .enum(['true', 'false', '1', '0'])
+    .optional()
+    .transform((v) => v === 'true' || v === '1'),
+});
+
+function parse<T extends z.ZodType>(schema: T, value: unknown): z.output<T> {
+  const parsed = schema.safeParse(value ?? {});
+  if (!parsed.success) {
+    throw httpError(400, 'bad_request', 'invalid request', parsed.error.issues);
+  }
+  return parsed.data;
+}
+
+/** GM-only, bound to this campaign — only the GM ever drives the Fixer. */
+function gmFor(req: FastifyRequest, campaignId: string | undefined): string {
+  const auth = requireRole(req, 'gm');
+  const id = campaignId ?? auth.campaignId;
+  if (!id) throw httpError(400, 'bad_request', 'campaignId is required');
+  assertCampaign(auth, id);
+  return id;
+}
+
+export default async function fixerToolRoutes(app: FastifyInstance): Promise<void> {
+  const ctxFor = (campaignId: string, prompt: string): ToolContext => ({
+    db: app.db,
+    campaignId,
+    prompt,
+    /** No model was involved — the draft records that honestly. */
+    model: null,
+  });
+
+  /** The catalog itself, so the GM panel can show what the Fixer can see. */
+  app.get('/api/fixer/tools', async (req, reply) => {
+    requireRole(req, 'gm');
+    return reply.send({
+      tools: FIXER_TOOLS.map((t) => ({
+        name: t.name,
+        kind: t.kind,
+        description: t.description,
+        parameters: toolParameters(t.schema),
+      })),
+      reads: FIXER_TOOLS.filter((t) => t.kind === 'read').length,
+      drafts: FIXER_TOOLS.filter((t) => t.kind === 'draft').length,
+    });
+  });
+
+  /**
+   * The layout schema on its own, for grammar / guided-JSON constrained
+   * decoding on the inference box (FR12.11/12.13).
+   */
+  app.get('/api/fixer/geometry-schema', async (req, reply) => {
+    requireRole(req, 'gm');
+    return reply.send({
+      name: 'propose_geometry',
+      units: 'whole grid squares; the scene grid supplies metres per square',
+      layout: layoutJsonSchema(),
+      tool: toolParameters(TOOLS_BY_NAME.get('propose_geometry')!.schema),
+    });
+  });
+
+  // --- FR12.9: who is this? -------------------------------------------------
+  app.post('/api/fixer/identify-tokens', async (req, reply) => {
+    const body = parse(IdentifyBody, req.body);
+    const campaignId = gmFor(req, body.campaignId);
+    if (!body.draft) {
+      return reply.send(
+        await identifyTokensState(app.db, campaignId, {
+          ...(body.sceneId !== undefined ? { sceneId: body.sceneId } : {}),
+        }),
+      );
+    }
+    const tool = TOOLS_BY_NAME.get('identify_tokens')!;
+    const result = await tool.run(
+      {
+        ...(body.sceneId !== undefined ? { sceneId: body.sceneId } : {}),
+        ...(body.note !== undefined ? { note: body.note } : {}),
+      },
+      ctxFor(campaignId, 'GM asked the app to identify the tokens on this scene'),
+    );
+    return reply.send(result);
+  });
+
+  // --- FR12.11: layout copilot ---------------------------------------------
+  app.post('/api/fixer/propose-geometry', async (req, reply) => {
+    const body = parse(GeometryBody, req.body);
+    const campaignId = gmFor(req, body.campaignId);
+    const tool = TOOLS_BY_NAME.get('propose_geometry')!;
+    const result = await tool.run(
+      {
+        title: body.title,
+        rooms: body.rooms,
+        doors: body.doors,
+        notes: body.notes,
+        mode: body.mode,
+        ...(body.sceneId !== undefined ? { sceneId: body.sceneId } : {}),
+      },
+      ctxFor(campaignId, `GM asked for a layout: ${body.title}`),
+    );
+    return reply.status(201).send(result);
+  });
+
+  // --- FR12.8: proximity prompts -------------------------------------------
+  app.get('/api/fixer/fog-proximity', async (req, reply) => {
+    const query = parse(ProximityQuery, req.query);
+    const campaignId = gmFor(req, query.campaignId);
+    const opts = {
+      ...(query.sceneId !== undefined ? { sceneId: query.sceneId } : {}),
+      ...(query.radiusM !== undefined ? { radiusM: query.radiusM } : {}),
+    };
+    const state = await fogProximityState(app.db, campaignId, opts);
+    const announced = query.announce
+      ? await emitFogProximity(app.db, app.hub, campaignId, opts)
+      : [];
+    return reply.send({ ...state, announced: announced.length });
+  });
+}

@@ -3,6 +3,8 @@
  * invites + QR join, role guards, device revocation, error envelope.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { buildApp } from '../src/app.js';
+import { httpError } from '../src/services/auth.js';
 import { bootstrapCampaign, joinAs, makeTestApp, type BootstrapResult, type TestApp } from './core-helpers.js';
 
 let t: TestApp;
@@ -73,8 +75,43 @@ describe('bootstrap (FR1.1)', () => {
   });
 });
 
+describe('the error handler and deliberate 5xx envelopes', () => {
+  /**
+   * A 5xx code used to be flattened to `internal` unconditionally, which is
+   * right for an exception out of a driver (its `code` must never become API
+   * surface) and wrong for a 503 somebody chose — the web app switches on
+   * `ai_disabled` vs `ai_unreachable` to say "the Fixer is off" rather than
+   * "the box is down".
+   */
+  it('keeps the code of an httpError, and flattens anything else', async () => {
+    // A second app on the same db: routes can only be added before the first
+    // inject readies an instance, and `t.app` has been serving all suite.
+    const probe = await buildApp({ db: t.db, webDist: false, logger: false });
+    probe.get('/test/deliberate-503', async () => {
+      throw httpError(503, 'ai_disabled', 'the Fixer is switched off');
+    });
+    probe.get('/test/unexpected', async () => {
+      const err = new Error('column "nope" does not exist') as Error & { code: string };
+      err.code = '42703';
+      throw err;
+    });
+    try {
+      const deliberate = await probe.inject({ method: 'GET', url: '/test/deliberate-503' });
+      expect(deliberate.statusCode).toBe(503);
+      expect((deliberate.json() as { error: { code: string } }).error.code).toBe('ai_disabled');
+
+      const unexpected = await probe.inject({ method: 'GET', url: '/test/unexpected' });
+      expect(unexpected.statusCode).toBe(500);
+      // The driver's own code is not leaked as an API code.
+      expect((unexpected.json() as { error: { code: string } }).error.code).toBe('internal');
+    } finally {
+      await probe.close();
+    }
+  }, 120_000);
+});
+
 describe('join flow (FR1.1/1.3)', () => {
-  it('GET /join/:code mints a device + long-lived token as JSON', async () => {
+  it('GET /api/join/:code mints a device + long-lived token as JSON', async () => {
     const joined = await joinAs(t.app, boot.campaignId, boot.gmToken, 'player', 'Sam');
     expect(joined.role).toBe('player');
     expect(joined.campaignId).toBe(boot.campaignId);
@@ -88,7 +125,7 @@ describe('join flow (FR1.1/1.3)', () => {
   });
 
   it('unknown code → 404 invite_not_found envelope', async () => {
-    const res = await t.app.inject({ method: 'GET', url: '/join/ZZZZZZZZ' });
+    const res = await t.app.inject({ method: 'GET', url: '/api/join/ZZZZZZZZ' });
     expect(res.statusCode).toBe(404);
     expect((res.json() as { error: { code: string } }).error.code).toBe('invite_not_found');
   });
@@ -101,9 +138,9 @@ describe('join flow (FR1.1/1.3)', () => {
       payload: { role: 'player', maxUses: 1 },
     });
     const { code } = inviteRes.json() as { code: string };
-    const first = await t.app.inject({ method: 'GET', url: `/join/${code}` });
+    const first = await t.app.inject({ method: 'GET', url: `/api/join/${code}` });
     expect(first.statusCode).toBe(200);
-    const second = await t.app.inject({ method: 'GET', url: `/join/${code}` });
+    const second = await t.app.inject({ method: 'GET', url: `/api/join/${code}` });
     expect(second.statusCode).toBe(410);
     expect((second.json() as { error: { code: string } }).error.code).toBe('invite_exhausted');
   });

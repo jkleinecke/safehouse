@@ -14,6 +14,7 @@ import {
   SceneEnvironmentSchema,
   SheetV1Schema,
   type Combatant,
+  type Encounter,
   type EncounterState,
   type InitKind,
   type Modifier,
@@ -49,8 +50,39 @@ import {
   type EncounterRow,
   type InitiativeDetail,
 } from './encounters-model.js';
+import type { ChainOutcome } from './encounters-copilot.js';
+import {
+  recordChainRolls,
+  recordCopilotRoll,
+  type ChainRollTarget,
+  type CopilotRollInput,
+} from './encounters-rolls.js';
 
 export * from './encounters-model.js';
+export {
+  chainRollInputs,
+  recordChainRolls,
+  recordCopilotRoll,
+  type ChainRollInput,
+  type ChainRollTarget,
+  type CopilotRollInput,
+} from './encounters-rolls.js';
+
+/**
+ * What `addCombatant` accepts. Widens the row-model input with the FR4.6/FR10.9
+ * Professional Rating so a HAND-ADDED NPC measures morale against a real
+ * number instead of PR 0 — `grunt.professionalRating` is the older spelling of
+ * the same value and stays accepted (top-level wins when both are sent).
+ */
+export interface AddCombatantOptions extends Omit<AddCombatantInput, 'grunt'> {
+  professionalRating?: number;
+  grunt?: { size: number; professionalRating?: number; groupEdge?: number; labelPrefix?: string };
+}
+
+/** `updateCombatant` patch, plus the same hand-editable PR (FR4.8). */
+export interface CombatantPatchOptions extends CombatantPatch {
+  professionalRating?: number;
+}
 
 export class EncountersService {
   constructor(
@@ -156,7 +188,7 @@ export class EncountersService {
    * nothing is copied, the row keeps only `sourceId` and the derived numbers
    * are recomputed from `characters.sheet` on every read.
    */
-  async addCombatant(encounterId: string, input: AddCombatantInput): Promise<Combatant> {
+  async addCombatant(encounterId: string, input: AddCombatantOptions): Promise<Combatant> {
     const encounter = await this.getEncounter(encounterId);
     const source = input.source ?? 'manual';
     let name = input.name ?? '';
@@ -191,11 +223,19 @@ export class EncountersService {
     }
     if (!name) throw httpError(400, 'bad_request', 'combatant needs a name');
 
+    // Professional Rating (FR4.6): ONE number per row, whether it arrived at the
+    // top level or inside `grunt`. Every non-PC row carries it in
+    // `copilot.generator` — the same place the generator writes it — so FR10.9
+    // morale measures real pressure on hand-added opposition too.
+    const professionalRating = Math.max(
+      0,
+      Math.floor(input.professionalRating ?? input.grunt?.professionalRating ?? 0),
+    );
     const size = input.grunt ? Math.max(1, Math.floor(input.grunt.size)) : 0;
     const grunt = input.grunt
       ? {
           size,
-          professionalRating: Math.max(0, Math.floor(input.grunt.professionalRating)),
+          professionalRating,
           groupEdge: Math.max(0, Math.floor(input.grunt.groupEdge ?? 0)),
           members: Array.from({ length: size }, (_, i) => ({
             label: `${input.grunt?.labelPrefix ?? name} ${i + 1}`,
@@ -227,6 +267,7 @@ export class EncountersService {
             ...(input.edge ? { edge: input.edge } : {}),
             ...(grunt ? { grunt } : {}),
             ...(input.leader ? { leader: true } : {}),
+            ...(source === 'character' ? {} : { generator: { professionalRating } }),
           },
         })
         .returning()
@@ -236,13 +277,18 @@ export class EncountersService {
   }
 
   /** Hand-edit anything mid-fight (FR4.8 / Principle 2). */
-  async updateCombatant(id: string, patch: CombatantPatch): Promise<Combatant> {
+  async updateCombatant(id: string, patch: CombatantPatchOptions): Promise<Combatant> {
     const row = await this.getCombatant(id);
     const copilot = parseCopilot(row.copilot);
     if (patch.initDice !== undefined) copilot.initDice = patch.initDice;
     if (patch.edge !== undefined) copilot.edge = patch.edge;
     if (patch.grunt !== undefined) copilot.grunt = patch.grunt;
     if (patch.leader !== undefined) copilot.leader = patch.leader;
+    if (patch.professionalRating !== undefined) {
+      const pr = Math.max(0, Math.floor(patch.professionalRating));
+      copilot.generator = { ...(copilot.generator ?? {}), professionalRating: pr };
+      if (copilot.grunt) copilot.grunt = { ...copilot.grunt, professionalRating: pr };
+    }
     const updated = (
       await this.db
         .update(combatants)
@@ -275,11 +321,16 @@ export class EncountersService {
   /**
    * Roll initiative for every combatant (or a subset): base + Nd6 through the
    * CSPRNG dice service, wound modifiers applied to the score.
+   *
+   * Rolling initiative on an encounter that has not started IS the start of
+   * turn 1 / pass 1 (FR4.3). `turn`/`pass` default to 0 on a fresh row and only
+   * `newTurn` ever bumped them, so the tracker used to read a pass behind for
+   * the whole first turn; this clamps them the moment the dice hit the table.
    */
   async rollInitiativeAll(
     encounterId: string,
     opts: { combatantIds?: string[]; kinds?: Record<string, InitKind> } = {},
-  ): Promise<{ combatants: Combatant[]; details: InitiativeDetail[] }> {
+  ): Promise<{ encounter: Encounter; combatants: Combatant[]; details: InitiativeDetail[] }> {
     const encounter = await this.getEncounter(encounterId);
     const list = await this.listCombatants(encounterId);
     const ids = opts.combatantIds;
@@ -310,8 +361,27 @@ export class EncountersService {
         score: detail.score,
       });
     }
-    const after = await this.emitUpdated(encounter, 'initiative.rolled');
-    return { combatants: after, details };
+    const started =
+      encounter.turn < 1 || encounter.pass < 1
+        ? ((
+            await this.db
+              .update(encounters)
+              .set({ turn: Math.max(1, encounter.turn), pass: 1 })
+              .where(eq(encounters.id, encounterId))
+              .returning()
+          )[0] ?? encounter)
+        : encounter;
+    const after = await this.emitUpdated(started, 'initiative.rolled');
+    return {
+      // `combatants` rides beside it, so the encounter object carries only the
+      // derived active id — never a second copy of the roster.
+      encounter: {
+        ...serializeEncounter(started),
+        activeCombatantId: nextActorRules(after)?.id ?? null,
+      },
+      combatants: after,
+      details,
+    };
   }
 
   /** Hand-set a score or line (FR4.2 "roll or hand-enter", FR4.8). */
@@ -502,57 +572,27 @@ export class EncountersService {
   }
 
   /**
-   * Persist one copilot roll to the immutable log (G5) and announce it.
-   * INTEGRATION: the rolls domain owns `roll.created` end to end; this writes
-   * the same row shape directly so quick-rolls appear in the session log — swap
-   * it for the rolls service once that plugin exposes one.
+   * Persist one copilot roll to the immutable log (G5) and announce it —
+   * session-stamped, so it counts in the session's own record (FR6.1). The
+   * write itself lives in `services/encounters-rolls.ts`.
    */
-  async recordRoll(input: {
+  async recordRoll(input: CopilotRollInput): Promise<{ rollId: string }> {
+    return recordCopilotRoll(this.db, this.hub, input);
+  }
+
+  /**
+   * Persist the dice an FR10.8 chain threw (attack / defence / soak) as GM-only
+   * rows linked by one `chainId`. Damage still lands only on commit.
+   */
+  async recordChainRolls(input: {
     campaignId: string;
-    combatantId: string;
-    kind: string;
-    request: Record<string, unknown>;
-    result: {
-      faces: number[];
-      hits: number;
-      ones: number;
-      glitch: 'none' | 'glitch' | 'critical';
-      limitedHits: number;
-    };
-    limit?: { kind: string; value: number } | null;
-    visibility: Visibility;
-    label: string;
-  }): Promise<{ rollId: string }> {
-    const row = (
-      await this.db
-        .insert(rolls)
-        .values({
-          campaignId: input.campaignId,
-          actor: { combatantId: input.combatantId },
-          kind: 'simple',
-          request: { ...input.request, label: input.label, copilot: input.kind },
-          faces: input.result.faces,
-          hits: input.result.hits,
-          ones: input.result.ones,
-          glitch: input.result.glitch,
-          limit: input.limit ?? null,
-          limitedHits: input.result.limitedHits,
-          visibility: input.visibility,
-        })
-        .returning()
-    )[0]!;
-    await this.hub.emit(input.campaignId, {
-      type: 'roll.created',
-      payload: {
-        id: row.id,
-        actor: { combatantId: input.combatantId },
-        label: input.label,
-        request: input.request,
-        result: input.result,
-      },
-      visibility: input.visibility,
-    });
-    return { rollId: row.id };
+    encounterId: string;
+    attacker: ChainRollTarget;
+    defender: ChainRollTarget;
+    weaponName: string;
+    outcome: ChainOutcome;
+  }): Promise<{ chainId: string; rolls: Array<{ step: string; rollId: string }> }> {
+    return recordChainRolls(this.db, this.hub, input);
   }
 
   // --- emission -----------------------------------------------------------

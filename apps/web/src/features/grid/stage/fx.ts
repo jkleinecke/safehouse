@@ -59,12 +59,13 @@ export class FxLayer {
   private readonly ruler = new Graphics();
   private readonly aoe = new Graphics();
   private readonly fogDraft = new Graphics();
+  private readonly segment = new Graphics();
   private readonly pings: PoolItem[];
   private readonly trail: PoolItem[];
 
   constructor() {
     this.root.eventMode = 'none';
-    this.root.addChild(this.aoe, this.fogDraft, this.ruler);
+    this.root.addChild(this.aoe, this.fogDraft, this.segment, this.ruler);
     this.trail = makePool(this.root, TRAIL_POOL, (g) => g.circle(0, 0, 4).fill({ color: C.cyan, alpha: 0.9 }));
     this.pings = makePool(this.root, PING_POOL, (g) =>
       g.circle(0, 0, 26).stroke({ width: 4, color: C.magenta, alpha: 1 }),
@@ -148,6 +149,25 @@ export class FxLayer {
     }
     g.stroke({ width: 2, color: C.cyan, alpha: 0.9 });
     for (const p of pts) g.circle(p.x, p.y, 4).fill({ color: C.cyan, alpha: 1 });
+  }
+
+  /**
+   * Rubber band while the GM drags a wall or a door (FR9.2). Doors preview in
+   * the same green the open state uses so the two tools read apart at a glance.
+   */
+  setSegmentDraft(m: SceneMetrics, kind: 'wall' | 'door', from: Point, to: Point): void {
+    const g = this.segment;
+    g.clear();
+    const a = worldFromGrid(m, from);
+    const b = worldFromGrid(m, to);
+    const color = kind === 'door' ? C.ok : C.ink;
+    g.moveTo(a.x, a.y).lineTo(b.x, b.y).stroke({ width: 4, color, alpha: 0.9 });
+    g.circle(a.x, a.y, 5).fill({ color, alpha: 1 });
+    g.circle(b.x, b.y, 5).stroke({ width: 2, color, alpha: 1 });
+  }
+
+  clearSegmentDraft(): void {
+    this.segment.clear();
   }
 
   /** Double-tap flash (FR9.15) — world px. */

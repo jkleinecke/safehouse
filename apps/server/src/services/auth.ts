@@ -6,11 +6,25 @@
  *   creates campaign + GM user + GM device token unauthenticated; afterwards
  *   an authenticated user creates further campaigns (becoming their GM).
  * - `POST /api/campaigns/:id/invites` — GM-only, role-scoped, expiring codes.
- * - `GET  /join/:code` — mints a device + long-lived token; returns JSON
- *   `{ token, role, campaignId, user }` (the web app renders the pretty page).
+ * - `GET|POST /api/join/:code` — mints a device + long-lived token; returns
+ *   JSON `{ token, role, campaignId, user }`.
  * - `GET  /api/campaigns/:id/join-qr` — `{ url, code, dataUrl }` against the
  *   server's LAN address (qrcode).
  * - `POST /api/devices/:id/revoke` — a lost phone is one tap to revoke.
+ *
+ * LIVE-3: the redemption endpoint lives under `/api/` and NOWHERE ELSE.
+ * `/join/:code` is the SPA route the QR encodes — when the same path was also
+ * an API route, scanning the QR handed the player raw JSON instead of the join
+ * screen. One path, one owner: `/join/:code` is the web app's, `/api/join/:code`
+ * is the server's.
+ *
+ * GM identity (FR1.1/1.2) is minted three ways and no other: the bootstrap
+ * `POST /api/campaigns`, a second device for the same GM
+ * (`POST /api/campaigns/:id/gm-device`), and a short-lived pairing code
+ * (`POST /api/campaigns/:id/gm-pair` → `/api/join/:code`) — both in
+ * `src/plugins/auth.ts`. An ordinary player/observer/display invite can never
+ * mint `gm`: `invites.role` is what the device inherits, and the invite routes
+ * exclude `gm` from the role enum by construction.
  *
  * Tokens are random 256-bit values; only their sha256 hash is stored
  * (`devices.token_hash`). `Authorization: Bearer <token>` everywhere; `?token=`
@@ -35,6 +49,14 @@ export interface HttpError extends Error {
   statusCode: number;
   code: string;
   details?: unknown;
+  /**
+   * Marks an envelope somebody wrote on purpose, as opposed to an exception
+   * that fell out of a driver. `app.ts` collapses unexpected 5xx codes to
+   * `internal` so a stack trace's `code` can never become API surface — but a
+   * deliberate 503 like `ai_disabled` is exactly what the web app switches on,
+   * so it has to survive that. This flag is the difference.
+   */
+  expose: true;
 }
 
 /** Throwable error carrying status + envelope code (app.ts formats it). */
@@ -47,6 +69,7 @@ export function httpError(
   const err = new Error(message) as HttpError;
   err.statusCode = statusCode;
   err.code = code;
+  err.expose = true;
   if (details !== undefined) err.details = details;
   return err;
 }
@@ -199,7 +222,36 @@ export class AuthService {
     return { code: row.code, role: row.role, expiresAt: row.expiresAt?.toISOString() ?? null };
   }
 
-  /** `GET /join/:code` — mint user + membership + device token (FR1.1). */
+  /**
+   * The identity a `gm` pairing code binds to. A pairing code does NOT create a
+   * user: it hands a second device to the GM who minted it, and only while that
+   * identity is still this campaign's GM — so `transfer-ownership` silently
+   * kills every pairing code the previous owner left lying around.
+   */
+  private async gmPairingIdentity(
+    campaignId: string,
+    createdBy: string | null,
+  ): Promise<{ id: string; displayName: string }> {
+    if (!createdBy) throw httpError(403, 'forbidden', 'this pairing code has no owner');
+    const row = (
+      await this.db
+        .select({ id: users.id, displayName: users.displayName })
+        .from(memberships)
+        .innerJoin(users, eq(users.id, memberships.userId))
+        .where(
+          and(
+            eq(memberships.campaignId, campaignId),
+            eq(memberships.userId, createdBy),
+            eq(memberships.role, 'gm'),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!row) throw httpError(403, 'forbidden', 'this pairing code no longer belongs to the GM');
+    return row;
+  }
+
+  /** `GET|POST /api/join/:code` — mint user + membership + device token (FR1.1). */
   async redeemInvite(
     code: string,
     opts: { displayName?: string; deviceLabel?: string } = {},
@@ -220,11 +272,18 @@ export class AuthService {
     if (invite.maxUses != null && invite.uses >= invite.maxUses) {
       throw httpError(410, 'invite_exhausted', 'this join code has no uses left');
     }
+    // A `gm` invite is a pairing code, not a sign-up: it re-uses the existing GM
+    // identity so the second laptop is the SAME user (owned characters, GM-only
+    // rolls and the `campaigns.gm_user_id` check all keep working). Every other
+    // role mints a fresh guest user, as before.
+    const isPairing = invite.role === 'gm';
     const displayName = opts.displayName?.trim() || 'Guest';
-    const user = (await this.db.insert(users).values({ displayName }).returning())[0]!;
+    const user = isPairing
+      ? await this.gmPairingIdentity(invite.campaignId, invite.createdBy)
+      : (await this.db.insert(users).values({ displayName }).returning())[0]!;
     // A display device is observer-grade in the membership table (§13).
     const membershipRole: 'gm' | 'player' | 'observer' =
-      invite.role === 'player' ? 'player' : invite.role === 'gm' ? 'gm' : 'observer';
+      invite.role === 'player' ? 'player' : isPairing ? 'gm' : 'observer';
     await this.db
       .insert(memberships)
       .values({ campaignId: invite.campaignId, userId: user.id, role: membershipRole })
@@ -238,7 +297,7 @@ export class AuthService {
           campaignId: invite.campaignId,
           role: invite.role,
           tokenHash: hashToken(token),
-          label: opts.deviceLabel ?? `${displayName}'s device`,
+          label: opts.deviceLabel ?? (isPairing ? 'GM device' : `${displayName}'s device`),
         })
         .returning()
     )[0]!;
@@ -303,10 +362,21 @@ const CreateCampaignBody = z.object({
   gmName: z.string().min(1).max(100).optional(),
 });
 
+/**
+ * `gm` is excluded on purpose (FR1.3): an ordinary invite is role-scoped to
+ * player/observer/display, and no amount of body-fiddling turns one into a GM
+ * device. GM devices come from the pairing routes in `plugins/auth.ts`.
+ */
 const CreateInviteBody = z.object({
   role: RoleSchema.exclude(['gm']).default('player'),
   expiresInMinutes: z.number().int().min(1).max(60 * 24 * 365).optional(),
   maxUses: z.number().int().min(1).optional(),
+});
+
+/** `POST /api/join/:code` body (the GET form takes `?name=` / `?label=`). */
+const JoinBody = z.object({
+  name: z.string().min(1).max(100).optional(),
+  label: z.string().min(1).max(120).optional(),
 });
 
 function parseBody<T extends z.ZodType>(schema: T, body: unknown): z.output<T> {
@@ -379,18 +449,23 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthService): voi
     return reply.send({ url, code: invite.code, role: invite.role, dataUrl });
   });
 
-  // QR join → device token (FR1.1). JSON; the web app owns the pretty page.
-  app.get('/join/:code', async (req, reply) => {
+  // QR join → device token (FR1.1). JSON, under /api; `/join/:code` belongs to
+  // the SPA (LIVE-3 — the two used to be the same path, and the API won).
+  const join = async (req: FastifyRequest, reply: FastifyReply) => {
     const { code } = req.params as { code: string };
     const q = (req.query ?? {}) as Record<string, unknown>;
-    const displayName = typeof q['name'] === 'string' ? q['name'] : undefined;
-    const deviceLabel = typeof q['label'] === 'string' ? q['label'] : undefined;
+    const body: { name?: string; label?: string } =
+      req.method === 'POST' ? parseBody(JoinBody, req.body) : {};
+    const displayName = body.name ?? (typeof q['name'] === 'string' ? q['name'] : undefined);
+    const deviceLabel = body.label ?? (typeof q['label'] === 'string' ? q['label'] : undefined);
     const joined = await auth.redeemInvite(code.toUpperCase(), {
       ...(displayName ? { displayName } : {}),
       ...(deviceLabel ? { deviceLabel } : {}),
     });
     return reply.send(joined);
-  });
+  };
+  app.get('/api/join/:code', join);
+  app.post('/api/join/:code', join);
 
   // Revoke a lost phone (FR1.3) — the campaign's GM, or the device's own user.
   app.post('/api/devices/:id/revoke', async (req, reply) => {
@@ -409,8 +484,19 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthService): voi
   });
 }
 
-/** Join URL players' phones can reach: the server's LAN address (§8 auth row). */
-function joinUrl(app: FastifyInstance, code: string): string {
+/**
+ * The URL a QR encodes: the **SPA** route `/join/:code` on an address the
+ * table's phones can reach (§8 auth row). The page then calls
+ * `GET /api/join/:code` for the token — scanning must land on the join screen,
+ * never on raw JSON (LIVE-3).
+ *
+ * Default origin is this server's LAN address, which is right in production
+ * (the server serves the built SPA). Set `WEB_ORIGIN` (e.g.
+ * `http://192.168.1.20:5173`) when Vite is serving the SPA on another port.
+ */
+export function joinUrl(app: FastifyInstance, code: string): string {
+  const override = process.env.WEB_ORIGIN?.trim();
+  if (override) return `${override.replace(/\/+$/, '')}/join/${code}`;
   const address = app.server.address();
   const port =
     typeof address === 'object' && address !== null

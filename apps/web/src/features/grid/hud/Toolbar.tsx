@@ -19,6 +19,10 @@ const TOOLS: ToolDef[] = [
   { id: 'pointer', label: 'Point', glyph: '✳', hint: 'Pointer trail for everyone' },
   { id: 'fogdef', label: 'Fog', glyph: '⬡', hint: 'Click vertices for a fog region', gmOnly: true },
   { id: 'focus', label: 'Focus', glyph: '⊕', hint: 'Pull every viewport here once', gmOnly: true },
+  { id: 'wall', label: 'Wall', glyph: '▬', hint: 'Drag to draw a wall (FR9.2)', gmOnly: true },
+  { id: 'door', label: 'Door', glyph: '⌷', hint: 'Drag to place a door (FR9.2)', gmOnly: true },
+  { id: 'zone', label: 'Zone', glyph: '▱', hint: 'Click vertices for a named zone', gmOnly: true },
+  { id: 'pin', label: 'Pin', glyph: '⚑', hint: 'Drop a map pin (FR9.3)', gmOnly: true },
 ];
 
 export interface ToolbarProps {

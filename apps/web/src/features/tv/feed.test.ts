@@ -164,6 +164,29 @@ describe('tvTakeover', () => {
     expect(tvTakeover([evt('handout.revealed', { title: 'Secret' }, 'gm')])).toBeNull();
   });
 
+  /**
+   * The real `handout.revealed` payload (`plugins/codex.ts`) names the page
+   * `pageTitle` and the caption `note` — neither of which this read, so every
+   * handout the GM revealed came up on the wall-sized screen as "Handout".
+   */
+  it('reads the names the server actually emits for a handout', () => {
+    const t = tvTakeover([
+      evt('handout.revealed', {
+        attachmentId: 'att_9',
+        url: '/files/att_9',
+        mime: 'image/png',
+        pageTitle: 'Pier 23 survey',
+        note: 'Someone has circled the east door.',
+      }),
+    ]);
+    expect(t).toMatchObject({
+      kind: 'handout',
+      title: 'Pier 23 survey',
+      body: 'Someone has circled the east door.',
+      attachmentId: 'att_9',
+    });
+  });
+
   it('is null with no reveals', () => {
     expect(tvTakeover([rollEvent()])).toBeNull();
   });

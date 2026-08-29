@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { DRAG_INTERVAL_MS, GridCommands, throttle, type CommandSink } from './commands.js';
+import {
+  DRAG_INTERVAL_MS,
+  GridCommands,
+  POINTER_INTERVAL_MS,
+  throttle,
+  type CommandSink,
+} from './commands.js';
 
 /** Deterministic clock + timer queue so the ~12 Hz relay is testable. */
 function fakeClock() {
@@ -127,6 +133,32 @@ describe('GridCommands', () => {
       { cmd: 'pointer', sceneId: 'sc7', x: 6, y: 7 },
       { cmd: 'scene.focus', sceneId: 'sc7', x: 8, y: 9 },
     ]);
+  });
+
+  it('throttles the pointer trail instead of flooding the socket (FR9.15)', () => {
+    const clock = fakeClock();
+    const s = sink();
+    const c = new GridCommands(s, 'sc1', clock.deps);
+    for (let i = 0; i < 40; i += 1) {
+      c.pointer(i, 0);
+      clock.advance(4); // a 250 Hz stylus
+    }
+    const trail = s.sent.filter((m) => m['cmd'] === 'pointer');
+    expect(trail.length).toBeGreaterThan(0);
+    expect(trail.length).toBeLessThanOrEqual(Math.ceil(160 / POINTER_INTERVAL_MS) + 1);
+    expect(trail[0]).toMatchObject({ cmd: 'pointer', sceneId: 'sc1' });
+  });
+
+  it('drives the table display and reports a dead socket (FR9.21)', () => {
+    const s = sink();
+    const c = new GridCommands(s, 'sc1', fakeClock().deps);
+    expect(c.display({ blank: true })).toBe(true);
+    expect(c.display({ ribbon: false })).toBe(true);
+    expect(s.sent).toEqual([
+      { cmd: 'display.set', blank: true },
+      { cmd: 'display.set', ribbon: false },
+    ]);
+    expect(new GridCommands(null, null).display({ blank: true })).toBe(false);
   });
 
   it('emits the three fog operations', () => {

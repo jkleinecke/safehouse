@@ -14,10 +14,18 @@ import type {
 } from '@safehouse/contracts';
 import { SheetV1Schema } from '@safehouse/contracts';
 import { deriveCharacter, environment } from '@safehouse/rules';
-import { ApiError, apiGet, apiPatch, apiPost } from '../../api/client.js';
+import { apiGet, apiPatch, apiPost } from '../../api/client.js';
 import { useLiveStore } from '../../live/store.js';
 import { useCampaign } from '../../api/campaigns.js';
+import { getSession } from '../../api/session.js';
+import { blitz, closeCall, seizeInitiative } from './edgeActions.js';
 import { edgeAfter, type ConditionState, type EdgeOp } from './lib.js';
+import {
+  fetchMacros,
+  saveMacros,
+  type DiceMacro,
+  type MacroSnapshot,
+} from './macroStore.js';
 
 // ---------------------------------------------------------------------------
 // Character record
@@ -45,7 +53,9 @@ export interface CharacterRecord {
   sheetVersion?: number;
 }
 
-function normalizeCharacter(raw: unknown): CharacterRecord {
+/** `GET /api/characters/:id` → the record the sheet renders (LIVE-1: this is
+ * the whole state on mount; WebSocket events only ever refine it). */
+export function normalizeCharacter(raw: unknown): CharacterRecord {
   const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
   const parsed = SheetV1Schema.safeParse(r['sheet']);
   const play = (r['play'] ?? {}) as Record<string, unknown>;
@@ -68,11 +78,28 @@ function normalizeCharacter(raw: unknown): CharacterRecord {
 
 export const characterKey = (id: string) => ['character', id] as const;
 
+/**
+ * Hydration policy for every live-play query on the sheet (LIVE-1).
+ *
+ * The web UI used to render only what arrived over the WebSocket while it was
+ * mounted, so a phone that reloaded mid-session showed an empty world. The
+ * sheet's own cure is this: each of its queries refetches on mount and on
+ * reconnect, so opening the sheet — or coming back to it after a lock screen —
+ * always starts from the server's state and merges live events on top of that,
+ * never on top of nothing.
+ */
+export const HYDRATE_ON_MOUNT = {
+  staleTime: 0,
+  refetchOnMount: 'always',
+  refetchOnReconnect: 'always',
+} as const;
+
 export function useCharacter(characterId: string | undefined) {
   return useQuery({
     queryKey: characterKey(characterId ?? ''),
     queryFn: async () => normalizeCharacter(await apiGet<unknown>(`/api/characters/${characterId}`)),
     enabled: Boolean(characterId),
+    ...HYDRATE_ON_MOUNT,
   });
 }
 
@@ -85,30 +112,92 @@ function looksDerived(v: unknown): v is DerivedCharacter {
 }
 
 /**
- * GET /api/characters/:id/derived → `{ characterId, name, derived, monitors,
- * wounds, edge, … }` (FR3.3). The server folds live wound state in but leaves
- * scene modifiers out — the roll dialog layers scene env as removable chips
- * per DESIGN.md §10.1. Falls back to running @safehouse/rules in the browser
- * if the request fails, so the sheet stays readable offline (Principle 5).
+ * The whole live-play picture behind `GET /api/characters/:id/derived`
+ * (`services/characters.ts DerivedView`), not just the numbers.
+ *
+ * `combatantId` is what makes Seize the Initiative and Blitz offerable — it is
+ * non-null exactly when this character has a row in a running encounter.
+ * `situational` is the list of modifiers the server ALREADY applied (scene
+ * environment, sustained spells); the roll dialog shows them as context and
+ * must never add them again (LIVE-2).
  */
-export function useDerived(character: CharacterRecord | undefined) {
+export interface DerivedView {
+  derived: DerivedCharacter;
+  situational: Modifier[];
+  activeSceneId: string | null;
+  encounterId: string | null;
+  combatantId: string | null;
+  wounds: { physical: number; stun: number; overflow: number };
+  edge?: { max: number; current: number; burned: number };
+  /** False when this came from the browser's own engine, not the server. */
+  authoritative: boolean;
+}
+
+function num(v: unknown): number {
+  return typeof v === 'number' ? v : 0;
+}
+
+export function normalizeDerivedView(raw: unknown): DerivedView | null {
+  const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  const body = 'derived' in r ? r['derived'] : raw;
+  if (!looksDerived(body)) return null;
+  const wounds = (r['wounds'] ?? {}) as Record<string, unknown>;
+  const edge = r['edge'] as { max: number; current: number; burned: number } | undefined;
+  return {
+    derived: body,
+    situational: Array.isArray(r['situational']) ? (r['situational'] as Modifier[]) : [],
+    activeSceneId: typeof r['activeSceneId'] === 'string' ? r['activeSceneId'] : null,
+    encounterId: typeof r['encounterId'] === 'string' ? r['encounterId'] : null,
+    combatantId: typeof r['combatantId'] === 'string' ? r['combatantId'] : null,
+    wounds: {
+      physical: num(wounds['physical']),
+      stun: num(wounds['stun']),
+      overflow: num(wounds['overflow']),
+    },
+    ...(edge && typeof edge === 'object' ? { edge } : {}),
+    authoritative: true,
+  };
+}
+
+/**
+ * GET /api/characters/:id/derived (FR3.3). Falls back to running
+ * @safehouse/rules in the browser if the request fails, so the sheet stays
+ * readable offline (Principle 5) — and the fallback is given the SAME scene
+ * environment the server would have applied, so the offline pool matches the
+ * online one instead of quietly reading a point high.
+ */
+export function useDerivedView(character: CharacterRecord | undefined) {
+  const sceneEnv = useActiveSceneEnv(character?.campaignId);
   return useQuery({
+    // The scene is deliberately NOT part of the key: the online path does not
+    // read it, and re-keying on it would refetch the whole sheet every time a
+    // scene event landed. `useSheetLive` invalidates this query on
+    // scene.activated / scene.updated instead, which re-runs the fallback with
+    // the fresh environment.
     queryKey: [...characterKey(character?.id ?? ''), 'derived'],
-    queryFn: async (): Promise<DerivedCharacter> => {
+    queryFn: async (): Promise<DerivedView> => {
       try {
-        const raw = await apiGet<unknown>(`/api/characters/${character?.id}/derived`);
-        const body =
-          typeof raw === 'object' && raw !== null && 'derived' in raw
-            ? (raw as { derived: unknown }).derived
-            : raw;
-        if (looksDerived(body)) return body;
+        const view = normalizeDerivedView(
+          await apiGet<unknown>(`/api/characters/${character?.id}/derived`),
+        );
+        if (view) return view;
       } catch {
         // fall through to the local engine
       }
       const c = character as CharacterRecord;
-      return deriveCharacter(c.sheet, { wounds: c.condition });
+      const situational = sceneEnv?.mods ?? [];
+      return {
+        derived: deriveCharacter(c.sheet, { situational, wounds: c.condition }),
+        situational,
+        activeSceneId: sceneEnv?.sceneId ?? null,
+        encounterId: null,
+        combatantId: null,
+        wounds: { physical: c.condition.physical, stun: c.condition.stun, overflow: 0 },
+        authoritative: false,
+      };
     },
     enabled: Boolean(character?.id && character?.sheet),
+    ...HYDRATE_ON_MOUNT,
   });
 }
 
@@ -252,6 +341,7 @@ export function useLedger(characterId: string | undefined) {
     queryFn: async () =>
       normalizeEntries(await apiGet<unknown>(`/api/characters/${characterId}/ledger`)),
     enabled: Boolean(characterId),
+    ...HYDRATE_ON_MOUNT,
   });
 }
 
@@ -277,40 +367,83 @@ export function useProposeSpend(characterId: string) {
   });
 }
 
+// Contacts (FR3.2 tab / FR5.8) live in `./contacts.ts`.
+
 // ---------------------------------------------------------------------------
-// Contacts (FR5.8, read-only on the sheet)
+// Edge actions beyond the dice (FR2.3/FR4.4) — POST /api/edge/*
 // ---------------------------------------------------------------------------
 
-/** INTEGRATION: GET /api/characters/:id/contacts assumed (DESIGN.md §9.2). */
-export interface ContactRecord {
-  id: string;
-  name: string;
-  archetype?: string;
-  connection: number;
-  loyalty: number;
-  notes?: string;
-  npcPageId?: string | null;
-}
-
-export function useContacts(characterId: string | undefined) {
-  return useQuery({
-    queryKey: [...characterKey(characterId ?? ''), 'contacts'],
-    queryFn: async (): Promise<ContactRecord[]> => {
-      try {
-        const raw = await apiGet<unknown>(`/api/characters/${characterId}/contacts`);
-        if (Array.isArray(raw)) return raw as ContactRecord[];
-        const c = (raw as { contacts?: unknown })?.contacts;
-        return Array.isArray(c) ? (c as ContactRecord[]) : [];
-      } catch {
-        return []; // contacts endpoint not up yet — render an empty section
-      }
+/**
+ * Seize the Initiative / Blitz / Close Call. The server debits the point,
+ * moves the tracker and posts the loud log line; all this does is fire the
+ * call and re-hydrate the sheet so the Edge track catches up immediately
+ * rather than waiting for the event to come back round.
+ */
+export function useEdgeActionMutation(characterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (
+      req:
+        | { action: 'seize_initiative' | 'blitz'; combatantId: string }
+        | { action: 'close_call'; rollId: string; combatantId?: string | null },
+    ) => {
+      if (req.action === 'close_call') return closeCall(req.rollId, req.combatantId ?? null);
+      return req.action === 'blitz' ? blitz(req.combatantId) : seizeInitiative(req.combatantId);
     },
-    enabled: Boolean(characterId),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: characterKey(characterId) });
+    },
   });
 }
 
 // ---------------------------------------------------------------------------
-// Active scene environment → situational modifier chips (FR9.11)
+// Personal macros (FR2.8) — server-backed, local mirror (see macroStore.ts)
+// ---------------------------------------------------------------------------
+
+export const macroKeyFor = (campaignId: string, userId: string | undefined) =>
+  ['macros', campaignId, userId ?? 'device'] as const;
+
+export function useMacros(campaignId: string | undefined) {
+  const userId = getSession()?.userId;
+  return useQuery({
+    queryKey: macroKeyFor(campaignId ?? '', userId),
+    queryFn: () => fetchMacros(campaignId as string, userId),
+    enabled: Boolean(campaignId),
+    ...HYDRATE_ON_MOUNT,
+  });
+}
+
+export function useMacroMutation(campaignId: string | undefined) {
+  const qc = useQueryClient();
+  const userId = getSession()?.userId;
+  const key = macroKeyFor(campaignId ?? '', userId);
+  return useMutation({
+    mutationFn: (macros: DiceMacro[]) => saveMacros(campaignId as string, userId, macros),
+    onMutate: async (macros) => {
+      await qc.cancelQueries({ queryKey: key });
+      const prev = qc.getQueryData<MacroSnapshot>(key);
+      qc.setQueryData<MacroSnapshot>(key, {
+        macros,
+        hasRemote: prev?.hasRemote ?? false,
+        ...(prev?.degraded ? { degraded: true } : {}),
+      });
+      return { prev };
+    },
+    onError: (_e, _m, ctx) => {
+      if (ctx?.prev) qc.setQueryData(key, ctx.prev);
+    },
+    onSuccess: (snapshot) => qc.setQueryData<MacroSnapshot>(key, snapshot),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Active scene environment (FR9.11) — CONTEXT ONLY on the sheet.
+//
+// LIVE-2: these modifiers are already inside every pool `GET …/derived`
+// returns, so nothing may add them to a roll a second time. The roll dialog
+// reads the scene lines out of the pool's own breakdown and labels them
+// "already in this pool"; this hook survives to name the scene and to feed the
+// offline fallback derive the same environment the server would have used.
 // ---------------------------------------------------------------------------
 
 export interface SceneEnvInfo {
@@ -320,9 +453,9 @@ export interface SceneEnvInfo {
 }
 
 /**
- * The active scene's environment as `scene` Modifiers for the roll dialog.
- * Scene id comes from the live store (scene.activated) with the campaign
- * record as fallback; env → modifiers via the shared rules engine.
+ * The active scene's environment as `scene` Modifiers. Scene id comes from the
+ * live store (scene.activated) with the campaign record as fallback; env →
+ * modifiers via the shared rules engine.
  */
 export function useActiveSceneEnv(campaignId: string | undefined): SceneEnvInfo | null {
   const liveSceneId = useLiveStore((s) => s.activeSceneId);

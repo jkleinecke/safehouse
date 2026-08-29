@@ -4,6 +4,7 @@
  * threes — the wound-modifier steps. The label opens the size's provenance.
  */
 import type { DerivedValue } from '@safehouse/contracts';
+import { monitorBoxLabel, monitorLabel } from '../a11y.js';
 import { monitorTapTarget } from '../lib.js';
 import { BreakdownButton, type OverrideApi } from './Provenance.js';
 
@@ -48,21 +49,26 @@ export default function MonitorRow({
       >
         {short}
       </BreakdownButton>
-      <div className="flex flex-wrap items-center gap-y-1" role="group" aria-label={`${label} monitor, ${filled}/${max}`}>
+      <div
+        className="flex flex-wrap items-center gap-y-1"
+        role="group"
+        aria-label={monitorLabel(label, filled, max)}
+      >
         {boxes.map((i) => (
           <button
             key={i}
             type="button"
+            aria-pressed={i < filled}
             className={`h-4.5 w-4.5 border ${i < filled ? t.filled : t.empty} ${
               (i + 1) % 3 === 0 ? 'mr-1.5' : 'mr-px'
             } rounded-[2px] active:scale-90`}
             onClick={() => onSetFilled(monitorTapTarget(filled, i))}
-            aria-label={`${label} box ${i + 1}${i < filled ? ' (filled)' : ''}`}
+            aria-label={monitorBoxLabel(label, i, filled, max)}
           />
         ))}
         {max === 0 && <span className="text-xs text-faint">—</span>}
       </div>
-      <span className="ml-auto shrink-0 font-label text-xs text-dim">
+      <span className="ml-auto shrink-0 font-label text-xs text-dim" aria-hidden>
         {filled}/{max}
       </span>
     </div>

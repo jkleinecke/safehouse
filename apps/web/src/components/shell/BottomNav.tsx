@@ -35,6 +35,11 @@ export default function BottomNav({ campaignId, role, characterId }: BottomNavPr
         <span aria-hidden>▦</span>
         Grid
       </NavLink>
+      {/* Shared lore during sessions (§4) — the server decides what is shared. */}
+      <NavLink to={`/c/${campaignId}/codex`} className={linkClass}>
+        <span aria-hidden>❖</span>
+        Codex
+      </NavLink>
       {role === 'gm' && (
         <NavLink to={`/c/${campaignId}/gm`} className={linkClass}>
           <span aria-hidden>◆</span>

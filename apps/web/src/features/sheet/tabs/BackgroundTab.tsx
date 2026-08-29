@@ -1,9 +1,9 @@
 /**
- * Background tab (FR3.2): qualities with the modifiers they inject, contacts
- * read-only (owned by the codex / GM, FR5.8), lifestyles, and the alias notes.
+ * Background tab (FR3.2): qualities with the modifiers they inject,
+ * lifestyles, and the alias notes. Contacts moved to their own tab — see
+ * `ContactsTab.tsx`.
  */
 import { signed } from '../lib.js';
-import { useContacts } from '../api.js';
 import { Empty, RefChip, SectionLabel } from '../components/ui.js';
 import type { TabProps } from './shared.js';
 
@@ -13,7 +13,6 @@ function monthly(n: number): string {
 
 export default function BackgroundTab({ character }: TabProps) {
   const sheet = character.sheet;
-  const { data: contacts = [], isPending } = useContacts(character.id);
 
   return (
     <div className="p-4">
@@ -42,31 +41,6 @@ export default function BackgroundTab({ character }: TabProps) {
               )}
             </div>
             <RefChip refInfo={q.ref} />
-          </li>
-        ))}
-      </ul>
-
-      <SectionLabel>Contacts</SectionLabel>
-      {isPending && <Empty>Loading contacts…</Empty>}
-      {!isPending && contacts.length === 0 && (
-        <Empty>No contacts on file — the GM keeps these in the codex.</Empty>
-      )}
-      <ul className="divide-y divide-edge/60">
-        {contacts.map((c) => (
-          <li key={c.id} className="flex items-center gap-2 py-2">
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm text-ink">{c.name}</div>
-              <div className="mono-label truncate">
-                {c.archetype ?? 'contact'}
-                {c.notes ? ` · ${c.notes}` : ''}
-              </div>
-            </div>
-            <span className="chip shrink-0 text-cyan" title="Connection">
-              C{c.connection}
-            </span>
-            <span className="chip shrink-0 text-warn" title="Loyalty">
-              L{c.loyalty}
-            </span>
           </li>
         ))}
       </ul>

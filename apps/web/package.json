@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "e2e": "node e2e/run.mjs",
+    "e2e:strict": "node e2e/run.mjs --require",
+    "e2e:install": "playwright install chromium",
+    "typecheck:e2e": "tsc -p e2e/tsconfig.json --noEmit"
   },
   "dependencies": {
     "@safehouse/contracts": "workspace:*",
@@ -23,6 +27,7 @@
     "@tailwindcss/vite": "^4.3.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "vite": "^7.3.6",
     "@vitejs/plugin-react": "^5.2.0",
     "@types/react": "^19.2.18",

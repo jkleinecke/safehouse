@@ -164,6 +164,16 @@ export interface PlayerCombatantView {
   /** True when this row is the viewer's own PC. */
   own: boolean;
   condition: Condition;
+  /**
+   * The token this row drives, when it has one — what lets the table TV put
+   * the acting glow and the coarse condition bar on the right figure instead
+   * of matching on display name (FR4.10/FR9.20).
+   *
+   * Safe on a filtered view: a row only reaches this list because it is
+   * public or the viewer's own, and a public combatant's token is already on
+   * that socket. A hidden combatant was dropped above, token and all.
+   */
+  tokenId?: string;
   /** Own PCs only — never another combatant's exact boxes. */
   monitors?: CombatantMonitors;
   effects: Array<{ id: string; name: string; note?: string }>;
@@ -219,6 +229,7 @@ export function encounterForViewer(
       actedThisPass: c.actedThisPass,
       own,
       condition: conditionOf(c.monitors),
+      ...(c.tokenId ? { tokenId: c.tokenId } : {}),
       ...(own ? { monitors: c.monitors } : {}),
       effects: c.effects.map((e) => ({
         id: e.id,

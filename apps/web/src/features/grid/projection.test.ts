@@ -6,6 +6,7 @@ import {
   canSeeBars,
   classifyMark,
   draggableTokenIds,
+  focusFromEvent,
   movementFrom,
   rangeReadout,
   rangedWeapons,
@@ -228,5 +229,31 @@ describe('classifyMark', () => {
     const prev = { x: 1, y: 1, ts: 100 };
     expect(classifyMark(prev, { x: 1.2, y: 1, ts: 900 })).toBe('ping');
     expect(classifyMark(prev, { x: 40, y: 1, ts: 150 })).toBe('ping');
+  });
+});
+
+describe('focusFromEvent', () => {
+  it('reads a focus point off either event shape', () => {
+    expect(focusFromEvent({ type: 'scene.focus', payload: { x: 4, y: 9 } }, null)).toEqual({
+      x: 4,
+      y: 9,
+    });
+    expect(
+      focusFromEvent({ type: 'display.updated', payload: { focus: { x: 1, y: 2 } } }, null),
+    ).toEqual({ x: 1, y: 2 });
+  });
+
+  it('ignores events that are not a focus gesture', () => {
+    expect(focusFromEvent({ type: 'token.moved', payload: { x: 1, y: 2 } }, null)).toBeNull();
+    expect(focusFromEvent({ type: 'display.updated', payload: { blank: true } }, null)).toBeNull();
+    expect(focusFromEvent({ type: 'scene.focus', payload: 'nonsense' }, null)).toBeNull();
+  });
+
+  it('ignores a focus aimed at another scene', () => {
+    const event = { type: 'scene.focus', payload: { sceneId: 'sc2', x: 1, y: 1 } };
+    expect(focusFromEvent(event, 'sc1')).toBeNull();
+    expect(focusFromEvent(event, 'sc2')).toEqual({ x: 1, y: 1 });
+    // No scene on screen yet: take it rather than drop it.
+    expect(focusFromEvent(event, null)).toEqual({ x: 1, y: 1 });
   });
 });

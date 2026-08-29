@@ -44,6 +44,35 @@ export function hitDoor(scene: Scene, at: Point, tolerance = 0.6): string | null
   return best;
 }
 
+/** Pin whose head is within `tolerance` grid units of `at` (FR9.3). */
+export function hitPin(scene: Scene, at: Point, tolerance = 0.6): string | null {
+  let best: string | null = null;
+  let bestDist = tolerance;
+  // Later pins draw on top, so a tie goes to the last one placed.
+  for (const pin of scene.geometry.pins) {
+    const d = gridDist(at, pin.at);
+    if (d <= bestDist) {
+      bestDist = d;
+      best = pin.id;
+    }
+  }
+  return best;
+}
+
+/** Wall whose segment is within `tolerance` grid units of `at` (GM editing). */
+export function hitWall(scene: Scene, at: Point, tolerance = 0.4): string | null {
+  let best: string | null = null;
+  let bestDist = tolerance;
+  for (const wall of scene.geometry.walls) {
+    const d = distToSegment(at, wall.a, wall.b);
+    if (d <= bestDist) {
+      bestDist = d;
+      best = wall.id;
+    }
+  }
+  return best;
+}
+
 /** Screen-space distance in grid units — used to size click tolerances. */
 export function gridTolerance(m: SceneMetrics, scale: number, screenPx = 10): number {
   const px = m.cell * Math.max(0.05, scale);

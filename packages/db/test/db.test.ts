@@ -1,8 +1,15 @@
+import { randomUUID } from 'node:crypto';
+import { existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { eq } from 'drizzle-orm';
 import {
   appendEvent,
+  getDb,
+  latestEventOfType,
+  resetDbSingleton,
   bookPages,
   books,
   campaigns,
@@ -192,4 +199,65 @@ describe('ws_events', () => {
     expect(fresh.map((e) => e.id)).toEqual([b1.id]);
     expect(fresh[0]!.visibility).toBe('gm');
   });
+});
+
+describe('latestEventOfType', () => {
+  /**
+   * Some state has no table: the GM's table-display steering (FR9.21) lives
+   * only as `display.updated` events, so the newest one IS the state and a
+   * kiosk that reboots mid-session reads it back through this.
+   */
+  it('returns the newest event of a type, scoped to its campaign', async () => {
+    await appendEvent(db, { campaignId, type: 'display.updated', payload: { blank: false, ribbon: true } });
+    const newest = await appendEvent(db, {
+      campaignId,
+      type: 'display.updated',
+      payload: { blank: true, ribbon: false },
+    });
+    await appendEvent(db, {
+      campaignId: otherCampaignId,
+      type: 'display.updated',
+      payload: { blank: false, ribbon: true },
+    });
+
+    const found = await latestEventOfType(db, campaignId, 'display.updated');
+    expect(found?.id).toBe(newest.id);
+    expect(found?.payload).toEqual({ blank: true, ribbon: false });
+    // Another table's screen is none of this campaign's business.
+    const other = await latestEventOfType(db, otherCampaignId, 'display.updated');
+    expect(other?.payload).toEqual({ blank: false, ribbon: true });
+  });
+
+  it('is undefined when the type has never been emitted', async () => {
+    expect(await latestEventOfType(db, campaignId, 'os.changed')).toBeUndefined();
+  });
+});
+
+describe('getDb on a fresh clone', () => {
+  /**
+   * `data/` is gitignored, so it is absent after a checkout. PGlite opens the
+   * directory but will not create the parent — this used to fail inside
+   * migrate() with ENOENT on someone's first `pnpm dev:server`.
+   */
+  it('creates DATA_DIR rather than dying inside migrate()', async () => {
+    const dir = join(tmpdir(), `safehouse-fresh-${randomUUID()}`, 'nested');
+    const prevData = process.env.DATA_DIR;
+    const prevUrl = process.env.DATABASE_URL;
+    process.env.DATA_DIR = dir;
+    delete process.env.DATABASE_URL;
+    resetDbSingleton();
+    try {
+      expect(existsSync(dir)).toBe(false);
+      const fresh = getDb();
+      await ensureMigrations(fresh);
+      expect(existsSync(dir)).toBe(true);
+      await ((fresh as unknown as { $client: PGlite }).$client).close();
+    } finally {
+      resetDbSingleton();
+      if (prevData === undefined) delete process.env.DATA_DIR;
+      else process.env.DATA_DIR = prevData;
+      if (prevUrl !== undefined) process.env.DATABASE_URL = prevUrl;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
 });

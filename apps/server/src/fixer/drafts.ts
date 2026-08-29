@@ -11,8 +11,8 @@
  * publishes it, flagging GM-only names the draft leaned on.
  */
 import { and, desc, eq } from 'drizzle-orm';
-import { FogStateSchema, PersonaSchema } from '@safehouse/contracts';
-import { aiGenerations, npcTemplates, scenes, wikiPages, type Db } from '@safehouse/db';
+import { FogStateSchema, PersonaSchema, SceneGeometrySchema } from '@safehouse/contracts';
+import { aiGenerations, npcTemplates, scenes, tokens, wikiPages, type Db } from '@safehouse/db';
 import { httpError } from '../services/auth.js';
 import { gmOnlyNames } from './state.js';
 import type { LlmUsage } from './llm.js';
@@ -20,7 +20,13 @@ import type { LlmUsage } from './llm.js';
 export type GenerationRow = typeof aiGenerations.$inferSelect;
 
 /** Draft kinds this module knows how to apply on accept. */
-export const DRAFT_KINDS = ['npc', 'wiki_page', 'fog_reveal'] as const;
+export const DRAFT_KINDS = [
+  'npc',
+  'wiki_page',
+  'fog_reveal',
+  'token_label',
+  'geometry',
+] as const;
 export type DraftKind = (typeof DRAFT_KINDS)[number];
 
 export interface DraftDto {
@@ -182,6 +188,10 @@ async function applyDraft(db: Db, row: GenerationRow): Promise<AppliedRef> {
       return applyWikiDraft(db, row);
     case 'fog_reveal':
       return applyFogDraft(db, row);
+    case 'token_label':
+      return applyTokenLabelDraft(db, row);
+    case 'geometry':
+      return applyGeometryDraft(db, row);
     default:
       throw httpError(
         400,
@@ -268,6 +278,85 @@ async function applyFogDraft(db: Db, row: GenerationRow): Promise<AppliedRef> {
     id: scene.id,
     note: `revealed ${regionIds.length} fog region(s) on "${scene.name}"`,
   };
+}
+
+/** A draft's scene, checked against the draft's own campaign. */
+async function draftScene(db: Db, row: GenerationRow, what: string) {
+  const sceneId = str(output(row)['sceneId']);
+  if (sceneId.length === 0) throw httpError(400, 'bad_request', `${what} carries no sceneId`);
+  const scene = (await db.select().from(scenes).where(eq(scenes.id, sceneId)).limit(1))[0];
+  if (!scene || scene.campaignId !== row.campaignId) {
+    throw httpError(404, 'not_found', `${what} points at an unknown scene`);
+  }
+  return scene;
+}
+
+/** Token labels (FR12.9) → the tokens that actually change name get renamed. */
+async function applyTokenLabelDraft(db: Db, row: GenerationRow): Promise<AppliedRef> {
+  const scene = await draftScene(db, row, 'token label draft');
+  const raw = output(row)['labels'];
+  const labels = Array.isArray(raw) ? raw.map((l) => asRecord(l)) : [];
+  const onScene = new Set(
+    (await db.select({ id: tokens.id }).from(tokens).where(eq(tokens.sceneId, scene.id))).map(
+      (t) => t.id,
+    ),
+  );
+  let renamed = 0;
+  for (const label of labels) {
+    const tokenId = str(label['tokenId']);
+    const to = str(label['to']);
+    const from = str(label['from']);
+    if (tokenId.length === 0 || to.length === 0 || to === from) continue;
+    if (!onScene.has(tokenId)) continue;
+    await db.update(tokens).set({ name: to }).where(eq(tokens.id, tokenId));
+    renamed += 1;
+  }
+  return {
+    table: 'tokens',
+    id: scene.id,
+    note: `renamed ${renamed} token(s) on "${scene.name}"`,
+  };
+}
+
+/**
+ * Layout copilot (FR12.11) → walls/doors/zones onto the scene, plus the named
+ * fog regions, which arrive UNREVEALED: drawing a room is not showing it.
+ */
+async function applyGeometryDraft(db: Db, row: GenerationRow): Promise<AppliedRef> {
+  const scene = await draftScene(db, row, 'geometry draft');
+  const out = output(row);
+  const proposed = SceneGeometrySchema.parse(out['geometry'] ?? {});
+  const merge = str(out['mode'], 'merge') !== 'replace';
+  const existing = merge
+    ? SceneGeometrySchema.parse(scene.geometry ?? {})
+    : SceneGeometrySchema.parse({});
+  const geometry = {
+    walls: [...existing.walls, ...proposed.walls],
+    doors: [...existing.doors, ...proposed.doors],
+    zones: [...existing.zones, ...proposed.zones],
+    pins: existing.pins,
+  };
+  const fog = FogStateSchema.parse(scene.fog ?? {});
+  const known = new Set(fog.regions.map((r) => r.id));
+  const incoming = FogStateSchema.parse({ regions: out['fogRegions'] ?? [] }).regions.filter(
+    (region) => !known.has(region.id),
+  );
+  await db
+    .update(scenes)
+    .set({ geometry, fog: { ...fog, regions: [...fog.regions, ...incoming] } })
+    .where(eq(scenes.id, scene.id));
+  return {
+    table: 'scenes',
+    id: scene.id,
+    note:
+      `${merge ? 'added' : 'replaced with'} ${proposed.walls.length} wall(s), ` +
+      `${proposed.doors.length} door(s), ${proposed.zones.length} zone(s) and ` +
+      `${incoming.length} unrevealed fog region(s) on "${scene.name}"`,
+  };
+}
+
+function asRecord(raw: unknown): Record<string, unknown> {
+  return typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
 }
 
 // ---------------------------------------------------------------------------

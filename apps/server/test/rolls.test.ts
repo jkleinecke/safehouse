@@ -194,6 +194,96 @@ describe('authoritative recompute (§10.1)', () => {
     }
   });
 
+  /**
+   * LIVE-2, found by driving the real app: the sheet's roll dialog builds its
+   * receipt from `GET /api/characters/:id/derived` — which has ALREADY applied
+   * the active scene — and then offers the same scene as a removable chip. Both
+   * were counted: the sheet read Perception 7, the dialog offered 6d6, and the
+   * persisted breakdown printed the environment line twice. The server is the
+   * one authority: the echo is dropped and the die comes back.
+   */
+  it('counts the active scene ONCE when the client re-sends it as a chip (LIVE-2)', async () => {
+    const scene = (
+      await t.db
+        .insert(scenes)
+        .values({
+          campaignId: boot.campaignId,
+          name: 'Sub-level — dim light',
+          state: 'active',
+          environment: { light: 1, visibility: 0, glare: 0, wind: 0 },
+        })
+        .returning()
+    )[0]!;
+    try {
+      // What the sheet shows: the derived pool, scene included, exactly once.
+      const derivedRes = await get(`/api/characters/${characterId}/derived`, player.token);
+      const view = derivedRes.json() as {
+        derived: {
+          pools: Record<
+            string,
+            { total: number; breakdown: { label: string; value: number; source?: string }[] }
+          >;
+        };
+      };
+      const shown = view.derived.pools['skill.perception']!;
+      expect(shown.total).toBe(7); // INT 5 + Perception 3 − 1 scene
+      expect(shown.breakdown.filter((b) => b.source === 'scene')).toHaveLength(1);
+
+      // What the dialog sent: that receipt PLUS the scene chip again, no
+      // poolRef (the live client does not send one).
+      const echo = shown.breakdown.find((b) => b.source === 'scene')!;
+      svc.setRng(fixedFace(4));
+      const res = await post('/api/rolls', player.token, {
+        pool: shown.total + echo.value,
+        breakdown: [...shown.breakdown, echo],
+        actor: { characterId },
+        meta: { title: 'Perception' },
+      });
+      expect(res.statusCode).toBe(201);
+      const { roll } = res.json() as {
+        roll: {
+          faces: number[];
+          request: {
+            pool: number;
+            breakdown: { label: string; value: number; source?: string }[];
+            meta: Record<string, unknown>;
+          };
+        };
+      };
+      const scenes_ = roll.request.breakdown.filter((b) => b.source === 'scene');
+      expect(scenes_).toHaveLength(1);
+      expect(roll.request.pool).toBe(shown.total);
+      // Principle 3: the pool equals the sum of its own receipt.
+      expect(roll.request.breakdown.reduce((s, b) => s + b.value, 0)).toBe(roll.request.pool);
+      expect(roll.faces.length).toBe(roll.request.pool);
+      // …and the refusal is on the record, not silent.
+      expect(roll.request.meta['claimedPool']).toBe(shown.total - 1);
+      expect(roll.request.meta['dedupedScene']).toEqual([
+        { label: echo.label, value: echo.value },
+      ]);
+    } finally {
+      await t.db.delete(scenes).where(eq(scenes.id, scene.id));
+    }
+  });
+
+  it('leaves an honest receipt alone (no scene, nothing dropped)', async () => {
+    svc.setRng(fixedFace(4));
+    const res = await post('/api/rolls', player.token, {
+      pool: 6,
+      breakdown: [
+        { label: 'AGI', value: 4, source: 'attribute' },
+        { label: 'blades', value: 2, source: 'skill' },
+      ],
+      actor: { characterId },
+    });
+    const { roll } = res.json() as {
+      roll: { request: { pool: number; breakdown: unknown[]; meta: Record<string, unknown> } };
+    };
+    expect(roll.request.pool).toBe(6);
+    expect(roll.request.breakdown).toHaveLength(2);
+    expect(roll.request.meta['dedupedScene']).toBeUndefined();
+  });
+
   it('takes wounds from live play state, not from a player\'s claim (FR3.4)', async () => {
     const hurt = { ...SHEET, play: { monitors: { physical: 6, stun: 0, overflow: 0 } } };
     await t.db.update(characters).set({ sheet: hurt }).where(eq(characters.id, characterId));
@@ -463,6 +553,66 @@ describe('log + pagination (FR2.9, §12)', () => {
       (e) => e.payload.text,
     );
     expect(texts).toContain('Scene: the dock, 03:14');
+  });
+
+  /**
+   * `?session=` has to tell "quiet session" apart from "wrong id" (FR6.1/#4):
+   * a malformed value used to reach Postgres as a uuid comparison (a 500) and a
+   * foreign id returned an empty page that looked like a real answer.
+   */
+  describe('?session= (FR6.1)', () => {
+    it('404s on a malformed or foreign session id instead of guessing', async () => {
+      const bad = await get(`/api/campaigns/${boot.campaignId}/rolls?session=not-a-uuid`, boot.gmToken);
+      expect(bad.statusCode).toBe(404);
+      expect((bad.json() as { error: { code: string } }).error.code).toBe('unknown_session');
+      const foreign = await get(
+        `/api/campaigns/${boot.campaignId}/rolls?session=00000000-0000-4000-8000-000000000000`,
+        boot.gmToken,
+      );
+      expect(foreign.statusCode).toBe(404);
+    });
+
+    it('404s on session=current when no session is running', async () => {
+      const res = await get(`/api/campaigns/${boot.campaignId}/rolls?session=current`, boot.gmToken);
+      expect(res.statusCode).toBe(404);
+      expect((res.json() as { error: { code: string } }).error.code).toBe('no_active_session');
+    });
+
+    it('returns the live session\'s rolls for session=current, and stamps new ones', async () => {
+      const started = await post(`/api/campaigns/${boot.campaignId}/sessions/start`, boot.gmToken, {});
+      expect(started.statusCode).toBe(201);
+      const sessionId = (started.json() as { session: { id: string } }).session.id;
+      try {
+        svc.setRng(fixedFace(5));
+        const rolled = await post('/api/rolls', player.token, {
+          pool: 4,
+          actor: { characterId },
+          meta: { poolRef: 'skill.perception' },
+        });
+        const id = (rolled.json() as { roll: { id: string; sessionId: string } }).roll.id;
+
+        const byAlias = await get(
+          `/api/campaigns/${boot.campaignId}/rolls?session=current&limit=200`,
+          boot.gmToken,
+        );
+        const page = byAlias.json() as { rolls: { id: string }[]; sessionId: string };
+        expect(page.sessionId).toBe(sessionId);
+        expect(page.rolls.map((r) => r.id)).toContain(id);
+
+        // The explicit id answers identically…
+        const byId = await get(
+          `/api/campaigns/${boot.campaignId}/rolls?session=${sessionId}&limit=200`,
+          boot.gmToken,
+        );
+        expect((byId.json() as { rolls: { id: string }[] }).rolls.map((r) => r.id)).toContain(id);
+        // …and rolls made before the session started are NOT in it.
+        const all = await get(`/api/campaigns/${boot.campaignId}/rolls?limit=200`, boot.gmToken);
+        const total = (all.json() as { rolls: unknown[] }).rolls.length;
+        expect(total).toBeGreaterThan(page.rolls.length);
+      } finally {
+        await post(`/api/sessions/${sessionId}/end`, boot.gmToken, {});
+      }
+    });
   });
 
   it('pages the roll log with a cursor', async () => {

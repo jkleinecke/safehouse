@@ -23,12 +23,13 @@ import type {
 import { characters, gameSessions, rolls, type Db } from '@safehouse/db';
 import {
   buyHits as buyHitsForPool,
+  dedupeSceneModifiers,
   deriveCharacter,
   resolveExtendedTest,
   resolveRoll,
   resolveTeamwork,
 } from '@safehouse/rules';
-import type { Hub } from '../hub.js';
+import type { EventTx, Hub } from '../hub.js';
 import { httpError } from './auth.js';
 import { rng as cryptoRng } from './dice.js';
 import {
@@ -50,6 +51,7 @@ import {
 import {
   aggregate,
   assertMayRoll,
+  dedupeSceneEntries,
   numberFrom,
   parseModifiers,
   parseRequest,
@@ -77,6 +79,7 @@ export {
   postDiscord,
   type OutboundLogger,
 } from './discord.js';
+export { dedupeSceneEntries, type SceneReceipt } from './roll-input.js';
 export {
   getRoll,
   listRolls,
@@ -92,6 +95,9 @@ export {
 // ---------------------------------------------------------------------------
 // Session helper (shared with the sessions plugin)
 // ---------------------------------------------------------------------------
+
+/** Postgres would raise 22P02 on a non-uuid comparison; we answer 404 instead. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The campaign's live session id, if one is running (FR6.2). */
 export async function activeSessionId(db: Db, campaignId: string): Promise<string | null> {
@@ -128,6 +134,44 @@ export class RollService {
    */
   setRng(rng: () => number): void {
     this.rng = rng;
+  }
+
+  /**
+   * One draw from the entropy source in force. Sibling services (the Edge
+   * actions in `rolls-edge.ts`) roll through this so `setRng` remains the ONE
+   * knob a test has to turn — and so production dice can only ever be the
+   * CSPRNG from services/dice (G5).
+   */
+  nextRandom(): number {
+    return this.rng();
+  }
+
+  /**
+   * `?session=` → a session id (FR6.1/FR2.9). Accepts `current` / `active` /
+   * `live` for the running session so a client that never saw a session id can
+   * still ask. An id that is not a uuid, does not exist, or belongs to another
+   * campaign is a 404 — previously a malformed value reached Postgres as a
+   * uuid comparison (a 500) and a foreign id silently returned an empty page,
+   * which made "no rolls this session" and "wrong id" indistinguishable.
+   */
+  async resolveSessionId(campaignId: string, raw: string): Promise<string> {
+    if (raw === 'current' || raw === 'active' || raw === 'live') {
+      const id = await activeSessionId(this.db, campaignId);
+      if (!id) throw httpError(404, 'no_active_session', 'no session is running');
+      return id;
+    }
+    if (!UUID_RE.test(raw)) throw httpError(404, 'unknown_session', 'unknown session');
+    const row = (
+      await this.db
+        .select({ id: gameSessions.id, campaignId: gameSessions.campaignId })
+        .from(gameSessions)
+        .where(eq(gameSessions.id, raw))
+        .limit(1)
+    )[0];
+    if (!row || row.campaignId !== campaignId) {
+      throw httpError(404, 'unknown_session', 'unknown session');
+    }
+    return row.id;
   }
 
   /** Roll (WS `roll.request` and `POST /api/rolls` share this path). */
@@ -223,7 +267,15 @@ export class RollService {
     // --- opposed linking (FR2.5) ------------------------------------------
     const netHits = opposed ? result.limitedHits - opposed.limitedHits : undefined;
 
-    const record = await this.persistAndEmit({
+    // The Edge debit rides INSIDE the roll's transaction (`alsoInTx`): a point
+    // of Edge spent on a roll that then failed to record is a point the player
+    // never gets back, and the sheet update and the roll must agree.
+    const edgeSpend =
+      req.edge && character
+        ? (tx: EventTx): Promise<void> =>
+            this.spendEdge(tx, campaignId, character, viewer, req.visibility, ownerUserId)
+        : undefined;
+    return this.persistAndEmit({
       campaignId,
       viewer,
       request: finalReq,
@@ -232,11 +284,8 @@ export class RollService {
       ...(netHits !== undefined ? { netHits } : {}),
       ...(detail ? { detail } : {}),
       ownerUserId,
+      ...(edgeSpend ? { alsoInTx: edgeSpend } : {}),
     });
-    if (req.edge && character) {
-      await this.spendEdge(campaignId, character, viewer, req.visibility, ownerUserId);
-    }
-    return record;
   }
 
   /** Buying hits: 4 dice : 1 hit, no dice rolled (FR2.4). */
@@ -306,8 +355,13 @@ export class RollService {
     ownerUserId?: string | null;
     by?: { userId: string; displayName?: string };
     extra?: Record<string, unknown>;
+    /**
+     * Join an open `hub.atomic` block instead of writing on its own, so the log
+     * line shares the fate of the change it narrates.
+     */
+    tx?: EventTx;
   }): Promise<{ id: number; ts: string }> {
-    const event = await this.hub.emit(opts.campaignId, {
+    const input = {
       type: 'log.posted',
       payload: {
         kind: opts.kind,
@@ -317,7 +371,10 @@ export class RollService {
       },
       visibility: opts.visibility ?? 'public',
       ownerUserId: opts.ownerUserId ?? null,
-    });
+    };
+    const event = opts.tx
+      ? await opts.tx.emit(input)
+      : await this.hub.emit(opts.campaignId, input);
     return { id: event.id, ts: event.ts };
   }
 
@@ -343,14 +400,28 @@ export class RollService {
   ): Promise<{ pool: number; breakdown: ProvenanceEntry[]; limit: LimitRef | undefined }> {
     const poolRef = typeof meta['poolRef'] === 'string' ? meta['poolRef'] : null;
     if (!character || !poolRef) {
-      return {
-        pool: req.pool,
-        breakdown:
-          req.breakdown.length > 0
-            ? req.breakdown
-            : [{ label: 'free-form pool', value: req.pool, source: 'situational' }],
-        limit: req.limit,
-      };
+      if (req.breakdown.length === 0) {
+        return {
+          pool: req.pool,
+          breakdown: [{ label: 'free-form pool', value: req.pool, source: 'situational' }],
+          limit: req.limit,
+        };
+      }
+      // One authority for the scene (LIVE-2): a receipt that names the same
+      // scene line twice had the penalty applied twice. Drop the echo and give
+      // the dice back, so `pool` always equals the sum of its own receipt.
+      //
+      // INTEGRATION (web): the roll dialog may keep SHOWING the scene chip —
+      // `GET /api/characters/:id/derived` returns the applied `situational`
+      // modifiers precisely so it can be rendered as "already in the pool"
+      // rather than added again. Send `meta.poolRef` with a sheet-backed roll
+      // and §10.1's full recompute takes over from this repair path.
+      const { entries, dropped } = dedupeSceneEntries(req.breakdown);
+      if (dropped.length === 0) return { pool: req.pool, breakdown: entries, limit: req.limit };
+      const returned = dropped.reduce((sum, e) => sum + e.value, 0);
+      meta['claimedPool'] = req.pool;
+      meta['dedupedScene'] = dropped.map((e) => ({ label: e.label, value: e.value }));
+      return { pool: Math.max(0, req.pool - returned), breakdown: entries, limit: req.limit };
     }
     const situational = await this.situationalFor(campaignId, character, meta['mods']);
     const wounds = await this.woundsFor(character, viewer, meta['wounds']);
@@ -388,7 +459,9 @@ export class RollService {
       mods.push(mod);
       seen.add(mod.id);
     }
-    return mods;
+    // Belt and braces: the engine collapses same-(kind,ref,target) scene
+    // modifiers too, so no assembly path can double-count the active scene.
+    return dedupeSceneModifiers(mods);
   }
 
   /**
@@ -428,6 +501,19 @@ export class RollService {
     return request.actor.gm === true ? 'GM' : null;
   }
 
+  /**
+   * The write half of a roll: the `rolls` row and its `roll.created` event, in
+   * ONE transaction (`hub.atomic`).
+   *
+   * These used to be two independent statements, and a throw from the emit left
+   * the roll durable, unannounced and unloggable while the client got a 500 —
+   * the table saw dice vanish. Now either both land or neither does, and the
+   * event reaches sockets only after the commit.
+   *
+   * Everything that needs a read runs BEFORE the block opens: PGlite is a
+   * single connection, so a query issued on `this.db` while the transaction is
+   * open would deadlock (see `Hub.atomic`).
+   */
   private async persistAndEmit(opts: {
     campaignId: string;
     viewer: RollViewer;
@@ -437,50 +523,58 @@ export class RollService {
     netHits?: number;
     detail?: Record<string, unknown>;
     ownerUserId: string;
+    /** Extra writes that must share the roll's fate (the Edge debit). */
+    alsoInTx?: (tx: EventTx) => Promise<void>;
   }): Promise<RollRecord> {
     const { campaignId, request, result } = opts;
     const sessionId = await activeSessionId(this.db, campaignId);
-    const inserted = (
-      await this.db
-        .insert(rolls)
-        .values({
-          campaignId,
-          sessionId,
-          actor: request.actor,
-          kind: request.kind,
-          request,
-          faces: result.faces,
-          hits: result.hits,
-          ones: result.ones,
-          glitch: result.glitch,
-          limit: request.limit ?? null,
-          limitedHits: result.limitedHits,
-          edgeAction: request.edge ?? null,
-          opposedLink: opts.opposedLink ?? null,
-          visibility: request.visibility,
-        })
-        .returning()
-    )[0];
-    if (!inserted) throw httpError(500, 'internal', 'roll insert returned no row');
-    const detail: Record<string, unknown> = {
-      ...(opts.detail ?? {}),
-      ...(result.exploded ? { exploded: result.exploded } : {}),
-    };
-    const record: RollRecord = {
-      ...toRecord(inserted),
-      ...(opts.netHits !== undefined ? { netHits: opts.netHits } : {}),
-      ...(Object.keys(detail).length > 0 ? { detail } : {}),
-    };
     // The log renders from the event stream (live and replayed), so the name
     // has to travel WITH the event — a client that reconnects has no roster
     // snapshot from the moment of the roll, and the sheet may since be renamed.
     const actorName = await this.actorNameFor(request);
-    await this.hub.emit(campaignId, {
-      type: 'roll.created',
-      payload: { ...record, ...(actorName ? { actorName } : {}) },
-      visibility: record.visibility,
-      ownerUserId: opts.ownerUserId,
+    const record = await this.hub.atomic(campaignId, async (tx) => {
+      const inserted = (
+        await tx.db
+          .insert(rolls)
+          .values({
+            campaignId,
+            sessionId,
+            actor: request.actor,
+            kind: request.kind,
+            request,
+            faces: result.faces,
+            hits: result.hits,
+            ones: result.ones,
+            glitch: result.glitch,
+            limit: request.limit ?? null,
+            limitedHits: result.limitedHits,
+            edgeAction: request.edge ?? null,
+            opposedLink: opts.opposedLink ?? null,
+            visibility: request.visibility,
+          })
+          .returning()
+      )[0];
+      if (!inserted) throw httpError(500, 'internal', 'roll insert returned no row');
+      const detail: Record<string, unknown> = {
+        ...(opts.detail ?? {}),
+        ...(result.exploded ? { exploded: result.exploded } : {}),
+      };
+      const rec: RollRecord = {
+        ...toRecord(inserted),
+        ...(opts.netHits !== undefined ? { netHits: opts.netHits } : {}),
+        ...(Object.keys(detail).length > 0 ? { detail } : {}),
+      };
+      await tx.emit({
+        type: 'roll.created',
+        payload: { ...rec, ...(actorName ? { actorName } : {}) },
+        visibility: rec.visibility,
+        ownerUserId: opts.ownerUserId,
+      });
+      if (opts.alsoInTx) await opts.alsoInTx(tx);
+      return rec;
     });
+    // Outbound mirroring is deliberately outside the transaction: it is a
+    // best-effort side effect (FR2.10) and must never hold or fail the write.
     if (record.visibility === 'public') this.mirrorToDiscord(campaignId, record);
     return record;
   }
@@ -523,10 +617,12 @@ export class RollService {
    * sustaining, monitors) rides along untouched. Only ever called once the roll
    * is on record — a rejected roll costs nothing.
    *
-   * INTEGRATION: no revision is snapshotted; spending (unlike burning) does not
-   * change the character, and revisions belong to the characters agent (FR3.8).
+   * No revision is snapshotted, deliberately: spending Edge moves a play-state
+   * counter, where burning it permanently lowers the attribute. Only the second
+   * is a change to the character worth a revision (FR3.8).
    */
   private async spendEdge(
+    tx: EventTx,
     campaignId: string,
     rec: CharacterRecord,
     viewer: RollViewer,
@@ -534,8 +630,10 @@ export class RollService {
     ownerUserId: string,
   ): Promise<void> {
     const change = applyEdgeOp(rec.sheet, rec.play, { op: 'spend', amount: 1 }, rec.name);
-    await saveCharacter(this.db, rec.id, { sheet: change.sheet, play: change.play });
-    await this.hub.emit(campaignId, {
+    // `tx.db`, never `this.db` — inside an open transaction the outer handle
+    // deadlocks on PGlite's single connection (see `Hub.atomic`).
+    await saveCharacter(tx.db, rec.id, { sheet: change.sheet, play: change.play });
+    await tx.emit({
       type: 'sheet.updated',
       payload: { characterId: rec.id, cause: 'edge.spent', edge: change.edge },
       visibility: 'public',
@@ -548,6 +646,7 @@ export class RollService {
       ownerUserId,
       by: { userId: viewer.userId },
       extra: { characterId: rec.id },
+      tx,
     });
   }
 

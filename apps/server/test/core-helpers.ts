@@ -92,7 +92,7 @@ export interface JoinResult {
   user: { id: string; displayName: string };
 }
 
-/** GM mints an invite, then redeems it via GET /join/:code (FR1.1/1.3). */
+/** GM mints an invite, then redeems it via GET /api/join/:code (FR1.1/1.3). */
 export async function joinAs(
   app: FastifyInstance,
   campaignId: string,
@@ -112,7 +112,7 @@ export async function joinAs(
   const { code } = inviteRes.json() as { code: string };
   const joinRes = await app.inject({
     method: 'GET',
-    url: `/join/${code}?name=${encodeURIComponent(name)}`,
+    url: `/api/join/${code}?name=${encodeURIComponent(name)}`,
   });
   if (joinRes.statusCode !== 200) {
     throw new Error(`join failed: ${joinRes.statusCode} ${joinRes.body}`);

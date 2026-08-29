@@ -6,9 +6,12 @@
 import type { Scene, Token } from '@safehouse/contracts';
 import type { GridCommands } from '../commands.js';
 import { useGridStore, type GmTab } from '../store.js';
+import DisplayTab from './DisplayTab.js';
 import EnvTab from './EnvTab.js';
 import FogTab from './FogTab.js';
+import GeometryTab from './GeometryTab.js';
 import MapTab from './MapTab.js';
+import PinsTab from './PinsTab.js';
 import ScenesTab from './ScenesTab.js';
 import TokensTab from './TokensTab.js';
 
@@ -16,8 +19,11 @@ const TABS: Array<{ id: GmTab; label: string }> = [
   { id: 'scenes', label: 'Scenes' },
   { id: 'map', label: 'Map' },
   { id: 'tokens', label: 'Tokens' },
+  { id: 'geo', label: 'Geo' },
+  { id: 'pins', label: 'Pins' },
   { id: 'fog', label: 'Fog' },
   { id: 'env', label: 'Env' },
+  { id: 'tv', label: 'TV' },
 ];
 
 export interface GmPanelProps {
@@ -37,11 +43,13 @@ export default function GmPanel(props: GmPanelProps) {
   return (
     <aside className="flex w-full shrink-0 flex-col border-t border-edge bg-panel xl:h-full xl:w-80 xl:border-l xl:border-t-0">
       <div className="flex items-center gap-1 border-b border-edge px-2 py-1.5">
-        <div className="flex min-w-0 flex-1 flex-wrap gap-1">
+        <div className="flex min-w-0 flex-1 flex-wrap gap-1" role="tablist" aria-label="GM tools">
           {TABS.map((t) => (
             <button
               key={t.id}
               type="button"
+              role="tab"
+              aria-selected={tab === t.id}
               onClick={() => setTab(t.id)}
               className={
                 'mono-label rounded px-2 py-1 ' +
@@ -74,8 +82,13 @@ export default function GmPanel(props: GmPanelProps) {
             onCenter={props.onCenter}
           />
         )}
+        {tab === 'geo' && <GeometryTab scene={props.scene} onCenter={props.onCenter} />}
+        {tab === 'pins' && (
+          <PinsTab campaignId={props.campaignId} scene={props.scene} onCenter={props.onCenter} />
+        )}
         {tab === 'fog' && <FogTab scene={props.scene} commands={props.commands} />}
         {tab === 'env' && <EnvTab scene={props.scene} />}
+        {tab === 'tv' && <DisplayTab commands={props.commands} />}
       </div>
 
       <p className="mono-label border-t border-edge px-3 py-2 text-faint">

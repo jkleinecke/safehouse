@@ -14,6 +14,12 @@ data/
 uploads/
 *.log
 
+# Playwright (apps/web/e2e) — traces, screenshots, HTML report
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+
 # Backups written by the compose `backup` sidecar (default BACKUP_DIR)
 backups/
 

@@ -79,10 +79,17 @@ const AddCombatantBody = z.object({
   visibility: VisibilitySchema.optional(),
   tokenId: z.string().nullable().optional(),
   edge: EdgeStateSchema.optional(),
+  /**
+   * Professional Rating (FR4.6) — the number FR10.9 morale measures pressure
+   * against. Accepted on ANY non-PC row, not just grunt groups; without it a
+   * hand-added NPC checked morale against PR 0 and broke on the first shot.
+   */
+  professionalRating: z.number().int().min(0).max(10).optional(),
   grunt: z
     .object({
       size: z.number().int().min(1).max(50),
-      professionalRating: z.number().int().min(0).max(10),
+      /** Legacy spelling of the row's PR; the top-level field wins. */
+      professionalRating: z.number().int().min(0).max(10).optional(),
       groupEdge: z.number().int().min(0).optional(),
       labelPrefix: z.string().optional(),
     })
@@ -104,6 +111,8 @@ const PatchCombatantBody = z.object({
   edge: EdgeStateSchema.optional(),
   grunt: GruntStateSchema.optional(),
   leader: z.boolean().optional(),
+  /** Fix a row's PR mid-fight (FR4.8); mirrors onto the grunt group's own. */
+  professionalRating: z.number().int().min(0).max(10).optional(),
 });
 
 const RollInitiativeBody = z.object({
@@ -204,11 +213,11 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
   }
 
   // --- encounters CRUD (FR4.1) -------------------------------------------
-  // INTEGRATION: this domain owns the plain encounter/combatant paths below.
-  // The generator domain (FR10.4–10.6) should hang its builder/readout/stage
-  // routes off distinct paths (e.g. `/api/encounters/build`,
-  // `/api/encounters/:id/threat`, `/api/encounters/:id/stage`) — Fastify
-  // refuses to boot on a duplicate route, so a clash is a hard failure.
+  // This domain owns the plain encounter/combatant paths below; the generator
+  // domain (FR10.4–10.6) hangs its builder/readout routes off distinct paths
+  // (`/api/encounters/build`, `/api/encounters/:id/threat`). Fastify refuses to
+  // boot on a duplicate route, so any clash here fails loudly at startup rather
+  // than quietly at the table.
 
   app.get('/api/campaigns/:campaignId/encounters', async (req) => {
     const { campaignId } = req.params as { campaignId: string };
@@ -227,12 +236,36 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
     return reply.status(201).send({ encounter: serializeEncounter(row) });
   });
 
+  /**
+   * The tracker's hydrate-on-mount call (and its reconnect refetch). The
+   * payload contract, stable for both scopes:
+   *
+   *   { encounter: { id, campaignId, sceneId, name, state, turn, pass,
+   *                  activeCombatantId },
+   *     state, turn, pass,        // mirrors of encounter.* — same row, one read
+   *     combatants, activeCombatantId, turnOrder, scope }
+   *
+   * `encounter.state|turn|pass` is canonical; the top-level trio is the same
+   * three numbers hoisted so a client never has to guess where they live. The
+   * `encounter.updated` events carry the same object under `payload.encounter`.
+   */
   app.get('/api/encounters/:id', async (req) => {
     const { id } = req.params as { id: string };
     const { encounter, auth } = await scope(req, id, false);
     const list = await service.listCombatants(id);
     const owners = await service.ownersFor(list);
-    return encounterForViewer(encounter, list, { userId: auth.userId, role: auth.role }, owners);
+    const view = encounterForViewer(
+      encounter,
+      list,
+      { userId: auth.userId, role: auth.role },
+      owners,
+    );
+    return {
+      ...view,
+      state: view.encounter.state,
+      turn: view.encounter.turn,
+      pass: view.encounter.pass,
+    };
   });
 
   app.patch('/api/encounters/:id', async (req) => {
@@ -396,7 +429,16 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
     const { rack } = await rackFor(encounter, combatant, body);
     const entry = rackEntry(rack, body.key);
     if (!entry) throw httpError(404, 'not_found', `no quick-roll '${body.key}' on this combatant`);
-    const breakdown: ProvenanceEntry[] = [...entry.breakdown, ...(body.extra ?? [])];
+    // ONE authority per scene modifier — the same rule `deriveCharacter`
+    // applies to `Modifier`s, enforced here for hand-sent provenance entries.
+    // The rack pool is already derived WITH the scene's environment, so a
+    // client that also sends its environment chip would double the penalty and
+    // print the line twice in the persisted receipt. Every other source (GM
+    // situational chips, range, cover) stacks as sent.
+    const rackHasScene = entry.breakdown.some((e) => e.source === 'scene');
+    const extra = (body.extra ?? []).filter((e) => !(rackHasScene && e.source === 'scene'));
+    const droppedSceneChips = (body.extra?.length ?? 0) - extra.length;
+    const breakdown: ProvenanceEntry[] = [...entry.breakdown, ...extra];
     const pool = Math.max(
       0,
       breakdown.reduce((sum, e) => sum + e.value, 0),
@@ -410,7 +452,11 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
       edge: body.edge ?? null,
       visibility,
       actor: { combatantId: id },
-      meta: { copilot: entry.key, ...(body.edgeDice ? { edgeDice: body.edgeDice } : {}) },
+      meta: {
+        copilot: entry.key,
+        ...(body.edgeDice ? { edgeDice: body.edgeDice } : {}),
+        ...(droppedSceneChips > 0 ? { droppedSceneChips } : {}),
+      },
     });
     const result = resolveRoll(request, rng);
     const { rollId } = await service.recordRoll({
@@ -422,6 +468,8 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
       limit: entry.limit ?? null,
       visibility,
       label: `${combatant.name} — ${entry.label}`,
+      actorName: combatant.name,
+      meta: { encounterId: encounter.id, rack: entry.key },
     });
     return { rollId, entry, request, result };
   });
@@ -481,6 +529,17 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
         ...(body.apOverride !== undefined ? { apOverride: body.apOverride } : {}),
       },
     );
+    // G5/FR2.1: the server threw real dice, so they go on the record NOW — one
+    // `rolls` row per pool (attack / defence / soak), all `gm` visibility, all
+    // linked by `chainId`. DAMAGE is still nothing until commit (Principle 2).
+    const recorded = await service.recordChainRolls({
+      campaignId: encounter.campaignId,
+      encounterId: id,
+      attacker: { id: attacker.id, name: attacker.name },
+      defender: { id: defender.id, name: defender.name },
+      weaponName: weapon.name,
+      outcome,
+    });
     return {
       encounterId: id,
       attackerId: attacker.id,
@@ -490,7 +549,10 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
       cards: outcome.cards,
       suggested: outcome.suggested,
       notes: outcome.result.notes,
-      /** Nothing is persisted until POST …/resolve-chain/commit (Principle 2). */
+      /** The persisted dice: `[{ step, rollId }]`, one per pool rolled. */
+      chainId: recorded.chainId,
+      rolls: recorded.rolls,
+      /** No damage is applied until POST …/resolve-chain/commit (Principle 2). */
       committed: false,
     };
   });

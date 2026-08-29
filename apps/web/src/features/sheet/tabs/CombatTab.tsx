@@ -13,6 +13,7 @@ import {
   withWeaponAmmo,
   type RollChip,
 } from '../lib.js';
+import { rollRowLabel } from '../a11y.js';
 import { recoilKey, useSheetPlayStore } from '../playState.js';
 import { BreakdownButton } from '../components/Provenance.js';
 import { Empty, RefChip, SectionLabel } from '../components/ui.js';
@@ -23,25 +24,32 @@ export default function CombatTab(props: TabProps) {
   const { character, derived, roll, patchSheet, overrideFor } = props;
   const sheet = character.sheet;
 
+  /**
+   * Defense / soak quick rolls. The card was a `div` with a click handler
+   * wrapping the provenance button — no accessible name, no keyboard path, and
+   * a nested interactive element. It is now a real button beside the
+   * provenance button.
+   */
   const quick = (key: 'defense' | 'soak', title: string) => {
     const pool = derived.pools[key];
     if (!pool) return null;
     return (
-      <div
-        key={key}
-        className="panel flex flex-1 cursor-pointer flex-col items-center gap-1 py-2.5 active:bg-raised"
-        onClick={() =>
-          roll({
-            title,
-            baseTotal: pool.total,
-            baseBreakdown: pool.breakdown,
-            meta: { poolKey: key },
-          })
-        }
-        role="button"
-        tabIndex={0}
-      >
-        <span className="mono-label">{title}</span>
+      <div key={key} className="panel flex flex-1 flex-col items-center gap-1 py-2.5">
+        <button
+          type="button"
+          className="mono-label rounded px-2 py-0.5 hover:text-cyan focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan"
+          aria-label={rollRowLabel(title, pool.total)}
+          onClick={() =>
+            roll({
+              title,
+              baseTotal: pool.total,
+              baseBreakdown: pool.breakdown,
+              meta: { poolRef: key, poolKey: key },
+            })
+          }
+        >
+          {title}
+        </button>
         <BreakdownButton
           title={`${title} pool`}
           value={pool.total}
@@ -94,6 +102,10 @@ export default function CombatTab(props: TabProps) {
             <RefChip refInfo={piece.ref} />
             <button
               type="button"
+              aria-pressed={piece.worn}
+              aria-label={`${piece.name}, armor ${piece.rating}, ${
+                piece.worn ? 'worn — activate to stow' : 'stowed — activate to wear'
+              }`}
               className={`chip ${piece.worn ? 'border-cyan-dim text-cyan' : 'text-faint'}`}
               onClick={() =>
                 patchSheet({
@@ -177,6 +189,10 @@ function WeaponCard({ weapon, character, derived, roll, patchSheet, overrideFor 
         ...(pool.limit ? { limit: pool.limit } : {}),
         extraChips: chips,
         meta: {
+          // §10.1: `poolRef` makes the server recompute from the live sheet;
+          // the chips above ride along as `meta.mods` so recoil and range are
+          // not lost in that recompute (see rollDialogState.ts).
+          poolRef: `weapon.${weapon.name}`,
           poolKey: `weapon.${weapon.name}`,
           weapon: weapon.name,
           mode,
@@ -227,9 +243,12 @@ function WeaponCard({ weapon, character, derived, roll, patchSheet, overrideFor 
               className="btn btn-accent"
               disabled={Boolean(weapon.ammo && weapon.ammo.current < bulletsForMode(mode))}
               onClick={() => fire(mode)}
+              aria-label={`Fire ${weapon.name} in ${mode} mode, ${effective} dice`}
             >
-              {mode} {effective}
-              {penalty !== 0 && <span className="text-magenta">{signed(penalty)}</span>}
+              <span aria-hidden>
+                {mode} {effective}
+                {penalty !== 0 && <span className="text-magenta">{signed(penalty)}</span>}
+              </span>
             </button>
           );
         })}
@@ -258,9 +277,16 @@ function WeaponCard({ weapon, character, derived, roll, patchSheet, overrideFor 
       <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5">
         {weapon.ammo && (
           <div className="flex items-center gap-1.5">
-            <span className="mono-label">ammo</span>
-            <span className="font-label text-sm text-ink">
-              {weapon.ammo.current}/{weapon.ammo.cap}
+            <span className="mono-label" aria-hidden>
+              ammo
+            </span>
+            <span
+              className="font-label text-sm text-ink"
+              aria-label={`${weapon.name} ammunition, ${weapon.ammo.current} of ${weapon.ammo.cap}`}
+            >
+              <span aria-hidden>
+                {weapon.ammo.current}/{weapon.ammo.cap}
+              </span>
             </span>
             <button
               type="button"
@@ -269,6 +295,7 @@ function WeaponCard({ weapon, character, derived, roll, patchSheet, overrideFor 
               onClick={() =>
                 patchSheet(withWeaponAmmo(sheet, weapon.name, (weapon.ammo?.current ?? 1) - 1))
               }
+              aria-label={`Spend one round of ${weapon.name} ammunition`}
             >
               −1
             </button>
@@ -276,22 +303,28 @@ function WeaponCard({ weapon, character, derived, roll, patchSheet, overrideFor 
               type="button"
               className="chip text-dim hover:border-cyan hover:text-cyan"
               onClick={() => patchSheet(withWeaponAmmo(sheet, weapon.name, weapon.ammo?.cap ?? 0))}
+              aria-label={`Reload ${weapon.name}`}
             >
               Reload
             </button>
           </div>
         )}
         <div className="flex items-center gap-1.5">
-          <span className="mono-label">recoil</span>
-          <span className={`font-label text-sm ${fired > 0 ? 'text-magenta' : 'text-dim'}`}>
-            {fired} rds
+          <span className="mono-label" aria-hidden>
+            recoil
+          </span>
+          <span
+            className={`font-label text-sm ${fired > 0 ? 'text-magenta' : 'text-dim'}`}
+            aria-label={`${fired} rounds fired this turn`}
+          >
+            <span aria-hidden>{fired} rds</span>
           </span>
           <button
             type="button"
             className="chip text-dim hover:border-cyan hover:text-cyan disabled:opacity-40"
             disabled={fired === 0}
             onClick={() => resetRecoil(rKey)}
-            title="Progressive recoil clears when you stop shooting (FR3.4)"
+            aria-label="Reset progressive recoil — it clears when you stop shooting"
           >
             Reset
           </button>

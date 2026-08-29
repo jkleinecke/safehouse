@@ -7,6 +7,7 @@
  * the TV runs unattended for a whole session, so nothing may accumulate.
  */
 import { useEffect, useRef, useState } from 'react';
+import { useLiveStore } from '../../live/store.js';
 
 /** Wall clock, HH:MM, refreshed on the minute boundary (one timer, ever). */
 export function useWallClock(): string {
@@ -138,4 +139,44 @@ export function useLatched<T extends { id: number; ts: string }>(
   }, []);
 
   return latched;
+}
+
+export interface FocusMark {
+  x: number;
+  y: number;
+  ts: number;
+}
+
+/**
+ * The GM's "focus here" gesture, which drives the TV camera (FR9.21).
+ *
+ * Only an explicitly-typed `focus` mark moves the camera: a TV that chased
+ * every ping would lurch away from the fight every time a player tapped the
+ * map. Subscribing outside React's render means an ephemeral burst costs one
+ * state write, not one per frame.
+ *
+ * The GM's `scene.focus` command relays a ping-family ephemeral stamped
+ * `kind: 'focus'`, which `live/store.ts` carries through on `lastPing`. This
+ * deliberately does NOT fall back to a cadence guess: a wrong guess pans the
+ * table's shared screen off the action, so an unlabelled mark leaves the
+ * camera exactly where it is.
+ */
+export function useFocusMark(sceneId: string | null): FocusMark | null {
+  const [mark, setMark] = useState<FocusMark | null>(null);
+  const sceneRef = useRef(sceneId);
+  sceneRef.current = sceneId;
+
+  useEffect(() => {
+    let lastTs = 0;
+    return useLiveStore.subscribe((state) => {
+      const ping = state.lastPing;
+      if (!ping || ping.ts === lastTs) return;
+      if ((ping as { kind?: string }).kind !== 'focus') return;
+      if (ping.sceneId && sceneRef.current && ping.sceneId !== sceneRef.current) return;
+      lastTs = ping.ts;
+      setMark({ x: ping.x, y: ping.y, ts: ping.ts });
+    });
+  }, []);
+
+  return mark;
 }

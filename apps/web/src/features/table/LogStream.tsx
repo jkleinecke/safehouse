@@ -2,8 +2,14 @@
  * The session log (FR2.9): rolls, damage, reveals, scene markers, ledger
  * callouts, and table talk — interleaved, append-only, auto-scrolling.
  * Table-talk input docked at the bottom (players + GM, §13).
+ *
+ * History is backfilled from `GET /api/campaigns/:id/log` on mount and again
+ * after every reconnect (LIVE-1); live `roll.created` and friends merge on top
+ * of it, deduplicated by event id. Each backfilled roll keeps its provenance
+ * breakdown, so a receipt read after a refresh is the same receipt (FR2.6).
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSessionLogHydration } from '../../live/hydrate.js';
 import { useLiveStore } from '../../live/store.js';
 import { postTableTalk } from './commands.js';
 import RollCard from './RollCard.js';
@@ -17,7 +23,7 @@ function timeOf(ts: string): string {
     : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function LogLine({ item }: { item: LogItem }) {
+export function LogLine({ item }: { item: LogItem }) {
   switch (item.kind) {
     case 'roll':
       return <RollCard roll={item.roll} />;
@@ -76,7 +82,35 @@ function LogLine({ item }: { item: LogItem }) {
   }
 }
 
+/**
+ * What an empty log column says. "The log is empty" is a claim about the
+ * server's answer — before it arrives the log says it is still reading, and a
+ * failed read says that instead of pretending the table was silent.
+ */
+export function LogEmptyLine({ asked, failed }: { asked: boolean; failed: boolean }) {
+  if (failed) {
+    return (
+      <p className="mt-8 text-center text-sm text-warn">
+        Could not load the session log. It will retry on reconnect.
+      </p>
+    );
+  }
+  if (!asked) {
+    return (
+      <p className="mt-8 text-center text-sm text-faint" aria-busy="true">
+        Loading the session log…
+      </p>
+    );
+  }
+  return (
+    <p className="mt-8 text-center text-sm text-faint">
+      The log is empty — rolls, damage, and table talk land here.
+    </p>
+  );
+}
+
 export default function LogStream({ campaignId }: { campaignId: string }) {
+  const { asked, failed } = useSessionLogHydration(campaignId);
   const events = useLiveStore((s) => s.events);
   const items = useMemo(() => toLogItems(events), [events]);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -117,11 +151,7 @@ export default function LogStream({ campaignId }: { campaignId: string }) {
         onScroll={onScroll}
         className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3"
       >
-        {items.length === 0 && (
-          <p className="mt-8 text-center text-sm text-faint">
-            The log is empty — rolls, damage, and table talk land here.
-          </p>
-        )}
+        {items.length === 0 && <LogEmptyLine asked={asked} failed={failed} />}
         {items.map((item) => (
           <LogLine key={item.id} item={item} />
         ))}

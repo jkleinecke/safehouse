@@ -10,10 +10,12 @@
  * drafts for the GM to accept (Principle 8).
  */
 import { z } from 'zod';
-import type { Db } from '@safehouse/db';
 import { GeneratorService, genOf } from '../services/generator.js';
 import type { ToolDefinition } from './llm.js';
 import { createDraft, spoilerScan } from './drafts.js';
+import { CODEX_TOOLS } from './tools-codex.js';
+import { TABLE_TOOLS } from './tools-table.js';
+import { Limit, tool, type FixerTool, type ToolContext } from './tool-kit.js';
 import {
   getCampaignState,
   getCharacterState,
@@ -27,44 +29,14 @@ import {
   searchBooksState,
 } from './state.js';
 
-export interface ToolContext {
-  db: Db;
-  campaignId: string;
-  /** The GM turn that triggered this call — recorded on any draft it creates. */
-  prompt: string;
-  /** Model slot id in play, stamped on drafts for the meter. */
-  model: string | null;
-}
-
-export interface FixerTool {
-  name: string;
-  description: string;
-  /** `read` costs nothing and is unlogged; `draft` writes an ai_generations row. */
-  kind: 'read' | 'draft';
-  schema: z.ZodType;
-  run(args: unknown, ctx: ToolContext): Promise<unknown>;
-}
-
-interface ToolDef<S extends z.ZodType> {
-  name: string;
-  description: string;
-  kind: 'read' | 'draft';
-  schema: S;
-  run(args: z.output<S>, ctx: ToolContext): Promise<unknown>;
-}
-
-function tool<S extends z.ZodType>(def: ToolDef<S>): FixerTool {
-  return def as unknown as FixerTool;
-}
-
-const Limit = (max: number, fallback: number) =>
-  z.number().int().min(1).max(max).default(fallback);
+export { Limit, tool, type FixerTool, type ToolContext, type ToolDef } from './tool-kit.js';
 
 // ---------------------------------------------------------------------------
 // The catalog
 // ---------------------------------------------------------------------------
 
-export const FIXER_TOOLS: readonly FixerTool[] = [
+/** P1–P3 core: campaign, party, ledger, fight, scene, log, books, NPCs. */
+const CORE_TOOLS: readonly FixerTool[] = [
   tool({
     name: 'get_campaign',
     description:
@@ -357,9 +329,23 @@ export const FIXER_TOOLS: readonly FixerTool[] = [
   }),
 ];
 
+/**
+ * The catalog handed to the model. Core first (the questions asked every
+ * session), then the codex/contacts/runs/calendar/magic/matrix reads, then the
+ * at-the-table tools.
+ */
+export const FIXER_TOOLS: readonly FixerTool[] = [
+  ...CORE_TOOLS,
+  ...CODEX_TOOLS,
+  ...TABLE_TOOLS,
+];
+
 export const TOOLS_BY_NAME: ReadonlyMap<string, FixerTool> = new Map(
   FIXER_TOOLS.map((t) => [t.name, t]),
 );
+
+/** Reads cost nothing and change nothing — used by tests and the usage meter. */
+export const READ_ONLY_TOOLS: readonly FixerTool[] = FIXER_TOOLS.filter((t) => t.kind === 'read');
 
 // ---------------------------------------------------------------------------
 // Zod → JSON Schema for the API

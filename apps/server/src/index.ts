@@ -10,11 +10,18 @@
  * sessions, localhost between them; nothing ever faces the internet.
  */
 import { buildApp } from './app.js';
+import { installSignalHandlers } from './shutdown.js';
 import { lanAddress } from './services/auth.js';
 
 const port = Number(process.env.PORT ?? 8787);
 
 const app = await buildApp();
+
+// Ctrl-C is how every session ends, so it is a first-class code path. Without
+// this the server exits without checkpointing PGlite and the next boot runs
+// recovery, which restarts each bigserial ~32 values past its rows — the id
+// gap that keeps getting reported as a broken event log. See src/shutdown.ts.
+installSignalHandlers(app);
 
 try {
   await app.listen({ port, host: '0.0.0.0' });

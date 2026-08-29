@@ -40,11 +40,20 @@ export default function GmSidebar({ campaignId, onShowQr }: GmSidebarProps) {
           <NavLink to={`${c}/grid`} className={linkClass}>
             Grid
           </NavLink>
+          <NavLink to={`${c}/codex`} className={linkClass}>
+            Codex
+          </NavLink>
+          <NavLink to={`${c}/calendar`} className={linkClass}>
+            Calendar
+          </NavLink>
         </Section>
 
         <Section label="Prep">
           <NavLink to={`${c}/gm`} end className={linkClass}>
             GM home
+          </NavLink>
+          <NavLink to={`${c}/gm/runs`} className={linkClass}>
+            Runs
           </NavLink>
           <NavLink to={`${c}/gm/scenes`} className={linkClass}>
             Scenes

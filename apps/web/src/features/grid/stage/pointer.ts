@@ -9,16 +9,18 @@
 import type { Point } from '@safehouse/contracts';
 import {
   gridFromWorld,
+  isDegenerateSegment,
   metersBetween,
   snapCenter,
+  snapVertex,
   worldFromGrid,
   type SceneMetrics,
 } from '../geometry.js';
 import type { StageCallbacks, StageSceneState } from '../types.js';
 import { Camera, wheelZoomFactor } from './camera.js';
-import { gridTolerance, hitDoor, hitToken, isDoubleTap, type TapRecord } from './hit.js';
+import { gridTolerance, hitDoor, hitPin, hitToken, isDoubleTap, type TapRecord } from './hit.js';
 
-type Mode = 'idle' | 'pan' | 'token' | 'ruler' | 'trail' | 'pinch';
+type Mode = 'idle' | 'pan' | 'token' | 'ruler' | 'trail' | 'pinch' | 'segment';
 
 /** React-facing ruler updates are rate-limited; the pixi line is not. */
 const RULER_REPORT_MS = 50;
@@ -35,6 +37,9 @@ export interface PointerHost {
   echoTrail(world: Point): void;
   drawRuler(from: Point, to: Point, meters: number): void;
   clearRuler(): void;
+  /** Rubber band while drawing a wall/door (optional — the TV never draws). */
+  drawSegment?(kind: 'wall' | 'door', from: Point, to: Point): void;
+  clearSegment?(): void;
 }
 
 interface ActivePointer {
@@ -60,6 +65,11 @@ export class PointerController {
   private rulerFrom: Point = { x: 0, y: 0 };
   private rulerTokenId: string | null = null;
   private rulerReportedAt = 0;
+
+  // wall/door authoring (FR9.2)
+  private segmentKind: 'wall' | 'door' = 'wall';
+  private segmentFrom: Point = { x: 0, y: 0 };
+  private segmentTo: Point = { x: 0, y: 0 };
 
   // pinch
   private pinchDist = 0;
@@ -175,9 +185,40 @@ export class PointerController {
         this.host.echoTrail(worldFromGrid(m, grid));
         this.host.callbacks.onPointer(grid.x, grid.y);
         return;
+      case 'wall':
+      case 'door':
+        this.beginSegment(state.tool, grid, state, e.shiftKey);
+        return;
+      case 'zone':
+        // Zones and fog regions share one polygon draft (FR9.2 / FR9.14).
+        this.mode = 'idle';
+        this.host.callbacks.onFogVertex(grid.x, grid.y);
+        return;
+      case 'pin':
+        this.mode = 'idle';
+        this.host.callbacks.onPinPlace?.(grid.x, grid.y);
+        return;
       default:
         this.beginSelect(grid, state, m);
     }
+  }
+
+  /** Walls and doors sit on cell edges, so authoring snaps to intersections. */
+  private vertex(grid: Point, state: StageSceneState, raw: boolean): Point {
+    return snapVertex(grid, state.snapEnabled && !raw);
+  }
+
+  private beginSegment(
+    kind: 'wall' | 'door',
+    grid: Point,
+    state: StageSceneState,
+    raw: boolean,
+  ): void {
+    this.segmentKind = kind;
+    this.segmentFrom = this.vertex(grid, state, raw);
+    this.segmentTo = this.segmentFrom;
+    this.mode = 'segment';
+    this.host.drawSegment?.(kind, this.segmentFrom, this.segmentTo);
   }
 
   private beginRuler(grid: Point, state: StageSceneState): void {
@@ -190,6 +231,18 @@ export class PointerController {
   }
 
   private beginSelect(grid: Point, state: StageSceneState, m: SceneMetrics): void {
+    // A pin head sits above the tokens it annotates — check it first, and only
+    // for the GM (players' payloads only ever contain public pins anyway).
+    if (state.role === 'gm' && this.host.callbacks.onPinSelect) {
+      const pinTol = Math.max(0.4, gridTolerance(m, this.host.camera.scale, 14));
+      const pinId = hitPin(state.scene, grid, pinTol);
+      if (pinId) {
+        this.mode = 'idle';
+        this.host.callbacks.onPinSelect(pinId);
+        return;
+      }
+    }
+
     const token = hitToken(state.tokens, grid);
     if (token) {
       this.host.callbacks.onSelectToken(token.id);
@@ -252,6 +305,11 @@ export class PointerController {
         this.host.callbacks.onPointer(grid.x, grid.y);
         return;
       }
+      case 'segment': {
+        this.segmentTo = this.vertex(this.toGrid(screen), this.host.state(), e.shiftKey);
+        this.host.drawSegment?.(this.segmentKind, this.segmentFrom, this.segmentTo);
+        return;
+      }
       default:
         return;
     }
@@ -305,6 +363,12 @@ export class PointerController {
       this.dragTokenId = null;
       this.host.localDrag(null, null);
       this.host.callbacks.onTokenMove(id, at.x, at.y);
+    } else if (this.mode === 'segment') {
+      this.host.clearSegment?.();
+      // A click that never moved is not a wall — the editor stays untouched.
+      if (!isDegenerateSegment(this.segmentFrom, this.segmentTo)) {
+        this.host.callbacks.onSegmentDraw?.(this.segmentKind, this.segmentFrom, this.segmentTo);
+      }
     } else if (this.mode === 'pan' && !this.moved) {
       this.host.callbacks.onSelectToken(null);
     }
@@ -323,6 +387,7 @@ export class PointerController {
       this.dragTokenId = null;
     }
     if (this.mode === 'ruler') this.host.clearRuler();
+    if (this.mode === 'segment') this.host.clearSegment?.();
     this.mode = 'pinch';
   }
 
