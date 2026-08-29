@@ -374,9 +374,10 @@ export class RollService {
       visibility: opts.visibility ?? 'public',
       ownerUserId: opts.ownerUserId ?? null,
     };
-    const event = opts.tx
-      ? await opts.tx.emit(input)
-      : await this.hub.emit(opts.campaignId, input);
+    // `atomicIn`, not `hub.emit`: handed a block it joins it, and on its own it
+    // opens one. The second arm is what keeps a caller that grows a domain
+    // write next to its log line from silently going back to a bare emit.
+    const event = await this.hub.atomicIn(opts.campaignId, opts.tx, (tx) => tx.emit(input));
     return { id: event.id, ts: event.ts };
   }
 

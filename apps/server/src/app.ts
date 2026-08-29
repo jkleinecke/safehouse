@@ -190,7 +190,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
       .send({ error: { code: 'not_found', message: `route ${req.method} ${req.url} not found` } });
   });
 
-  // --- domain plugins (stubs until feature agents fill them) --------------
+  // --- domain plugins (every one is built; the list is plugins/index.ts) --
   await app.register(registerPlugins);
 
   return app;

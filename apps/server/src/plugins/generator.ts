@@ -278,33 +278,48 @@ export default async function generatorPlugin(app: FastifyInstance): Promise<voi
   app.post('/api/encounters/build', async (req, reply) => {
     const body = parse(BuildBody, req.body);
     gmFor(req, body.campaignId);
-    const result = await generator.buildEncounter({
-      campaignId: body.campaignId,
-      sceneId: body.sceneId ?? null,
-      name: body.name,
-      parts: body.parts.map(partOf),
-    });
+    const parts = body.parts.map(partOf);
 
-    // Coordination with the encounters/scene agents is via db rows; the hub
-    // event just tells GM clients to refetch. Opposition is GM-visible and the
-    // staged tokens are hidden, so both events stay gm-scoped (Principle 4).
-    await app.hub.emit(body.campaignId, {
-      type: 'encounter.updated',
-      payload: {
-        encounterId: result.encounter.id,
-        encounter: result.encounter,
-        combatants: result.combatants,
-        reason: 'generator.build',
-      },
-      visibility: 'gm',
-    });
-    for (const token of result.tokens) {
-      await app.hub.emit(body.campaignId, {
-        type: 'token.added',
-        payload: { token, staged: true },
+    // One transaction over the build AND its two announcements. A build is the
+    // widest write in this file — an encounter row, N combatants, N staged
+    // tokens — so a half-commit leaves the GM a fight that exists in the
+    // database, is drawn on nobody's screen, and is silently built again.
+    //
+    // The service is re-pointed at the transaction handle rather than threaded
+    // with a `tx` parameter: `GeneratorService` holds nothing but its `Db`, and
+    // every read it makes inside the block (templates, the scene check) must go
+    // through that handle or wait forever on PGlite's single connection — the
+    // deadlock rule in `Hub.atomic`'s docblock.
+    const result = await app.hub.atomic(body.campaignId, async (tx) => {
+      const built = await new GeneratorService(tx.db).buildEncounter({
+        campaignId: body.campaignId,
+        sceneId: body.sceneId ?? null,
+        name: body.name,
+        parts,
+      });
+
+      // Coordination with the encounters/scene agents is via db rows; the hub
+      // event just tells GM clients to refetch. Opposition is GM-visible and the
+      // staged tokens are hidden, so both events stay gm-scoped (Principle 4).
+      await tx.emit({
+        type: 'encounter.updated',
+        payload: {
+          encounterId: built.encounter.id,
+          encounter: built.encounter,
+          combatants: built.combatants,
+          reason: 'generator.build',
+        },
         visibility: 'gm',
       });
-    }
+      for (const token of built.tokens) {
+        await tx.emit({
+          type: 'token.added',
+          payload: { token, staged: true },
+          visibility: 'gm',
+        });
+      }
+      return built;
+    });
     return reply.status(201).send(result);
   });
 

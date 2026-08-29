@@ -2,8 +2,9 @@
  * Domain plugin registry (BUILD_CONVENTIONS "Server architecture"): one
  * fastify plugin per domain, all registered here, ONCE, by server-core.
  *
- * Feature agents: fill your own `src/plugins/<domain>.ts` stub ONLY — this
- * file already imports and registers every domain and never needs edits.
+ * Every domain below is implemented; none is a stub any more. Work on a domain
+ * happens in its own `src/plugins/<domain>.ts` — this file only needs an edit
+ * when a genuinely new domain appears.
  */
 import type { FastifyInstance } from 'fastify';
 import authPlugin from './auth.js';

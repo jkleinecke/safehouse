@@ -105,52 +105,55 @@ export default async function campaignsAdminPlugin(app: FastifyInstance): Promis
     const incoming = await requireMember(app.db, id, body.toUserId);
     const previousGmUserId = campaign.gmUserId;
 
-    // 1. the record
-    await app.db
-      .update(campaigns)
-      .set({ gmUserId: incoming.id })
-      .where(eq(campaigns.id, id));
+    // All five writes and the log line under ONE transaction. The three steps
+    // are a single answer to "who is the GM" and were already only as safe as
+    // the process staying up between them; the marker joins because a transfer
+    // nobody can point at in the log is one the table argues about later.
+    await app.hub.atomic(id, async (tx) => {
+      // 1. the record
+      await tx.db.update(campaigns).set({ gmUserId: incoming.id }).where(eq(campaigns.id, id));
 
-    // 2. memberships — one GM, and the old one keeps a seat as a player
-    await app.db
-      .update(memberships)
-      .set({ role: 'gm' })
-      .where(and(eq(memberships.campaignId, id), eq(memberships.userId, incoming.id)));
-    await app.db
-      .update(memberships)
-      .set({ role: 'player' })
-      .where(and(eq(memberships.campaignId, id), eq(memberships.userId, previousGmUserId)));
+      // 2. memberships — one GM, and the old one keeps a seat as a player
+      await tx.db
+        .update(memberships)
+        .set({ role: 'gm' })
+        .where(and(eq(memberships.campaignId, id), eq(memberships.userId, incoming.id)));
+      await tx.db
+        .update(memberships)
+        .set({ role: 'player' })
+        .where(and(eq(memberships.campaignId, id), eq(memberships.userId, previousGmUserId)));
 
-    // 3. live device tokens (the part that actually gates the API)
-    await app.db
-      .update(devices)
-      .set({ role: 'player' })
-      .where(
-        and(
-          eq(devices.campaignId, id),
-          eq(devices.userId, previousGmUserId),
-          eq(devices.role, 'gm'),
-        ),
-      );
-    await app.db
-      .update(devices)
-      .set({ role: 'gm' })
-      .where(
-        and(
-          eq(devices.campaignId, id),
-          eq(devices.userId, incoming.id),
-          ne(devices.role, 'display'), // a kiosk stays a kiosk
-        ),
-      );
+      // 3. live device tokens (the part that actually gates the API)
+      await tx.db
+        .update(devices)
+        .set({ role: 'player' })
+        .where(
+          and(
+            eq(devices.campaignId, id),
+            eq(devices.userId, previousGmUserId),
+            eq(devices.role, 'gm'),
+          ),
+        );
+      await tx.db
+        .update(devices)
+        .set({ role: 'gm' })
+        .where(
+          and(
+            eq(devices.campaignId, id),
+            eq(devices.userId, incoming.id),
+            ne(devices.role, 'display'), // a kiosk stays a kiosk
+          ),
+        );
 
-    // Table-visible history, not a silent edit (§11).
-    await app.hub.emit(id, {
-      type: 'log.posted',
-      payload: {
-        kind: 'marker',
-        text: `${incoming.displayName} is running the table now.`,
-        transfer: { from: previousGmUserId, to: incoming.id },
-      },
+      // Table-visible history, not a silent edit (§11).
+      await tx.emit({
+        type: 'log.posted',
+        payload: {
+          kind: 'marker',
+          text: `${incoming.displayName} is running the table now.`,
+          transfer: { from: previousGmUserId, to: incoming.id },
+        },
+      });
     });
 
     return reply.send({
@@ -176,22 +179,26 @@ export default async function campaignsAdminPlugin(app: FastifyInstance): Promis
     assertCampaign(auth, rec.campaignId);
     const body = parse(OwnerBody, req.body);
 
-    await setCharacterOwner(app.db, {
-      characterId: rec.id,
-      campaignId: rec.campaignId,
-      ownerUserId: body.ownerUserId,
-    });
-
-    // The owning phone's sheet query has to refetch — gm_owner rolls and the
-    // "my character" list both key off this column.
-    await app.hub.emit(rec.campaignId, {
-      type: 'sheet.updated',
-      payload: {
+    // The owning phone's sheet query has to refetch — `gm_owner` rolls and the
+    // "my character" list both key off this column, so a claim that lands
+    // without its event hands a player a sheet they cannot see rolls for until
+    // they reload. `setCharacterOwner` reads (membership) as well as writes, so
+    // it gets the transaction handle, never `app.db` (the deadlock rule).
+    await app.hub.atomic(rec.campaignId, async (tx) => {
+      await setCharacterOwner(tx.db, {
         characterId: rec.id,
-        name: rec.name,
+        campaignId: rec.campaignId,
         ownerUserId: body.ownerUserId,
-        cause: 'ownership',
-      },
+      });
+      await tx.emit({
+        type: 'sheet.updated',
+        payload: {
+          characterId: rec.id,
+          name: rec.name,
+          ownerUserId: body.ownerUserId,
+          cause: 'ownership',
+        },
+      });
     });
 
     return reply.send({

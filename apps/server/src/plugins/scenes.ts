@@ -707,6 +707,9 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
    * here. The event IS the state — `displayState` reads it back with
    * `latestEventOfType` — so this is a single write with nothing to be
    * inconsistent with, and wrapping it would buy a transaction for one insert.
+   * AUDITED EXEMPTION (§6.2, the LIVE-4 sweep): this is one of the two emits
+   * left outside a transaction on purpose, not one that was missed. Should a
+   * `display_state` row ever appear, this becomes an `atomic` block that day.
    */
   app.hub.onCommand('display.set', async (msg, ctx) => {
     if (ctx.auth.role !== 'gm') {

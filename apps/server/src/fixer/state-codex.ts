@@ -4,9 +4,13 @@
  *
  * Same contract as `state.ts` — never raw rows, always the engine-derived view
  * the table is playing with, queried live at call time, and never a write.
- * Where a module is genuinely not built yet (spirit services FR8.3, Overwatch
- * FR7.4) these readers say so in a `tracked: false` field instead of inventing
+ * Where a module is genuinely not built yet — the Matrix toolkit's Overwatch
+ * score and marks (FR7.4/M7), and a focus the sheet only mentions as gear —
+ * these readers say so in a `tracked: false` field instead of inventing
  * numbers: the model must be able to tell "zero" from "we don't track that".
+ * Spirit services (FR8.3) used to be on that list and no longer are:
+ * `state-play.ts` returns `spirits: { tracked: true, … }` from the real
+ * tracker, so the Fixer reads live service counts, not a disclaimer.
  *
  * The magic / Matrix snapshots live next door in `state-play.ts`.
  *

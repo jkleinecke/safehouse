@@ -343,26 +343,32 @@ export default async function codexPlugin(app: FastifyInstance): Promise<void> {
       }
     }
 
-    const updated = (
-      await app.db.update(wikiPages).set(patch).where(eq(wikiPages.id, id)).returning()
-    )[0]!;
-    await recordWikiRevision(app.db, updated, auth.userId);
-
-    if (body.announce) {
-      const { visibility, ownerUserId } = announceVisibility(body.visibility, audience);
-      await app.hub.emit(row.campaignId, {
-        type: 'wiki.revealed',
-        payload: {
-          pageId: updated.id,
-          title: updated.title,
-          kind: updated.kind,
-          visibility: body.visibility,
-          ...(body.section ? { section: { id: body.section, heading: heading ?? '' } } : {}),
-        },
-        visibility,
-        ...(ownerUserId ? { ownerUserId } : {}),
-      });
-    }
+    // The visibility flip IS the reveal (Principle 4 gates reads on the stored
+    // row); `wiki.revealed` is how anyone finds out it happened. Split, a
+    // GM who reveals the sequence of the night gets no push and no card —
+    // the page is open and nobody at the table knows to look at it.
+    const announce = body.announce ? announceVisibility(body.visibility, audience) : null;
+    const updated = await app.hub.atomic(row.campaignId, async (tx) => {
+      const next = (
+        await tx.db.update(wikiPages).set(patch).where(eq(wikiPages.id, id)).returning()
+      )[0]!;
+      await recordWikiRevision(tx.db, next, auth.userId);
+      if (announce) {
+        await tx.emit({
+          type: 'wiki.revealed',
+          payload: {
+            pageId: next.id,
+            title: next.title,
+            kind: next.kind,
+            visibility: body.visibility,
+            ...(body.section ? { section: { id: body.section, heading: heading ?? '' } } : {}),
+          },
+          visibility: announce.visibility,
+          ...(announce.ownerUserId ? { ownerUserId: announce.ownerUserId } : {}),
+        });
+      }
+      return next;
+    });
 
     return reply.send({
       page: await buildPageDto(app.db, updated, readPageMeta(updated.sections), viewerOf(auth)),
@@ -463,34 +469,41 @@ export default async function codexPlugin(app: FastifyInstance): Promise<void> {
     const campaignId = att.campaignId;
     assertCampaign(auth, campaignId);
 
-    const updated = (
-      await app.db
-        .update(attachments)
-        .set({ visibility: body.visibility })
-        .where(eq(attachments.id, attachmentId))
-        .returning()
-    )[0]!;
-
+    // Hoisted ABOVE the transaction (the deadlock rule on `Hub.atomic`): the
+    // title is a read, and the flip below does not change it.
     let pageTitle: string | undefined;
     if (body.pageId) {
       const page = await loadPage(app.db, body.pageId);
       if (page && page.campaignId === campaignId) pageTitle = page.title;
     }
     const announce = announceVisibility(body.visibility, []);
-    await app.hub.emit(campaignId, {
-      type: 'handout.revealed',
-      payload: {
-        attachmentId: updated.id,
-        url: `/files/${updated.id}`,
-        mime: updated.mime,
-        kind: updated.kind,
-        visibility: updated.visibility,
-        ...(body.pageId ? { pageId: body.pageId } : {}),
-        ...(pageTitle ? { pageTitle } : {}),
-        ...(body.sessionId ? { sessionId: body.sessionId } : {}),
-        ...(body.note ? { note: body.note } : {}),
-      },
-      visibility: announce.visibility,
+
+    // The flip is the permission and the event is the announcement, so a torn
+    // write is an image the table may now open and will never be shown.
+    const updated = await app.hub.atomic(campaignId, async (tx) => {
+      const next = (
+        await tx.db
+          .update(attachments)
+          .set({ visibility: body.visibility })
+          .where(eq(attachments.id, attachmentId))
+          .returning()
+      )[0]!;
+      await tx.emit({
+        type: 'handout.revealed',
+        payload: {
+          attachmentId: next.id,
+          url: `/files/${next.id}`,
+          mime: next.mime,
+          kind: next.kind,
+          visibility: next.visibility,
+          ...(body.pageId ? { pageId: body.pageId } : {}),
+          ...(pageTitle ? { pageTitle } : {}),
+          ...(body.sessionId ? { sessionId: body.sessionId } : {}),
+          ...(body.note ? { note: body.note } : {}),
+        },
+        visibility: announce.visibility,
+      });
+      return next;
     });
 
     return reply.send({

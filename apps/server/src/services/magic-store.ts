@@ -156,7 +156,27 @@ export function spiritVisibility(spirit: Pick<SpiritRecord, 'characterId'>): Vis
   return spirit.characterId === null ? 'gm' : 'public';
 }
 
-/** Every magic write announces itself as `magic.updated` (§11 is open-ended). */
+/**
+ * Every magic write announces itself as `magic.updated` (§11 is open-ended).
+ *
+ * NOT atomic with the shelf write it announces, and knowingly so — this is the
+ * one emit the §6.2 sweep could not close in place. The pairing is always
+ * `writeMagicState(db, …)` then `announceMagic(hub, …)`, two calls sequenced by
+ * the CALLER (`services/magic.ts`, `services/magic-foci.ts`), so the
+ * transaction has to span both of them and neither of those files was in this
+ * pass's scope. `commitMagicState` below is that transaction, ready to use.
+ *
+ * The exposure is a spirit's service counter (or a focus, or a reagent count)
+ * moving in `campaigns.settings.magic` with no frame on the wire: every open
+ * client keeps drawing the old count until a refetch. Real, but it is stored
+ * state a reload repairs, not a dice record — which is why it ranked last.
+ *
+ * INTEGRATION: replace each `writeMagicState(...)` + `announceMagic(...)` pair
+ * in `services/magic.ts` (6) and `services/magic-foci.ts` (4) with one
+ * `commitMagicState(...)` call. `magic.ts`'s quiet arm (`setSpiritSustaining`,
+ * `opts.quiet`) keeps the bare `writeMagicState` — a write that announces
+ * nothing has nothing to be inconsistent with.
+ */
 export async function announceMagic(
   hub: Hub,
   campaignId: string,
@@ -164,6 +184,37 @@ export async function announceMagic(
   visibility: Visibility = 'public',
 ): Promise<void> {
   await hub.emit(campaignId, { type: 'magic.updated', payload, visibility });
+}
+
+/**
+ * Write the magic shelf and announce it in ONE transaction — `writeMagicState`
+ * and `announceMagic` fused, which is the only way the two can share a fate
+ * (see the note above).
+ *
+ * The `settings` read is hoisted OUT of the block on purpose: PGlite is a
+ * single embedded connection, so a query through `db` while the transaction is
+ * open waits forever (the deadlock rule on `Hub.atomic`).
+ */
+export async function commitMagicState(
+  db: Db,
+  hub: Hub,
+  campaignId: string,
+  next: MagicState,
+  announce: { payload: Record<string, unknown>; visibility?: Visibility },
+): Promise<MagicState> {
+  const settings = await loadSettings(db, campaignId);
+  settings['magic'] = next;
+  await hub.atomic(campaignId, async (tx) => {
+    await tx.db.update(campaigns).set({ settings }).where(eq(campaigns.id, campaignId));
+    await tx.emit({
+      type: 'magic.updated',
+      payload: announce.payload,
+      visibility: announce.visibility ?? 'public',
+    });
+  });
+  // The roll path caches campaign settings for 15s (services/discord.ts).
+  forgetCampaignSettings(campaignId);
+  return next;
 }
 
 // ---------------------------------------------------------------------------

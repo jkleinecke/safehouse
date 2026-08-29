@@ -3,15 +3,13 @@
  * Feature stubs live one-per-file under src/features/* so feature agents
  * replace their own files without touching this one.
  */
+import { Suspense, lazy, type ReactNode } from 'react';
 import { createBrowserRouter } from 'react-router-dom';
 import CampaignHome from './components/shell/CampaignHome.js';
 import CampaignLayout from './components/shell/CampaignLayout.js';
 import JoinPage from './components/shell/JoinPage.js';
 import Landing from './components/shell/Landing.js';
 import NotFound from './components/shell/NotFound.js';
-import CalendarView from './features/codex/CalendarView.js';
-import CodexPage from './features/codex/CodexPage.js';
-import RunsBoard from './features/codex/RunsBoard.js';
 import BooksPage from './features/gm/BooksPage.js';
 import FixerPage from './features/gm/FixerPage.js';
 import GeneratorPage from './features/gm/GeneratorPage.js';
@@ -26,6 +24,32 @@ import ReaderRoute from './features/reader/ReaderRoute.js';
 import SheetPage from './features/sheet/SheetPage.js';
 import TablePage from './features/table/TablePage.js';
 import TvPage from './features/tv/TvPage.js';
+
+// The codex/calendar/runs tree is a lazy chunk (§15 "codex editor
+// lazy-loaded"), on the same pattern as the Grid's stage: these three
+// `import()` calls are the ONLY references to `features/codex/` from outside
+// it, so rollup gives the whole subtree — the Markdown renderer, the page
+// editor, the template panels — its own file and the entry chunk never carries
+// it. The budget was already met without this; what it buys is that the
+// editor's weight can grow without moving the number §15 measures.
+const CalendarView = lazy(() => import('./features/codex/CalendarView.js'));
+const CodexPage = lazy(() => import('./features/codex/CodexPage.js'));
+const RunsBoard = lazy(() => import('./features/codex/RunsBoard.js'));
+
+/** Suspense boundary for the lazy codex chunk — one line while it arrives. */
+function Chunk({ children }: { children: ReactNode }) {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-[50dvh] items-center justify-center p-6">
+          <span className="mono-label text-faint">loading…</span>
+        </div>
+      }
+    >
+      {children}
+    </Suspense>
+  );
+}
 
 export const router = createBrowserRouter([
   { path: '/', element: <Landing /> },
@@ -47,14 +71,15 @@ export const router = createBrowserRouter([
       { path: 'grid', element: <GridPage /> },
       // M5 codex + calendar are table-wide: players browse shared lore during
       // sessions (§4). The server filters what each device receives.
-      { path: 'codex', element: <CodexPage /> },
-      { path: 'codex/:pageId', element: <CodexPage /> },
-      { path: 'calendar', element: <CalendarView /> },
+      { path: 'codex', element: <Chunk><CodexPage /></Chunk> },
+      { path: 'codex/:pageId', element: <Chunk><CodexPage /></Chunk> },
+      { path: 'calendar', element: <Chunk><CalendarView /></Chunk> },
       {
         path: 'gm',
         children: [
           { index: true, element: <GmHome /> },
-          { path: 'runs', element: <RunsBoard /> },
+          // RunsBoard lives under features/codex/, so it rides that chunk.
+          { path: 'runs', element: <Chunk><RunsBoard /></Chunk> },
           { path: 'scenes', element: <ScenesPage /> },
           { path: 'generator', element: <GeneratorPage /> },
           { path: 'fixer', element: <FixerPage /> },

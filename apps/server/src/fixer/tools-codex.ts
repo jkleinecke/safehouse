@@ -102,7 +102,7 @@ export const CODEX_TOOLS: readonly FixerTool[] = [
   tool({
     name: 'get_magic_state',
     description:
-      'Awakened bookkeeping right now: spells and adept powers per character, what each of them is sustaining and the dice penalty that costs, and any foci on the sheet. Spirits and services are not tracked by the app yet — it says so rather than reporting zero.',
+      'Awakened bookkeeping right now: spells and adept powers per character, what each of them is sustaining and the dice penalty that costs, summoned spirits with their Force and remaining services, bonded foci, and reagent drams. A focus the sheet only mentions as gear comes back with tracked: false — say so rather than reporting zero for it.',
     kind: 'read',
     schema: z.object({}),
     run: async (_args, ctx) => getMagicState(ctx.db, ctx.campaignId),

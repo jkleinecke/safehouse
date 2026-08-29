@@ -295,12 +295,20 @@ export class EdgeActionService {
     this.assertCanPay(payer);
     if (payer.kind === 'character') {
       const rec = payer.rec;
+      // Pure arithmetic, hoisted OUT of the block: nothing inside may touch
+      // `this.db` while the transaction holds PGlite's single connection.
       const change = applyEdgeOp(rec.sheet, rec.play, { op: 'spend', amount: 1 }, rec.name);
-      await saveCharacter(this.db, rec.id, { sheet: change.sheet, play: change.play });
-      await this.hub.emit(campaignId, {
-        type: 'sheet.updated',
-        payload: { characterId: rec.id, cause: 'edge.spent', edge: change.edge },
-        visibility: 'public',
+      // The debited sheet and the announcement share one fate. Split, the bad
+      // half is silent: the point is gone from the row and every open sheet —
+      // the player's own phone included — still shows it until a reload, so it
+      // gets spent twice (LIVE-4's shape, on a resource that does not grow back).
+      await this.hub.atomic(campaignId, async (tx) => {
+        await saveCharacter(tx.db, rec.id, { sheet: change.sheet, play: change.play });
+        await tx.emit({
+          type: 'sheet.updated',
+          payload: { characterId: rec.id, cause: 'edge.spent', edge: change.edge },
+          visibility: 'public',
+        });
       });
       return { edge: change.edge };
     }

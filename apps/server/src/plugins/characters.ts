@@ -30,6 +30,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { ModifierOpSchema, SheetV1Schema, type Modifier, type SheetV1 } from '@safehouse/contracts';
 import { characters, type Db } from '@safehouse/db';
+import type { EventTx } from '../hub.js';
 import { assertCampaign, httpError, requireAuth, type AuthContext } from '../services/auth.js';
 import {
   assertCanEdit,
@@ -145,35 +146,53 @@ interface CommitOptions {
   payload?: Record<string, unknown>;
 }
 
-/** Save, optionally snapshot a revision, and broadcast `sheet.updated`. */
+/**
+ * Save, optionally snapshot a revision, and broadcast `sheet.updated` — all
+ * three in ONE transaction (§6.2 / LIVE-4).
+ *
+ * Every mutating route on this plugin funnels through here, so a torn write is
+ * the whole sheet surface at once: the stored sheet moves, no client is told,
+ * and every open phone keeps rendering — and rolling from — the old numbers
+ * until someone reloads. The revision joins it too, because a snapshot for a
+ * change nobody heard about is a rollback target that does not match any state
+ * the table ever saw.
+ *
+ * Handed a `tx` it joins that block instead of opening its own (`atomicIn`),
+ * which is how the Edge route gets its save and its loud log line under one
+ * fate. Everything inside goes through `tx.db` — the deadlock rule on
+ * `Hub.atomic`.
+ */
 async function commit(
   app: FastifyInstance,
   rec: CharacterRecord,
   opts: CommitOptions,
+  tx?: EventTx,
 ): Promise<number | null> {
-  await saveCharacter(app.db, rec.id, {
-    sheet: opts.sheet,
-    play: opts.play,
-    ...(opts.name !== undefined ? { name: opts.name } : {}),
-  });
-  const revision = opts.cause
-    ? await recordRevision(app.db, {
+  return app.hub.atomicIn(rec.campaignId, tx, async (t) => {
+    await saveCharacter(t.db, rec.id, {
+      sheet: opts.sheet,
+      play: opts.play,
+      ...(opts.name !== undefined ? { name: opts.name } : {}),
+    });
+    const revision = opts.cause
+      ? await recordRevision(t.db, {
+          characterId: rec.id,
+          sheet: opts.sheet,
+          cause: opts.cause,
+          createdBy: opts.auth.userId,
+        })
+      : null;
+    await t.emit({
+      type: 'sheet.updated',
+      payload: {
         characterId: rec.id,
-        sheet: opts.sheet,
-        cause: opts.cause,
-        createdBy: opts.auth.userId,
-      })
-    : null;
-  await app.hub.emit(rec.campaignId, {
-    type: 'sheet.updated',
-    payload: {
-      characterId: rec.id,
-      name: opts.name ?? rec.name,
-      ...(revision !== null ? { revision, cause: opts.cause } : {}),
-      ...opts.payload,
-    },
+        name: opts.name ?? rec.name,
+        ...(revision !== null ? { revision, cause: opts.cause } : {}),
+        ...opts.payload,
+      },
+    });
+    return revision;
   });
-  return revision;
 }
 
 /** Reload + derive: every mutating route answers with the fresh live picture. */
@@ -256,26 +275,32 @@ export default async function charactersPlugin(app: FastifyInstance): Promise<vo
     const name = upload.fields['name'] ?? sheet.identity.alias;
     const ownerUserId =
       auth.role === 'gm' ? (upload.fields['ownerUserId'] ?? null) : auth.userId;
-    const rows = await app.db
-      .insert(characters)
-      .values({
-        campaignId,
-        ownerUserId,
-        name,
-        sheet: { ...sheet, play: {} },
-        ...(upload.xml !== null ? { chummerBlob: upload.xml } : {}),
-      })
-      .returning();
-    const rec = await requireCharacter(app.db, rows[0]!.id);
-    const revision = await recordRevision(app.db, {
-      characterId: rec.id,
-      sheet,
-      cause,
-      createdBy: auth.userId,
-    });
-    await app.hub.emit(campaignId, {
-      type: 'sheet.updated',
-      payload: { characterId: rec.id, name: rec.name, revision, cause },
+    // Row, first revision and the announcement together: a character in the
+    // table nobody was told about does not appear in any roster until a reload,
+    // and the GM's response to that is to create it a second time.
+    const { rec, revision } = await app.hub.atomic(campaignId, async (tx) => {
+      const rows = await tx.db
+        .insert(characters)
+        .values({
+          campaignId,
+          ownerUserId,
+          name,
+          sheet: { ...sheet, play: {} },
+          ...(upload.xml !== null ? { chummerBlob: upload.xml } : {}),
+        })
+        .returning();
+      const created = await requireCharacter(tx.db, rows[0]!.id);
+      const seq = await recordRevision(tx.db, {
+        characterId: created.id,
+        sheet,
+        cause,
+        createdBy: auth.userId,
+      });
+      await tx.emit({
+        type: 'sheet.updated',
+        payload: { characterId: created.id, name: created.name, revision: seq, cause },
+      });
+      return { rec: created, revision: seq };
     });
 
     // Chummer's karma/nuyen balances become opening ledger entries — the sheet
@@ -483,25 +508,28 @@ export default async function charactersPlugin(app: FastifyInstance): Promise<vo
     const rec = await requireCharacter(app.db, id);
     assertCanEdit(auth, rec);
     const body = parse(DamageBody, req.body);
-    // Sizes come from derivation; filled boxes from live state.
+    // Sizes come from derivation; filled boxes from live state. Both reads are
+    // hoisted OUT of the transaction below (the deadlock rule on `Hub.atomic`).
     const view = await deriveView(app.db, rec);
     const change = applyMonitorOp(view.monitors, body);
-    await saveCharacter(app.db, id, {
-      sheet: rec.sheet,
-      play: playWithMonitors(rec.play, change.monitors),
-    });
-    await app.hub.emit(rec.campaignId, {
-      type: 'combatant.damaged',
-      payload: {
-        source: 'character',
-        characterId: id,
-        name: rec.name,
-        monitors: change.monitors,
-        woundModifier: change.woundModifier,
-        ...(change.applied ? { applied: change.applied } : {}),
-        ...(body.note ? { note: body.note } : {}),
-        op: body.op,
-      },
+    const play = playWithMonitors(rec.play, change.monitors);
+    // Boxes and the frame that draws them: filled boxes nobody heard about are
+    // wound modifiers the table keeps rolling without.
+    await app.hub.atomic(rec.campaignId, async (tx) => {
+      await saveCharacter(tx.db, id, { sheet: rec.sheet, play });
+      await tx.emit({
+        type: 'combatant.damaged',
+        payload: {
+          source: 'character',
+          characterId: id,
+          name: rec.name,
+          monitors: change.monitors,
+          woundModifier: change.woundModifier,
+          ...(change.applied ? { applied: change.applied } : {}),
+          ...(body.note ? { note: body.note } : {}),
+          op: body.op,
+        },
+      });
     });
     return reply.send({
       monitors: change.monitors,
@@ -518,23 +546,35 @@ export default async function charactersPlugin(app: FastifyInstance): Promise<vo
     assertCanEdit(auth, rec);
     const body = parse(EdgeBody, req.body);
     const change = applyEdgeOp(rec.sheet, rec.play, body, rec.name);
-    const revision = await commit(app, rec, {
-      sheet: change.sheet,
-      play: change.play,
-      auth,
-      // Burning is a permanent change to the character, so it snapshots.
-      cause: change.permanent ? `burned ${body.amount} Edge` : null,
-      payload: { kind: 'edge', op: body.op, edge: change.edge },
-    });
-    await app.hub.emit(rec.campaignId, {
-      type: 'log.posted',
-      payload: {
-        kind: 'edge',
-        characterId: id,
-        text: body.reason ? `${change.text} — ${body.reason}` : change.text,
-        loud: change.permanent,
-        edge: change.edge,
-      },
+    // One block for the spend AND the line that announces it (FR2.3 — "Edge
+    // spend decrements the character's current Edge WITH a log entry"). A debit
+    // with no log line is a point of Edge nobody can account for after the
+    // fact, which is the argument the table has an hour later.
+    const revision = await app.hub.atomic(rec.campaignId, async (tx) => {
+      const seq = await commit(
+        app,
+        rec,
+        {
+          sheet: change.sheet,
+          play: change.play,
+          auth,
+          // Burning is a permanent change to the character, so it snapshots.
+          cause: change.permanent ? `burned ${body.amount} Edge` : null,
+          payload: { kind: 'edge', op: body.op, edge: change.edge },
+        },
+        tx,
+      );
+      await tx.emit({
+        type: 'log.posted',
+        payload: {
+          kind: 'edge',
+          characterId: id,
+          text: body.reason ? `${change.text} — ${body.reason}` : change.text,
+          loud: change.permanent,
+          edge: change.edge,
+        },
+      });
+      return seq;
     });
     return reply.send({ edge: change.edge, burned: change.play.edgeBurned, revision });
   });
