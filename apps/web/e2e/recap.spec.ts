@@ -224,19 +224,14 @@ test.describe('FR12.12 · the recap the Fixer drafts', () => {
    * carries it, the Fixer says it in chat — and the one surface where the GM
    * decides whether the players get told about the hidden sniper shows nothing.
    *
-   * The test above proves the server half; this one is the browser half, and it
-   * is marked `fail` so the suite is honest about the gap instead of silent
-   * about it. The fix belongs to whoever owns `features/gm/fixer/api.ts`:
-   * accept the object form and render `f.name`, keeping the string form for
-   * anything that still sends one. When it lands, this trips as an *unexpected
-   * pass* and the marker comes off with it.
+   * The test above proves the server half; this one is the browser half.
+   *
+   * FIXED: `spoilerFlagsOf()` now accepts the object form and renders `f.name`,
+   * keeping the string form for anything that still sends one, so the warning
+   * reaches the card the GM accepts from. The `test.fail` marker came off with
+   * the fix; `spoilerFlags.test.ts` pins the shape handling at unit level.
    */
   test('the spoiler-guard warning is on the card the GM accepts from', async ({ page }) => {
-    test.fail(
-      true,
-      'known gap: spoilerFlagsOf() drops the object-shaped flags the server sends, so the DraftsInbox warning never renders',
-    );
-
     await signIn(page);
     await page.goto(`${stack.baseUrl}/c/${stack.campaignId}/gm/fixer`);
     await expect(page.getByText('Drafts inbox')).toBeVisible();
