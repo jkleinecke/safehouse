@@ -8,6 +8,7 @@ import type { Combatant } from '@safehouse/contracts';
 import { hasCopilotRack } from './copilot.js';
 import { patchCombatant, patchCombatantLocal } from './commands.js';
 import CopilotRack from './CopilotRack.js';
+import HintLine from './HintLine.js';
 import InterruptMenu from './InterruptMenu.js';
 import MonitorBar from './MonitorBar.js';
 import StatusChips from './StatusChips.js';
@@ -160,12 +161,18 @@ export default function CombatantRow({
           </div>
 
           {isGm && hasCopilotRack(c) && (
-            <CopilotRack
-              campaignId={campaignId}
-              combatant={c}
-              visibility={rackVisibility}
-              onOpenChain={() => onOpenChain(c.id)}
-            />
+            <>
+              <CopilotRack
+                campaignId={campaignId}
+                combatant={c}
+                visibility={rackVisibility}
+                onOpenChain={() => onOpenChain(c.id)}
+              />
+              {/* FR10.10 — one advisory line, GM-only, off by default. The
+                  server withholds it unless the campaign turned hints on, so
+                  this renders nothing in the ordinary case. */}
+              <HintLine combatant={c} isGm={isGm} acting={row.acting} />
+            </>
           )}
         </div>
 

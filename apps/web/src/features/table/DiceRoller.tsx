@@ -1,16 +1,30 @@
 /**
  * Free-form dice roller (FR2.8): pool + optional limit + edge + visibility,
- * buy-hits shortcut (FR2.4), and personal macros in localStorage. Dice are
- * rolled server-side via the `roll.request` WS command (§10.1).
+ * buy-hits shortcut (FR2.4), and personal macros. Dice are rolled server-side
+ * via the `roll.request` WS command (§10.1).
+ *
+ * The rack is the *same* rack as the sheet's (`features/sheet/macroStore.ts`):
+ * server-backed, keyed to the signed-in user, with a localStorage mirror
+ * underneath. It used to be a second, device-local list — so the GM's macros
+ * lived on whichever laptop made them, and a player who saved one on the sheet
+ * did not see it here. One store, one rack, whichever screen you are on.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { LimitKind, RollRequestInput } from '@safehouse/contracts';
 import { buyHits } from '@safehouse/rules';
 import { useMyCharacterId } from '../../api/campaigns.js';
 import { apiPost } from '../../api/client.js';
 import { getSession } from '../../api/session.js';
+import { useMacroMutation, useMacros } from '../sheet/api.js';
+import {
+  mergeMacros,
+  newMacroId,
+  withMacro,
+  withoutMacro,
+  type DiceMacro,
+} from '../sheet/macroStore.js';
 import { sendCommand } from './commands.js';
-import { addMacro, loadMacros, removeMacro, type DiceMacro } from './macros.js';
+import { takeLegacyMacros } from './macros.js';
 
 const LIMIT_KINDS: LimitKind[] = ['physical', 'mental', 'social', 'accuracy', 'force'];
 type EdgeChoice = '' | 'push_pre' | 'push_post' | 'second_chance';
@@ -25,8 +39,27 @@ export default function DiceRoller({ campaignId }: { campaignId: string }) {
   const [limitValue, setLimitValue] = useState(4);
   const [edge, setEdge] = useState<EdgeChoice>('');
   const [visibility, setVisibility] = useState<'public' | 'gm' | 'gm_owner'>('public');
-  const [macros, setMacros] = useState<DiceMacro[]>(() => loadMacros(campaignId));
   const [flash, setFlash] = useState<string | null>(null);
+
+  const rack = useMacros(campaignId);
+  const saveRack = useMacroMutation(campaignId);
+  const macros = rack.data?.macros ?? [];
+
+  // One-time hand-over from the old device-local rack (see ./macros.ts). Runs
+  // after the server's list has landed, so the merge keeps the shared rack
+  // first and appends only what this device alone was holding.
+  const adopted = useRef(false);
+  const rackReady = rack.isSuccess;
+  useEffect(() => {
+    if (!rackReady || adopted.current) return;
+    adopted.current = true;
+    const legacy = takeLegacyMacros(campaignId);
+    if (legacy.length === 0) return;
+    saveRack.mutate(mergeMacros(macros, legacy));
+    // `macros`/`saveRack` deliberately out of deps: this fires once per mount,
+    // and re-running it on every rack change would fight the mutation it made.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaignId, rackReady]);
 
   // A free-form roll is still attributed: sheet-backed for a player (so the
   // server recomputes the pool against the real sheet), GM-flagged otherwise.
@@ -72,14 +105,16 @@ export default function DiceRoller({ campaignId }: { campaignId: string }) {
   const saveMacro = () => {
     const name = window.prompt('Macro name?', `Pool ${pool}`);
     if (!name?.trim()) return;
-    setMacros(
-      addMacro(campaignId, {
-        name: name.trim(),
-        pool,
-        ...(limitOn ? { limitKind, limitValue } : {}),
-        ...(edge ? { edge } : {}),
-      }),
-    );
+    const macro: DiceMacro = {
+      id: newMacroId(),
+      name: name.trim(),
+      pool,
+      ...(limitOn ? { limitKind, limitValue } : {}),
+      ...(edge ? { edge } : {}),
+    };
+    saveRack.mutate(withMacro(macros, macro), {
+      onError: () => note('Macro saved on this device only'),
+    });
   };
 
   const runMacro = (m: DiceMacro) => {
@@ -205,7 +240,7 @@ export default function DiceRoller({ campaignId }: { campaignId: string }) {
                 type="button"
                 aria-label={`Delete macro ${m.name}`}
                 className="text-faint hover:text-danger"
-                onClick={() => setMacros(removeMacro(campaignId, m.id))}
+                onClick={() => saveRack.mutate(withoutMacro(macros, m.id))}
               >
                 ×
               </button>

@@ -327,14 +327,27 @@ describe('P4 state reads', () => {
 });
 
 describe('magic + matrix snapshots', () => {
-  it('get_magic_state reports live sustaining and its dice cost, not a guess at spirits', async () => {
+  it('get_magic_state reports live sustaining and its dice cost', async () => {
     const magic = await call('get_magic_state');
     const rows = magic['characters'] as Array<Record<string, unknown>>;
     const cinder = rows.find((c) => c['name'] === 'Cinder')!;
     expect(cinder['sustained']).toEqual([{ id: 's1', name: 'Lantern Light', exempt: false }]);
     expect(cinder['sustainingPenalty']).toBe(-2);
-    expect((cinder['foci'] as Array<{ name: string }>)[0]!.name).toContain('Sustaining focus');
-    expect(magic['spirits']).toMatchObject({ tracked: false });
+    // Gear the GM typed that reads like a focus is still reported, but is
+    // flagged as never registered so the model cannot mistake it for a toggle.
+    const foci = cinder['foci'] as Array<{ name: string; tracked: boolean }>;
+    const gearFocus = foci.find((f) => f.name.includes('Sustaining focus'))!;
+    expect(gearFocus.tracked).toBe(false);
+  });
+
+  it('get_magic_state answers spirits with a number now that FR8.3 tracks them', async () => {
+    const magic = await call('get_magic_state');
+    // The honest answer changed shape when the tracker landed: an empty list of
+    // spirits is a fact, where `tracked: false` was an admission.
+    expect(magic['spirits']).toMatchObject({ tracked: true });
+    expect(Array.isArray((magic['spirits'] as { list: unknown }).list)).toBe(true);
+    const rows = magic['characters'] as Array<Record<string, unknown>>;
+    expect(rows.every((c) => typeof c['reagents'] === 'number')).toBe(true);
   });
 
   it('get_matrix_state reports the deck and refuses to invent an Overwatch score', async () => {

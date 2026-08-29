@@ -139,6 +139,25 @@ function toDto(row: BookRow): BookDto {
   };
 }
 
+/**
+ * Is this `GET /read/:code` a *browser navigating* to the reader, or a client
+ * *fetching* the offset mapping?
+ *
+ * A navigation sends `Accept: text/html,…` and never asks for JSON; `fetch`
+ * defaults to the wildcard Accept, and the app's API client asks for JSON
+ * outright. `?format=json` is the explicit override for anything that guesses
+ * wrong (curl with `-H 'Accept: text/html'`, a webview with an odd default).
+ */
+export function wantsSpaShell(req: FastifyRequest): boolean {
+  const q = (req.query ?? {}) as Record<string, unknown>;
+  if (q['format'] === 'json') return false;
+  const accept = req.headers['accept'];
+  if (typeof accept !== 'string') return false;
+  const lower = accept.toLowerCase();
+  if (lower.includes('application/json')) return false;
+  return lower.includes('text/html');
+}
+
 // ---------------------------------------------------------------------------
 // Plugin
 // ---------------------------------------------------------------------------
@@ -276,12 +295,28 @@ export default async function booksPlugin(app: FastifyInstance): Promise<void> {
   // --- reader resolution (FR11.3) -----------------------------------------
 
   /**
-   * `GET /read/:code?p=426` → `{ fileUrl, pdfPage }`. The web viewer opens
-   * `fileUrl` at `pdfPage` (or follows `viewerUrl`'s `#page=` fragment as the
-   * no-JS fallback). Offset resolution is server-side so a ref chip never has
-   * to know a book's front matter.
+   * `GET /read/:code?p=426` — one path, two audiences (DESIGN.md §12 gives this
+   * address to the *viewer*; the app's own client needs the mapping behind it).
+   *
+   * A **browser navigation** — a ref chip's `target="_blank"`, a link pasted
+   * into Discord, a refresh — asks for `text/html` and gets the SPA, which
+   * mounts the reader at the printed page in `?p=`. That is what makes a ref
+   * chip's link shareable at the table.
+   *
+   * Anything else — `fetch` (wildcard Accept), an explicit `application/json`,
+   * or `?format=json` — gets `{ fileUrl, pdfPage }`: the web viewer opens `fileUrl`
+   * at `pdfPage` (or follows `viewerUrl`'s `#page=` fragment as the no-JS
+   * fallback). Offset resolution stays server-side so a ref chip never has to
+   * know a book's front matter.
+   *
+   * The HTML branch is deliberately ahead of the auth check: `index.html` is
+   * public on every other route too, and a 401 in the address bar is a worse
+   * answer than the app's own "this book is not shared with your device".
    */
   app.get('/read/:code', async (req, reply) => {
+    if (wantsSpaShell(req) && typeof reply.sendFile === 'function') {
+      return reply.type('text/html').sendFile('index.html');
+    }
     const { code } = req.params as { code: string };
     const book = await readableBook(req, { code });
     const q = (req.query ?? {}) as Record<string, unknown>;

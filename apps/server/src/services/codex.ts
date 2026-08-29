@@ -426,6 +426,57 @@ export function pageSummary(row: WikiPageRow, viewer: Viewer): PageSummary {
   return { ...base, gmOnlySections: hidden };
 }
 
+// ---------------------------------------------------------------------------
+// The template link (FR5.6)
+// ---------------------------------------------------------------------------
+
+/**
+ * FR5.6 asks for archetype templates to *live in the codex* — user-entered and
+ * page-referenced. The link is one column, `npc_templates.wiki_page_id`
+ * (migration 0003), deliberately singular so the two directions cannot
+ * disagree: a template names its page, a page finds its templates by reverse
+ * lookup. That is what turns FR9.3's pins, FR10.1's templates and FR5.1's pages
+ * into one graph — a pin opens a page, the page names the template, the
+ * template rolls the NPC (FR10.2).
+ *
+ * The pure half only: the shape a page reports. Queries live in
+ * `services/codex-templates.ts` so this module stays free of I/O.
+ */
+export interface TemplateLink {
+  templateId: string;
+  name: string;
+  /** From `npc_templates.gen.roleTags` — what the template is for (FR10.1). */
+  roleTags: string[];
+  /** The page this template says it belongs to; null when unlinked. */
+  wikiPageId: string | null;
+  /** True when the template carries a `{book,page}` ref as well (FR11.2). */
+  hasPageRef: boolean;
+}
+
+/** Tolerant read of `npc_templates.gen.roleTags`. */
+export function readRoleTags(gen: unknown): string[] {
+  if (typeof gen !== 'object' || gen === null) return [];
+  const tags = (gen as Record<string, unknown>)['roleTags'];
+  return Array.isArray(tags) ? tags.filter((t): t is string => typeof t === 'string') : [];
+}
+
+/** One `npc_templates` row → the link view a codex page reports. */
+export function templateLinkView(row: {
+  id: string;
+  name: string;
+  gen: unknown;
+  wikiPageId: string | null;
+  pageRef?: unknown;
+}): TemplateLink {
+  return {
+    templateId: row.id,
+    name: row.name,
+    roleTags: readRoleTags(row.gen),
+    wikiPageId: row.wikiPageId,
+    hasPageRef: row.pageRef !== null && row.pageRef !== undefined,
+  };
+}
+
 /**
  * Campaign-wide unresolved-link report (FR5.3): every `[[target]]` with no
  * page behind it, and who points at it. GM-facing — it is computed over the

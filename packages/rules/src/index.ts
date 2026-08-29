@@ -7,3 +7,4 @@ export * from './dice.js';
 export * from './env.js';
 export * from './combat/index.js';
 export * from './generator/index.js';
+export * from './magic/index.js';

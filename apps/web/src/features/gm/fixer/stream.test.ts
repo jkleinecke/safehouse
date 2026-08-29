@@ -75,6 +75,40 @@ describe('reduceFixerStream (FR12.1 streaming)', () => {
     expect(view.messages[0]?.done).toBe(true);
   });
 
+  it('leaves a chip running until the server says otherwise', () => {
+    // The server emits `fixer.tool` twice per call (start, then end/error).
+    // A lone start frame — or one from a server that sends no status at all —
+    // must read as running, never as finished: the whole point of the chip is
+    // that the GM can see the model is still grinding through the library.
+    const mid = reduceFixerStream([
+      chunk('fixer.tool', { name: 'search_books', status: 'start' }, 1),
+      chunk('fixer.tool', { name: 'get_encounter' }, 2),
+    ]);
+    expect(mid.messages[0]?.chips.map((c) => c.status)).toEqual(['running', 'running']);
+  });
+
+  it('settles any still-running chip when the turn ends', () => {
+    // A dropped `end` frame must not leave a chip spinning for the session.
+    const view = reduceFixerStream([
+      chunk('fixer.tool', { name: 'search_codex', status: 'start' }, 1),
+      chunk('fixer.done', {}, 2),
+    ]);
+    expect(view.messages[0]?.chips[0]?.status).toBe('done');
+  });
+
+  it('keeps an errored call visible as an error, not a success', () => {
+    const view = reduceFixerStream([
+      chunk('fixer.tool', { name: 'get_scene', status: 'start' }, 1),
+      chunk('fixer.tool', { name: 'get_scene', status: 'error', detail: 'no active scene' }, 2),
+      chunk('fixer.done', {}, 3),
+    ]);
+    expect(view.messages[0]?.chips[0]).toEqual({
+      name: 'get_scene',
+      status: 'error',
+      detail: 'no active scene',
+    });
+  });
+
   it('ignores unknown fixer.* types (forward compatible)', () => {
     const view = reduceFixerStream([chunk('fixer.future', { x: 1 }, 1)]);
     expect(view.messages).toHaveLength(0);

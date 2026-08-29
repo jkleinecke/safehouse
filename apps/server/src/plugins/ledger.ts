@@ -23,7 +23,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { CurrencySchema, LedgerStateSchema, type LedgerEntry } from '@safehouse/contracts';
 import { characters, ledgerEntries, ledgerBalance, type Db } from '@safehouse/db';
-import type { Hub } from '../hub.js';
+import type { EventTx, Hub } from '../hub.js';
 import { httpError, requireAuth, requireRole, type AuthContext } from '../services/auth.js';
 import { requireCharacter, assertCanView } from '../services/characters.js';
 
@@ -72,34 +72,50 @@ export interface CreateEntryInput {
  * Append one ledger entry and broadcast `ledger.changed`. Exported so the
  * Chummer import can seed opening balances (FR3.1 → FR3.6) without inventing
  * a second write path.
+ *
+ * Row and event commit TOGETHER (`Hub.atomic`). This is money: an entry that
+ * lands in `ledger_entries` while its `ledger.changed` throws leaves every
+ * open sheet showing a balance the database disagrees with, and nothing on the
+ * wire ever corrects it — the LIVE-4 half-commit shape, applied to the number
+ * players argue about. Pass `opts.tx` to fold the entry into a bigger unit of
+ * work (a run payout settling several characters at once).
  */
 export async function createEntry(
   db: Db,
   hub: Hub,
   campaignId: string,
   input: CreateEntryInput,
+  opts: { tx?: EventTx } = {},
 ): Promise<{ entry: LedgerEntry; balances: LedgerBalances }> {
-  const rows = await db
-    .insert(ledgerEntries)
-    .values({
-      characterId: input.characterId,
-      currency: input.currency,
-      delta: Math.trunc(input.delta),
-      reason: input.reason,
-      state: input.state ?? 'pending',
-      sessionId: input.sessionId ?? null,
-      runId: input.runId ?? null,
-      createdBy: input.createdBy ?? null,
-      approvedBy: input.state === 'approved' ? (input.createdBy ?? null) : null,
-    })
-    .returning();
-  const entry = toDto(rows[0]!);
-  const balances = await balancesFor(db, input.characterId);
-  await hub.emit(campaignId, {
-    type: 'ledger.changed',
-    payload: { entry, balances, characterId: input.characterId },
+  // `db` is deliberately unread here: insert, balance recompute and event all
+  // go through the transaction handle, because on PGlite's single connection a
+  // query on the outer handle inside an open transaction never returns (the
+  // deadlock rule on `Hub.atomic`). It stays in the signature because callers
+  // pass `app.db`, which IS the hub's handle.
+  void db;
+  return hub.atomicIn(campaignId, opts.tx, async (tx) => {
+    const rows = await tx.db
+      .insert(ledgerEntries)
+      .values({
+        characterId: input.characterId,
+        currency: input.currency,
+        delta: Math.trunc(input.delta),
+        reason: input.reason,
+        state: input.state ?? 'pending',
+        sessionId: input.sessionId ?? null,
+        runId: input.runId ?? null,
+        createdBy: input.createdBy ?? null,
+        approvedBy: input.state === 'approved' ? (input.createdBy ?? null) : null,
+      })
+      .returning();
+    const entry = toDto(rows[0]!);
+    const balances = await balancesFor(tx.db, input.characterId);
+    await tx.emit({
+      type: 'ledger.changed',
+      payload: { entry, balances, characterId: input.characterId },
+    });
+    return { entry, balances };
   });
-  return { entry, balances };
 }
 
 const CreateEntryBody = z.object({
@@ -145,18 +161,22 @@ async function settle(
   if (row.state !== 'pending') {
     throw httpError(409, 'already_settled', `entry is already ${row.state}`);
   }
-  const updated = await app.db
-    .update(ledgerEntries)
-    .set({ state: next, approvedBy: auth.userId })
-    .where(and(eq(ledgerEntries.id, entryId), eq(ledgerEntries.state, 'pending')))
-    .returning();
-  const entry = toDto(updated[0]!);
-  const balances = await balancesFor(app.db, entry.characterId);
-  await app.hub.emit(campaignId, {
-    type: 'ledger.changed',
-    payload: { entry, balances, characterId: entry.characterId, settled: next },
+  // The lookup above is hoisted OUT of the block on purpose (the deadlock
+  // rule); the state change, the recomputed balances and the event go in.
+  return app.hub.atomic(campaignId, async (tx) => {
+    const updated = await tx.db
+      .update(ledgerEntries)
+      .set({ state: next, approvedBy: auth.userId })
+      .where(and(eq(ledgerEntries.id, entryId), eq(ledgerEntries.state, 'pending')))
+      .returning();
+    const entry = toDto(updated[0]!);
+    const balances = await balancesFor(tx.db, entry.characterId);
+    await tx.emit({
+      type: 'ledger.changed',
+      payload: { entry, balances, characterId: entry.characterId, settled: next },
+    });
+    return { entry, balances };
   });
-  return { entry, balances };
 }
 
 export default async function ledgerPlugin(app: FastifyInstance): Promise<void> {

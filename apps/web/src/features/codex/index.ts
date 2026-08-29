@@ -20,6 +20,24 @@ export type { MarkdownProps } from './Markdown.js';
 export { default as PageBrowser } from './PageBrowser.js';
 export { default as PageView } from './PageView.js';
 export { default as HandoutsPanel } from './HandoutsPanel.js';
+export { default as TemplatePanel } from './TemplatePanel.js';
+export type { TemplatePanelProps } from './TemplatePanel.js';
+
+/**
+ * FR5.6's pure half. `generatorPathFor` is the codex→template hop; the
+ * template→codex hop is the same single column read the other way, so a
+ * generator-side "open its codex page" link is `/c/:campaignId/codex/:pageId`
+ * with the `wikiPageId` the link row already carries — no extra route needed.
+ */
+export {
+  describeFollow,
+  generatorPathFor,
+  isLinkedTo,
+  linkableTemplates,
+  linkedTemplates,
+  roleTagLine,
+} from './templates.js';
+export type { TemplateOption } from './templates.js';
 
 export {
   excerpt,
@@ -76,11 +94,14 @@ export {
   useCreatePage,
   useDeleteContact,
   useHandouts,
+  useLinkTemplate,
+  useLinkableTemplates,
   usePage,
   usePages,
   useRevealPage,
   useRoster,
   useRuns,
+  useUnlinkTemplate,
   useUnresolvedLinks,
   useUpdateContact,
   useUpdatePage,
@@ -92,5 +113,6 @@ export type {
   LinkReport,
   RunRecord,
   SectionView,
+  TemplateLink,
   UnresolvedLink,
 } from './api.js';

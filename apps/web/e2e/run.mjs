@@ -10,6 +10,11 @@
  *   node e2e/run.mjs                # skip if chromium is absent
  *   node e2e/run.mjs --require      # fail if chromium is absent
  *   node e2e/run.mjs <playwright args…>
+ *
+ * A bare `--` is dropped before the rest is forwarded: `pnpm … e2e -- reader`
+ * is how pnpm makes you pass arguments, and playwright reads the `--` itself as
+ * a test-name filter that matches everything — so the filter was silently
+ * ignored and the whole suite ran.
  */
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -17,7 +22,7 @@ import { createRequire } from 'node:module';
 
 const args = process.argv.slice(2);
 const require_ = args.includes('--require') || process.env.SAFEHOUSE_E2E_REQUIRE === '1';
-const passthrough = args.filter((a) => a !== '--require');
+const passthrough = args.filter((a) => a !== '--require' && a !== '--');
 
 let executable = null;
 let probeError = null;

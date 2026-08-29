@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import type { AddressInfo } from 'node:net';
 import type { FastifyInstance } from 'fastify';
 import { eq } from 'drizzle-orm';
-import { campaigns, characters, devices } from '@safehouse/db';
+import { campaigns, characters, closeDb, devices } from '@safehouse/db';
 import { buildApp } from '../../src/app.js';
 import { hashToken, mintToken } from '../../src/services/auth.js';
 
@@ -83,6 +83,39 @@ export interface BootOptions {
   keepData: boolean;
 }
 
+/** Open the real app on a loopback port against `dataDir`. */
+async function listen(dataDir: string): Promise<{ app: FastifyInstance; baseUrl: string }> {
+  process.env['DATA_DIR'] = dataDir;
+  const app = await buildApp({ webDist: false, logger: false });
+  await app.listen({ port: 0, host: '127.0.0.1' });
+  const address = app.server.address() as AddressInfo;
+  return { app, baseUrl: `http://127.0.0.1:${address.port}` };
+}
+
+/**
+ * Stop the server, close the database, and boot the whole thing again against
+ * the same `DATA_DIR` — a real restart, not a mocked one.
+ *
+ * The order is the operational rule the hard way: **close PGlite before
+ * reopening it.** PGlite is single-process and `getDb()` is a singleton, so
+ * merely forgetting the handle would leave two clients on one directory and the
+ * second would serve a phantom database. `closeDb()` CHECKPOINTs, closes, and
+ * drops the singleton, so the second `buildApp()` opens the directory cold —
+ * which is exactly what the GM's laptop does after `docker compose restart`,
+ * migrations, sequence guard and all.
+ *
+ * The `World` is mutated in place so the caller's teardown closes the NEW app.
+ */
+export async function restart(world: World): Promise<World> {
+  await world.app.close();
+  await closeDb();
+  const { app, baseUrl } = await listen(world.dataDir);
+  world.app = app;
+  world.baseUrl = baseUrl;
+  world.wsUrl = baseUrl.replace(/^http/, 'ws');
+  return world;
+}
+
 /** Seed a throwaway world and boot the server against it. */
 export async function boot(opts: BootOptions): Promise<World> {
   const dataDir = join(tmpdir(), `safehouse-playthrough-${Date.now()}`);
@@ -119,11 +152,7 @@ export async function boot(opts: BootOptions): Promise<World> {
   console.log(`  ${CAMPAIGN_NAME} seeded into ${dataDir}`);
 
   // --- boot the real app ----------------------------------------------------
-  process.env['DATA_DIR'] = dataDir;
-  const app = await buildApp({ webDist: false, logger: false });
-  await app.listen({ port: 0, host: '127.0.0.1' });
-  const address = app.server.address() as AddressInfo;
-  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const { app, baseUrl } = await listen(dataDir);
 
   const campaign = (
     await app.db.select().from(campaigns).where(eq(campaigns.name, CAMPAIGN_NAME)).limit(1)
@@ -192,5 +221,9 @@ export async function assignCharacter(
 
 export async function teardown(world: World, keepData: boolean): Promise<void> {
   await world.app.close();
+  // Let go of the directory before deleting it. On Windows the delete
+  // "succeeds" while a handle is open and the process carries on serving an
+  // in-memory ghost of the database — the failure mode that cost an evening.
+  await closeDb().catch(() => undefined);
   if (!keepData) await rm(world.dataDir, { recursive: true, force: true }).catch(() => undefined);
 }

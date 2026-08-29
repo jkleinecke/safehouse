@@ -301,9 +301,20 @@ export const npcTemplates = pgTable(
     persona: jsonb('persona').notNull().default({}),
     /** `{ book, page }` ref — never book content. */
     pageRef: jsonb('page_ref'),
+    /**
+     * FR5.6 — the codex page describing this archetype. One column, not two:
+     * a page finds its templates by reverse lookup, so the two directions can
+     * never disagree. SET NULL, not CASCADE — deleting the lore page must not
+     * delete the stat block, because the template is the playable thing.
+     * (Migration `0003_npc_template_wiki_link.sql`.)
+     */
+    wikiPageId: uuid('wiki_page_id').references(() => wikiPages.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('npc_templates_campaign_idx').on(t.campaignId)],
+  (t) => [
+    index('npc_templates_campaign_idx').on(t.campaignId),
+    index('npc_templates_wiki_page_idx').on(t.wikiPageId),
+  ],
 );
 
 export const gruntGroups = pgTable('grunt_groups', {
@@ -403,6 +414,79 @@ export const aiGenerations = pgTable('ai_generations', {
   usage: jsonb('usage'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Durable AI usage meter (FR12.15/12.16) — one row per completed Fixer turn.
+ *
+ * `ai_generations.usage` only ever covers work that produced a DRAFT, so a
+ * campaign's chat turns (the majority of what the box actually does) had
+ * nowhere to live but a per-process accumulator that reset on every restart.
+ * This table is that accumulator's disk. It stores tokens and latency, never
+ * money: there is no per-token bill on a laptop, and §15's meter reports what
+ * the hardware is doing.
+ *
+ * Deliberately append-only and denormalised — the read is one aggregate per
+ * campaign, and a row that is never updated cannot drift from the turn it
+ * describes.
+ */
+export const aiUsage = pgTable(
+  'ai_usage',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    campaignId: uuid('campaign_id')
+      .notNull()
+      .references(() => campaigns.id, { onDelete: 'cascade' }),
+    /** Resolved model id (the slot's configured name), not the slot. */
+    model: text('model').notNull().default('unknown'),
+    /** What the tokens were spent on: `chat`, `npc`, `draft`, … */
+    kind: text('kind').notNull().default('chat'),
+    promptTokens: integer('prompt_tokens').notNull().default(0),
+    completionTokens: integer('completion_tokens').notNull().default(0),
+    totalTokens: integer('total_tokens').notNull().default(0),
+    latencyMs: integer('latency_ms').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('ai_usage_campaign_created_idx').on(t.campaignId, t.createdAt)],
+);
+
+// ---------------------------------------------------------------------------
+// Personal macros (FR2.8)
+// ---------------------------------------------------------------------------
+
+/**
+ * A player's saved quick rolls, per campaign, keyed on the PERSON.
+ *
+ * FR2.8 calls these *personal* macros, and personal means they follow the
+ * player rather than the handset: a device token resolves to a user, so a
+ * runner who picks up a borrowed phone mid-fight finds their rack already
+ * built. The unique index on (user, campaign, label) is what makes the web
+ * app's one-time migration off `localStorage` safe to repeat — pushing the
+ * same rack twice updates rows instead of doubling them.
+ */
+export const userMacros = pgTable(
+  'user_macros',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    campaignId: uuid('campaign_id')
+      .notNull()
+      .references(() => campaigns.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** The button's name; also the natural key that makes creation idempotent. */
+    label: text('label').notNull(),
+    /** `{ pool, limitKind?, limitValue?, edge?, visibility }` — a free-form roll. */
+    config: jsonb('config').notNull().default({}),
+    /** Rack order, ascending; ties break on label. */
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('user_macros_owner_label_idx').on(t.userId, t.campaignId, t.label),
+    index('user_macros_owner_idx').on(t.userId, t.campaignId, t.sortOrder),
+  ],
+);
 
 export const audioTracks = pgTable('audio_tracks', {
   id: uuid('id').primaryKey().defaultRandom(),

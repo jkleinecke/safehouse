@@ -20,6 +20,8 @@ import ledgerPlugin from './ledger.js';
 import sessionsPlugin from './sessions.js';
 import codexPlugin from './codex.js';
 import contactsPlugin from './contacts.js';
+import magicPlugin from './magic.js';
+import macrosPlugin from './macros.js';
 
 const domainPlugins = [
   authPlugin,
@@ -36,6 +38,8 @@ const domainPlugins = [
   sessionsPlugin,
   codexPlugin,
   contactsPlugin,
+  macrosPlugin,
+  magicPlugin,
 ] as const;
 
 /** Register every domain plugin (called once from buildApp). */

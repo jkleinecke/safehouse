@@ -1,84 +1,26 @@
 /**
- * Ref chips + in-app book viewer (M11, FR11.3): a `{ book, page }` ref renders
- * as a tappable chip; tapping opens the PDF right there — an overlay iframing
- * the browser-native PDF (`/files/books/:code#page=N`, offset resolved by the
- * server's /read JSON) without losing table context. Exported for reuse.
+ * Ref chips (M11, FR11.3/FR11.4): a `{ book, page }` ref renders as a tappable
+ * chip; tapping opens the book right there, over whatever the table was already
+ * looking at, without losing context.
+ *
+ * The overlay itself is `features/reader`'s pdf.js viewer. It used to be an
+ * `<iframe>` around the browser's own PDF plugin with a `#page=` fragment — the
+ * fragment mobile browsers ignore, which is what made "one tap opens the printed
+ * page" a desktop-only promise. The name `BookViewerOverlay` is kept because
+ * every ref surface in the app imports it; the props are unchanged, calibration
+ * included, and the browser-native viewer survives inside it as the documented
+ * fallback (`?native=1`, or automatically when pdf.js cannot start).
  */
 import { useState, type ReactNode } from 'react';
 import type { Ref } from '@safehouse/contracts';
-import { getToken } from '../../../api/session.js';
-import { useReadInfo } from './api.js';
-import { bookFileHref, findFreetextRefs, printedToPdf, viewerHref } from './refs.js';
+import { BookReaderOverlay } from '../../reader/index.js';
+import type { BookReaderOverlayProps } from '../../reader/index.js';
+import { findFreetextRefs, viewerHref } from './refs.js';
 
-export interface BookViewerOverlayProps {
-  code: string;
-  printedPage: number;
-  onClose: () => void;
-  /**
-   * Calibration mode (FR11.1): render offset nudge controls and map pages
-   * locally with the given offset instead of asking the server.
-   */
-  calibrate?: {
-    offset: number;
-    onNudge: (delta: number) => void;
-    onSave: () => void;
-    saving?: boolean;
-  };
-}
+export type BookViewerOverlayProps = BookReaderOverlayProps;
 
-/** Full-screen overlay: printed-page input → browser-native PDF iframe. */
-export function BookViewerOverlay({ code, printedPage, onClose, calibrate }: BookViewerOverlayProps) {
-  const [page, setPage] = useState(printedPage);
-  const info = useReadInfo(calibrate ? undefined : code, page);
-  const token = getToken();
-
-  // Calibrating: local offset math. Otherwise: trust the server's mapping,
-  // falling back to raw page while the JSON loads (or if the route 404s).
-  const pdfPage = calibrate ? printedToPdf(page, calibrate.offset) : info.data?.pdfPage ?? page;
-  const src = info.data?.fileUrl
-    ? `${info.data.fileUrl}${info.data.fileUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(token ?? '')}#page=${pdfPage}`
-    : bookFileHref(code, pdfPage, token);
-
-  return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-ground/95 p-3 backdrop-blur" role="dialog" aria-label={`Book ${code}`}>
-      <div className="mb-2 flex flex-wrap items-center gap-2">
-        <span className="chip border-cyan-dim text-cyan">{code}</span>
-        {info.data?.title && <span className="truncate text-sm text-dim">{info.data.title}</span>}
-        <label className="ml-2 flex items-center gap-1.5">
-          <span className="mono-label">p.</span>
-          <input
-            type="number"
-            min={1}
-            value={page}
-            onChange={(e) => setPage(Math.max(1, Number(e.target.value) || 1))}
-            className="w-20 rounded-md border border-edge bg-deck px-2 py-1 text-sm text-ink"
-            aria-label="Printed page"
-          />
-        </label>
-        <span className="mono-label text-faint">pdf {pdfPage}</span>
-        {calibrate && (
-          <span className="flex items-center gap-1.5">
-            <button className="btn px-2 py-1" onClick={() => calibrate.onNudge(-1)} aria-label="Offset −1">−</button>
-            <span className="chip border-warn/40 text-warn">offset {calibrate.offset >= 0 ? '+' : ''}{calibrate.offset}</span>
-            <button className="btn px-2 py-1" onClick={() => calibrate.onNudge(1)} aria-label="Offset +1">+</button>
-            <button className="btn btn-accent px-2 py-1" onClick={calibrate.onSave} disabled={calibrate.saving}>
-              {calibrate.saving ? 'saving…' : 'save offset'}
-            </button>
-          </span>
-        )}
-        <button className="btn ml-auto px-3 py-1" onClick={onClose}>
-          close
-        </button>
-      </div>
-      <iframe
-        key={src}
-        src={src}
-        title={`${code} p.${page}`}
-        className="min-h-0 w-full flex-1 rounded-md border border-edge bg-deck"
-      />
-    </div>
-  );
-}
+/** Full-screen overlay: printed-page controls → the self-hosted pdf.js viewer. */
+export const BookViewerOverlay = BookReaderOverlay;
 
 export interface RefChipProps {
   /** `ref` is reserved in React — hence refValue. */

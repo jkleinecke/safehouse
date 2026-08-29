@@ -21,7 +21,8 @@ import { LlmClient, llmConfigFromEnv } from '../fixer/llm.js';
 import { runFixerChat, runNpcConverse } from '../fixer/agent.js';
 import { listConversations, loadConversation } from '../fixer/conversations.js';
 import { acceptDraft, listDrafts, rejectDraft } from '../fixer/drafts.js';
-import { usageMeter } from '../fixer/usage.js';
+import { campaignUsage, persistTurnUsage, usageMeter } from '../fixer/usage.js';
+import { visionCapability } from '../fixer/vision.js';
 import fixerToolRoutes from '../fixer/routes.js';
 
 const ChatBody = z.object({
@@ -158,13 +159,31 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
   await app.register(fixerToolRoutes);
 
   // --- capability probe: lets the web app hide AI entry points cleanly ------
+  /**
+   * Two capabilities, not one. `enabled` is "is there a box at all" (NG7).
+   * `vision` is FR12.11's flag — whether that box's model reads images, which
+   * decides whether the map-vision lane exists for this GM. The answer is
+   * probed here (once per base URL + model, then cached) precisely because this
+   * is the call the panel makes on load: by the time the GM opens the Fixer,
+   * the tool catalog and the UI agree about what is on offer.
+   * `?probe=refresh` re-asks after a model swap.
+   */
   app.get('/api/fixer/status', async (req) => {
     requireRole(req, 'gm');
     const config = llmConfigFromEnv();
+    const refresh = (req.query as { probe?: string } | undefined)?.probe === 'refresh';
+    const vision = await visionCapability(config, refresh ? { force: true } : {});
     return {
       enabled: config !== null,
       models: config ? { primary: config.primary, fast: config.fast } : null,
       maxToolRounds: 8,
+      vision: {
+        supported: vision.supported,
+        via: vision.via,
+        model: vision.model,
+        note: vision.note,
+        checkedAt: vision.checkedAt,
+      },
     };
   });
 
@@ -192,6 +211,15 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
     } catch (err) {
       return upstream(reply, err);
     }
+    // FR12.15: one row per completed turn, so the meter is not a per-boot
+    // number. Best-effort by construction (see fixer/usage.ts).
+    await persistTurnUsage(app.db, {
+      campaignId,
+      model: result.model,
+      usage: result.usage,
+      latencyMs: result.usage.latencyMs,
+      kind: 'chat',
+    });
     return reply.send({
       conversationId: result.conversationId,
       text: result.text,
@@ -229,6 +257,13 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
     } catch (err) {
       return upstream(reply, err);
     }
+    await persistTurnUsage(app.db, {
+      campaignId,
+      model: result.model,
+      usage: result.usage,
+      latencyMs: result.usage.latencyMs,
+      kind: 'npc',
+    });
     return reply.send({
       conversationId: result.conversationId,
       npcId: id,
@@ -304,7 +339,13 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
       .where(and(eq(aiGenerations.campaignId, campaignId), eq(aiGenerations.status, 'draft')));
     return reply.send({
       campaignId,
-      /** Since this server process started — see fixer/usage.ts INTEGRATION. */
+      /**
+       * The durable number (FR12.15): every completed Fixer turn this campaign
+       * has ever run, aggregated out of `ai_usage`. Survives a restart, which
+       * is the whole point — see fixer/usage.ts.
+       */
+      total: await campaignUsage(app.db, campaignId),
+      /** Since this server process started. Useful precisely because it is narrow. */
       session: usageMeter.totals(campaignId),
       drafts: { ...(await draftUsage(app.db, campaignId)), pending: pending.length },
       currency: 'tokens+latency',

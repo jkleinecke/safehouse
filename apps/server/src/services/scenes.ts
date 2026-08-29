@@ -371,6 +371,21 @@ function monitorsFrom(stats: StatShape | null | undefined) {
 export class ScenesService {
   constructor(private readonly db: Db) {}
 
+  /**
+   * The same service bound to a transaction handle — `svc.withDb(tx.db)`
+   * inside a `Hub.atomic` block.
+   *
+   * Every method here reads and writes through one `Db`, so re-binding is all
+   * it takes to put a whole scene operation (fog state + its event, a token
+   * insert + `token.added`, staging a dozen combatants + `encounter.updated`)
+   * inside one transaction. It also satisfies the deadlock rule structurally:
+   * a transaction-bound copy has no route back to the outer handle, so no
+   * query inside the block can accidentally take it.
+   */
+  withDb(db: Db): ScenesService {
+    return new ScenesService(db);
+  }
+
   // --- scenes --------------------------------------------------------------
 
   async sceneRow(sceneId: string): Promise<SceneRow> {

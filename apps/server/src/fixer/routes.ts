@@ -7,6 +7,11 @@
  * work with **no inference box configured at all** (NG7). Only the wording
  * around them needs a model.
  *
+ * The one exception is `POST /api/fixer/read-map` (FR12.11 lane 2), which needs
+ * both a box and a vision-capable model on it; it says so with a distinct
+ * status code rather than pretending, and `GET /api/fixer/status` publishes the
+ * same capability so the button can be hidden before it is ever pressed.
+ *
  * Everything is GM-only (§13). The two write-shaped routes produce
  * `ai_generations` drafts exactly like the tool path — nothing they return has
  * touched a token or a scene.
@@ -20,10 +25,12 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { assertCampaign, httpError, requireRole } from '../services/auth.js';
 import { layoutJsonSchema, LayoutDoorSchema, LayoutRoomSchema } from './geometry.js';
+import { llmConfigFromEnv } from './llm.js';
 import { emitFogProximity, fogProximityState } from './proximity.js';
 import { identifyTokensState } from './token-id.js';
 import { FIXER_TOOLS, TOOLS_BY_NAME, toolParameters } from './tools.js';
 import type { ToolContext } from './tool-kit.js';
+import { mapVisionJsonSchema, proposeGeometryFromMap } from './vision.js';
 
 const IdentifyBody = z.object({
   campaignId: z.string().optional(),
@@ -41,6 +48,16 @@ const GeometryBody = z.object({
   doors: z.array(LayoutDoorSchema).max(160).default([]),
   notes: z.string().max(2000).default(''),
   mode: z.enum(['merge', 'replace']).default('merge'),
+});
+
+/** FR12.11 lane 2 — read the map the GM already uploaded onto the scene. */
+const ReadMapBody = z.object({
+  campaignId: z.string().optional(),
+  sceneId: z.string().optional(),
+  attachmentId: z.string().optional(),
+  hint: z.string().max(600).optional(),
+  mode: z.enum(['merge', 'replace']).default('merge'),
+  slot: z.enum(['primary', 'fast']).optional(),
 });
 
 const ProximityQuery = z.object({
@@ -109,6 +126,8 @@ export default async function fixerToolRoutes(app: FastifyInstance): Promise<voi
       units: 'whole grid squares; the scene grid supplies metres per square',
       layout: layoutJsonSchema(),
       tool: toolParameters(TOOLS_BY_NAME.get('propose_geometry')!.schema),
+      /** The same schema plus the grid-alignment fields the vision lane adds. */
+      mapVision: mapVisionJsonSchema(),
     });
   });
 
@@ -150,6 +169,30 @@ export default async function fixerToolRoutes(app: FastifyInstance): Promise<voi
       },
       ctxFor(campaignId, `GM asked for a layout: ${body.title}`),
     );
+    return reply.status(201).send(result);
+  });
+
+  // --- FR12.11 lane 2: read the map image ----------------------------------
+  /**
+   * Unlike its neighbours this one DOES need the box — it is the only route
+   * here that sends anything to a model. It answers three different ways on
+   * purpose, because "hides cleanly" has to mean something the client can act
+   * on: `503 ai_disabled` (no box), `501 vision_unsupported` (a box whose model
+   * is text-only), or a geometry draft. `GET /api/fixer/status` reports the
+   * same capability up front so the button need never be shown at all.
+   */
+  app.post('/api/fixer/read-map', async (req, reply) => {
+    const body = parse(ReadMapBody, req.body);
+    const campaignId = gmFor(req, body.campaignId);
+    const result = await proposeGeometryFromMap(app.db, llmConfigFromEnv(), {
+      campaignId,
+      mode: body.mode,
+      prompt: 'GM asked the Fixer to read the scene map image',
+      ...(body.sceneId !== undefined ? { sceneId: body.sceneId } : {}),
+      ...(body.attachmentId !== undefined ? { attachmentId: body.attachmentId } : {}),
+      ...(body.hint !== undefined ? { hint: body.hint } : {}),
+      ...(body.slot !== undefined ? { slot: body.slot } : {}),
+    });
     return reply.status(201).send(result);
   });
 

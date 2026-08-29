@@ -10,9 +10,12 @@
  * It drives the app's own HTTP surface via `app.inject`, so every seeded row
  * goes through the same validation, revisioning and event emission as a GM
  * clicking through the UI — a seed that bypassed the API would be a lie about
- * whether the API works. Only three things go straight to the db: creating the
- * campaign (the bootstrap route refuses a second campaign without a token),
- * the `runs` row (no REST surface yet), and the wipe.
+ * whether the API works. Exactly two things go straight to the db: creating the
+ * campaign (the bootstrap route refuses a second campaign without a token) and
+ * the wipe. The `runs` row used to be a third — it was inserted raw while
+ * `POST /api/campaigns/:id/runs` sat right there, so the paragraph above was
+ * true with an asterisk and the one row nothing validated was the one carrying
+ * the payout. It goes through the route now like everything else.
  *
  * IDEMPOTENT: every run deletes the campaign named "Static on the Line" —
  * cascading its scenes, sheets, tokens, templates, tables and devices — and
@@ -26,14 +29,15 @@
  * See docs/demo/CAMPAIGN.md for the brief these numbers encode. The content
  * itself lives beside this file: `assets/runners.ts` (the three PCs),
  * `assets/opposition.ts` (the Rusted Halo + the lieutenant + the complications
- * table), `assets/pier23.ts` (the scene, its geometry and its map), and
+ * table), `assets/pier23.ts` (the scene, its geometry and its map),
+ * `assets/run.ts` (the job, its objectives and its payout), and
  * `assets/png.ts` (the stdlib PNG writer that map is drawn with).
  */
 import { unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { and, eq, inArray, notExists, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { attachments, campaigns, characters, memberships, runs, users, type Db } from '@safehouse/db';
+import { attachments, campaigns, characters, memberships, users, type Db } from '@safehouse/db';
 import { buildApp } from '../src/app.js';
 import { closeDatabase } from '../src/shutdown.js';
 import { filesDir } from '../src/services/scenes.js';
@@ -50,25 +54,14 @@ import {
   PIER23_ZONES,
   renderPier23Map,
 } from './assets/pier23.js';
-import { PARTY } from './assets/runners.js';
+import { demoRun } from './assets/run.js';
+import { PARTY, WHISPERS_DRAMS, WHISPERS_FOCUS, WHISPERS_SPIRIT } from './assets/runners.js';
 
 const CAMPAIGN_NAME = 'Static on the Line';
 const INGAME_DATE = '2076-06-12';
 
-/** The run itself (FR5.5). Awards post to ledgers when the GM confirms. */
-const RUN = {
-  title: CAMPAIGN_NAME,
-  state: 'prep',
-  payout: {
-    currency: 'nuyen',
-    total: 8000,
-    upfront: 2000,
-    onDelivery: 6000,
-    terms: 'Split however the crew likes. Johnson pays on hand-over, not on promises.',
-  },
-  awards: { karma: 4, nuyen: 8000, note: 'Baseline: +1 karma if the drone leaves the pier unshot at.' },
-  recapMd: '',
-};
+/** The run itself (FR5.5) — content and rationale in `assets/run.ts`. */
+const RUN = demoRun(CAMPAIGN_NAME, INGAME_DATE);
 
 // ---------------------------------------------------------------------------
 // HTTP plumbing
@@ -226,6 +219,34 @@ async function seed(app: FastifyInstance): Promise<void> {
     return id;
   };
 
+  // --- the mage's magic state (FR8.3/FR8.4) --------------------------------
+  // Through the magic routes, so the demo campaign opens with a spirit whose
+  // services can actually be spent and a focus whose toggle actually moves a
+  // pool — the two things a gear line pretending to be either cannot do.
+  const spirit = await call<{ spirit: { id: string }; derived: { initiative: { base: number } } }>(
+    inj,
+    'POST',
+    `/api/campaigns/${campaignId}/magic/spirits`,
+    { ...gm, payload: { ...WHISPERS_SPIRIT, characterId: pc('Whisper') } },
+  );
+  console.log(
+    `spirit        ${spirit.spirit.id}  ${WHISPERS_SPIRIT.name} (${WHISPERS_SPIRIT.spiritType} F${WHISPERS_SPIRIT.force})` +
+      `  · ${WHISPERS_SPIRIT.services} services`,
+  );
+
+  const focus = await call<{ focus: { id: string } }>(inj, 'POST', `/api/characters/${pc('Whisper')}/foci`, {
+    ...gm,
+    payload: WHISPERS_FOCUS,
+  });
+  await call(inj, 'POST', `/api/characters/${pc('Whisper')}/reagents`, {
+    ...gm,
+    payload: { op: 'set', amount: WHISPERS_DRAMS },
+  });
+  console.log(
+    `focus         ${focus.focus.id}  ${WHISPERS_FOCUS.name} (bonded, live, +${WHISPERS_FOCUS.force} spellcasting)` +
+      `  · ${WHISPERS_DRAMS} drams`,
+  );
+
   const tv = await call<{ code: string }>(inj, 'POST', `/api/campaigns/${campaignId}/invites`, {
     ...gm,
     payload: { role: 'display' },
@@ -322,8 +343,18 @@ async function seed(app: FastifyInstance): Promise<void> {
   await call(inj, 'POST', `/api/scenes/${scene.id}/activate`, { ...gm, payload: {} });
 
   // --- the run row (FR5.5) + a planned session -----------------------------
-  const run = (await app.db.insert(runs).values({ campaignId, ...RUN }).returning())[0];
-  console.log(`run           ${run?.id ?? '?'}  "${RUN.title}"  ${RUN.payout.total}¥ + ${RUN.awards.karma} karma`);
+  // Through the route, not the table: the brief, the objectives and the payout
+  // are validated by the same schema a GM's own POST goes through.
+  const { run } = await call<{ run: { id: string; objectives: unknown[] } }>(
+    inj,
+    'POST',
+    `/api/campaigns/${campaignId}/runs`,
+    { ...gm, payload: RUN },
+  );
+  console.log(
+    `run           ${run.id}  "${RUN.title}"  ${RUN.payout.nuyen}¥ + ${RUN.payout.karma} karma` +
+      `  · ${run.objectives.length} objectives`,
+  );
 
   const session = await call<{ session: { id: string } }>(inj, 'POST', `/api/campaigns/${campaignId}/sessions`, {
     ...gm,

@@ -22,7 +22,7 @@ import {
   type Visibility,
 } from '@safehouse/contracts';
 import { rolls, type Db } from '@safehouse/db';
-import type { Hub } from '../hub.js';
+import type { EventTx, Hub } from '../hub.js';
 import type { ChainOutcome } from './encounters-copilot.js';
 import { toRecord } from './roll-log.js';
 import { activeSessionId } from './rolls.js';
@@ -208,11 +208,18 @@ export interface CopilotRollInput {
  * (`toRecord`) plus `label`/`actorName`/`result`, so a client hydrating from
  * `GET …/rolls` and one merging live events agree — which is the property that
  * actually matters, and the one a test should hold to.
+ *
+ * Row and `roll.created` commit together (`Hub.atomic`), the same guarantee
+ * `RollService.persistAndEmit` gives a sheet roll: this is the copilot's half
+ * of the immutable dice record, and a row nobody was told about is exactly the
+ * half-commit LIVE-4 found. `tx` folds the roll into a wider unit of work —
+ * `recordChainRolls` uses it to land a whole exchange at once.
  */
 export async function recordCopilotRoll(
   db: Db,
   hub: Hub,
   input: CopilotRollInput,
+  tx?: EventTx,
 ): Promise<{ rollId: string }> {
   const actor = { combatantId: input.combatantId };
   const baseMeta =
@@ -231,37 +238,42 @@ export async function recordCopilotRoll(
       ...(input.actorName ? { actorName: input.actorName } : {}),
     },
   };
-  const sessionId = await activeSessionId(db, input.campaignId);
-  const row = (
-    await db
-      .insert(rolls)
-      .values({
-        campaignId: input.campaignId,
-        sessionId,
-        actor,
-        kind: 'simple',
-        request: persistedRequest,
-        faces: input.result.faces,
-        hits: input.result.hits,
-        ones: input.result.ones,
-        glitch: input.result.glitch,
-        limit: input.limit ?? null,
-        limitedHits: input.result.limitedHits,
-        visibility: input.visibility,
-      })
-      .returning()
-  )[0]!;
-  await hub.emit(input.campaignId, {
-    type: 'roll.created',
-    payload: {
-      ...toRecord(row),
-      label: input.label,
-      ...(input.actorName ? { actorName: input.actorName } : {}),
-      result: input.result,
-    },
-    visibility: input.visibility,
+  // The session lookup is hoisted out of the block (the deadlock rule): when a
+  // transaction is already open it must go through `tx.db`, and when one is
+  // not it happens before `atomicIn` opens one.
+  const sessionId = await activeSessionId(tx?.db ?? db, input.campaignId);
+  return hub.atomicIn(input.campaignId, tx, async (itx) => {
+    const row = (
+      await itx.db
+        .insert(rolls)
+        .values({
+          campaignId: input.campaignId,
+          sessionId,
+          actor,
+          kind: 'simple',
+          request: persistedRequest,
+          faces: input.result.faces,
+          hits: input.result.hits,
+          ones: input.result.ones,
+          glitch: input.result.glitch,
+          limit: input.limit ?? null,
+          limitedHits: input.result.limitedHits,
+          visibility: input.visibility,
+        })
+        .returning()
+    )[0]!;
+    await itx.emit({
+      type: 'roll.created',
+      payload: {
+        ...toRecord(row),
+        label: input.label,
+        ...(input.actorName ? { actorName: input.actorName } : {}),
+        result: input.result,
+      },
+      visibility: input.visibility,
+    });
+    return { rollId: row.id };
   });
-  return { rollId: row.id };
 }
 
 /**
@@ -270,6 +282,10 @@ export async function recordCopilotRoll(
  * server rolled them) — G5/FR2.1 are about the dice, not about the damage, and
  * the damage still lands only on `…/resolve-chain/commit` (Principle 2). Rows
  * are linked by `request.meta.chainId` so the log can group one exchange.
+ *
+ * All of them in ONE transaction: the three rows are a single exchange, and a
+ * chain that recorded an attack but lost its defence roll would read, for ever
+ * after, as an attack nobody defended against.
  */
 export async function recordChainRolls(
   db: Db,
@@ -291,21 +307,28 @@ export async function recordChainRolls(
     defender: input.defender,
     weaponName: input.weaponName,
   });
-  const out: Array<{ step: string; rollId: string }> = [];
-  for (const step of steps) {
-    const { rollId } = await recordCopilotRoll(db, hub, {
-      campaignId: input.campaignId,
-      combatantId: step.combatantId,
-      kind: step.kind,
-      request: step.request,
-      result: step.result,
-      limit: step.limit ?? null,
-      visibility: 'gm',
-      label: step.label,
-      actorName: step.actorName,
-      meta: step.meta,
-    });
-    out.push({ step: step.step, rollId });
-  }
-  return { chainId, rolls: out };
+  return hub.atomic(input.campaignId, async (tx) => {
+    const out: Array<{ step: string; rollId: string }> = [];
+    for (const step of steps) {
+      const { rollId } = await recordCopilotRoll(
+        db,
+        hub,
+        {
+          campaignId: input.campaignId,
+          combatantId: step.combatantId,
+          kind: step.kind,
+          request: step.request,
+          result: step.result,
+          limit: step.limit ?? null,
+          visibility: 'gm',
+          label: step.label,
+          actorName: step.actorName,
+          meta: step.meta,
+        },
+        tx,
+      );
+      out.push({ step: step.step, rollId });
+    }
+    return { chainId, rolls: out };
+  });
 }

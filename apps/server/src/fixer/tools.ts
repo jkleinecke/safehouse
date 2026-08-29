@@ -11,10 +11,13 @@
  */
 import { z } from 'zod';
 import { GeneratorService, genOf } from '../services/generator.js';
+import { httpError } from '../services/auth.js';
 import type { ToolDefinition } from './llm.js';
 import { createDraft, spoilerScan } from './drafts.js';
 import { CODEX_TOOLS } from './tools-codex.js';
+import { RECAP_TOOLS } from './tools-recap.js';
 import { TABLE_TOOLS } from './tools-table.js';
+import { proposeGeometryFromMap } from './vision.js';
 import { Limit, tool, type FixerTool, type ToolContext } from './tool-kit.js';
 import {
   getCampaignState,
@@ -330,14 +333,66 @@ const CORE_TOOLS: readonly FixerTool[] = [
 ];
 
 /**
+ * Map vision (FR12.11, lane 2) — capability-flagged.
+ *
+ * This is the only tool in the catalog that can be *absent*: DESIGN.md says
+ * map vision requires a vision-capable local model and the feature hides
+ * otherwise, so `runFixerChat` drops it from the tool list when the probed
+ * capability says no (`fixer/vision.ts`). A model that never sees the
+ * definition cannot promise the GM something the box cannot do.
+ */
+export const VISION_TOOL_NAME = 'read_map_image';
+
+const VISION_TOOLS: readonly FixerTool[] = [
+  tool({
+    name: VISION_TOOL_NAME,
+    description:
+      "Read the battle map image already attached to a scene and propose its geometry: rooms snapped to the scene's grid, doors, walls and named fog regions, plus what grid the image looks like. Saves a DRAFT for the GM to accept — the same draft kind the layout copilot produces. Use this when the GM has uploaded or photographed a map; use propose_geometry instead when they are describing a place in words.",
+    kind: 'draft',
+    schema: z.object({
+      sceneId: z.string().optional().describe('Defaults to the active scene'),
+      attachmentId: z
+        .string()
+        .optional()
+        .describe("Defaults to the scene's first background map image"),
+      hint: z
+        .string()
+        .max(600)
+        .optional()
+        .describe('What the GM wants read, e.g. "ground floor only, ignore the furniture"'),
+      mode: z.enum(['merge', 'replace']).default('merge'),
+    }),
+    run: async (args, ctx) => {
+      if (!ctx.llm) {
+        throw httpError(
+          503,
+          'ai_disabled',
+          'reading a map needs the inference box; none is configured for this call',
+        );
+      }
+      return proposeGeometryFromMap(ctx.db, ctx.llm, {
+        campaignId: ctx.campaignId,
+        prompt: ctx.prompt,
+        mode: args.mode,
+        ...(args.sceneId !== undefined ? { sceneId: args.sceneId } : {}),
+        ...(args.attachmentId !== undefined ? { attachmentId: args.attachmentId } : {}),
+        ...(args.hint !== undefined ? { hint: args.hint } : {}),
+      });
+    },
+  }),
+];
+
+/**
  * The catalog handed to the model. Core first (the questions asked every
  * session), then the codex/contacts/runs/calendar/magic/matrix reads, then the
- * at-the-table tools.
+ * at-the-table tools, the recap, and last the capability-flagged vision lane.
  */
 export const FIXER_TOOLS: readonly FixerTool[] = [
   ...CORE_TOOLS,
   ...CODEX_TOOLS,
   ...TABLE_TOOLS,
+  ...RECAP_TOOLS,
+  ...VISION_TOOLS,
 ];
 
 export const TOOLS_BY_NAME: ReadonlyMap<string, FixerTool> = new Map(

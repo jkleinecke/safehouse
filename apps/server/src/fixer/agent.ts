@@ -26,11 +26,13 @@ import {
 import {
   FIXER_TOOLS,
   TOOLS_BY_NAME,
+  VISION_TOOL_NAME,
   executeTool,
   toolDefinitions,
   type FixerTool,
   type ToolContext,
 } from './tools.js';
+import { cachedVisionCapability } from './vision.js';
 import { getNpcState, getSessionLogState, isSessionLive, liveEncounterRow } from './state.js';
 import { getEncounterState, getSceneState, listCharactersState } from './state.js';
 import { usageMeter } from './usage.js';
@@ -49,7 +51,8 @@ export const FIXER_SYSTEM_PROMPT = [
   '2. Cite only provenance you were handed. search_books returns the book code and printed page for each passage; cite those and nothing else. With no retrieved page, say so plainly instead of inventing a citation.',
   '3. Quote sparingly — a phrase at most, and summarise the rest in your own words.',
   '4. You never roll dice and never decide outcomes. You lay out options and the odds you were given; the GM adjudicates.',
-  '5. Everything you produce is a draft. generate_npc, draft_wiki_page and suggest_fog_reveal save proposals for the GM to accept — never claim you changed the game.',
+  '5. Everything you produce is a draft. generate_npc, draft_wiki_page, draft_recap and suggest_fog_reveal save proposals for the GM to accept — never claim you changed the game.',
+  '5b. Anything the players will read — a recap above all — is spoiler-checked against GM-only material. When a tool hands back spoilerFlags, name them to the GM and ask reveal or cut; never quietly leave them in.',
   '6. Fiction you write is original. Do not reproduce published text.',
   '7. At the table, be terse: answer first, reasoning after. Say when you are unsure rather than guessing.',
 ].join('\n');
@@ -187,6 +190,8 @@ async function runLoop(deps: FixerDeps, opts: LoopOptions): Promise<FixerTurnRes
     campaignId: opts.campaignId,
     prompt: opts.userMessage,
     model,
+    /** Only map vision uses this — a second, multimodal call (FR12.11). */
+    llm: llm.config,
   };
 
   const emit = (type: string, payload: Record<string, unknown>): void => {
@@ -196,6 +201,10 @@ async function runLoop(deps: FixerDeps, opts: LoopOptions): Promise<FixerTurnRes
       visibility: 'gm',
     });
   };
+
+  // FR12.18: the panel shows what the model was handed before it answers, so
+  // the GM can see the snapshot was current without asking for it.
+  if (opts.snapshot) emit('fixer.snapshot', { text: opts.snapshot });
 
   const totals: LlmUsage & { latencyMs: number } = { ...ZERO_USAGE, latencyMs: 0 };
   const traces: FixerToolTrace[] = [];
@@ -254,13 +263,23 @@ async function runLoop(deps: FixerDeps, opts: LoopOptions): Promise<FixerTurnRes
 
     for (const call of turn.toolCalls) {
       const startedAt = Date.now();
-      emit('fixer.tool', { round, name: call.function.name });
+      // Two frames per call, not one: the panel's chip needs to say "running"
+      // while a `search_books` grinds through the library, then settle. A
+      // single frame left every chip reading "done" the instant it appeared.
+      emit('fixer.tool', { round, name: call.function.name, status: 'start' });
       const result = await executeTool(call.function.name, call.function.arguments, toolCtx, registry);
+      const ms = Date.now() - startedAt;
+      emit('fixer.tool', {
+        round,
+        name: call.function.name,
+        status: result.ok ? 'end' : 'error',
+        detail: result.ok ? `${ms} ms` : result.error,
+      });
       const trace: FixerToolTrace = {
         name: call.function.name,
         arguments: safeJson(call.function.arguments),
         ok: result.ok,
-        ms: Date.now() - startedAt,
+        ms,
         ...(result.error !== undefined ? { error: result.error } : {}),
       };
       traces.push(trace);
@@ -326,6 +345,24 @@ export interface FixerChatInput {
   temperature?: number;
 }
 
+/**
+ * The catalog this box can actually honour (FR12.11's capability flag).
+ *
+ * `read_map_image` is offered only when the *cached* probe says the model reads
+ * images. Cached deliberately: the probe belongs to `GET /api/fixer/status`, so
+ * a chat turn never pays two extra round trips, and an unprobed box hides the
+ * tool rather than letting the model promise the GM something that will fail
+ * halfway through a turn.
+ */
+export function toolsFor(
+  llm: LlmClient,
+  slot: ModelSlot,
+  catalog: readonly FixerTool[] = FIXER_TOOLS,
+): readonly FixerTool[] {
+  if (cachedVisionCapability(llm.config, slot).supported) return catalog;
+  return catalog.filter((t) => t.name !== VISION_TOOL_NAME);
+}
+
 /** GM chat (FR12.1–12.4) with the full tool catalog and the live snapshot. */
 export async function runFixerChat(
   deps: FixerDeps,
@@ -336,14 +373,15 @@ export async function runFixerChat(
     ...(input.conversationId !== undefined ? { conversationId: input.conversationId } : {}),
   });
   const snapshot = await buildSituationSnapshot(deps.db, input.campaignId);
+  const slot = input.slot ?? 'primary';
   return runLoop(deps, {
     campaignId: input.campaignId,
     conversation,
     systemPrompt: FIXER_SYSTEM_PROMPT,
     snapshot,
     userMessage: input.message,
-    tools: input.tools ?? FIXER_TOOLS,
-    slot: input.slot ?? 'primary',
+    tools: input.tools ?? toolsFor(deps.llm, slot),
+    slot,
     maxRounds: Math.min(Math.max(input.maxRounds ?? MAX_TOOL_ROUNDS, 1), MAX_TOOL_ROUNDS),
     ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
     mode: 'fixer',

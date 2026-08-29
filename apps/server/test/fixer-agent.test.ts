@@ -270,6 +270,31 @@ describe('streaming to the GM panel (§11, Principle 4)', () => {
     expect(deltas).toContain('stairwell');
     expect(playerSocket.has((f) => f.type.startsWith('fixer.'))).toBe(false);
   });
+
+  it('brackets every tool call with a start and an end frame', async () => {
+    // The panel's chip is the only sign the GM has that the model is still
+    // grinding through the library. One frame per call left every chip reading
+    // "done" the instant it appeared, which is the opposite of the point.
+    await mock({
+      responder: (req) =>
+        lastToolResult(req)
+          ? { content: 'Nobody is down yet.' }
+          : { toolCalls: [{ name: 'get_encounter', arguments: {} }] },
+    });
+    const gmSocket = await WsTestClient.connect(wsUrl(t.app, boot.campaignId, boot.gmToken));
+    sockets.push(gmSocket);
+
+    const res = await gm({ message: 'anyone down?' });
+    expect(res.statusCode).toBe(200);
+    await gmSocket.next((f) => f.type === 'fixer.done');
+
+    const toolFrames = gmSocket.frames
+      .filter((f) => f.type === 'fixer.tool')
+      .map((f) => f.payload as { name: string; status: string; detail?: string });
+    expect(toolFrames.map((f) => f.status)).toEqual(['start', 'end']);
+    expect(toolFrames.every((f) => f.name === 'get_encounter')).toBe(true);
+    expect(toolFrames[1]!.detail).toMatch(/ms$/);
+  });
 });
 
 describe('in-character NPC mode (FR12.5–12.6)', () => {

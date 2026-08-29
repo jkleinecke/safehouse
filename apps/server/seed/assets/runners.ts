@@ -132,20 +132,49 @@ export const WHISPER: SheetV1Input = {
   ],
   armor: [{ name: 'Weave-lined longcoat', rating: 9, worn: true }],
   gear: [
-    // INTEGRATION: SheetV1 has no bound-spirit slot (§9.3), so the spirit rides
-    // as a gear record with its Force in `rating` and services in the note.
-    {
-      name: 'Bound spirit — Ash-of-Kettles (Force 4)',
-      qty: 1,
-      rating: 4,
-      note: '2 services remaining. Answers to a kettle left to boil dry; sulks if asked to be subtle.',
-    },
-    { name: 'Reagents, common', qty: 6 },
+    // The bound spirit, the reagents and the focus are NOT gear lines: they are
+    // real tracked state now (FR8.3/FR8.4), seeded through the magic routes in
+    // `seed/demo.ts` — see WHISPERS_SPIRIT, WHISPERS_FOCUS and WHISPERS_DRAMS
+    // below. A gear line cannot spend a service or move a pool.
     { name: 'Commlink, mid-tier', qty: 1, rating: 3 },
+    { name: 'Chalk, salt, and a very old kettle', qty: 1, note: 'Ritual kit, such as it is.' },
   ],
   lifestyles: [{ name: 'Middle', costPerMonth: 5000, paidThrough: '2076-06-30' }],
   rangeTables: { ...RANGE_TABLES },
 };
+
+/**
+ * Whisper's bound spirit (FR8.3) — the one the table actually spends services
+ * from. `POST /api/campaigns/:id/magic/spirits` validates this shape, and the
+ * rules engine derives its attributes, limits, monitors and initiative from
+ * Force plus these offsets, so it is playable the moment it is summoned.
+ */
+export const WHISPERS_SPIRIT = {
+  name: 'Ash-of-Kettles',
+  spiritType: 'fire',
+  force: 4,
+  bound: true,
+  services: 2,
+  attributeOffsets: { bod: -1, agi: 2, rea: 3, str: -2 },
+  skills: [{ id: 'unarmed combat', attr: 'agi' as const }],
+  initiativeDice: 2,
+  note: 'Answers to a kettle left to boil dry; sulks if asked to be subtle.',
+};
+
+/** A bonded focus, switched on: a real toggle in the pipeline (FR8.4). */
+export const WHISPERS_FOCUS = {
+  name: 'Kettle-ring',
+  kind: 'power focus',
+  force: 2,
+  bonded: true,
+  active: true,
+  sourceKind: 'spell' as const,
+  targets: ['pool.skill.spellcasting'],
+  note: 'A band of scorched brass. Warm to the touch when she is holding something up.',
+};
+
+/** Reagent drams on hand (FR8.4). */
+export const WHISPERS_DRAMS = 6;
 
 export const SPARROW: SheetV1Input = {
   v: 1,

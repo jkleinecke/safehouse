@@ -13,4 +13,12 @@ export const codexKeys = {
   calendar: (campaignId: string) => ['codex', campaignId, 'calendar'] as const,
   contacts: (characterId: string) => ['codex', 'contacts', characterId] as const,
   campaignContacts: (campaignId: string) => ['codex', campaignId, 'contacts'] as const,
+  /**
+   * FR5.6's other half. Deliberately NOT under the `codex` prefix: this is the
+   * same cache the Opposition Kit's `useNpcTemplates` fills
+   * (`features/gm/generator/api.ts`), and sharing the key is what makes a
+   * template linked from a codex page show up as linked in the generator
+   * without a second round trip. Two keys for one list would be two lists.
+   */
+  npcTemplates: (campaignId: string) => ['campaign', campaignId, 'npc-templates'] as const,
 };

@@ -10,9 +10,19 @@
  *
  * The run boots the REAL stack against a throwaway `DATA_DIR` (see
  * `e2e/fixtures/harness.ts`): the built server, the built SPA on one origin,
- * PGlite, the demo campaign, no model, no network.
+ * PGlite, the demo campaign and one manufactured book in the library, no model,
+ * no network.
+ *
+ * **No model is a deliberate property of the shared world**, not an oversight:
+ * NG7 says the table plays with the Fixer off, and every spec here is written
+ * against that posture. The one feature that needs an inference box —
+ * `recap.spec.ts` — boots its own stack on the next port with its own
+ * `DATA_DIR` and a mock model in-process (`e2e/fixtures/ai-stack.ts`), rather
+ * than turning the Fixer on underneath everything else. PGlite's rule is one
+ * process per data directory; two directories are fine.
  *
  *   pnpm --filter @safehouse/web e2e          # guarded: skips with no browser
+ *   pnpm --filter @safehouse/web e2e -- reader.spec.ts
  *   pnpm --filter @safehouse/web e2e:install  # download chromium once
  */
 import { defineConfig, devices } from '@playwright/test';

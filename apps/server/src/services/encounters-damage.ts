@@ -22,6 +22,7 @@ import {
   type MoraleTriggers,
 } from '@safehouse/rules';
 import { characters, combatants } from '@safehouse/db';
+import type { EventTx } from '../hub.js';
 import { httpError } from './auth.js';
 import type { EncountersService } from './encounters.js';
 import {
@@ -37,10 +38,9 @@ import {
 export class CombatDamageService {
   constructor(private readonly encounters: EncountersService) {}
 
-  private get db() {
-    return this.encounters.db;
-  }
-
+  // No `db` getter: every query on these paths runs inside an open
+  // transaction and must go through `tx.db` (the deadlock rule on
+  // `Hub.atomic`). Reaching for the service's own handle here would hang.
   private get hub() {
     return this.encounters.hub;
   }
@@ -48,6 +48,14 @@ export class CombatDamageService {
   /**
    * Apply boxes to a combatant (FR4.5). Grunt rows with a `memberIndex` tick
    * that member's row instead (FR4.6) — the shared statblock is untouched.
+   *
+   * The monitor write, `combatant.damaged`, the owner's sheet mirror, the
+   * morale suggestion and both `encounter.updated` frames are ONE transaction
+   * (`Hub.atomic`). Damage is the value the table trusts least and checks
+   * most: a row that filled boxes while its event was lost leaves every player
+   * screen showing a character who is still standing, and the next reload
+   * silently disagrees with the tracker the GM is reading from. The two reads
+   * this needs happen before the block opens (the deadlock rule).
    */
   async applyDamage(input: DamageInput): Promise<DamageOutcome> {
     const encounter = await this.encounters.getEncounter(input.encounterId);
@@ -91,42 +99,44 @@ export class CombatDamageService {
     }
     copilot.lastDamage = snapshot;
 
-    const updatedRow = (
-      await this.db
-        .update(combatants)
-        .set({ monitors, initScore, copilot })
-        .where(eq(combatants.id, row.id))
-        .returning()
-    )[0]!;
-    const combatant = serializeCombatant(updatedRow);
+    return this.hub.atomic(encounter.campaignId, async (tx) => {
+      const updatedRow = (
+        await tx.db
+          .update(combatants)
+          .set({ monitors, initScore, copilot })
+          .where(eq(combatants.id, row.id))
+          .returning()
+      )[0]!;
+      const combatant = serializeCombatant(updatedRow);
 
-    await this.hub.emit(encounter.campaignId, {
-      type: 'combatant.damaged',
-      payload: {
-        encounterId: encounter.id,
-        combatantId: combatant.id,
-        name: combatant.name,
-        boxes: input.boxes,
-        track: input.track,
-        monitors: combatant.monitors,
-        condition: conditionOf(combatant.monitors),
-        woundModifier: result?.woundModifier ?? null,
-        initScore: combatant.initScore,
-        ...(gruntMember ? { gruntMember, grunt: combatant.grunt } : {}),
-        ...(input.note ? { note: input.note } : {}),
-        undoAvailable: true,
-      },
-      visibility: combatant.visibility,
+      await tx.emit({
+        type: 'combatant.damaged',
+        payload: {
+          encounterId: encounter.id,
+          combatantId: combatant.id,
+          name: combatant.name,
+          boxes: input.boxes,
+          track: input.track,
+          monitors: combatant.monitors,
+          condition: conditionOf(combatant.monitors),
+          woundModifier: result?.woundModifier ?? null,
+          initScore: combatant.initScore,
+          ...(gruntMember ? { gruntMember, grunt: combatant.grunt } : {}),
+          ...(input.note ? { note: input.note } : {}),
+          undoAvailable: true,
+        },
+        visibility: combatant.visibility,
+      });
+      await this.mirrorToCharacter(tx, combatant, result);
+      const morale = await this.evaluateMorale(tx, encounter.id, combatant);
+      await this.encounters.emitUpdated(encounter, 'damage', tx);
+      return {
+        combatant,
+        ...(result ? { result } : {}),
+        ...(gruntMember ? { gruntMember } : {}),
+        morale,
+      };
     });
-    await this.mirrorToCharacter(encounter.campaignId, combatant, result);
-    const morale = await this.evaluateMorale(encounter.campaignId, encounter.id, combatant);
-    await this.encounters.emitUpdated(encounter, 'damage');
-    return {
-      combatant,
-      ...(result ? { result } : {}),
-      ...(gruntMember ? { gruntMember } : {}),
-      morale,
-    };
   }
 
   /**
@@ -164,31 +174,33 @@ export class CombatDamageService {
     const encounter = await this.encounters.getEncounter(row.encounterId);
     if (snapshot.grunt) copilot.grunt = snapshot.grunt;
     delete copilot.lastDamage;
-    const updated = (
-      await this.db
-        .update(combatants)
-        .set({ monitors: snapshot.monitors, initScore: snapshot.initScore, copilot })
-        .where(eq(combatants.id, combatantId))
-        .returning()
-    )[0]!;
-    const combatant = serializeCombatant(updated);
-    await this.hub.emit(encounter.campaignId, {
-      type: 'combatant.damaged',
-      payload: {
-        encounterId: encounter.id,
-        combatantId: combatant.id,
-        name: combatant.name,
-        undo: true,
-        monitors: combatant.monitors,
-        condition: conditionOf(combatant.monitors),
-        initScore: combatant.initScore,
-        undoAvailable: false,
-      },
-      visibility: combatant.visibility,
+    return this.hub.atomic(encounter.campaignId, async (tx) => {
+      const updated = (
+        await tx.db
+          .update(combatants)
+          .set({ monitors: snapshot.monitors, initScore: snapshot.initScore, copilot })
+          .where(eq(combatants.id, combatantId))
+          .returning()
+      )[0]!;
+      const combatant = serializeCombatant(updated);
+      await tx.emit({
+        type: 'combatant.damaged',
+        payload: {
+          encounterId: encounter.id,
+          combatantId: combatant.id,
+          name: combatant.name,
+          undo: true,
+          monitors: combatant.monitors,
+          condition: conditionOf(combatant.monitors),
+          initScore: combatant.initScore,
+          undoAvailable: false,
+        },
+        visibility: combatant.visibility,
+      });
+      await this.mirrorToCharacter(tx, combatant);
+      await this.encounters.emitUpdated(encounter, 'damage.undo', tx);
+      return combatant;
     });
-    await this.mirrorToCharacter(encounter.campaignId, combatant);
-    await this.encounters.emitUpdated(encounter, 'damage.undo');
-    return combatant;
   }
 
   /**
@@ -198,16 +210,17 @@ export class CombatDamageService {
    * owner; point it at the play-state row once the characters agent lands one.
    */
   private async mirrorToCharacter(
-    campaignId: string,
+    tx: EventTx,
     combatant: Combatant,
     result?: DamageResult,
   ): Promise<void> {
     if (combatant.source !== 'character' || !combatant.sourceId) return;
+    // `tx.db`, never `this.db` — the caller's transaction is open (`Hub.atomic`).
     const character = (
-      await this.db.select().from(characters).where(eq(characters.id, combatant.sourceId)).limit(1)
+      await tx.db.select().from(characters).where(eq(characters.id, combatant.sourceId)).limit(1)
     )[0];
     if (!character) return;
-    await this.hub.emit(campaignId, {
+    await tx.emit({
       type: 'sheet.updated',
       payload: {
         characterId: character.id,
@@ -228,7 +241,7 @@ export class CombatDamageService {
    * and the log records it.
    */
   private async evaluateMorale(
-    campaignId: string,
+    tx: EventTx,
     encounterId: string,
     target: Combatant,
   ): Promise<(MoraleReport & { combatantId: string }) | null> {
@@ -241,7 +254,9 @@ export class CombatDamageService {
       });
       pr = target.grunt.professionalRating;
     } else {
-      const side = (await this.encounters.listCombatants(encounterId)).filter(
+      // Through the transaction handle: the damage row is already written and
+      // the side's casualty count has to be measured against THAT state.
+      const side = (await this.encounters.listCombatants(encounterId, tx)).filter(
         (c) => c.source !== 'character',
       );
       const bodies = side.reduce((n, c) => n + (c.grunt ? c.grunt.size : 1), 0);
@@ -258,7 +273,7 @@ export class CombatDamageService {
     }
     const report = moraleReport(pr, triggers);
     if (report.pressure === 0) return null;
-    await this.hub.emit(campaignId, {
+    await tx.emit({
       type: 'log.posted',
       payload: {
         kind: 'morale',

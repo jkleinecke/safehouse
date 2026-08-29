@@ -21,9 +21,13 @@
  * `combat` + `combat-close` + `edge` (the firefight), and the wrap below.
  */
 import { fileURLToPath } from 'node:url';
+import { aftermath } from './playthrough/aftermath.js';
+import { atomicity } from './playthrough/atomicity.js';
 import { combat } from './playthrough/combat.js';
 import { fixer } from './playthrough/fixer.js';
 import { Api, Checks, Live, Story, settle, writeReport } from './playthrough/harness.js';
+import { hints } from './playthrough/hints.js';
+import { macros } from './playthrough/macros.js';
 import { recapContext } from './playthrough/mock-script.js';
 import { pairing } from './playthrough/pairing.js';
 import { prep } from './playthrough/prep.js';
@@ -137,6 +141,7 @@ async function main(world: World): Promise<void> {
   );
 
   await pairing(ctx, world, gm, anon, phones);
+  await macros(ctx, world, gm, phones);
 
   // =========================================================================
   // 2–5 — prep, the pier, the Fixer, the firefight
@@ -151,10 +156,24 @@ async function main(world: World): Promise<void> {
   // write from the log the table stares at. This one reads the log.
   await sharedLog(ctx, world, gm, phones, gmLive);
 
+  // FR10.10, on the planner path that actually carries role tags onto a row.
+  await hints(ctx, gm, phones, cid, written.templateId);
+  gaps.push(
+    '**FR10.10 reaches only the planner path.** `hintForCombatant` looks the template up ' +
+      'through `copilot.generator.templateId`, which only `POST /api/encounters/build` and the ' +
+      'grunt-group inserter write. A row added through `POST /api/encounters/:id/combatants` with ' +
+      "`source: 'generated', sourceId: <templateId>` — how the pier fight's four gangers were " +
+      'built, and how the copilot rack is meant to be used — gets `copilot.generator = ' +
+      '{ professionalRating }` and no template, so it is silent even with hints switched on. ' +
+      'One line in `EncountersService.addCombatant` (carry `sourceId` into `generator.templateId` ' +
+      "when `source === 'generated'`) would close it; nothing here is wrong, it is just narrower " +
+      'than the FR reads.',
+  );
+
   // =========================================================================
-  // 6 — housekeeping
+  // 7 — housekeeping
   // =========================================================================
-  checks.beat('6 · Wrap');
+  checks.beat('7 · Wrap');
   story.beat('After — the housekeeping beat, while everyone is still connected');
 
   // Two roads into the same ledger, both PENDING until the GM says otherwise:
@@ -245,29 +264,66 @@ async function main(world: World): Promise<void> {
   checks.record('…and a GM-only table stays GM-only', 'absent for players', playerLog.events.some((e) => e.id === draw.event.id) ? 'leaked' : 'absent', !playerLog.events.some((e) => e.id === draw.event.id));
   story.say(`The crate moves, and the GM draws from *Docklands complications*: “${draw.entry.text}”`);
 
-  // --- the recap draft ------------------------------------------------------
+  // --- the recap draft (FR12.12) -------------------------------------------
+  // `draft_recap`, not `draft_wiki_page` with a different prompt: the facts come
+  // out of the session log rather than out of the model (D13), and the FR12.19
+  // spoiler guard runs unconditionally because a recap is player-facing by
+  // definition — FR6.3 posts it to Discord, and with the app offline to players
+  // between sessions it is their only window into the campaign.
   recapContext.gangerName = pier.hiddenNames.find((n) => n.includes('pallet')) ?? pier.hiddenNames[0] ?? 'Ratchet — catwalk';
+  const sessionBeforeRecap = await gm.get<{ session: { recapMd: string | null } }>(`/api/sessions/${sessionId}`);
   const recapTurn = await gm.post<{ tools: { name: string; ok: boolean }[]; text: string }>('/api/fixer/chat', {
     campaignId: cid,
     message: 'Draft the recap for tonight from the log. It goes to the players.',
   });
-  checks.eq('the Fixer drafts the recap through draft_wiki_page', ['draft_wiki_page'], recapTurn.tools.map((t) => t.name));
+  checks.eq(
+    'the Fixer reads the log, then drafts the recap through draft_recap (FR12.12)',
+    ['get_session_log', 'draft_recap'],
+    recapTurn.tools.map((t) => t.name),
+  );
   const drafts = await gm.get<{ generations: { id: string; kind: string; status: string; output: Dict }[] }>(
     `/api/campaigns/${cid}/generations?status=draft`,
   );
-  const recapDraft = drafts.generations.find((g) => g.kind === 'wiki_page');
-  checks.record('nothing was applied — it is an ai_generations draft', 'status draft', recapDraft?.status ?? 'missing', recapDraft?.status === 'draft');
+  const recapDraft = drafts.generations.find((g) => g.kind === 'recap');
+  checks.record('nothing was applied — it is an ai_generations draft', 'kind recap, status draft', `${recapDraft?.kind ?? 'missing'} / ${recapDraft?.status ?? 'missing'}`, recapDraft?.kind === 'recap' && recapDraft.status === 'draft');
+  const recapMd = String(recapDraft?.output['recapMd'] ?? '');
+  const digest = (recapDraft?.output['digest'] ?? {}) as Dict;
+  const digestRolls = (digest['rolls'] ?? {}) as { total?: number };
+  checks.record(
+    '…whose numbers came off the log, not out of the model (D13)',
+    'the roll tally and the award lines assembled server-side',
+    `${String(digestRolls.total)} public rolls · ${((digest['awards'] ?? []) as unknown[]).length} award line(s) in the body`,
+    (digestRolls.total ?? 0) > 0 && recapMd.includes('## What the log says'),
+  );
   const flags = (recapDraft?.output['spoilerFlags'] ?? []) as { name: string }[];
   checks.record(
     'the spoiler guard caught the GM-only name in it (FR12.19)',
-    'at least one flag',
+    `a flag naming "${recapContext.gangerName}"`,
     flags.map((f) => f.name).join(', ') || 'none',
-    flags.length > 0,
+    flags.length > 0 && flags.some((f) => f.name === recapContext.gangerName),
   );
-  const accepted = await gm.post<{ applied: { table: string; id: string } }>(`/api/generations/${recapDraft?.id}/accept`);
-  checks.eq('accepting it creates the codex page', 'wiki_pages', accepted.applied.table);
+  checks.record(
+    '…and it never auto-applied: the session still holds whatever the GM last wrote',
+    'session.recapMd untouched by the draft',
+    (await gm.get<{ session: { recapMd: string | null } }>(`/api/sessions/${sessionId}`)).session.recapMd ===
+      sessionBeforeRecap.session.recapMd
+      ? 'unchanged'
+      : 'WRITTEN WITHOUT CONSENT',
+    (await gm.get<{ session: { recapMd: string | null } }>(`/api/sessions/${sessionId}`)).session.recapMd ===
+      sessionBeforeRecap.session.recapMd,
+  );
+  const accepted = await gm.post<{ applied: { table: string; id: string; note?: string } }>(`/api/generations/${recapDraft?.id}/accept`);
+  checks.eq('accepting it writes the draft onto the session, and no further', 'game_sessions', accepted.applied.table);
+  checks.eq('…the session it was actually about', sessionId, accepted.applied.id);
+  const onSession = await gm.get<{ session: { recapMd: string | null } }>(`/api/sessions/${sessionId}`);
+  checks.record(
+    '…and publishing to Discord is still a separate GM action (Principle 8)',
+    'the markdown on the session, still unpublished',
+    `${(onSession.session.recapMd ?? '').length} chars on game_sessions.recap_md`,
+    onSession.session.recapMd === recapMd,
+  );
 
-  const clean = String(recapDraft?.output['contentMd'] ?? '').replace(recapContext.gangerName, 'the one on the pallet rows');
+  const clean = recapMd.replace(recapContext.gangerName, 'the one on the pallet rows');
   await gm.patch(`/api/sessions/${sessionId}`, { recapMd: clean });
   const published = await gm.post<{ published: boolean; headlines: string[]; discord: string }>(
     `/api/sessions/${sessionId}/publish-recap`,
@@ -295,7 +351,25 @@ async function main(world: World): Promise<void> {
       'written, edited and posted before anyone has found their coat.',
   );
 
+  // =========================================================================
+  // 8–9 — the two things no in-fiction beat can reach
+  // =========================================================================
+  // Half-commit: break the event log on purpose and prove the domain rows go
+  // with it. Run on the real campaign, after the table has stopped playing.
+  await atomicity(ctx, world, gm, phones['Torque']!.characterId);
+
+  // Sockets down first — the server is about to stop for the restart.
   for (const l of everyone) l.close();
+  await settle();
+
+  await aftermath({
+    ctx,
+    world,
+    sessionId,
+    aliases: ALIASES,
+    characterIds: world.characterIds,
+  });
+
   await brain.mock.close();
 }
 

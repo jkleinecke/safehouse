@@ -34,6 +34,18 @@ interface Generation {
   output: Dict;
 }
 
+interface Status {
+  enabled: boolean;
+  models: { primary: string; fast: string } | null;
+  vision: {
+    supported: boolean;
+    via: string;
+    model: string | null;
+    note: string;
+    checkedAt: string;
+  };
+}
+
 export interface FixerResult {
   mock: MockLlmServer;
   /** The Rusted Halo template id, for the firefight's generator calls. */
@@ -56,7 +68,10 @@ export async function fixer(
   process.env['LLM_BASE_URL'] = mock.baseUrl;
   process.env['LLM_MODEL_PRIMARY'] = 'mock-primary';
   process.env['LLM_MODEL_FAST'] = 'mock-fast';
-  checks.eq('AI entry points switch on with LLM_BASE_URL set', true, (await gm.get<{ enabled: boolean }>('/api/fixer/status')).enabled);
+  const status = await gm.get<Status>('/api/fixer/status?probe=refresh');
+  checks.eq('AI entry points switch on with LLM_BASE_URL set', true, status.enabled);
+
+  await visionProbe(ctx, gm, status);
 
   const chat = await gm.post<ChatTurn>('/api/fixer/chat', {
     campaignId: cid,
@@ -82,6 +97,15 @@ export async function fixer(
   );
   checks.record('the answer quotes the live count back', 'a sentence naming 4 hidden tokens', chat.text, chat.text.includes('4 still hidden'));
   checks.eq('a live session prefixes the situation snapshot (FR12.18)', true, chat.snapshotApplied);
+  // The catalog route lists every tool that exists; what matters is the list
+  // actually put on the wire, which is where the FR12.11 flag bites.
+  const offered = (mock.lastRequest()?.tools ?? []).map((t) => t.function.name);
+  checks.record(
+    'the model is never offered the tool this box cannot run (FR12.11)',
+    'read_map_image absent from the tools sent to the model',
+    `${offered.length} tools offered, read_map_image ${offered.includes('read_map_image') ? 'OFFERED' : 'withheld'}`,
+    offered.length > 0 && !offered.includes('read_map_image'),
+  );
   story.say(`**Fixer:** ${chat.text}`);
 
   await catalog(ctx, world, gm, mock, phones);
@@ -89,6 +113,65 @@ export async function fixer(
   const templateId = await generation(ctx, world, gm);
   await layout(ctx, world, gm);
   return { mock, templateId };
+}
+
+// ---------------------------------------------------------------------------
+// FR12.11 — "requires a vision-capable local model; the feature hides otherwise"
+// ---------------------------------------------------------------------------
+
+/**
+ * The capability probe, on a box that cannot read images.
+ *
+ * This is the ordinary case on the table's hardware: the inference box runs a
+ * text-only instruct model, because that is the one that fits. The FR does not
+ * ask the app to cope — it asks it to *hide the feature*, which means something
+ * has to answer "does this box read images?" before a map is ever sent
+ * anywhere. The mock refuses the probe's image content part exactly the way
+ * llama.cpp with no projector does (see `mock-script.ts`), so what is asserted
+ * here is the real probe path: `GET /props` says nothing, the image probe is
+ * refused, and the answer is a clean, explained `supported: false` — not a
+ * crash, not a silent success, and not a map read by a model that never looked.
+ */
+async function visionProbe(ctx: Ctx, gm: Api, status: Status): Promise<void> {
+  const { checks, story } = ctx;
+  checks.record(
+    'the vision probe reports cleanly on a model with no image support (FR12.11)',
+    'supported false, via `probe`, with a reason the GM can read',
+    `supported ${status.vision.supported} · via ${status.vision.via} · model ${String(
+      status.vision.model,
+    )} · “${status.vision.note}”`,
+    status.vision.supported === false &&
+      status.vision.via === 'probe' &&
+      status.vision.model === 'mock-primary' &&
+      status.vision.note.length > 0,
+  );
+  checks.record(
+    '…and it is an answer, not an outage: the rest of the Fixer is on',
+    'enabled true beside vision false',
+    `enabled ${status.enabled}, vision ${status.vision.supported}`,
+    status.enabled && !status.vision.supported,
+  );
+
+  // The one route that needs the capability says so with its own status code,
+  // so the button can be hidden before it is ever pressed rather than failing
+  // in the GM's hands.
+  const refused = await gm.raw('POST', '/api/fixer/read-map', {});
+  const body = JSON.parse(refused.body || '{}') as { error?: { code?: string; message?: string } };
+  checks.record(
+    'the map-vision lane refuses by name rather than pretending',
+    '501 vision_unsupported, explaining which box and which model',
+    `${refused.status} ${String(body.error?.code)}: ${String(body.error?.message)}`,
+    refused.status === 501 &&
+      body.error?.code === 'vision_unsupported' &&
+      String(body.error?.message).includes('cannot read images'),
+  );
+
+  story.say(
+    'Before anything else, the app asks the box a question it will not guess at: *do you read images?* The box ' +
+      'refuses the test image, which is the answer — so the map-vision half of the layout copilot simply is not ' +
+      'there tonight. The model is never offered the tool, the button reports `vision_unsupported` rather than ' +
+      'failing in the GM\'s hands, and everything else the Fixer does carries on unaffected.',
+  );
 }
 
 // ---------------------------------------------------------------------------

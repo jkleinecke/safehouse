@@ -6,6 +6,7 @@
  * Split from combat.ts only for length; it is one continuous fight.
  */
 import { diceLine, settle, type Api, type Live } from './harness.js';
+import { magic } from './magic.js';
 import {
   sceneEntry,
   type Combatant,
@@ -250,7 +251,21 @@ export async function closeFight(fight: Fight): Promise<void> {
       `*${String(morale?.['suggestion']).replace(/_/g, ' ')}*. The GM decides.`,
   );
 
+  // --- Whisper calls in what she is owed (M8) -------------------------------
+  // After the morale beat on purpose: a spirit joining the fight adds a body to
+  // the opposition-side arithmetic FR10.9 counts, and the squad's own numbers
+  // had to be measured first.
+  await magic({
+    ctx,
+    gm,
+    gmLive,
+    phones,
+    campaignId: cid,
+    encounterId: eid,
+  });
+
   // --- Ratchet calls it -----------------------------------------------------
+  checks.beat('5c · Ratchet calls it off');
   const ratchet = hiddenNames.find((n) => n.startsWith('Ratchet')) ?? 'Ratchet';
   await gm.post(`/api/campaigns/${cid}/log`, {
     kind: 'talk',

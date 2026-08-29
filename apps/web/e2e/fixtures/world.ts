@@ -55,12 +55,56 @@ export interface World {
     actorName: string;
   };
 
+  /**
+   * The one book in the library (M11). The PDF is manufactured by
+   * `fixtures/pdf.ts` and registered through the real `seed:books` path, so the
+   * code and offset are the seeder's own guess for the core rulebook, not
+   * values the fixture asserted into existence.
+   */
+  book: {
+    /** `SR5`. */
+    code: string;
+    title: string;
+    /** The printed page the reader spec opens: 426. */
+    printedPage: number;
+    /** What the server resolved it to — 431, if the offset is the measured +5. */
+    pdfPage: number;
+    pageOffset: number;
+    /** Pages in the file, so a clamp can be told apart from a jump. */
+    pageCount: number;
+    /** Bytes on disk — the denominator for "streamed, not downloaded". */
+    bytes: number;
+    /** A shared codex page whose prose autolinks `SR5 p.426` into a chip. */
+    refPageId: string;
+    refPageTitle: string;
+  };
+
+  /**
+   * The generator-backed NPC that is UP, and therefore the one row FR10.10
+   * puts a tactical hint on. GM-visibility: a player's tracker has neither the
+   * row nor the hint.
+   */
+  hint: {
+    combatantId: string;
+    name: string;
+  };
+
   /** Reusable invite codes minted for the specs (maxUses is unlimited). */
   codes: {
     display: string;
     player: string;
   };
 }
+
+/**
+ * The sentence on the codex ref page that ends in `SR5 p.426`.
+ *
+ * Shared between the arrangement that writes it and the spec that clicks the
+ * chip inside it, because the page has TWO chips for the same ref: the one
+ * FR11.4 autolinked out of the prose, and the one the sidebar renders from the
+ * page's structured `refs`. The reader spec is about the first.
+ */
+export const REF_PROSE = 'but the table still wants the page:';
 
 export const WORLD_ENV = 'SAFEHOUSE_E2E_WORLD';
 

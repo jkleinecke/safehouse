@@ -65,9 +65,11 @@ import {
   liveWounds,
   loadCharacter,
   saveCharacter,
-  sustainedModifiers,
   type CharacterRecord,
 } from './characters.js';
+// Sustaining (with spirit exemptions) + live foci, composed the one way
+// `deriveView` and the Magic tab compose them (FR8.2/FR8.4).
+import { magicSituationalFor } from './magic-derive.js';
 import { applyEdgeOp } from './character-play.js';
 
 // The read side (record shape, pagination, SQL visibility filter) and the
@@ -411,11 +413,13 @@ export class RollService {
       // scene line twice had the penalty applied twice. Drop the echo and give
       // the dice back, so `pool` always equals the sum of its own receipt.
       //
-      // INTEGRATION (web): the roll dialog may keep SHOWING the scene chip —
+      // The web side keeps SHOWING the scene chip and does not re-add it:
       // `GET /api/characters/:id/derived` returns the applied `situational`
-      // modifiers precisely so it can be rendered as "already in the pool"
-      // rather than added again. Send `meta.poolRef` with a sheet-backed roll
-      // and §10.1's full recompute takes over from this repair path.
+      // modifiers precisely so the dialog can render them as "already in the
+      // pool" (`features/sheet/rollDialogState.ts`). It also sends
+      // `meta.poolRef` with every sheet-backed roll, which puts the roll on
+      // §10.1's full recompute and past this repair path entirely — so what
+      // follows is for free-form rolls and older clients.
       const { entries, dropped } = dedupeSceneEntries(req.breakdown);
       if (dropped.length === 0) return { pool: req.pool, breakdown: entries, limit: req.limit };
       const returned = dropped.reduce((sum, e) => sum + e.value, 0);
@@ -439,18 +443,21 @@ export class RollService {
   }
 
   /**
-   * Scene environment + sustaining are the server's to know; the client may
-   * only contribute chips it alone can see (range to target, a GM's ad-hoc
-   * situational), and duplicates by id are dropped so a chip the client also
-   * previewed can never be counted twice.
+   * Scene environment, sustaining and bonded foci are the server's to know; the
+   * client may only contribute chips it alone can see (range to target, a GM's
+   * ad-hoc situational), and duplicates by id are dropped so a chip the client
+   * also previewed can never be counted twice.
    */
   private async situationalFor(
     campaignId: string,
     rec: CharacterRecord,
     rawMods: unknown,
   ): Promise<Modifier[]> {
-    const scene = await activeSceneModifiers(this.db, campaignId);
-    const mods: Modifier[] = [...scene.mods, ...sustainedModifiers(rec.play)];
+    const [scene, magic] = await Promise.all([
+      activeSceneModifiers(this.db, campaignId),
+      magicSituationalFor(this.db, campaignId, rec.id, rec.play.sustained),
+    ]);
+    const mods: Modifier[] = [...scene.mods, ...magic];
     const seen = new Set(mods.map((m) => m.id));
     for (const mod of parseModifiers(rawMods)) {
       const kind = mod.source.kind;

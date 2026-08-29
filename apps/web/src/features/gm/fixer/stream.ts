@@ -3,13 +3,19 @@
  * (FR12.1): streamed deltas → assistant messages, tool-call chips, situation
  * snapshot, and a tokens/latency usage tally (FR12.16).
  *
- * INTEGRATION: payload shapes assumed from DESIGN.md M12 — align with the
- * server fixer plugin's ephemeral emissions:
- *   fixer.delta    { conversationId?, delta | text | content }
- *   fixer.tool     { name | tool, status?: 'start'|'end'|'error', detail? }
- *   fixer.snapshot { text | summary }   (FR12.18 situation snapshot)
- *   fixer.done     { usage?: { promptTokens?, completionTokens?, totalTokens?, latencyMs? } }
+ * The shapes below are what `src/fixer/agent.ts` actually emits over the hub as
+ * gm-visibility ephemeral events; the reducer stays lenient about aliases so a
+ * server that renames a field does not blank the panel mid-session:
+ *   fixer.delta    { conversationId, mode, round, text }
+ *   fixer.tool     { name, status: 'start' | 'end' | 'error', detail? } — two
+ *                  frames per call, so a chip reads "running" while it runs
+ *   fixer.snapshot { text }   (FR12.18 situation snapshot, once per turn)
+ *   fixer.done     { text, rounds, truncated, usage: { promptTokens,
+ *                    completionTokens, totalTokens, latencyMs }, tools[] }
  *   fixer.error    { code?, message? }
+ *
+ * A `fixer.tool` with no `status` is treated as *running* and settled by the
+ * turn's `fixer.done`: an unfinished call must never look finished.
  */
 import type { FixerChunk } from '../../../live/store.js';
 
@@ -123,7 +129,13 @@ export function reduceFixerStream(chunks: readonly FixerChunk[]): FixerView {
         const status = str(payload['status']);
         const detail = str(payload['detail']) ?? str(payload['summary']);
         const mapped: ToolChip['status'] =
-          status === 'error' ? 'error' : status === 'start' || status === 'running' ? 'running' : 'done';
+          status === 'error'
+            ? 'error'
+            : status === 'end' || status === 'done'
+              ? 'done'
+              : // 'start', 'running', or a server that sent no status at all:
+                // an unfinished call must never look finished.
+                'running';
         const prior = msg.chips.find((c) => c.name === name && c.status === 'running');
         if (prior && mapped !== 'running') {
           prior.status = mapped;
@@ -142,6 +154,9 @@ export function reduceFixerStream(chunks: readonly FixerChunk[]): FixerView {
       case 'fixer.done': {
         const msg = open(current, chunk.ts);
         msg.done = true;
+        // The turn is over, so nothing can still be running — a dropped `end`
+        // frame must not leave a chip spinning for the rest of the session.
+        for (const chip of msg.chips) if (chip.status === 'running') chip.status = 'done';
         const usage = parseUsage(payload);
         if (usage) {
           msg.usage = usage;

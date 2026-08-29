@@ -35,6 +35,7 @@ import {
   type EncounterRow,
 } from '../services/encounters.js';
 import { CombatDamageService } from '../services/encounters-damage.js';
+import { hintForCombatant } from '../services/tactical-hints.js';
 import {
   buildRack,
   bulletsForMode,
@@ -413,11 +414,16 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
     const combatant = await service.combatantIn(row.encounterId, id);
     const query = parse(QuickRollQuery, req.query);
     const { rack } = await rackFor(encounter, combatant, query);
+    // FR10.10: one advisory line, GM-only (this route is), off unless the
+    // campaign set `settings.tacticalHints`. It never acts — see
+    // services/tactical-hints.ts.
+    const hint = await hintForCombatant(app.db, encounter.campaignId, combatant);
     return {
       combatantId: id,
       woundModifier: rack.woundModifier,
       entries: rack.entries,
       sceneModifiers: environmentEntries(await service.sceneModifiers(encounter)),
+      ...(hint ? { hint } : {}),
     };
   });
 

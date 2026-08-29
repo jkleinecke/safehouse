@@ -59,6 +59,20 @@ jobs:
       - name: Regression — seed in one process, serve from the next
         run: pnpm --filter @safehouse/server exec vitest run test/seeded-boot.test.ts
 
+      # The same hazard reached the two ways a real deployment reaches it, since
+      # the one above manufactures the state with `setval`:
+      #   · a file-copy RESTORE of DATA_DIR — what infra/backup.sh produces, and
+      #     what recovery from it looks like: copy the directory back and boot.
+      #     Nothing had ever booted the server on a copied database, so the whole
+      #     backup story was a shell script and a hope.
+      #   · a MOVE from embedded PGlite to a DATABASE_URL Postgres with the ids
+      #     preserved (apps/server/scripts/migrate-to-postgres.ts), which is the
+      #     upgrade path the compose stack implies and had no script at all.
+      # The driver hop needs a real server, so that block skips here and runs in
+      # the `restore-postgres` job below; everything else runs on any machine.
+      - name: Regression — restore a copied DATA_DIR and boot on it
+        run: pnpm --filter @safehouse/server exec vitest run test/restore-boot.test.ts
+
       # No Docker, no testcontainers: the server suites boot a throwaway PGlite
       # per file under a temp DATA_DIR (BUILD_CONVENTIONS, "Ports, env, database").
       - name: Test
@@ -93,6 +107,60 @@ jobs:
           path: apps/web/test-results
           if-no-files-found: ignore
           retention-days: 7
+
+  # The half of the deployment story that needs a server the laptop does not
+  # have: moving a campaign off embedded PGlite onto a real Postgres, ids and
+  # sequences intact. `restore-boot.test.ts` skips that block when
+  # SAFEHOUSE_TEST_DATABASE_URL is unset — which is every developer machine, by
+  # design (BUILD_CONVENTIONS: tests never require Docker) — so this job is the
+  # one place it actually runs, over node-postgres instead of PGlite.
+  #
+  # Independent of `verify`: it proves a different thing and a failure here
+  # should read as "the move is broken", not "the build is broken".
+  restore-postgres:
+    name: PGlite → Postgres move
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: safehouse
+          POSTGRES_PASSWORD: safehouse
+          POSTGRES_DB: safehouse_move_test
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U safehouse -d safehouse_move_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # Workspace packages resolve to dist/, so the server's three dependencies
+      # (contracts, rules, db) have to exist before vitest loads anything.
+      - name: Build the server's workspace dependencies
+        run: pnpm --filter "@safehouse/server^..." --workspace-concurrency=1 build
+
+      - name: Restore, then move the campaign into Postgres
+        run: pnpm --filter @safehouse/server exec vitest run test/restore-boot.test.ts
+        env:
+          # A throwaway database from the service above — the suite resets its
+          # `public` and `drizzle` schemas before the move, which is safe here
+          # and is why the variable is named for tests rather than DATABASE_URL.
+          SAFEHOUSE_TEST_DATABASE_URL: postgres://safehouse:safehouse@localhost:5432/safehouse_move_test
 
   # Multi-arch by construction (§16): a dependency with an x86-only native
   # binary must fail the build here, not at the venue. Build only — publishing

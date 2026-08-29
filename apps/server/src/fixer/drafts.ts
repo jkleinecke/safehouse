@@ -12,7 +12,15 @@
  */
 import { and, desc, eq } from 'drizzle-orm';
 import { FogStateSchema, PersonaSchema, SceneGeometrySchema } from '@safehouse/contracts';
-import { aiGenerations, npcTemplates, scenes, tokens, wikiPages, type Db } from '@safehouse/db';
+import {
+  aiGenerations,
+  gameSessions,
+  npcTemplates,
+  scenes,
+  tokens,
+  wikiPages,
+  type Db,
+} from '@safehouse/db';
 import { httpError } from '../services/auth.js';
 import { gmOnlyNames } from './state.js';
 import type { LlmUsage } from './llm.js';
@@ -26,6 +34,7 @@ export const DRAFT_KINDS = [
   'fog_reveal',
   'token_label',
   'geometry',
+  'recap',
 ] as const;
 export type DraftKind = (typeof DRAFT_KINDS)[number];
 
@@ -192,6 +201,8 @@ async function applyDraft(db: Db, row: GenerationRow): Promise<AppliedRef> {
       return applyTokenLabelDraft(db, row);
     case 'geometry':
       return applyGeometryDraft(db, row);
+    case 'recap':
+      return applyRecapDraft(db, row);
     default:
       throw httpError(
         400,
@@ -277,6 +288,34 @@ async function applyFogDraft(db: Db, row: GenerationRow): Promise<AppliedRef> {
     table: 'scenes',
     id: scene.id,
     note: `revealed ${regionIds.length} fog region(s) on "${scene.name}"`,
+  };
+}
+
+/**
+ * Recap draft (FR12.12) → `game_sessions.recap_md`, the *draft* field the GM
+ * edits. Accepting a recap publishes nothing: FR6.3's Discord post is a
+ * separate, explicit GM action against the same column, so the AI's output
+ * still stops one tap short of the players (Principle 8).
+ */
+async function applyRecapDraft(db: Db, row: GenerationRow): Promise<AppliedRef> {
+  const out = output(row);
+  const sessionId = str(out['sessionId']);
+  if (sessionId.length === 0) throw httpError(400, 'bad_request', 'recap draft carries no sessionId');
+  const session = (
+    await db.select().from(gameSessions).where(eq(gameSessions.id, sessionId)).limit(1)
+  )[0];
+  if (!session || session.campaignId !== row.campaignId) {
+    throw httpError(404, 'not_found', 'recap draft points at an unknown session');
+  }
+  const recapMd = str(out['recapMd']);
+  if (recapMd.trim().length === 0) {
+    throw httpError(400, 'bad_request', 'recap draft carries no markdown');
+  }
+  await db.update(gameSessions).set({ recapMd }).where(eq(gameSessions.id, session.id));
+  return {
+    table: 'game_sessions',
+    id: session.id,
+    note: `wrote the recap draft onto session ${session.date ?? session.id} — publish is still a separate GM action`,
   };
 }
 

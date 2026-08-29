@@ -274,11 +274,12 @@ const normalizeName = (s: string): string => s.trim().toLowerCase();
 /**
  * Resolve which token a combatant row drives.
  *
- * `tokenId` is the answer whenever the server sends one. It does not send one
- * to a display device yet (see the INTEGRATION note on `TvCombatantRow`), so
- * two fallbacks stand in: the shared `sourceId` (same character behind both
- * rows), then an unambiguous name match. An ambiguous name matches nothing —
- * a glow on the wrong token is worse than no glow at all.
+ * `tokenId` is the answer whenever the server sends one, and the public
+ * combatant view now does (`encounters-model.ts#encounterForViewer` — see the
+ * note on `TvCombatantRow`). Two fallbacks stand behind it for rows that carry
+ * no token: the shared `sourceId` (same character behind both rows), then an
+ * unambiguous name match. An ambiguous name matches nothing — a glow on the
+ * wrong token is worse than no glow at all.
  */
 function tokenIndex(tokens: readonly Token[]): {
   byId: Map<string, Token>;

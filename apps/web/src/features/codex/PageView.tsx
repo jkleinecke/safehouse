@@ -17,6 +17,7 @@ import { RefChip } from '../gm/books/RefChip.js';
 import { ErrorNote } from '../gm/ui.js';
 import Markdown from './Markdown.js';
 import HandoutsPanel from './HandoutsPanel.js';
+import TemplatePanel from './TemplatePanel.js';
 import {
   useDeletePage,
   usePage,
@@ -394,6 +395,10 @@ export default function PageView({ campaignId, pageId, isGm, onCreatePrompt }: P
           )}
 
           <HandoutsPanel campaignId={campaignId} page={page} isGm={isGm} />
+
+          {/* FR5.6 — the archetypes this page is the entry for. Renders
+              nothing for a player: the field is not in their response. */}
+          <TemplatePanel campaignId={campaignId} page={page} isGm={isGm} />
 
           {isGm && (
             <button

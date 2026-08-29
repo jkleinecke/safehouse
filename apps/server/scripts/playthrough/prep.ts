@@ -54,10 +54,20 @@ interface ContactDto {
   favours: { owed: number; owing: number };
 }
 
+interface TemplateLink {
+  templateId: string;
+  name: string;
+  roleTags: string[];
+  wikiPageId: string | null;
+  hasPageRef: boolean;
+}
+
 export interface PrepResult {
   haloPageId: string;
   runId: string;
   contactId: string;
+  /** The Rusted Halo archetype template, now linked to the gang's page (FR5.6). */
+  templateId: string;
 }
 
 export async function prep(
@@ -224,6 +234,49 @@ export async function prep(
     briefed.run.objectives.length === 2 && briefed.run.payout.nuyen === 8000,
   );
 
+  // --- FR5.6: the page and the archetype template point at each other -------
+  // Before this, `npc_templates` and `wiki_pages` were two disconnected tables
+  // describing the same gang: the page that says who the Rusted Halo are and
+  // the template that says what one of them rolls. One column joins them, and
+  // the link is GM-only in both directions — a location page shared with the
+  // table must not leak the opposition waiting in it.
+  const templates = await gm.get<{ templates: { id: string; name: string }[] }>(
+    `/api/campaigns/${cid}/npc-templates`,
+  );
+  const halo = templates.templates.find((t) => t.name.includes('Rusted Halo'));
+  if (!halo) throw new Error('seed left no Rusted Halo template');
+  const linked = await gm.post<{ link: TemplateLink }>(`/api/wiki/${pageId}/templates`, {
+    templateId: halo.id,
+  });
+  checks.record(
+    'the archetype template is linked to the codex page that describes it (FR5.6)',
+    'the template naming the page, with its role tags',
+    `${linked.link.name} → page ${linked.link.wikiPageId === pageId ? 'matched' : 'MISMATCH'} · tags ${linked.link.roleTags.join(', ')}`,
+    linked.link.wikiPageId === pageId && linked.link.roleTags.includes('ganger'),
+  );
+  const pageWithTemplates = await gm.get<{ page: PageDto & { templates?: TemplateLink[] } }>(
+    `/api/wiki/${pageId}`,
+  );
+  checks.record(
+    '…and the page resolves back to it, so the two are one graph',
+    'the template listed on the page',
+    (pageWithTemplates.page.templates ?? []).map((t) => t.name).join(', ') || 'none',
+    (pageWithTemplates.page.templates ?? []).some((t) => t.templateId === halo.id),
+  );
+  const templateRow = await gm.get<{ template: { id: string; wikiPageId: string | null } }>(
+    `/api/npc-templates/${halo.id}`,
+  );
+  checks.eq('…on the template row itself, not in a join table', pageId, templateRow.template.wikiPageId);
+  const playerCopy = await torque.api.get<{ page: PageDto & { templates?: unknown } }>(
+    `/api/wiki/${pageId}`,
+  );
+  checks.record(
+    '…and a player’s copy of a shared page carries no opposition at all',
+    'no templates key on the phone’s payload',
+    playerCopy.page.templates === undefined ? 'absent' : 'LEAKED',
+    playerCopy.page.templates === undefined,
+  );
+
   const gmSawReveal = gmLive.frames.some((f) => f.type === 'wiki.revealed');
   checks.record(
     'every one of those writes is on the log the session replays from',
@@ -244,5 +297,11 @@ export async function prep(
       'read it.',
   );
 
-  return { haloPageId: pageId, runId: run.id, contactId: contact.contact.id };
+  story.say(
+    'The gang page and the gang’s stat template stop being two unrelated rows: the archetype the generator ' +
+      'rolls bodies from now names the codex page that says who they are, and the page lists it back. Only for ' +
+      'the GM — the phones read the same page and are handed no opposition at all.',
+  );
+
+  return { haloPageId: pageId, runId: run.id, contactId: contact.contact.id, templateId: halo.id };
 }

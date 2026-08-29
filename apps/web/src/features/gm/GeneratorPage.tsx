@@ -5,7 +5,7 @@
  * THREAT READOUT recomputes as the levers move (FR10.4–10.6).
  */
 import { useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import EncounterBuilder from './generator/EncounterBuilder.js';
 import GeneratePanel from './generator/GeneratePanel.js';
 import TemplateEditor from './generator/TemplateEditor.js';
@@ -23,6 +23,9 @@ type TabId = (typeof TABS)[number]['id'];
 
 export default function GeneratorPage() {
   const { campaignId } = useParams<{ campaignId: string }>();
+  // `?template=` is how a codex page hands its archetype over (FR5.6).
+  const [search] = useSearchParams();
+  const linkedTemplateId = search.get('template') ?? undefined;
   const [tab, setTab] = useState<TabId>('generate');
   const [entries, setEntries] = useState<RosterEntry[]>([]);
   const templates = useNpcTemplates(campaignId ?? '');
@@ -62,6 +65,7 @@ export default function GeneratorPage() {
             <GeneratePanel
               campaignId={campaignId}
               templates={list}
+              initialTemplateId={linkedTemplateId}
               onAddEntry={(entry) => {
                 setEntries((cur) => [...cur, entry]);
                 setTab('encounter');

@@ -17,16 +17,41 @@ import type { MockChatRequest, MockTurn } from '../../src/fixer/mock-llm.js';
 /** A GM-only name the driver injects so the recap trips the spoiler guard. */
 export const recapContext = { gangerName: 'Ratchet — catwalk' };
 
-const RECAP_MD = (ganger: string): string =>
-  [
-    'Pier 23 was dark, damp and already occupied. The crew came in through the roller door, opened',
-    'the main floor a room at a time, and found the crate exactly where the fixer said it would be.',
-    '',
-    `It went loud anyway. Two of the Halo went down — ${ganger} among them — and the`,
-    'lieutenant on the catwalk called the rest off rather than lose the pier over a box.',
-    '',
-    'The drone left intact. Nobody on either side stopped breathing, so the bonus stands.',
-  ].join('\n');
+/**
+ * The recap the model writes: **prose only.** Every number in the published
+ * recap — the roll tally, who went down, what was revealed, the awards — is
+ * added by the server from the session log (`fixer/recap.ts`), so the model is
+ * given no opportunity to invent one (D13). The GM-only name is deliberate: it
+ * is what the FR12.19 spoiler guard has to catch before this reaches Discord.
+ */
+const RECAP_PROSE = (ganger: string) => ({
+  title: 'Static on the Line — session recap',
+  headline: [
+    'Pier 23 was dark, damp and already occupied. The crew came in through the roller door, opened the',
+    'main floor a room at a time, and found the crate exactly where the fixer said it would be.',
+  ].join(' '),
+  moments: [
+    {
+      title: 'The roller door',
+      text: 'Three runners, one unlit shed, and a gang that had not been told anyone was coming.',
+    },
+    {
+      title: 'It went loud',
+      text: `Two of the Halo stopped getting up — ${ganger} among them — and the aisle filled with fire.`,
+    },
+    {
+      title: 'The voice on the catwalk',
+      text: 'The lieutenant called the rest off rather than lose the pier over a box.',
+    },
+  ],
+  whoDidWhat: [
+    { who: 'Torque', what: 'Opened the exchange and finished it, and took a burst doing it.' },
+    { who: 'Whisper', what: 'Put a spike through the pallet rows and paid the Drain for it.' },
+    { who: 'Sparrow', what: 'Crossed four metres of wet concrete without appearing to hurry.' },
+  ],
+  cliffhanger:
+    'The crate is out, the drone is intact, and somebody on that pier now knows exactly who carried it.',
+});
 
 /**
  * Four rectangles in whole grid squares. This is everything the model is
@@ -85,7 +110,33 @@ function briefLine(results: string[]): string {
   ].join(' ');
 }
 
+/**
+ * A text-only box, faithfully impolite about it.
+ *
+ * `fixer/vision-probe.ts` decides whether map vision exists by sending a real
+ * image content part and reading the status back: a server whose model has no
+ * projector rejects the request outright, and that refusal IS the answer. This
+ * mock has no vision, so it refuses — which is what makes the FR12.11
+ * capability flag testable at all. (Throwing here is how `mock-llm.ts` renders
+ * a non-2xx; nothing about the refusal is faked at the HTTP layer.)
+ */
+function refuseImages(req: MockChatRequest): void {
+  const hasImage = req.messages.some((m) => {
+    // On the wire a multimodal message's `content` is an array of parts; the
+    // typed `ChatMessage` only ever builds the text form, hence the widening.
+    const parts: unknown = m.content;
+    return (
+      Array.isArray(parts) &&
+      parts.some((part) => (part as { type?: string } | null)?.type === 'image_url')
+    );
+  });
+  if (hasImage) {
+    throw new Error('this model has no vision projector loaded: image content is not supported');
+  }
+}
+
 export function respond(req: MockChatRequest): MockTurn {
+  refuseImages(req);
   const toolMessages = req.messages.filter((m) => m.role === 'tool');
   const ask = req.messages
     .filter((m) => m.role === 'user')
@@ -100,16 +151,8 @@ export function respond(req: MockChatRequest): MockTurn {
     if (wantsRecap) {
       return {
         toolCalls: [
-          {
-            name: 'draft_wiki_page',
-            arguments: {
-              title: 'Static on the Line — session recap',
-              kind: 'run',
-              playerFacing: true,
-              tags: ['recap', 'docklands'],
-              contentMd: RECAP_MD(recapContext.gangerName),
-            },
-          },
+          { name: 'get_session_log', arguments: { limit: 60 } },
+          { name: 'draft_recap', arguments: RECAP_PROSE(recapContext.gangerName) },
         ],
       };
     }
@@ -140,9 +183,20 @@ export function respond(req: MockChatRequest): MockTurn {
   // --- second round: answer from what came back ----------------------------
   const results = toolMessages.map((m) => String(m.content ?? ''));
   if (wantsRecap) {
+    // Read back what `draft_recap` returned, so the sentence the GM sees is the
+    // server's verdict rather than the model's optimism about its own prose.
+    const out = json(results[results.length - 1]);
+    const flags = (out['spoilerFlags'] ?? []) as Array<{ name: string }>;
+    const facts = (out['facts'] ?? {}) as Record<string, unknown>;
     return {
       content:
-        'Draft saved. It leans on a GM-only name, so the spoiler guard has flagged it — reveal or cut before you publish.',
+        `Draft saved against session ${String(out['sessionId'] ?? '?')} — ` +
+        `${String(facts['publicRolls'] ?? '?')} public rolls and ` +
+        `${Array.isArray(facts['down']) ? (facts['down'] as unknown[]).length : '?'} down, ` +
+        'all counted off the log rather than out of my head. ' +
+        (flags.length > 0
+          ? `It names GM-only material — ${flags.map((f) => f.name).join(', ')} — so reveal or cut before you publish.`
+          : 'Nothing GM-only in it.'),
     };
   }
   if (wantsBrief) return { content: briefLine(results) };

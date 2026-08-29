@@ -107,12 +107,17 @@ export function hasOverrideEntry(breakdown: readonly ProvenanceEntry[]): boolean
 }
 
 // ---------------------------------------------------------------------------
-// Sustained spells (FR8.2): −2 per sustained spell on all pools. The sheet
-// has no `sustained` field, so the toggle is carried as a Modifier (source
-// kind 'spell') in sheet.overrides — persisted, so the server's /derived and
-// every other device see the −2 too.
-// INTEGRATION: if the server grows first-class sustained-spell state, move
-// these toggles there and drop the modifier convention.
+// Sustained spells (FR8.2): −2 per sustained spell on all pools, carried as a
+// Modifier (source kind 'spell') in `sheet.overrides` — persisted, so the
+// server's /derived and every other device see the −2 too.
+//
+// This is the OLDER of two conventions. The server grew first-class sustained
+// state (`play.sustained`) with the spirit tracker, and that is the only kind a
+// spirit can be handed (FR8.2 × FR8.3), so the Magic workbench adds new ones
+// there. These helpers stay because a toggle set under the old convention must
+// remain visible and releasable — `magic/lib.ts#sustainedRows` merges both
+// lists by name and marks this one `origin: 'sheet'`, so a pre-existing toggle
+// can never become an invisible −2 or a doubled one.
 // ---------------------------------------------------------------------------
 
 export function sustainId(spellName: string): string {
@@ -235,8 +240,11 @@ function asRecord(v: unknown): Record<string, unknown> {
 /**
  * Hits from the most recent `roll.created` event whose request meta carries
  * `drainFor === spell` — prefills the drain application panel (FR8.1).
- * INTEGRATION: payload shape assumed `{ request: { meta }, result: { hits } }`
- * with flat `meta` / `hits` tolerated; align with the rolls plugin.
+ *
+ * The server's payload is a flat `RollRecord`
+ * (`services/roll-log.ts`): `{ request: { meta, … }, hits, limitedHits, … }`.
+ * The nested `result` / flat `meta` fallbacks below are tolerance, not guesses
+ * — a mid-session panel must not go blank because a field moved.
  */
 export function drainHitsFromEvents(events: readonly WsEvent[], spell: string): number | null {
   for (let i = events.length - 1; i >= 0; i -= 1) {

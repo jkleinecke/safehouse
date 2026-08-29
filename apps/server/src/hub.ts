@@ -317,6 +317,27 @@ export class Hub {
   }
 
   /**
+   * Join an already-open `atomic` block, or open a fresh one when there is
+   * none.
+   *
+   * This is what lets domains compose without either duplicating the write or
+   * nesting transactions: `applyDamage` opens one block and hands its `tx` to
+   * `emitUpdated`, so the combatant row, `combatant.damaged` and both
+   * `encounter.updated` frames share a single fate; called on its own,
+   * `emitUpdated` opens its own block and gets the same guarantee. A method
+   * that takes an optional `tx` must route EVERY read through `tx.db` when it
+   * has one — the caller's transaction is already open, so the outer handle
+   * would deadlock (see the rule on `atomic`).
+   */
+  async atomicIn<T>(
+    campaignId: string,
+    tx: EventTx | undefined,
+    body: (tx: EventTx) => Promise<T>,
+  ): Promise<T> {
+    return tx ? body(tx) : this.atomic(campaignId, body);
+  }
+
+  /**
    * Append one event through `db` (a handle or a transaction) and shape it for
    * the wire. On failure the underlying Postgres error is logged with the
    * campaign and event type — the drizzle wrapper's message is only the SQL.

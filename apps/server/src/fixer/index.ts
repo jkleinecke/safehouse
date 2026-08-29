@@ -36,7 +36,44 @@ export {
 } from './tools.js';
 
 export { CODEX_TOOLS } from './tools-codex.js';
+export { RECAP_TOOLS } from './tools-recap.js';
 export { TABLE_TOOLS } from './tools-table.js';
+export { VISION_TOOL_NAME } from './tools.js';
+
+export {
+  MAX_VISION_IMAGE_BYTES,
+  MapVisionProposalSchema,
+  PROBE_IMAGE_DATA_URI,
+  VISION_MIME_TYPES,
+  cachedVisionCapability,
+  gridAlignmentWarnings,
+  loadMapImage,
+  mapVisionJsonSchema,
+  parseModelJson,
+  proposeGeometryFromMap,
+  readPropsVision,
+  resetVisionCache,
+  visionCapability,
+  visionEnvOverride,
+  type MapImage,
+  type MapVisionInput,
+  type MapVisionProposal,
+  type MapVisionResult,
+  type VisionCapability,
+  type VisionVia,
+} from './vision.js';
+
+export {
+  RECAP_EVENT_LIMIT,
+  assembleRecap,
+  recapDigest,
+  recapSessionRow,
+  type RecapAward,
+  type RecapContribution,
+  type RecapDigest,
+  type RecapMoment,
+  type RecapProse,
+} from './recap.js';
 
 export { default as fixerToolRoutes } from './routes.js';
 
@@ -80,6 +117,7 @@ export {
   npcSystemPrompt,
   runFixerChat,
   runNpcConverse,
+  toolsFor,
   type FixerChatInput,
   type FixerDeps,
   type FixerHub,
@@ -116,8 +154,13 @@ export {
 
 export {
   UsageMeter,
+  campaignUsage,
+  persistTurnUsage,
   usageMeter,
+  type DurableUsage,
   type ModelUsage,
+  type TurnUsageInput,
+  type UsageKind,
   type UsageRecord,
   type UsageTotals,
 } from './usage.js';

@@ -6,6 +6,10 @@
  * picking up a second phone mid-session brings the rack with you. When the
  * server has no macro route yet the rack still works off the local mirror and
  * says so, quietly, rather than pretending to have synced.
+ *
+ * The header line is the whole of the sync UI, and it distinguishes three
+ * states because they are three different problems. "Synced" says nothing at
+ * all — the normal case does not deserve a badge.
  */
 import { useState } from 'react';
 import type { LimitKind } from '@safehouse/contracts';
@@ -19,6 +23,8 @@ export interface MacroRackProps {
   macros: readonly DiceMacro[];
   /** False when the macros live only on this device (route not up yet). */
   synced: boolean;
+  /** The route is there but the last exchange failed — offline, or a fault. */
+  degraded?: boolean;
   busy?: boolean;
   onSave: (macros: DiceMacro[]) => void;
   onRoll: (config: RollConfig) => void;
@@ -32,14 +38,22 @@ function describe(macro: DiceMacro): string {
   return `Roll ${macro.name}, ${macro.pool} dice${limit}`;
 }
 
-export default function MacroRack({ macros, synced, busy, onSave, onRoll }: MacroRackProps) {
+/**
+ * Three honest sentences, never a fourth. A rack that says "synced" when it is
+ * not is worse than one that says nothing.
+ */
+export function syncNote(synced: boolean, degraded: boolean | undefined): string {
+  if (!synced) return ' — this device only';
+  if (degraded) return ' — saved here, not yet on the server';
+  return '';
+}
+
+export default function MacroRack({ macros, synced, degraded, busy, onSave, onRoll }: MacroRackProps) {
   const [editing, setEditing] = useState(false);
 
   return (
     <>
-      <SectionLabel>
-        Macros{synced ? '' : ' — this device only'}
-      </SectionLabel>
+      <SectionLabel>Macros{syncNote(synced, degraded)}</SectionLabel>
       {macros.length === 0 && <Empty>No macros yet. Build one for the roll you keep making.</Empty>}
       <div className="flex flex-wrap gap-1.5" role="group" aria-label="Personal dice macros">
         {macros.map((macro) => (

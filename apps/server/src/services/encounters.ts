@@ -33,7 +33,7 @@ import {
   turnOrder,
 } from '@safehouse/rules';
 import { characters, combatants, encounters, rolls, scenes, type Db } from '@safehouse/db';
-import type { Hub } from '../hub.js';
+import type { EventTx, Hub } from '../hub.js';
 import { httpError } from './auth.js';
 import { rng } from './dice.js';
 import {
@@ -90,10 +90,27 @@ export class EncountersService {
     readonly hub: Hub,
   ) {}
 
+  /**
+   * The handle a read must use: the caller's transaction when there is one,
+   * the service's own otherwise.
+   *
+   * Every write below now commits its row and the `encounter.updated` frames
+   * announcing it in ONE transaction (`Hub.atomic`), so a failed append can no
+   * longer leave the tracker showing a fight the database never recorded — or
+   * hide a combatant it did. Inside an open transaction PGlite's single
+   * connection makes a query on `this.db` wait forever, so every read on those
+   * paths comes through here (or is hoisted out of the block entirely).
+   */
+  private read(tx?: EventTx): Db {
+    return tx?.db ?? this.db;
+  }
+
   // --- encounters CRUD (FR4.1) -------------------------------------------
 
-  async getEncounter(id: string): Promise<EncounterRow> {
-    const row = (await this.db.select().from(encounters).where(eq(encounters.id, id)).limit(1))[0];
+  async getEncounter(id: string, tx?: EventTx): Promise<EncounterRow> {
+    const row = (
+      await this.read(tx).select().from(encounters).where(eq(encounters.id, id)).limit(1)
+    )[0];
     if (!row) throw httpError(404, 'not_found', 'unknown encounter');
     return row;
   }
@@ -109,19 +126,21 @@ export class EncountersService {
     state?: EncounterState;
   }): Promise<EncounterRow> {
     if (input.sceneId) await this.assertScene(input.campaignId, input.sceneId);
-    const row = (
-      await this.db
-        .insert(encounters)
-        .values({
-          campaignId: input.campaignId,
-          name: input.name,
-          sceneId: input.sceneId ?? null,
-          state: input.state ?? 'prep',
-        })
-        .returning()
-    )[0]!;
-    await this.emitUpdated(row, 'created');
-    return row;
+    return this.hub.atomic(input.campaignId, async (tx) => {
+      const row = (
+        await tx.db
+          .insert(encounters)
+          .values({
+            campaignId: input.campaignId,
+            name: input.name,
+            sceneId: input.sceneId ?? null,
+            state: input.state ?? 'prep',
+          })
+          .returning()
+      )[0]!;
+      await this.emitUpdated(row, 'created', tx);
+      return row;
+    });
   }
 
   async updateEncounter(
@@ -136,20 +155,24 @@ export class EncountersService {
   ): Promise<EncounterRow> {
     const current = await this.getEncounter(id);
     if (patch.sceneId) await this.assertScene(current.campaignId, patch.sceneId);
-    const row = (
-      await this.db.update(encounters).set(patch).where(eq(encounters.id, id)).returning()
-    )[0]!;
-    await this.emitUpdated(row, 'updated');
-    return row;
+    return this.hub.atomic(current.campaignId, async (tx) => {
+      const row = (
+        await tx.db.update(encounters).set(patch).where(eq(encounters.id, id)).returning()
+      )[0]!;
+      await this.emitUpdated(row, 'updated', tx);
+      return row;
+    });
   }
 
   async deleteEncounter(id: string): Promise<void> {
     const row = await this.getEncounter(id);
-    await this.db.delete(encounters).where(eq(encounters.id, id));
-    await this.hub.emit(row.campaignId, {
-      type: 'encounter.updated',
-      payload: { encounterId: id, deleted: true, reason: 'deleted', scope: 'gm' },
-      visibility: 'gm',
+    await this.hub.atomic(row.campaignId, async (tx) => {
+      await tx.db.delete(encounters).where(eq(encounters.id, id));
+      await tx.emit({
+        type: 'encounter.updated',
+        payload: { encounterId: id, deleted: true, reason: 'deleted', scope: 'gm' },
+        visibility: 'gm',
+      });
     });
   }
 
@@ -162,14 +185,16 @@ export class EncountersService {
 
   // --- combatants (FR4.1 / FR4.6 / FR4.8) --------------------------------
 
-  async getCombatant(id: string): Promise<CombatantRow> {
-    const row = (await this.db.select().from(combatants).where(eq(combatants.id, id)).limit(1))[0];
+  async getCombatant(id: string, tx?: EventTx): Promise<CombatantRow> {
+    const row = (
+      await this.read(tx).select().from(combatants).where(eq(combatants.id, id)).limit(1)
+    )[0];
     if (!row) throw httpError(404, 'not_found', 'unknown combatant');
     return row;
   }
 
-  async listCombatants(encounterId: string): Promise<Combatant[]> {
-    const rows = await this.db
+  async listCombatants(encounterId: string, tx?: EventTx): Promise<Combatant[]> {
+    const rows = await this.read(tx)
       .select()
       .from(combatants)
       .where(eq(combatants.encounterId, encounterId));
@@ -245,35 +270,39 @@ export class EncountersService {
         }
       : undefined;
 
-    const row = (
-      await this.db
-        .insert(combatants)
-        .values({
-          encounterId,
-          source,
-          sourceId: input.sourceId ?? null,
-          tokenId: input.tokenId ?? null,
-          name,
-          initBase: initBase ?? 0,
-          initScore: input.initScore ?? 0,
-          initKind: input.initKind ?? 'physical',
-          monitors: monitors ?? ZERO_MONITORS,
-          effects: [],
-          visibility,
-          actedThisPass: false,
-          copilot: {
-            initDice: initDice ?? 1,
-            ...(sheet ? { sheet } : {}),
-            ...(input.edge ? { edge: input.edge } : {}),
-            ...(grunt ? { grunt } : {}),
-            ...(input.leader ? { leader: true } : {}),
-            ...(source === 'character' ? {} : { generator: { professionalRating } }),
-          },
-        })
-        .returning()
-    )[0]!;
-    await this.emitUpdated(encounter, 'combatant.added');
-    return serializeCombatant(row);
+    // Everything above is a read or pure derivation, done before the block
+    // opens; only the insert and its events are inside it (the deadlock rule).
+    return this.hub.atomic(encounter.campaignId, async (tx) => {
+      const row = (
+        await tx.db
+          .insert(combatants)
+          .values({
+            encounterId,
+            source,
+            sourceId: input.sourceId ?? null,
+            tokenId: input.tokenId ?? null,
+            name,
+            initBase: initBase ?? 0,
+            initScore: input.initScore ?? 0,
+            initKind: input.initKind ?? 'physical',
+            monitors: monitors ?? ZERO_MONITORS,
+            effects: [],
+            visibility,
+            actedThisPass: false,
+            copilot: {
+              initDice: initDice ?? 1,
+              ...(sheet ? { sheet } : {}),
+              ...(input.edge ? { edge: input.edge } : {}),
+              ...(grunt ? { grunt } : {}),
+              ...(input.leader ? { leader: true } : {}),
+              ...(source === 'character' ? {} : { generator: { professionalRating } }),
+            },
+          })
+          .returning()
+      )[0]!;
+      await this.emitUpdated(encounter, 'combatant.added', tx);
+      return serializeCombatant(row);
+    });
   }
 
   /** Hand-edit anything mid-fight (FR4.8 / Principle 2). */
@@ -289,31 +318,37 @@ export class EncountersService {
       copilot.generator = { ...(copilot.generator ?? {}), professionalRating: pr };
       if (copilot.grunt) copilot.grunt = { ...copilot.grunt, professionalRating: pr };
     }
-    const updated = (
-      await this.db
-        .update(combatants)
-        .set({
-          ...(patch.name !== undefined ? { name: patch.name } : {}),
-          ...(patch.initBase !== undefined ? { initBase: patch.initBase } : {}),
-          ...(patch.initScore !== undefined ? { initScore: patch.initScore } : {}),
-          ...(patch.initKind !== undefined ? { initKind: patch.initKind } : {}),
-          ...(patch.monitors !== undefined ? { monitors: patch.monitors } : {}),
-          ...(patch.visibility !== undefined ? { visibility: patch.visibility } : {}),
-          ...(patch.actedThisPass !== undefined ? { actedThisPass: patch.actedThisPass } : {}),
-          ...(patch.tokenId !== undefined ? { tokenId: patch.tokenId } : {}),
-          copilot,
-        })
-        .where(eq(combatants.id, id))
-        .returning()
-    )[0]!;
-    await this.emitUpdatedById(row.encounterId, 'combatant.updated');
-    return serializeCombatant(updated);
+    const encounter = await this.getEncounter(row.encounterId);
+    return this.hub.atomic(encounter.campaignId, async (tx) => {
+      const updated = (
+        await tx.db
+          .update(combatants)
+          .set({
+            ...(patch.name !== undefined ? { name: patch.name } : {}),
+            ...(patch.initBase !== undefined ? { initBase: patch.initBase } : {}),
+            ...(patch.initScore !== undefined ? { initScore: patch.initScore } : {}),
+            ...(patch.initKind !== undefined ? { initKind: patch.initKind } : {}),
+            ...(patch.monitors !== undefined ? { monitors: patch.monitors } : {}),
+            ...(patch.visibility !== undefined ? { visibility: patch.visibility } : {}),
+            ...(patch.actedThisPass !== undefined ? { actedThisPass: patch.actedThisPass } : {}),
+            ...(patch.tokenId !== undefined ? { tokenId: patch.tokenId } : {}),
+            copilot,
+          })
+          .where(eq(combatants.id, id))
+          .returning()
+      )[0]!;
+      await this.emitUpdated(encounter, 'combatant.updated', tx);
+      return serializeCombatant(updated);
+    });
   }
 
   async removeCombatant(id: string): Promise<void> {
     const row = await this.getCombatant(id);
-    await this.db.delete(combatants).where(eq(combatants.id, id));
-    await this.emitUpdatedById(row.encounterId, 'combatant.removed');
+    const encounter = await this.getEncounter(row.encounterId);
+    await this.hub.atomic(encounter.campaignId, async (tx) => {
+      await tx.db.delete(combatants).where(eq(combatants.id, id));
+      await this.emitUpdated(encounter, 'combatant.removed', tx);
+    });
   }
 
   // --- initiative (FR4.2) -------------------------------------------------
@@ -330,58 +365,73 @@ export class EncountersService {
   async rollInitiativeAll(
     encounterId: string,
     opts: { combatantIds?: string[]; kinds?: Record<string, InitKind> } = {},
+    tx?: EventTx,
   ): Promise<{ encounter: Encounter; combatants: Combatant[]; details: InitiativeDetail[] }> {
-    const encounter = await this.getEncounter(encounterId);
-    const list = await this.listCombatants(encounterId);
+    const encounter = await this.getEncounter(encounterId, tx);
+    const list = await this.listCombatants(encounterId, tx);
     const ids = opts.combatantIds;
     const targets = ids ? list.filter((c) => ids.includes(c.id)) : list;
-    const details: InitiativeDetail[] = [];
+    // Roll everything FIRST. `initiativeLineFor` reads `characters` for a PC
+    // changing init kind, and that read cannot happen once the transaction is
+    // open (the deadlock rule) — so the dice, which need no writes, are thrown
+    // out here and only the resulting scores go inside.
+    const rolled: Array<{ combatantId: string; kind: InitKind; detail: InitiativeDetail }> = [];
     for (const combatant of targets) {
       const kind = opts.kinds?.[combatant.id] ?? combatant.initKind;
-      const line = await this.initiativeLineFor(combatant, kind);
+      const line = await this.initiativeLineFor(combatant, kind, tx);
       const detail = rollInitiative(combatant, kind, rng, {
         ...(line ? { base: line.base, dice: line.dice } : {}),
       });
-      await this.db
-        .update(combatants)
-        .set({
-          initScore: detail.score,
-          initKind: kind,
-          initBase: detail.base,
-          actedThisPass: false,
-        })
-        .where(eq(combatants.id, combatant.id));
-      details.push({
+      rolled.push({
         combatantId: combatant.id,
-        kind: detail.kind,
-        base: detail.base,
-        dice: detail.dice,
-        rolls: detail.rolls,
-        woundModifier: detail.woundModifier,
-        score: detail.score,
+        kind,
+        detail: {
+          combatantId: combatant.id,
+          kind: detail.kind,
+          base: detail.base,
+          dice: detail.dice,
+          rolls: detail.rolls,
+          woundModifier: detail.woundModifier,
+          score: detail.score,
+        },
       });
     }
-    const started =
-      encounter.turn < 1 || encounter.pass < 1
-        ? ((
-            await this.db
-              .update(encounters)
-              .set({ turn: Math.max(1, encounter.turn), pass: 1 })
-              .where(eq(encounters.id, encounterId))
-              .returning()
-          )[0] ?? encounter)
-        : encounter;
-    const after = await this.emitUpdated(started, 'initiative.rolled');
-    return {
-      // `combatants` rides beside it, so the encounter object carries only the
-      // derived active id — never a second copy of the roster.
-      encounter: {
-        ...serializeEncounter(started),
-        activeCombatantId: nextActorRules(after)?.id ?? null,
-      },
-      combatants: after,
-      details,
-    };
+    return this.hub.atomicIn(encounter.campaignId, tx, async (itx) => {
+      const details: InitiativeDetail[] = [];
+      for (const r of rolled) {
+        await itx.db
+          .update(combatants)
+          .set({
+            initScore: r.detail.score,
+            initKind: r.kind,
+            initBase: r.detail.base,
+            actedThisPass: false,
+          })
+          .where(eq(combatants.id, r.combatantId));
+        details.push(r.detail);
+      }
+      const started =
+        encounter.turn < 1 || encounter.pass < 1
+          ? ((
+              await itx.db
+                .update(encounters)
+                .set({ turn: Math.max(1, encounter.turn), pass: 1 })
+                .where(eq(encounters.id, encounterId))
+                .returning()
+            )[0] ?? encounter)
+          : encounter;
+      const after = await this.emitUpdated(started, 'initiative.rolled', itx);
+      return {
+        // `combatants` rides beside it, so the encounter object carries only the
+        // derived active id — never a second copy of the roster.
+        encounter: {
+          ...serializeEncounter(started),
+          activeCombatantId: nextActorRules(after)?.id ?? null,
+        },
+        combatants: after,
+        details,
+      };
+    });
   }
 
   /** Hand-set a score or line (FR4.2 "roll or hand-enter", FR4.8). */
@@ -401,9 +451,10 @@ export class EncountersService {
   private async initiativeLineFor(
     combatant: Combatant,
     kind: InitKind,
+    tx?: EventTx,
   ): Promise<{ base: number; dice: number } | null> {
     if (kind === combatant.initKind) return null;
-    const sheet = await this.sheetFor(combatant);
+    const sheet = await this.sheetFor(combatant, tx);
     if (!sheet) return null;
     const derived = deriveFor(sheet, kind);
     return { base: derived.base, dice: derived.dice };
@@ -418,14 +469,16 @@ export class EncountersService {
     const encounter = await this.getEncounter(encounterId);
     const list = await this.listCombatants(encounterId);
     const acting = nextActorRules(list);
-    if (acting) {
-      await this.db
-        .update(combatants)
-        .set({ actedThisPass: true })
-        .where(eq(combatants.id, acting.id));
-    }
-    const after = await this.emitUpdated(encounter, 'next-actor');
-    return { acted: acting, active: nextActorRules(after), combatants: after };
+    return this.hub.atomic(encounter.campaignId, async (tx) => {
+      if (acting) {
+        await tx.db
+          .update(combatants)
+          .set({ actedThisPass: true })
+          .where(eq(combatants.id, acting.id));
+      }
+      const after = await this.emitUpdated(encounter, 'next-actor', tx);
+      return { acted: acting, active: nextActorRules(after), combatants: after };
+    });
   }
 
   /** End of pass: −10 to every score, `actedThisPass` cleared (FR4.3). */
@@ -433,37 +486,49 @@ export class EncountersService {
     encounterId: string,
   ): Promise<{ encounter: EncounterRow; combatants: Combatant[]; anyActive: boolean }> {
     const encounter = await this.getEncounter(encounterId);
+    // `advancePass` is pure — the −10 loop runs on the list read above, and the
+    // block below only writes what it decided.
     const advanced = advancePass(await this.listCombatants(encounterId));
-    for (const c of advanced) {
-      await this.db
-        .update(combatants)
-        .set({ initScore: c.initScore, actedThisPass: false })
-        .where(eq(combatants.id, c.id));
-    }
-    const row = (
-      await this.db
-        .update(encounters)
-        .set({ pass: encounter.pass + 1 })
-        .where(eq(encounters.id, encounterId))
-        .returning()
-    )[0]!;
-    const after = await this.emitUpdated(row, 'end-pass');
-    return { encounter: row, combatants: after, anyActive: anyActiveScores(advanced) };
+    return this.hub.atomic(encounter.campaignId, async (tx) => {
+      for (const c of advanced) {
+        await tx.db
+          .update(combatants)
+          .set({ initScore: c.initScore, actedThisPass: false })
+          .where(eq(combatants.id, c.id));
+      }
+      const row = (
+        await tx.db
+          .update(encounters)
+          .set({ pass: encounter.pass + 1 })
+          .where(eq(encounters.id, encounterId))
+          .returning()
+      )[0]!;
+      const after = await this.emitUpdated(row, 'end-pass', tx);
+      return { encounter: row, combatants: after, anyActive: anyActiveScores(advanced) };
+    });
   }
 
-  /** New combat turn: everyone re-rolls, pass resets to 1 (FR4.3). */
+  /**
+   * New combat turn: everyone re-rolls, pass resets to 1 (FR4.3).
+   *
+   * The turn bump and the re-roll are ONE transaction: half of this — a turn
+   * counter that moved with nobody's initiative rerolled, or the reverse —
+   * is a tracker the table has to unpick by hand mid-fight.
+   */
   async newTurn(encounterId: string): Promise<{ encounter: EncounterRow; combatants: Combatant[] }> {
     const encounter = await this.getEncounter(encounterId);
-    const row = (
-      await this.db
-        .update(encounters)
-        .set({ turn: encounter.turn + 1, pass: 1, state: 'live' })
-        .where(eq(encounters.id, encounterId))
-        .returning()
-    )[0]!;
-    const rolled = await this.rollInitiativeAll(encounterId);
-    await this.emitUpdated(row, 'new-turn');
-    return { encounter: row, combatants: rolled.combatants };
+    return this.hub.atomic(encounter.campaignId, async (tx) => {
+      const row = (
+        await tx.db
+          .update(encounters)
+          .set({ turn: encounter.turn + 1, pass: 1, state: 'live' })
+          .where(eq(encounters.id, encounterId))
+          .returning()
+      )[0]!;
+      const rolled = await this.rollInitiativeAll(encounterId, {}, tx);
+      await this.emitUpdated(row, 'new-turn', tx);
+      return { encounter: row, combatants: rolled.combatants };
+    });
   }
 
   /** Interrupt action: deduct its Initiative Score cost immediately (FR4.4). */
@@ -480,11 +545,14 @@ export class EncountersService {
       throw httpError(400, 'bad_request', 'interrupt needs a known actionId or an explicit cost');
     }
     const updated = applyInterrupt(serializeCombatant(row), cost);
-    await this.db
-      .update(combatants)
-      .set({ initScore: updated.initScore })
-      .where(eq(combatants.id, combatantId));
-    await this.emitUpdatedById(row.encounterId, 'interrupt');
+    const encounter = await this.getEncounter(row.encounterId);
+    await this.hub.atomic(encounter.campaignId, async (tx) => {
+      await tx.db
+        .update(combatants)
+        .set({ initScore: updated.initScore })
+        .where(eq(combatants.id, combatantId));
+      await this.emitUpdated(encounter, 'interrupt', tx);
+    });
     return {
       combatant: updated,
       action: { id: input.actionId ?? 'custom', name: input.name ?? preset?.name ?? 'Interrupt', cost },
@@ -514,24 +582,31 @@ export class EncountersService {
     effects: StatusEffect[],
     reason: string,
   ): Promise<Combatant> {
-    const updated = (
-      await this.db
-        .update(combatants)
-        .set({ effects })
-        .where(eq(combatants.id, row.id))
-        .returning()
-    )[0]!;
-    await this.emitUpdatedById(row.encounterId, reason);
-    return serializeCombatant(updated);
+    const encounter = await this.getEncounter(row.encounterId);
+    return this.hub.atomic(encounter.campaignId, async (tx) => {
+      const updated = (
+        await tx.db
+          .update(combatants)
+          .set({ effects })
+          .where(eq(combatants.id, row.id))
+          .returning()
+      )[0]!;
+      await this.emitUpdated(encounter, reason, tx);
+      return serializeCombatant(updated);
+    });
   }
 
   // --- copilot support ----------------------------------------------------
 
   /** The playable sheet behind a combatant: PCs link live, NPCs carry theirs. */
-  async sheetFor(combatant: Combatant): Promise<SheetV1 | null> {
+  async sheetFor(combatant: Combatant, tx?: EventTx): Promise<SheetV1 | null> {
     if (combatant.source === 'character' && combatant.sourceId) {
       const character = (
-        await this.db.select().from(characters).where(eq(characters.id, combatant.sourceId)).limit(1)
+        await this.read(tx)
+          .select()
+          .from(characters)
+          .where(eq(characters.id, combatant.sourceId))
+          .limit(1)
       )[0];
       if (!character) return null;
       const parsed = SheetV1Schema.safeParse(character.sheet);
@@ -576,8 +651,8 @@ export class EncountersService {
    * session-stamped, so it counts in the session's own record (FR6.1). The
    * write itself lives in `services/encounters-rolls.ts`.
    */
-  async recordRoll(input: CopilotRollInput): Promise<{ rollId: string }> {
-    return recordCopilotRoll(this.db, this.hub, input);
+  async recordRoll(input: CopilotRollInput, tx?: EventTx): Promise<{ rollId: string }> {
+    return recordCopilotRoll(this.db, this.hub, input, tx);
   }
 
   /**
@@ -601,11 +676,30 @@ export class EncountersService {
    * `encounter.updated` twice: the full delta at `gm` visibility, and a
    * player-safe delta at `public` (hidden combatants stripped before
    * serialization, Principle 4). Payloads carry `scope` so clients pick.
+   *
+   * Pass the caller's `tx` and both frames join that transaction — they then
+   * describe the row as it will be after COMMIT, and a rolled-back change is
+   * also an unsent frame. Without one this opens its own block, so the two
+   * frames still cannot half-land relative to each other.
    */
-  async emitUpdated(encounter: EncounterRow, reason: string): Promise<Combatant[]> {
-    const list = await this.listCombatants(encounter.id);
+  async emitUpdated(
+    encounter: EncounterRow,
+    reason: string,
+    tx?: EventTx,
+  ): Promise<Combatant[]> {
+    return this.hub.atomicIn(encounter.campaignId, tx, async (itx) =>
+      this.emitUpdatedIn(itx, encounter, reason),
+    );
+  }
+
+  private async emitUpdatedIn(
+    tx: EventTx,
+    encounter: EncounterRow,
+    reason: string,
+  ): Promise<Combatant[]> {
+    const list = await this.listCombatants(encounter.id, tx);
     const active = nextActorRules(list)?.id ?? null;
-    await this.hub.emit(encounter.campaignId, {
+    await tx.emit({
       type: 'encounter.updated',
       payload: {
         encounterId: encounter.id,
@@ -619,7 +713,7 @@ export class EncountersService {
       visibility: 'gm',
     });
     const visible = list.filter((c) => c.visibility === 'public');
-    await this.hub.emit(encounter.campaignId, {
+    await tx.emit({
       type: 'encounter.updated',
       payload: {
         encounterId: encounter.id,
@@ -643,7 +737,7 @@ export class EncountersService {
     return list;
   }
 
-  async emitUpdatedById(encounterId: string, reason: string): Promise<void> {
-    await this.emitUpdated(await this.getEncounter(encounterId), reason);
+  async emitUpdatedById(encounterId: string, reason: string, tx?: EventTx): Promise<void> {
+    await this.emitUpdated(await this.getEncounter(encounterId, tx), reason, tx);
   }
 }

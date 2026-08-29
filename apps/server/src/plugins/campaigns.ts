@@ -114,21 +114,32 @@ export default async function campaignsPlugin(app: FastifyInstance): Promise<voi
     }
     if (Object.keys(patch).length === 0) throw httpError(400, 'bad_request', 'nothing to update');
 
-    const row = (
-      await app.db.update(campaigns).set(patch).where(eq(campaigns.id, id)).returning()
-    )[0] as CampaignRow | undefined;
-    if (!row) throw httpError(404, 'not_found', 'unknown campaign');
+    // Advancing the clock is table-visible history, not a silent edit (§11) —
+    // and the row and that history commit TOGETHER (`Hub.atomic`). A campaign
+    // whose date moved without a `clock.advanced` is the LIVE-4 half-commit on
+    // the one field every downtime calculation counts from: the log says the
+    // run was last week, the record says a month ago, and nothing reconciles
+    // them. The read above is hoisted out of the block (the deadlock rule).
+    const row = await app.hub.atomic(id, async (tx) => {
+      const updated = (
+        await tx.db.update(campaigns).set(patch).where(eq(campaigns.id, id)).returning()
+      )[0] as CampaignRow | undefined;
+      if (!updated) throw httpError(404, 'not_found', 'unknown campaign');
+      if (body.ingameDate !== undefined && body.ingameDate !== before.ingameDate) {
+        await tx.emit({
+          type: 'clock.advanced',
+          payload: { campaignId: id, from: before.ingameDate, to: updated.ingameDate },
+        });
+      }
+      return updated;
+    });
 
-    // The roll path caches settings for 15s; a flag change must bite now.
+    // COMPENSATING, deliberately outside the transaction: this drops an
+    // in-process cache, which no rollback could restore anyway. Dropping it
+    // after COMMIT is the safe order — a re-read before the commit could
+    // repopulate the cache with the pre-patch row. The roll path caches
+    // settings for 15s, so a flag change has to bite here.
     if (body.settings !== undefined) forgetCampaignSettings(id);
-
-    // Advancing the clock is table-visible history, not a silent edit (§11).
-    if (body.ingameDate !== undefined && body.ingameDate !== before.ingameDate) {
-      await app.hub.emit(id, {
-        type: 'clock.advanced',
-        payload: { campaignId: id, from: before.ingameDate, to: row.ingameDate },
-      });
-    }
 
     return reply.send({
       id: row.id,

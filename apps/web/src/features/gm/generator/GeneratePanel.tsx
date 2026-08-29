@@ -17,11 +17,41 @@ export interface GeneratePanelProps {
   campaignId: string;
   templates: readonly NpcTemplate[];
   onAddEntry: (entry: RosterEntry) => void;
+  /**
+   * Archetype to open on, from a codex page's "follow the link" (FR5.6 →
+   * `features/codex/templates.ts#generatorPathFor`). Landing on the generator
+   * with the list loaded but nothing chosen made the link a navigation rather
+   * than an answer.
+   */
+  initialTemplateId?: string | undefined;
 }
 
 type Mode = 'npc' | 'gruntGroup';
 
-export default function GeneratePanel({ campaignId, templates, onAddEntry }: GeneratePanelProps) {
+/**
+ * Which archetype the panel opens on: the one a codex link named, else the
+ * first in the list.
+ *
+ * A link's id is not trusted to exist. Templates are GM data — one can be
+ * renamed, re-created or deleted between the page that links to it and the tap
+ * that follows the link — and a panel sitting on an id nothing matches has an
+ * empty tier list and a dead Generate button. Falling back to the first row
+ * loses the deep link, which is the smaller loss by far.
+ */
+export function pickInitialTemplate(
+  templates: readonly { id: string }[],
+  wanted: string | undefined,
+): string {
+  if (templates.length === 0) return '';
+  return templates.find((t) => t.id === wanted)?.id ?? templates[0]!.id;
+}
+
+export default function GeneratePanel({
+  campaignId,
+  templates,
+  onAddEntry,
+  initialTemplateId,
+}: GeneratePanelProps) {
   const [templateId, setTemplateId] = useState('');
   const [tierId, setTierId] = useState('');
   const [mode, setMode] = useState<Mode>('npc');
@@ -43,8 +73,9 @@ export default function GeneratePanel({ campaignId, templates, onAddEntry }: Gen
 
   // Keep the selection valid as templates load / change underneath.
   useEffect(() => {
-    if (!templateId && templates.length > 0) setTemplateId(templates[0]!.id);
-  }, [templates, templateId]);
+    if (templateId || templates.length === 0) return;
+    setTemplateId(pickInitialTemplate(templates, initialTemplateId));
+  }, [templates, templateId, initialTemplateId]);
   useEffect(() => {
     if (tiers.length > 0 && !tiers.some((t) => t.id === tierId)) setTierId(tiers[0]!.id);
   }, [tiers, tierId]);

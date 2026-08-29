@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { addMacro, loadMacros, MACRO_LIMIT, removeMacro, saveMacros } from './macros.js';
+import {
+  addMacro,
+  loadMacros,
+  MACRO_LIMIT,
+  removeMacro,
+  saveMacros,
+  takeLegacyMacros,
+} from './macros.js';
 
 /** Minimal in-memory Storage — macros are device-local, never server state. */
 function memoryStorage(): Storage {
@@ -60,5 +67,35 @@ describe('macros', () => {
     expect(loadMacros('c1', store)).toEqual([]);
     store.setItem('safehouse.macros.c1', JSON.stringify([{ nope: true }, { id: 'a', name: 'b', pool: 3 }]));
     expect(loadMacros('c1', store)).toEqual([{ id: 'a', name: 'b', pool: 3 }]);
+  });
+});
+
+/**
+ * The hand-over into the server-backed, per-user rack. A GM upgrading
+ * mid-campaign has buttons under this key that the new store would never look
+ * at; the migration must move them exactly once and never resurrect a deletion.
+ */
+describe('takeLegacyMacros (migration to the shared rack)', () => {
+  it('hands the rack over and clears the old key', () => {
+    saveMacros('c1', [{ id: 'm1', name: 'Perception', pool: 9 }], store);
+    expect(takeLegacyMacros('c1', store)).toEqual([{ id: 'm1', name: 'Perception', pool: 9 }]);
+    expect(store.getItem('safehouse.macros.c1')).toBeNull();
+  });
+
+  it('is empty and harmless the second time — a deleted macro stays deleted', () => {
+    saveMacros('c1', [{ id: 'm1', name: 'Perception', pool: 9 }], store);
+    takeLegacyMacros('c1', store);
+    expect(takeLegacyMacros('c1', store)).toEqual([]);
+  });
+
+  it('takes nothing when there was never a legacy rack', () => {
+    expect(takeLegacyMacros('c-new', store)).toEqual([]);
+  });
+
+  it('leaves another campaign’s rack alone', () => {
+    saveMacros('c1', [{ id: 'm1', name: 'Perception', pool: 9 }], store);
+    saveMacros('c2', [{ id: 'm2', name: 'Sneak', pool: 11 }], store);
+    takeLegacyMacros('c1', store);
+    expect(loadMacros('c2', store)).toHaveLength(1);
   });
 });

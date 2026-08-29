@@ -8,11 +8,12 @@
  *   log notes, codex prose) and open the book in place (FR11.2–11.4).
  * - `FixerDock` is the GM-only dockable copilot; mount it once in the campaign
  *   shell so it follows the GM across every screen (FR12.1).
- * - `BookReader` is the `/read/:bookCode` viewer page body (FR11.3).
+ * - The `/read/:bookCode` page body and the overlay both live in
+ *   `features/reader` now (self-hosted pdf.js, FR11.3); `BookViewerOverlay`
+ *   below is that viewer under the name every ref surface already imports.
  */
 export { BookViewerOverlay, RefChip, RefText, refLink } from './books/RefChip.js';
 export type { BookViewerOverlayProps, RefChipProps } from './books/RefChip.js';
-export { default as BookReader } from './books/BookReader.js';
 export {
   REF_PATTERN,
   bookFileHref,

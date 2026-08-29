@@ -16,6 +16,7 @@ import { getSession } from '../../api/session.js';
 import CombatantRow from './CombatantRow.js';
 import { postEndPass, postNewTurn, sendCommand, useTrackerEncounter } from './commands.js';
 import DamageDialog from './DamageDialog.js';
+import { useHintsSetting } from './hints.js';
 import MoraleToasts from './MoraleToasts.js';
 import ResolveChainDialog from './ResolveChainDialog.js';
 import { passLabel, trackerRows, type Viewer } from './initiative.js';
@@ -79,6 +80,10 @@ export default function Tracker({ campaignId }: TrackerProps) {
   const acting = rows.find((r) => r.acting);
 
   const [rackPublic, setRackPublic] = useState(false);
+  // FR10.10 lives next to the rack toggle because that is where the GM already
+  // reaches when they want the tracker to help them run the opposition — and
+  // because it is the only screen where a hint ever appears.
+  const hints = useHintsSetting(campaignId, isGm);
   const [damageFor, setDamageFor] = useState<{ c: Combatant; track?: 'physical' | 'stun' } | null>(null);
   const [chainFor, setChainFor] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -114,6 +119,24 @@ export default function Tracker({ campaignId }: TrackerProps) {
             >
               rack {rackPublic ? 'public' : 'behind screen'}
             </button>
+            {hints.ready && (
+              <button
+                type="button"
+                className={`chip ${
+                  hints.enabled ? 'border-magenta text-magenta' : 'border-edge-bright text-faint'
+                }`}
+                aria-pressed={hints.enabled}
+                disabled={hints.pending}
+                onClick={hints.toggle}
+                title={
+                  hints.enabled
+                    ? 'A one-line suggestion on the acting NPC’s row. It never acts (FR10.10).'
+                    : 'Off by default. Turn on to get a one-line suggestion on the acting NPC’s row — advice only, it never acts (FR10.10).'
+                }
+              >
+                hints {hints.enabled ? 'on' : 'off'}
+              </button>
+            )}
             <button
               type="button"
               className="btn btn-accent px-2.5 py-1"

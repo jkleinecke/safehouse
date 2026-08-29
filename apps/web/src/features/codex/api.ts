@@ -17,7 +17,7 @@
  *   GET/POST   /api/characters/:id/contacts · /api/contacts/:contactId
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Visibility } from '@safehouse/contracts';
+import type { NpcTemplate, Visibility } from '@safehouse/contracts';
 import { apiDelete, apiGet, apiPatch, apiPost } from '../../api/client.js';
 import type { PageListItem } from './lib.js';
 import { codexKeys } from './keys.js';
@@ -59,6 +59,26 @@ export interface HandoutView {
   addedAt: string;
 }
 
+/**
+ * FR5.6 — an `npc_templates` row as seen from the page it belongs to.
+ *
+ * The link is ONE column (`npc_templates.wiki_page_id`), deliberately: a
+ * template names its page, and a page finds its templates by reverse lookup,
+ * so the two directions cannot disagree about what is linked to what. That is
+ * what turns FR9.3's map pins, FR10.1's templates and FR5.1's pages into one
+ * graph instead of three tables that happen to mention each other.
+ */
+export interface TemplateLink {
+  templateId: string;
+  name: string;
+  /** From `gen.roleTags` — what the template is for (FR10.1). */
+  roleTags: string[];
+  /** The page this template says it belongs to; null once unlinked. */
+  wikiPageId: string | null;
+  /** True when the template also carries a `{book,page}` ref (FR11.2). */
+  hasPageRef: boolean;
+}
+
 export interface CodexPage extends PageListItem {
   campaignId: string;
   contentMd: string;
@@ -69,6 +89,12 @@ export interface CodexPage extends PageListItem {
   handouts: HandoutView[];
   createdAt: string;
   audience?: string[];
+  /**
+   * GM-only, and absent rather than empty for anyone else: a shared location
+   * page must not leak the opposition waiting in it. The server decides that
+   * (Principle 4) — this field simply is not in a player's response.
+   */
+  templates?: TemplateLink[];
 }
 
 export interface UnresolvedLink {
@@ -198,6 +224,59 @@ export function useRevealPage(campaignId: string, pageId: string) {
     onSuccess: (page) => {
       qc.setQueryData(codexKeys.page(pageId), page);
       void qc.invalidateQueries({ queryKey: codexKeys.pages(campaignId) });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Codex ↔ npc_template links (FR5.6)
+// ---------------------------------------------------------------------------
+
+/**
+ * Every archetype template in the campaign — the pool a page can claim from.
+ *
+ * GM-only at the server (`GET /api/campaigns/:id/npc-templates` is behind
+ * `gmFor`), so this is only ever asked for when the picker is actually open.
+ */
+export function useLinkableTemplates(campaignId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: codexKeys.npcTemplates(campaignId ?? ''),
+    queryFn: async () =>
+      (await apiGet<{ templates: NpcTemplate[] }>(`/api/campaigns/${campaignId}/npc-templates`))
+        .templates,
+    enabled: Boolean(campaignId) && enabled,
+  });
+}
+
+/**
+ * Point a template at this page (`POST /api/wiki/:id/templates`).
+ *
+ * The column is singular, so linking a template that already belongs to
+ * another page MOVES it rather than adding a second owner. Both pages' caches
+ * are therefore stale afterwards and both are dropped — invalidating only the
+ * page in hand is how a link appears to be in two places at once.
+ */
+export function useLinkTemplate(campaignId: string, pageId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (templateId: string) =>
+      (await apiPost<{ link: TemplateLink }>(`/api/wiki/${pageId}/templates`, { templateId })).link,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['codex', 'page'] });
+      void qc.invalidateQueries({ queryKey: codexKeys.npcTemplates(campaignId) });
+    },
+  });
+}
+
+/** Clear the link (`DELETE /api/wiki/:id/templates/:templateId`). */
+export function useUnlinkTemplate(campaignId: string, pageId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (templateId: string) =>
+      (await apiDelete<{ link: TemplateLink }>(`/api/wiki/${pageId}/templates/${templateId}`)).link,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: codexKeys.page(pageId) });
+      void qc.invalidateQueries({ queryKey: codexKeys.npcTemplates(campaignId) });
     },
   });
 }

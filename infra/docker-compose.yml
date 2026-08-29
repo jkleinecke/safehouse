@@ -15,6 +15,26 @@
 # Multi-arch (§16) — build and push both platforms from the repo root:
 #   docker buildx build -f infra/Dockerfile \
 #     --platform linux/amd64,linux/arm64 -t safehouse/app:latest --push .
+#
+# ONE-SHOTS RUN FROM THE REPO, NOT FROM THE CONTAINER. The runtime image is
+# production-only (no tsx, no source), so `seed:books` (FR11.7) and the PGlite
+# migration below run on the host against the loopback port `postgres`
+# publishes. Moving a campaign that started on the laptop's embedded database
+# into this stack — ids and sequences preserved, which is exactly what a
+# hand-rolled row copy gets wrong (see the script's header):
+#
+#   docker compose -f infra/docker-compose.yml up -d postgres
+#   pnpm --filter @safehouse/server exec tsx scripts/migrate-to-postgres.ts \
+#     --data-dir ./data --dry-run
+#   pnpm --filter @safehouse/server exec tsx scripts/migrate-to-postgres.ts \
+#     --data-dir ./data \
+#     --database-url postgres://safehouse:PASSWORD@127.0.0.1:5432/safehouse
+#
+# The script moves the database and NOT the file store — maps, token art and
+# the seeded book PDFs live on disk under DATA_DIR/files and are referenced by
+# `attachments.path`, so they go into the app's volume separately:
+#
+#   docker compose -f infra/docker-compose.yml cp ./data/files/. app:/data/files
 
 # Project name comes from the directory (or -p safehouse) rather than a
 # top-level `name:`, which older Compose rejects.
@@ -83,7 +103,15 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
-    # Not published: only `app` and `backup` talk to it, on the compose network.
+    ports:
+      # LOOPBACK ONLY — the venue Wi-Fi never sees the database. `app` and
+      # `backup` reach it over the compose network and do not need this; the
+      # host-side one-shots in the header do, because the production image
+      # carries no tsx and no source to run them from. Without a published
+      # port there is no way to seed the book library (FR11.7) into this stack
+      # or to migrate a laptop campaign in. Move it with POSTGRES_PORT if
+      # something else on the laptop already owns 5432.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
 
   # Nightly pg_dump + file-store sync, retained 30 days (§15 data durability).
   # Sketch, deliberately: the loop and the dump are real, but "copied off-box"

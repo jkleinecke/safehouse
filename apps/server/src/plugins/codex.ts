@@ -17,6 +17,8 @@
  *   GET    /api/wiki/:id/revisions              edit history (GM)
  *   POST   /api/wiki/:id/handouts               pin an attachment (GM)
  *   DELETE /api/wiki/:id/handouts/:attachmentId (GM)
+ *   POST   /api/wiki/:id/templates              link an NPC template (GM, FR5.6)
+ *   DELETE /api/wiki/:id/templates/:templateId  unlink (GM, FR5.6)
  *   POST   /api/handouts/:attachmentId/reveal   staged → live (GM, FR5.4)
  *
  * Secrecy (Principle 4): a player's GET never *contains* a GM-only section —
@@ -51,6 +53,11 @@ import {
   recordWikiRevision,
   requireVisiblePage,
 } from '../services/codex-store.js';
+import {
+  setTemplatePage,
+  templateLink,
+  templatesForPage,
+} from '../services/codex-templates.js';
 import registerCalendarRoutes from './codex-calendar.js';
 import registerRunRoutes from './codex-runs.js';
 
@@ -94,6 +101,11 @@ const RevealBody = z.object({
 const AttachBody = z.object({
   attachmentId: z.string().uuid(),
   label: z.string().max(200).optional(),
+});
+
+/** FR5.6 — which archetype template this page is the codex entry for. */
+const TemplateLinkBody = z.object({
+  templateId: z.string().uuid(),
 });
 
 const HandoutRevealBody = z.object({
@@ -225,7 +237,38 @@ export default async function codexPlugin(app: FastifyInstance): Promise<void> {
     const { id } = req.params as { id: string };
     const viewer = viewerOf(auth);
     const { row, meta } = await requireVisiblePage(app.db, id, viewer);
-    return reply.send({ page: await buildPageDto(app.db, row, meta, viewer) });
+    const page = await buildPageDto(app.db, row, meta, viewer);
+    // FR5.6: the archetype templates this page is the codex entry for. GM-only
+    // — a shared location page must not leak the opposition waiting in it.
+    if (viewer.role !== 'gm') return reply.send({ page });
+    return reply.send({
+      page: { ...page, templates: await templatesForPage(app.db, row.campaignId, row.id) },
+    });
+  });
+
+  // --- FR5.6: link a page to the templates it describes (GM) ---------------
+  app.post('/api/wiki/:id/templates', async (req, reply) => {
+    const auth = requireRole(req, 'gm');
+    const { id } = req.params as { id: string };
+    const body = parse(TemplateLinkBody, req.body);
+    const row = await loadPage(app.db, id);
+    if (!row) throw httpError(404, 'not_found', 'unknown codex page');
+    assertCampaign(auth, row.campaignId);
+    const link = await setTemplatePage(app.db, row.campaignId, body.templateId, row.id);
+    return reply.status(201).send({ link });
+  });
+
+  app.delete('/api/wiki/:id/templates/:templateId', async (req, reply) => {
+    const auth = requireRole(req, 'gm');
+    const { id, templateId } = req.params as { id: string; templateId: string };
+    const row = await loadPage(app.db, id);
+    if (!row) throw httpError(404, 'not_found', 'unknown codex page');
+    assertCampaign(auth, row.campaignId);
+    const current = await templateLink(app.db, row.campaignId, templateId);
+    if (current.wikiPageId !== row.id) {
+      throw httpError(409, 'not_linked', 'that template does not point at this page');
+    }
+    return reply.send({ link: await setTemplatePage(app.db, row.campaignId, templateId, null) });
   });
 
   // --- edit (GM) — every edit writes a revision ----------------------------

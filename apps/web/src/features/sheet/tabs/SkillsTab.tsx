@@ -140,6 +140,7 @@ export default function SkillsTab({ character, derived, roll, overrideFor, campa
       <MacroRack
         macros={macroQuery.data?.macros ?? []}
         synced={macroQuery.data?.hasRemote ?? false}
+        degraded={macroQuery.data?.degraded ?? false}
         busy={macroMutation.isPending}
         onSave={(next) => macroMutation.mutate(next)}
         onRoll={roll}

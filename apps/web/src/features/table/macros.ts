@@ -1,7 +1,17 @@
 /**
- * Personal dice macros (FR2.8) — recurring custom rolls, stored per campaign
- * in localStorage. Device-local by design: macros are a convenience, the
- * server never needs them.
+ * The table roller's OLD device-local macro rack (FR2.8), kept for one job:
+ * handing its contents over.
+ *
+ * Macros are server-backed and per-user now (`features/sheet/macroStore.ts`),
+ * so a player's rack follows them onto a borrowed phone and the GM's follows
+ * them onto a second laptop. This module's key —
+ * `safehouse.macros.<campaign>`, with no user in it — predates that, and a GM
+ * upgrading mid-campaign has a rack sitting under it that the new store would
+ * never look at. `takeLegacyMacros` reads that rack once and clears it, so the
+ * buttons move rather than vanish.
+ *
+ * Nothing writes here any more. When no upgrading instance can plausibly still
+ * be holding a rack under the old key, this file goes.
  */
 import type { LimitKind } from '@safehouse/contracts';
 
@@ -71,4 +81,27 @@ export function removeMacro(campaignId: string, id: string, store?: Storage): Di
   const next = loadMacros(campaignId, store).filter((m) => m.id !== id);
   saveMacros(campaignId, next, store);
   return next;
+}
+
+/**
+ * Read the legacy rack and clear it, in that order — the migration into the
+ * server-backed store (`features/table/DiceRoller.tsx`).
+ *
+ * Clearing immediately is deliberate. The alternative is clearing after the
+ * push succeeds, which sounds safer and is not: the push is idempotent on the
+ * label, so a retry costs nothing, while a rack left in place is re-adopted on
+ * every load and resurrects a macro the player deleted on their other device.
+ * Returns `[]` when there is nothing to take, which is the common case.
+ */
+export function takeLegacyMacros(campaignId: string, store?: Storage): DiceMacro[] {
+  const s = storage(store);
+  if (!s) return [];
+  const macros = loadMacros(campaignId, store);
+  if (macros.length === 0) return [];
+  try {
+    s.removeItem(keyFor(campaignId));
+  } catch {
+    // Storage blocked: nothing was persisted to clear either.
+  }
+  return macros;
 }

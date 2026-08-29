@@ -15,6 +15,20 @@
       "when": 1787905795852,
       "tag": "0001_sequence_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787905795853,
+      "tag": "0002_macros_and_usage",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1787905795854,
+      "tag": "0003_npc_template_wiki_link",
+      "breakpoints": true
     }
   ]
 }

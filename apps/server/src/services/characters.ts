@@ -37,6 +37,9 @@ import {
 } from '@safehouse/db';
 import { z } from 'zod';
 import { httpError, type AuthContext } from './auth.js';
+// Leaf module (it reaches @safehouse/rules and magic-store, never back here),
+// so folding the magic pipeline in below closes no import cycle.
+import { magicSituationalFor, sustainedModifiersFor } from './magic-derive.js';
 
 // ---------------------------------------------------------------------------
 // Live-play state (FR3.4)
@@ -245,19 +248,15 @@ export function assertCanEdit(auth: AuthContext, rec: CharacterRecord): void {
 // Derivation with live state (FR3.3/FR3.4/FR9.11)
 // ---------------------------------------------------------------------------
 
-/** −2 dice per sustained spell, focus/quickening exempt (FR8.2, §10.2). */
+/**
+ * −2 dice per sustained spell, focus/quickening exempt (FR8.2, §10.2).
+ *
+ * The composition itself lives in `magic-derive.ts` so the magic tab, the roll
+ * path and this one cannot drift apart; this stays as the `PlayState`-shaped
+ * front door its existing callers use.
+ */
 export function sustainedModifiers(play: PlayState): Modifier[] {
-  return play.sustained
-    .filter((s) => !s.exempt)
-    .map((s) => ({
-      id: `sustain.${s.id}`,
-      source: { kind: 'spell' as const, ref: s.name },
-      target: 'pool.all',
-      op: 'add' as const,
-      value: -2,
-      active: true,
-      note: `sustaining ${s.name} (−2)`,
-    }));
+  return sustainedModifiersFor(play.sustained);
 }
 
 /** The campaign's active scene, if any — its environment feeds every pool. */
@@ -342,7 +341,10 @@ export interface DerivedView {
   encounterId: string | null;
   combatantId: string | null;
   edge: { max: number; current: number; burned: number };
-  /** Scene environment + sustaining modifiers actually applied (Principle 3). */
+  /**
+   * Scene environment + sustaining + live foci — the modifiers actually
+   * applied, in the order the pipeline saw them (Principle 3).
+   */
   situational: Modifier[];
   activeSceneId: string | null;
   sustained: SustainedSpell[];
@@ -352,10 +354,20 @@ export interface DerivedView {
   overrides: Modifier[];
 }
 
-/** GET /api/characters/:id/derived — the whole live-play picture (FR3.3/3.4). */
+/**
+ * GET /api/characters/:id/derived — the whole live-play picture (FR3.3/3.4).
+ *
+ * The magic half (sustaining with spirit exemptions resolved, plus every
+ * bonded-and-active focus) comes from the same composer the Magic tab and the
+ * roll path use, so flipping a focus moves this pool too and names itself in
+ * the provenance (FR8.4).
+ */
 export async function deriveView(db: Db, rec: CharacterRecord): Promise<DerivedView> {
-  const scene = await activeSceneModifiers(db, rec.campaignId);
-  const situational = [...scene.mods, ...sustainedModifiers(rec.play)];
+  const [scene, magic] = await Promise.all([
+    activeSceneModifiers(db, rec.campaignId),
+    magicSituationalFor(db, rec.campaignId, rec.id, rec.play.sustained),
+  ]);
+  const situational = [...scene.mods, ...magic];
   const wounds = await liveWounds(db, rec);
   const derived = deriveCharacter(rec.sheet, {
     situational,

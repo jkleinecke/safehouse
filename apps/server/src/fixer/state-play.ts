@@ -3,10 +3,11 @@
  *
  * Both are honest about their edges. Sustaining is real live state — it comes
  * off each character's play record and carries the dice penalty the table is
- * eating right now (FR8.2) — but bound spirits and their services have no
- * tracker (FR8.3), and Overwatch scores and marks are run by hand (M7). Those
- * come back as `tracked: false` with a note rather than a zero, because a model
- * that reads "0 spirits" will happily tell the GM the mage has none.
+ * eating right now (FR8.2) — and since the FR8.3 spirit tracker landed, so are
+ * spirits, their Force and their remaining services: the honest answer there is
+ * a number, not a disclaimer. Overwatch scores and marks are still run by hand
+ * (M7) and come back as `tracked: false` with a note rather than a zero,
+ * because a model that reads "0" will happily tell the GM there is none.
  *
  * Split out of `state-codex.ts` to keep both files small; read-only, like
  * everything else in the catalog.
@@ -15,6 +16,7 @@ import { eq } from 'drizzle-orm';
 import { SheetV1Schema } from '@safehouse/contracts';
 import { characters, matrixHosts, type Db } from '@safehouse/db';
 import { splitStoredSheet } from '../services/characters.js';
+import { getMagicTracker, type MagicTracker } from '../services/magic-foci.js';
 
 export interface MagicState {
   characters: Array<{
@@ -26,16 +28,35 @@ export interface MagicState {
     sustained: Array<{ id: string; name: string; exempt: boolean }>;
     /** Total sustaining dice penalty right now (FR8.2, −2 each, exemptions free). */
     sustainingPenalty: number;
-    foci: Array<{ name: string; rating: number | null }>;
+    /**
+     * The tracked focus rack first (FR8.4 — real toggles, with the two gates
+     * the pipeline reads), then any gear the GM typed that *looks* like a focus
+     * but was never registered, marked `tracked: false` so the model can tell
+     * "switched off" from "never entered".
+     */
+    foci: Array<{
+      name: string;
+      rating: number | null;
+      bonded: boolean | null;
+      active: boolean | null;
+      tracked: boolean;
+    }>;
+    /** Reagent drams on hand (FR8.4). */
+    reagents: number;
   }>;
-  spirits: { tracked: false; note: string };
+  /** FR8.3: bound and unbound spirits with Force and services remaining. */
+  spirits: { tracked: true; list: MagicTracker['spirits'] };
 }
 
-/** Foci are gear the GM typed; match by name rather than inventing a column. */
+/** Gear the GM typed that reads like a focus but is not in the rack. */
 const FOCUS_HINT = /\bfocus(?:es)?\b/i;
 
 export async function getMagicState(db: Db, campaignId: string): Promise<MagicState> {
-  const rows = await db.select().from(characters).where(eq(characters.campaignId, campaignId));
+  const [rows, tracker] = await Promise.all([
+    db.select().from(characters).where(eq(characters.campaignId, campaignId)),
+    getMagicTracker(db, campaignId),
+  ]);
+  const dramsOf = new Map(tracker.reagents.map((r) => [r.characterId, r.drams]));
   const out: MagicState['characters'] = [];
   for (const row of rows) {
     let sheet;
@@ -46,7 +67,18 @@ export async function getMagicState(db: Db, campaignId: string): Promise<MagicSt
       continue;
     }
     const sustained = play.sustained.map((s) => ({ id: s.id, name: s.name, exempt: s.exempt }));
-    if (sheet.spells.length === 0 && sheet.powers.length === 0 && sustained.length === 0) continue;
+    const tracked = tracker.foci.filter((f) => f.characterId === row.id);
+    const trackedNames = new Set(tracked.map((f) => f.name.toLowerCase()));
+    const spirits = tracker.spirits.filter((s) => s.characterId === row.id);
+    if (
+      sheet.spells.length === 0 &&
+      sheet.powers.length === 0 &&
+      sustained.length === 0 &&
+      tracked.length === 0 &&
+      spirits.length === 0
+    ) {
+      continue;
+    }
     out.push({
       characterId: row.id,
       name: row.name,
@@ -58,18 +90,28 @@ export async function getMagicState(db: Db, campaignId: string): Promise<MagicSt
       powers: sheet.powers.map((p) => ({ name: p.name, rating: p.rating ?? null })),
       sustained,
       sustainingPenalty: sustained.filter((s) => !s.exempt).length * -2,
-      foci: sheet.gear
-        .filter((g) => FOCUS_HINT.test(g.name))
-        .map((g) => ({ name: g.name, rating: g.rating ?? null })),
+      foci: [
+        ...tracked.map((f) => ({
+          name: f.name,
+          rating: f.force,
+          bonded: f.bonded,
+          active: f.active,
+          tracked: true,
+        })),
+        ...sheet.gear
+          .filter((g) => FOCUS_HINT.test(g.name) && !trackedNames.has(g.name.toLowerCase()))
+          .map((g) => ({
+            name: g.name,
+            rating: g.rating ?? null,
+            bonded: null,
+            active: null,
+            tracked: false,
+          })),
+      ],
+      reagents: dramsOf.get(row.id) ?? 0,
     });
   }
-  return {
-    characters: out,
-    spirits: {
-      tracked: false,
-      note: 'Bound spirits and their services have no tracker yet (FR8.3) — ask the GM rather than assuming zero.',
-    },
-  };
+  return { characters: out, spirits: { tracked: true, list: tracker.spirits } };
 }
 
 export interface MatrixState {

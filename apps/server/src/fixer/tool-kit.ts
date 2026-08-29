@@ -9,6 +9,7 @@
  */
 import { z } from 'zod';
 import type { Db } from '@safehouse/db';
+import type { LlmConfig } from './llm.js';
 
 export interface ToolContext {
   db: Db;
@@ -17,6 +18,13 @@ export interface ToolContext {
   prompt: string;
   /** Model slot id in play, stamped on drafts for the meter. */
   model: string | null;
+  /**
+   * The configured inference box, when there is one. Almost every tool is a
+   * plain data read and never wants this; map vision (FR12.11) is the exception
+   * — it calls the model a second time with the map image attached. Absent on
+   * the deterministic HTTP routes, which run with no model at all (NG7).
+   */
+  llm?: LlmConfig | null;
 }
 
 export interface FixerTool {

@@ -9,9 +9,12 @@
  * proposes a pool for a combatant: it names a rack key and the server decides
  * what that is worth right now.
  */
-import { useMutation, useQuery } from '@tanstack/react-query';
-import type { Combatant, LimitRef, ProvenanceEntry } from '@safehouse/contracts';
-import { apiGet, apiPost } from '../../api/client.js';
+import { useMutation } from '@tanstack/react-query';
+import type { Combatant } from '@safehouse/contracts';
+import { apiPost } from '../../api/client.js';
+import { useQuickRolls, type RackEntry } from './quickRolls.js';
+
+export type { QuickRolls, RackEntry } from './quickRolls.js';
 
 export interface CopilotRackProps {
   campaignId: string;
@@ -19,25 +22,6 @@ export interface CopilotRackProps {
   /** Rack rolls default behind the screen; the tracker header can flip this. */
   visibility: 'gm' | 'public';
   onOpenChain: () => void;
-}
-
-/** One rollable row as the server offers it. */
-export interface RackEntry {
-  /** Stable id the quick-roll endpoint takes (`attack:Beretta`, `defense`, …). */
-  key: string;
-  kind: string;
-  label: string;
-  pool: number;
-  breakdown: ProvenanceEntry[];
-  limit?: LimitRef;
-  weapon?: { name: string; dv: string | null; ap: number };
-}
-
-export interface QuickRolls {
-  combatantId: string;
-  woundModifier: number;
-  entries: RackEntry[];
-  sceneModifiers: ProvenanceEntry[];
 }
 
 /** Short chip label: the first word of the row, upper-cased ("ATK", "DEF"). */
@@ -54,14 +38,7 @@ export default function CopilotRack({
 }: CopilotRackProps) {
   void campaignId; // the roll is scoped by the combatant, not the campaign
 
-  const rack = useQuery({
-    queryKey: ['combatant', combatant.id, 'quick-rolls'],
-    queryFn: () => apiGet<QuickRolls>(`/api/combatants/${combatant.id}/quick-rolls`),
-    // A hand-added combatant has no copilot config and answers 404/empty;
-    // that is a normal state, not something to retry at.
-    retry: false,
-    staleTime: 10_000,
-  });
+  const rack = useQuickRolls(combatant.id);
 
   const roll = useMutation({
     mutationFn: (key: string) =>

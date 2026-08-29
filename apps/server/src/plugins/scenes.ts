@@ -36,6 +36,7 @@ import {
   requireRole,
   type AuthContext,
 } from '../services/auth.js';
+import type { EventTx } from '../hub.js';
 import { emitFogProximity } from '../fixer/proximity.js';
 import {
   PerKeyThrottle,
@@ -175,12 +176,15 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     const auth = requireRole(req, 'gm');
     assertCampaign(auth, campaignId);
     const body = parseBody(SceneCreateBody, req.body);
-    const scene = await svc.createScene(campaignId, {
-      ...body,
-      grid: body.grid as Record<string, unknown> | undefined,
-      environment: body.environment as Record<string, unknown> | undefined,
+    const scene = await app.hub.atomic(campaignId, async (tx) => {
+      const created = await svc.withDb(tx.db).createScene(campaignId, {
+        ...body,
+        grid: body.grid as Record<string, unknown> | undefined,
+        environment: body.environment as Record<string, unknown> | undefined,
+      });
+      await tx.emit({ type: 'scene.updated', payload: { sceneId: created.id, changed: ['created'] } });
+      return created;
     });
-    await app.hub.emit(campaignId, { type: 'scene.updated', payload: { sceneId: scene.id, changed: ['created'] } });
     return reply.status(201).send({ scene });
   });
 
@@ -199,16 +203,19 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     const { id } = req.params as { id: string };
     const { scene } = await openScene(req, id, { gmOnly: true });
     const body = parseBody(ScenePatchBody, req.body);
-    const { scene: updated, changed } = await svc.updateScene(scene, {
-      ...body,
-      grid: body.grid as Record<string, unknown> | undefined,
-      environment: body.environment as Record<string, unknown> | undefined,
-    });
-    // Public delta signal only — the payload never carries GM-layer geometry;
-    // clients re-GET the scene and receive their own role-filtered view.
-    await app.hub.emit(scene.campaignId, {
-      type: 'scene.updated',
-      payload: { sceneId: id, changed, environment: updated.environment },
+    const updated = await app.hub.atomic(scene.campaignId, async (tx) => {
+      const written = await svc.withDb(tx.db).updateScene(scene, {
+        ...body,
+        grid: body.grid as Record<string, unknown> | undefined,
+        environment: body.environment as Record<string, unknown> | undefined,
+      });
+      // Public delta signal only — the payload never carries GM-layer geometry;
+      // clients re-GET the scene and receive their own role-filtered view.
+      await tx.emit({
+        type: 'scene.updated',
+        payload: { sceneId: id, changed: written.changed, environment: written.scene.environment },
+      });
+      return written.scene;
     });
     return { scene: updated };
   });
@@ -216,24 +223,35 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
   app.delete('/api/scenes/:id', async (req) => {
     const { id } = req.params as { id: string };
     const { scene } = await openScene(req, id, { gmOnly: true });
-    await svc.deleteScene(id);
-    await app.hub.emit(scene.campaignId, {
-      type: 'scene.updated',
-      payload: { sceneId: id, changed: ['deleted'], deleted: true },
+    await app.hub.atomic(scene.campaignId, async (tx) => {
+      await svc.withDb(tx.db).deleteScene(id);
+      await tx.emit({
+        type: 'scene.updated',
+        payload: { sceneId: id, changed: ['deleted'], deleted: true },
+      });
     });
     return { ok: true };
   });
 
-  /** FR9.1: exactly one active scene per campaign; the table follows it. */
+  /**
+   * FR9.1: exactly one active scene per campaign; the table follows it.
+   *
+   * Demotion, promotion and `scene.activated` are one transaction — a
+   * promotion that committed without its event leaves every player device
+   * looking at the scene the GM just closed, with no way to notice.
+   */
   app.post('/api/scenes/:id/activate', async (req) => {
     const { id } = req.params as { id: string };
     const auth = requireRole(req, 'gm');
     const row = await svc.sceneRow(id);
     assertCampaign(auth, row.campaignId);
-    const scene = await svc.activateScene(row);
-    await app.hub.emit(row.campaignId, {
-      type: 'scene.activated',
-      payload: { sceneId: scene.id, name: scene.name },
+    const scene = await app.hub.atomic(row.campaignId, async (tx) => {
+      const activated = await svc.withDb(tx.db).activateScene(row);
+      await tx.emit({
+        type: 'scene.activated',
+        payload: { sceneId: activated.id, name: activated.name },
+      });
+      return activated;
     });
     return { scene };
   });
@@ -244,11 +262,14 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     const { id } = req.params as { id: string };
     const { scene } = await openScene(req, id, { gmOnly: true });
     const body = parseBody(TokenCreateBody, req.body);
-    const token = await svc.createToken(scene, body);
-    await app.hub.emit(scene.campaignId, {
-      type: 'token.added',
-      payload: { token },
-      visibility: tokenVis(token.hidden),
+    const token = await app.hub.atomic(scene.campaignId, async (tx) => {
+      const created = await svc.withDb(tx.db).createToken(scene, body);
+      await tx.emit({
+        type: 'token.added',
+        payload: { token: created },
+        visibility: tokenVis(created.hidden),
+      });
+      return created;
     });
     return reply.status(201).send({ token });
   });
@@ -268,8 +289,13 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         throw httpError(403, 'forbidden', 'you do not control this token');
       }
     }
-    const after = await svc.patchToken(id, body);
-    await emitTokenChange(scene, before, after, { positional, nonPositional });
+    // The permission reads above are all hoisted out of the block; only the
+    // row write and the event(s) describing it are inside it.
+    const after = await app.hub.atomic(scene.campaignId, async (tx) => {
+      const written = await svc.withDb(tx.db).patchToken(id, body);
+      await emitTokenChange(tx, scene, before, written, { positional, nonPositional });
+      return written;
+    });
     return { token: serializeToken(after) };
   });
 
@@ -278,11 +304,13 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     const auth = requireRole(req, 'gm');
     const { token, scene } = await svc.tokenWithScene(id);
     assertCampaign(auth, scene.campaignId);
-    await svc.deleteToken(id);
-    await app.hub.emit(scene.campaignId, {
-      type: 'token.removed',
-      payload: { tokenId: id, sceneId: scene.id },
-      visibility: tokenVis(token.hidden),
+    await app.hub.atomic(scene.campaignId, async (tx) => {
+      await svc.withDb(tx.db).deleteToken(id);
+      await tx.emit({
+        type: 'token.removed',
+        payload: { tokenId: id, sceneId: scene.id },
+        visibility: tokenVis(token.hidden),
+      });
     });
     return { ok: true };
   });
@@ -291,8 +319,14 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
    * Emit the right event(s) for a token mutation. Reveal (hidden → visible)
    * surfaces as `token.added` for players: a NEW entity arriving, never a
    * position that was quietly on their wire all along (FR9.7).
+   *
+   * Takes the caller's transaction, so a token whose row moved is a token the
+   * table was told about — and a hide that rolls back never leaks the
+   * `token.removed` that would have made a player's screen disagree with the
+   * GM's. Emits only; the row write is the caller's.
    */
   async function emitTokenChange(
+    tx: EventTx,
     scene: SceneRow,
     before: TokenRow,
     after: TokenRow,
@@ -300,15 +334,15 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
   ): Promise<void> {
     const dto = serializeToken(after);
     if (before.hidden && !after.hidden) {
-      await app.hub.emit(scene.campaignId, { type: 'token.added', payload: { token: dto } });
+      await tx.emit({ type: 'token.added', payload: { token: dto } });
       return;
     }
     if (!before.hidden && after.hidden) {
-      await app.hub.emit(scene.campaignId, {
+      await tx.emit({
         type: 'token.removed',
         payload: { tokenId: after.id, sceneId: scene.id },
       });
-      await app.hub.emit(scene.campaignId, {
+      await tx.emit({
         type: 'token.updated',
         payload: { token: dto },
         visibility: 'gm',
@@ -317,14 +351,14 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     }
     const visibility = tokenVis(after.hidden);
     if (kind.positional) {
-      await app.hub.emit(scene.campaignId, {
+      await tx.emit({
         type: 'token.moved',
         payload: { tokenId: after.id, sceneId: scene.id, x: after.x, y: after.y, rotation: after.rotation },
         visibility,
       });
     }
     if (kind.nonPositional) {
-      await app.hub.emit(scene.campaignId, {
+      await tx.emit({
         type: 'token.updated',
         payload: { token: dto },
         visibility,
@@ -345,36 +379,45 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
    * Fog events keep the payload player-safe: a *reveal* may carry the region
    * polygon (players now see it), `define`/unrevealed geometry stays GM-only,
    * and `hide` carries an id with no geometry at all.
+   *
+   * The `scenes.fog` write and its event commit together (`Hub.atomic`). Fog
+   * is the sharpest case of the half-commit in the whole app: a reveal that
+   * stored without emitting leaves players still fogged out of a room the
+   * server now considers open, and a `hide` that stored without emitting is
+   * worse — the client keeps drawing geometry the server has taken back, which
+   * is a Principle 4 leak the GM cannot see from their own screen.
    */
   async function applyFog(
     scene: SceneRow,
     body: z.output<typeof FogOpBody>,
   ): Promise<{ fog: unknown }> {
-    const { fog, region } = await svc.applyFogOp(scene, {
-      op: body.op,
-      ...(body.regionId ? { regionId: body.regionId } : {}),
-      ...(body.region ? { region: { ...body.region, id: body.region.id ?? undefined } } : {}),
-      ...(body.shape ? { shape: body.shape } : {}),
-    });
-    const isDefine = body.op === 'define';
-    await app.hub.emit(scene.campaignId, {
-      type: 'fog.updated',
-      payload: {
-        sceneId: scene.id,
+    return app.hub.atomic(scene.campaignId, async (tx) => {
+      const { fog, region } = await svc.withDb(tx.db).applyFogOp(scene, {
         op: body.op,
         ...(body.regionId ? { regionId: body.regionId } : {}),
-        ...(!isDefine && region ? { region } : {}),
-        ...(!isDefine && body.shape ? { shape: body.shape } : {}),
-      },
-      visibility: isDefine ? 'gm' : 'public',
-    });
-    if (body.announce && body.op === 'reveal' && region) {
-      await app.hub.emit(scene.campaignId, {
-        type: 'log.posted',
-        payload: { kind: 'scene', sceneId: scene.id, text: `Revealed: ${region.name}` },
+        ...(body.region ? { region: { ...body.region, id: body.region.id ?? undefined } } : {}),
+        ...(body.shape ? { shape: body.shape } : {}),
       });
-    }
-    return { fog };
+      const isDefine = body.op === 'define';
+      await tx.emit({
+        type: 'fog.updated',
+        payload: {
+          sceneId: scene.id,
+          op: body.op,
+          ...(body.regionId ? { regionId: body.regionId } : {}),
+          ...(!isDefine && region ? { region } : {}),
+          ...(!isDefine && body.shape ? { shape: body.shape } : {}),
+        },
+        visibility: isDefine ? 'gm' : 'public',
+      });
+      if (body.announce && body.op === 'reveal' && region) {
+        await tx.emit({
+          type: 'log.posted',
+          payload: { kind: 'scene', sceneId: scene.id, text: `Revealed: ${region.name}` },
+        });
+      }
+      return { fog };
+    });
   }
 
   // --- drawings, AoE templates, scatter (FR9.12/9.15) -----------------------
@@ -386,8 +429,13 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       throw httpError(403, 'forbidden', 'requires role: gm | player');
     }
     const body = parseBody(DrawingBody, req.body);
-    const drawing = await svc.createDrawing(scene.id, { ...body, createdBy: auth.userId });
-    await app.hub.emit(scene.campaignId, { type: 'drawing.added', payload: { drawing } });
+    const drawing = await app.hub.atomic(scene.campaignId, async (tx) => {
+      const created = await svc
+        .withDb(tx.db)
+        .createDrawing(scene.id, { ...body, createdBy: auth.userId });
+      await tx.emit({ type: 'drawing.added', payload: { drawing: created } });
+      return created;
+    });
     return reply.status(201).send({ drawing });
   });
 
@@ -398,8 +446,11 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     const scene = await svc.sceneRow(row.sceneId);
     assertCampaign(auth, scene.campaignId);
     const geometry = parseBody(z.record(z.string(), z.unknown()), req.body);
-    const drawing = await svc.updateDrawing(id, geometry);
-    await app.hub.emit(scene.campaignId, { type: 'drawing.added', payload: { drawing } });
+    const drawing = await app.hub.atomic(scene.campaignId, async (tx) => {
+      const updated = await svc.withDb(tx.db).updateDrawing(id, geometry);
+      await tx.emit({ type: 'drawing.added', payload: { drawing: updated } });
+      return updated;
+    });
     return { drawing };
   });
 
@@ -409,10 +460,12 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     const row = await svc.drawingRow(id);
     const scene = await svc.sceneRow(row.sceneId);
     assertCampaign(auth, scene.campaignId);
-    await svc.deleteDrawing(id);
-    await app.hub.emit(scene.campaignId, {
-      type: 'drawing.cleared',
-      payload: { sceneId: scene.id, drawingIds: [id] },
+    await app.hub.atomic(scene.campaignId, async (tx) => {
+      await svc.withDb(tx.db).deleteDrawing(id);
+      await tx.emit({
+        type: 'drawing.cleared',
+        payload: { sceneId: scene.id, drawingIds: [id] },
+      });
     });
     return { ok: true };
   });
@@ -420,10 +473,13 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
   app.delete('/api/scenes/:id/drawings', async (req) => {
     const { id } = req.params as { id: string };
     const { scene } = await openScene(req, id, { gmOnly: true });
-    const drawingIds = await svc.clearDrawings(scene.id);
-    await app.hub.emit(scene.campaignId, {
-      type: 'drawing.cleared',
-      payload: { sceneId: scene.id, drawingIds },
+    const drawingIds = await app.hub.atomic(scene.campaignId, async (tx) => {
+      const cleared = await svc.withDb(tx.db).clearDrawings(scene.id);
+      await tx.emit({
+        type: 'drawing.cleared',
+        payload: { sceneId: scene.id, drawingIds: cleared },
+      });
+      return cleared;
     });
     return { drawingIds };
   });
@@ -447,18 +503,23 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       ...(body.distanceDice !== undefined ? { distanceDice: body.distanceDice } : {}),
     });
     if (!body.placeTemplate) return { scatter };
-    const drawing = await svc.createDrawing(scene.id, {
-      kind: 'template',
-      geometry: {
-        shape: 'circle',
-        center: scatter.to,
-        radiusM: body.radiusM ?? 5,
-        origin: scatter.from,
-        scatter,
-      },
-      createdBy: auth.userId,
+    // The dice are already thrown (server-authoritative, G5) — only the
+    // template row and its event are transactional.
+    const drawing = await app.hub.atomic(scene.campaignId, async (tx) => {
+      const created = await svc.withDb(tx.db).createDrawing(scene.id, {
+        kind: 'template',
+        geometry: {
+          shape: 'circle',
+          center: scatter.to,
+          radiusM: body.radiusM ?? 5,
+          origin: scatter.from,
+          scatter,
+        },
+        createdBy: auth.userId,
+      });
+      await tx.emit({ type: 'drawing.added', payload: { drawing: created } });
+      return created;
     });
-    await app.hub.emit(scene.campaignId, { type: 'drawing.added', payload: { drawing } });
     return { scatter, drawing };
   });
 
@@ -473,15 +534,22 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     const { id } = req.params as { id: string };
     const { scene } = await openScene(req, id, { gmOnly: true });
     const body = parseBody(StageEncounterBody, req.body);
-    const staged = await svc.stageEncounter(scene, body);
-    await app.hub.emit(scene.campaignId, {
-      type: 'encounter.updated',
-      payload: {
-        encounterId: staged.encounterId,
-        sceneId: scene.id,
-        staged: staged.combatantIds.length,
-        created: staged.createdEncounter,
-      },
+    // One transaction for the whole staging: the encounter row, every
+    // combatant derived from a token, and the announcement. A partial stage —
+    // three of five runners on the tracker, no event — is a fight the GM has
+    // to notice is wrong before it starts.
+    const staged = await app.hub.atomic(scene.campaignId, async (tx) => {
+      const out = await svc.withDb(tx.db).stageEncounter(scene, body);
+      await tx.emit({
+        type: 'encounter.updated',
+        payload: {
+          encounterId: out.encounterId,
+          sceneId: scene.id,
+          staged: out.combatantIds.length,
+          created: out.createdEncounter,
+        },
+      });
+      return out;
     });
     return reply.status(201).send(staged);
   });
@@ -586,16 +654,27 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       return ctx.reply({ type: 'error', payload: { code: 'forbidden', message: 'you do not control this token' }, ephemeral: true });
     }
     dragThrottle.clear(token.id);
-    const after = await svc.patchToken(token.id, {
-      x: parsed.data.x,
-      y: parsed.data.y,
-      ...(parsed.data.rotation !== undefined ? { rotation: parsed.data.rotation } : {}),
+    // Position and `token.moved` commit together: the server is authoritative
+    // for where a token IS (FR9.5), so a stored move nobody was told about
+    // leaves every other screen — including the TV — drawing it in the old
+    // square until someone reloads.
+    await app.hub.atomic(ctx.campaignId, async (tx) => {
+      const after = await svc.withDb(tx.db).patchToken(token.id, {
+        x: parsed.data.x,
+        y: parsed.data.y,
+        ...(parsed.data.rotation !== undefined ? { rotation: parsed.data.rotation } : {}),
+      });
+      await emitTokenChange(tx, scene, token, after, { positional: true, nonPositional: false });
     });
-    await emitTokenChange(scene, token, after, { positional: true, nonPositional: false });
     // "They're at the lab door, reveal?" (FR12.8). On the COMMIT only, never on
     // drag frames — a nudge per interim position would be a strobe. GM-only and
     // ephemeral inside `emitFogProximity`, and wrapped because a suggestion
     // failing must never turn a legal move into an error.
+    //
+    // Outside the transaction on purpose, and it has nothing to compensate: it
+    // stores nothing and its frame is ephemeral, so the worst case is one
+    // missing prompt. It also reads the scene, which inside the open block
+    // would deadlock (the rule on `Hub.atomic`) — hence after, not within.
     try {
       await emitFogProximity(app.db, app.hub, ctx.campaignId, { sceneId: scene.id });
     } catch (err) {
@@ -623,6 +702,11 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
    * left it in — which it can only do by replaying the last `display.updated`.
    * The payload carries the FULL state, not the patch, so the newest event is
    * always the whole answer.
+   *
+   * `hub.emit`, deliberately, and NOT `hub.atomic`: there is no domain row
+   * here. The event IS the state — `displayState` reads it back with
+   * `latestEventOfType` — so this is a single write with nothing to be
+   * inconsistent with, and wrapping it would buy a transaction for one insert.
    */
   app.hub.onCommand('display.set', async (msg, ctx) => {
     if (ctx.auth.role !== 'gm') {

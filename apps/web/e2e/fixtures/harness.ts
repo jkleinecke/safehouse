@@ -6,7 +6,15 @@
  * has to resolve to the join SCREEN rather than the API's JSON (LIVE-3).
  *
  * Nothing is mocked. The dice are the server's CSPRNG, the database is PGlite,
- * and the only thing missing is a model (`LLM_BASE_URL` stays unset, NG7).
+ * and the only thing missing is a model (`LLM_BASE_URL` stays unset, NG7) —
+ * which is a property the specs rely on, not an omission. `recap.spec.ts` boots
+ * a second, AI-enabled stack of its own rather than switching the Fixer on
+ * underneath everything else (`fixtures/ai-stack.ts`).
+ *
+ * Two seeders run against the directory before the server opens it, each in its
+ * own process and each closing cleanly on the way out: `seed:demo` for the
+ * campaign, then `seed:books` for one manufactured book (`fixtures/pdf.ts`).
+ * PGlite is single-writer, so the order is not a preference.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -14,18 +22,39 @@ import { readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Api, type DerivedPool, type JoinAnswer, type PersistedRoll } from './api';
-import type { DeviceSession, World } from './world';
+import { Api } from './api';
+import { BOOK_PAGES, arrange } from './arrange';
+import { buildTestPdf } from './pdf';
+import type { World } from './world';
 
 export const REPO_ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../../../..');
-const WEB_DIST = join(REPO_ROOT, 'apps', 'web', 'dist');
-const SERVER_DIST = join(REPO_ROOT, 'apps', 'server', 'dist', 'index.js');
+const WEB_ROOT = join(REPO_ROOT, 'apps', 'web');
+const WEB_DIST = join(WEB_ROOT, 'dist');
+export const SERVER_DIST = join(REPO_ROOT, 'apps', 'server', 'dist', 'index.js');
 const SEED_DEMO = join(REPO_ROOT, 'apps', 'server', 'seed', 'demo.ts');
+const SEED_BOOKS = join(REPO_ROOT, 'apps', 'server', 'scripts', 'seed-books.ts');
 
-/** Distinctive strings the secrecy spec looks for. Never book content. */
-export const GM_ONLY_LOG_TEXT =
-  'GM-ONLY-E2E: the second courier is already inside and nobody has seen him.';
-export const PUBLIC_LOG_TEXT = 'PUBLIC-E2E: the freight door grinds half open.';
+/**
+ * Where vite actually is. pnpm does NOT hoist to the workspace root, so the
+ * old hard-coded `<root>/node_modules/vite/bin/vite.js` resolved to nothing on
+ * a normal install and every rebuild died with MODULE_NOT_FOUND — which, since
+ * the rebuild only fires when `dist` is stale, meant the suite failed exactly
+ * when someone had just changed the app.
+ */
+function viteBin(): string {
+  const candidates = [
+    join(WEB_ROOT, 'node_modules', 'vite', 'bin', 'vite.js'),
+    join(REPO_ROOT, 'node_modules', 'vite', 'bin', 'vite.js'),
+  ];
+  const found = candidates.find((p) => existsSync(p));
+  if (!found) {
+    throw new Error(
+      `e2e: cannot find vite to rebuild the SPA (looked in ${candidates.join(', ')}). ` +
+        'Run `pnpm build` first, or set SAFEHOUSE_E2E_NO_BUILD=1.',
+    );
+  }
+  return found;
+}
 
 export interface Booted {
   world: World;
@@ -69,16 +98,19 @@ export async function ensureWebBuild(log: (s: string) => void): Promise<void> {
   const built = existsSync(join(WEB_DIST, 'index.html'))
     ? statSync(join(WEB_DIST, 'index.html')).mtimeMs
     : 0;
-  const source = await newestMtime(join(REPO_ROOT, 'apps', 'web', 'src'));
+  const source = await newestMtime(join(WEB_ROOT, 'src'));
   if (built > source) {
     log('e2e: apps/web/dist is current, skipping the SPA build');
     return;
   }
 
   log('e2e: building the SPA (apps/web/dist is stale)…');
-  await run(process.execPath, [join(REPO_ROOT, 'node_modules', 'vite', 'bin', 'vite.js'), 'build'], {
-    cwd: join(REPO_ROOT, 'apps', 'web'),
-  });
+  // Vendor pdf.js first, exactly as `pnpm --filter @safehouse/web build` does:
+  // the reader loads it from `/pdfjs/` as a same-origin static asset, and a
+  // dist without it silently degrades to the browser's own viewer — which is
+  // the one thing `reader.spec.ts` exists to prove we no longer depend on.
+  await run(process.execPath, [join(WEB_ROOT, 'scripts', 'vendor-pdfjs.mjs')], { cwd: WEB_ROOT });
+  await run(process.execPath, [viteBin(), 'build'], { cwd: WEB_ROOT });
 }
 
 // ---------------------------------------------------------------------------
@@ -109,15 +141,22 @@ function run(
   });
 }
 
-/** Env every child gets: no model, no webhook, no external database (NG7). */
-function childEnv(dataDir: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, DATA_DIR: dataDir, LOG_LEVEL: 'warn', ...extra };
+/**
+ * Env every child gets: no model, no webhook, no external database (NG7).
+ *
+ * The deletes run BEFORE `extra` is folded in, so a caller that deliberately
+ * wants one of them back — `recap.spec.ts` points its own stack at a mock
+ * inference box — can pass it and have it survive. Passing nothing keeps the
+ * default posture: the app under test has no model and no outbound anything.
+ */
+export function childEnv(dataDir: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, DATA_DIR: dataDir, LOG_LEVEL: 'warn' };
   delete env.DATABASE_URL;
   delete env.LLM_BASE_URL;
   delete env.DISCORD_WEBHOOK_URL;
   // The seeded PDFs are 300 MB of book; nothing here needs them.
   delete env.SAFEHOUSE_BOOKS_DIR;
-  return env;
+  return { ...env, ...extra };
 }
 
 /**
@@ -127,7 +166,7 @@ function childEnv(dataDir: string, extra: NodeJS.ProcessEnv = {}): NodeJS.Proces
  * GM's token; everything else the specs need is fetched over REST afterwards,
  * so a change to the seed's pretty-printing cannot break the suite.
  */
-async function seedDemo(dataDir: string): Promise<{ campaignId: string; gmToken: string }> {
+export async function seedDemo(dataDir: string): Promise<{ campaignId: string; gmToken: string }> {
   const stdout = await run(process.execPath, ['--import', 'tsx', SEED_DEMO], {
     env: childEnv(dataDir),
   });
@@ -139,10 +178,70 @@ async function seedDemo(dataDir: string): Promise<{ campaignId: string; gmToken:
   return { campaignId, gmToken };
 }
 
-async function startServer(dataDir: string, port: number, logPath: string): Promise<ChildProcess> {
+/**
+ * Put one book in the library, through the REAL seeding path (FR11.7).
+ *
+ * The PDF is manufactured (`fixtures/pdf.ts`) — the table's actual seventeen
+ * books are copyrighted and 300 MB, and the harness unsets
+ * `SAFEHOUSE_BOOKS_DIR` for exactly that reason. What is NOT manufactured is
+ * the route in: `seed:books` runs as its own process against the same
+ * `DATA_DIR` the demo seed just left, guesses the code and offset from the
+ * filename the way it does for the GM's own folder, copies the file into the
+ * store and indexes a couple of pages. So the reader spec opens a book that was
+ * registered the way every real book is.
+ *
+ * Filename choice is load-bearing: it is the one the seeder recognises as the
+ * core rulebook, which is what yields code `SR5` and the measured `+5` offset —
+ * the pair the whole printed↔PDF story in FR11.1/11.3 rests on. The *title* is
+ * overwritten later (`arrange`) so nothing in a trace can mistake this stand-in
+ * for the book itself.
+ *
+ * Returns where the file landed so the spec can compare bytes-on-the-wire to
+ * bytes-on-disk.
+ */
+async function seedBook(
+  dataDir: string,
+  opts: { pages: number },
+): Promise<{ code: string; pages: number; bytes: number }> {
+  const dir = mkdtempSync(join(tmpdir(), 'safehouse-e2e-book-'));
+  const file = join(dir, 'Shadowrun Fifth Edition Core Rulebook.pdf');
+  const pdf = buildTestPdf({ pages: opts.pages });
+  writeFileSync(file, pdf);
+  try {
+    await run(
+      process.execPath,
+      [
+        '--import',
+        'tsx',
+        SEED_BOOKS,
+        '--dir',
+        dir,
+        '--only',
+        'SR5',
+        '--data-dir',
+        dataDir,
+        // Text extraction is FR12.14's business, not the reader's; two pages is
+        // enough to prove the seeder ran and keeps a 440-page file cheap.
+        '--max-pages',
+        '2',
+      ],
+      { env: childEnv(dataDir) },
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  return { code: 'SR5', pages: opts.pages, bytes: pdf.byteLength };
+}
+
+export async function startServer(
+  dataDir: string,
+  port: number,
+  logPath: string,
+  extraEnv: NodeJS.ProcessEnv = {},
+): Promise<ChildProcess> {
   const child = spawn(process.execPath, [SERVER_DIST], {
     cwd: REPO_ROOT,
-    env: childEnv(dataDir, { PORT: String(port) }),
+    env: childEnv(dataDir, { PORT: String(port), ...extraEnv }),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let log = '';
@@ -173,180 +272,6 @@ async function startServer(dataDir: string, port: number, logPath: string): Prom
 }
 
 // ---------------------------------------------------------------------------
-// Arrangement — a table mid-session, before any browser opens
-// ---------------------------------------------------------------------------
-
-interface CharacterRow {
-  id: string;
-  name: string;
-  ownerUserId?: string | null;
-}
-interface SceneRow {
-  id: string;
-  name: string;
-  environment?: { light?: number };
-}
-interface TokenRow {
-  id: string;
-  name: string;
-  hidden?: boolean;
-}
-interface CombatantRow {
-  id: string;
-  name: string;
-  visibility?: string;
-}
-
-async function arrange(api: Api, campaignId: string, gmToken: string): Promise<World> {
-  const gm: DeviceSession = { token: gmToken, role: 'gm', campaignId };
-
-  const campaign = await api.get<{ name: string; activeSceneId?: string | null }>(
-    `/api/campaigns/${campaignId}`,
-    gmToken,
-  );
-  const { characters } = await api.get<{ characters: CharacterRow[] }>(
-    `/api/campaigns/${campaignId}/characters`,
-    gmToken,
-  );
-  const byAlias: Record<string, string> = {};
-  for (const c of characters) byAlias[c.name] = c.id;
-
-  const playerAlias = 'Whisper';
-  const playerCharacterId = byAlias[playerAlias];
-  if (!playerCharacterId) {
-    throw new Error(`e2e: the demo seed has no character named ${playerAlias}`);
-  }
-
-  // --- a player device that actually OWNS a sheet --------------------------
-  // Invites are not character-bound (a join mints a fresh user), so the E2E
-  // player is joined over REST and then handed the sheet by the GM — the same
-  // `PATCH /api/characters/:id/owner` a GM taps when a phone scans in.
-  const playerInvite = await api.post<{ code: string }>(
-    `/api/campaigns/${campaignId}/invites`,
-    { role: 'player' },
-    gmToken,
-  );
-  const joined = await api.get<JoinAnswer>(
-    `/api/join/${playerInvite.code}?name=${encodeURIComponent(playerAlias)}&label=E2E%20phone`,
-  );
-  await api.patch(
-    `/api/characters/${playerCharacterId}/owner`,
-    { ownerUserId: joined.user?.id },
-    gmToken,
-  );
-  const player: DeviceSession = { token: joined.token, role: 'player', campaignId };
-
-  // Codes the browser specs redeem themselves (unlimited uses, 24 h).
-  const displayInvite = await api.post<{ code: string }>(
-    `/api/campaigns/${campaignId}/invites`,
-    { role: 'display' },
-    gmToken,
-  );
-  const spectatorInvite = await api.post<{ code: string }>(
-    `/api/campaigns/${campaignId}/invites`,
-    { role: 'player' },
-    gmToken,
-  );
-
-  // --- the session is live (FR6.2) -----------------------------------------
-  await api.post(`/api/campaigns/${campaignId}/sessions/start`, {}, gmToken);
-
-  // --- the scene, its hidden tokens, and a fight staged from it ------------
-  const sceneId = campaign.activeSceneId;
-  if (!sceneId) throw new Error('e2e: the demo seed left no active scene');
-  const scene = await api.get<{ scene: SceneRow; tokens: TokenRow[] }>(
-    `/api/scenes/${sceneId}`,
-    gmToken,
-  );
-  const hiddenTokenNames = scene.tokens.filter((t) => t.hidden).map((t) => t.name);
-  if (hiddenTokenNames.length === 0) {
-    throw new Error('e2e: the demo scene has no hidden tokens — the secrecy spec would be vacuous');
-  }
-
-  const staged = await api.post<{ encounterId: string; combatantIds: string[] }>(
-    `/api/scenes/${sceneId}/stage-encounter`,
-    { name: 'Pier 23 — the freight door' },
-    gmToken,
-  );
-  await api.patch(`/api/encounters/${staged.encounterId}`, { state: 'live' }, gmToken);
-  await api.post(`/api/encounters/${staged.encounterId}/roll-initiative`, {}, gmToken);
-  const encounter = await api.get<{
-    encounter?: { name?: string };
-    name?: string;
-    combatants: CombatantRow[];
-  }>(`/api/encounters/${staged.encounterId}`, gmToken);
-  const publicCombatants = (
-    await api.get<{ combatants: CombatantRow[] }>(
-      `/api/encounters/${staged.encounterId}`,
-      player.token,
-    )
-  ).combatants.map((c) => c.name);
-
-  // --- one roll already on the record, before any page mounts (LIVE-1) -----
-  const derived = await api.get<{ derived: { pools: Record<string, DerivedPool> } }>(
-    `/api/characters/${playerCharacterId}/derived`,
-    player.token,
-  );
-  const perception = derived.derived.pools['skill.perception'];
-  if (!perception) throw new Error(`e2e: ${playerAlias} has no perception pool`);
-
-  const { roll } = await api.post<{ roll: PersistedRoll }>(
-    '/api/rolls',
-    {
-      kind: 'simple',
-      pool: perception.total,
-      breakdown: perception.breakdown,
-      ...(perception.limit ? { limit: perception.limit } : {}),
-      edge: null,
-      visibility: 'public',
-      actor: { characterId: playerCharacterId },
-      meta: { poolRef: 'skill.perception', title: 'perception', label: 'perception' },
-    },
-    player.token,
-  );
-
-  // --- two log lines: one the table shares, one only the GM may ever see ---
-  await api.post(
-    `/api/campaigns/${campaignId}/log`,
-    { kind: 'marker', text: PUBLIC_LOG_TEXT, visibility: 'public' },
-    gmToken,
-  );
-  await api.post(
-    `/api/campaigns/${campaignId}/log`,
-    { kind: 'marker', text: GM_ONLY_LOG_TEXT, visibility: 'gm' },
-    gmToken,
-  );
-
-  return {
-    baseUrl: api.baseUrl,
-    campaignId,
-    campaignName: campaign.name,
-    gm,
-    player,
-    playerAlias,
-    playerCharacterId,
-    characters: byAlias,
-    sceneId,
-    sceneName: scene.scene.name,
-    sceneLight: scene.scene.environment?.light ?? 0,
-    encounterId: staged.encounterId,
-    encounterName: encounter.encounter?.name ?? encounter.name ?? 'encounter',
-    stagedCombatants: staged.combatantIds.length,
-    publicCombatants,
-    hiddenTokenNames,
-    gmOnlyLogText: GM_ONLY_LOG_TEXT,
-    publicLogText: PUBLIC_LOG_TEXT,
-    seededRoll: {
-      id: roll.id,
-      pool: roll.request.pool,
-      label: 'perception',
-      actorName: playerAlias,
-    },
-    codes: { display: displayInvite.code, player: spectatorInvite.code },
-  };
-}
-
-// ---------------------------------------------------------------------------
 // Entry point used by global setup
 // ---------------------------------------------------------------------------
 
@@ -358,20 +283,27 @@ export async function boot(port: number, log: (s: string) => void): Promise<Boot
   log(`e2e: seeding the demo campaign into ${dataDir}`);
   const { campaignId, gmToken } = await seedDemo(dataDir);
 
+  // Same directory, next process, still before the server opens it: PGlite is
+  // single-writer and each seeder closes cleanly on the way out (LIVE-4).
+  log('e2e: seeding one manufactured book into the library');
+  const book = await seedBook(dataDir, { pages: BOOK_PAGES });
+
   log(`e2e: booting the built server on :${port}`);
   const server = await startServer(dataDir, port, serverLog);
 
   const api = new Api(`http://127.0.0.1:${port}`);
   let world: World;
   try {
-    world = await arrange(api, campaignId, gmToken);
+    world = await arrange(api, campaignId, gmToken, book);
   } catch (err) {
     server.kill();
     throw err;
   }
   log(
     `e2e: world ready — campaign ${world.campaignId}, ${world.stagedCombatants} combatants staged, ` +
-      `roll ${world.seededRoll.id} (pool ${world.seededRoll.pool}) on the record`,
+      `roll ${world.seededRoll.id} (pool ${world.seededRoll.pool}) on the record, ` +
+      `${world.book.code} p.${world.book.printedPage} = pdf ${world.book.pdfPage} ` +
+      `(${(world.book.bytes / 1_048_576).toFixed(1)} MB)`,
   );
 
   return {
