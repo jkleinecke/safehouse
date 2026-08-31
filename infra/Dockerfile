@@ -26,6 +26,12 @@ COPY packages/rules/package.json    packages/rules/
 COPY packages/db/package.json       packages/db/
 COPY apps/server/package.json       apps/server/
 COPY apps/web/package.json          apps/web/
+# `apps/web`'s postinstall vendors pdf.js (§13, self-hosted — no CDN), so its
+# script has to exist before the install layer runs. It is copied separately
+# and ahead of the source so the dependency layer still caches on manifests
+# alone; `apps/web/build` re-runs the same script, so a future change here
+# degrades to a slower build, never a broken one.
+COPY apps/web/scripts/              apps/web/scripts/
 RUN pnpm install --frozen-lockfile
 
 COPY packages/ packages/
@@ -49,7 +55,13 @@ COPY apps/server/package.json       apps/server/
 COPY apps/web/package.json          apps/web/
 # Builds allowed by pnpm-workspace.yaml still run; the dev-only ones (esbuild,
 # tailwind oxide) are simply not installed here.
-RUN pnpm install --frozen-lockfile --prod
+#
+# `--ignore-scripts`: the only lifecycle script in the prod tree is
+# `apps/web`'s pdf.js vendoring, and this stage has neither its script nor any
+# reason to run it — the assets were vendored in the build stage and travel in
+# `apps/web/dist` below. Every prod dependency is pure JS or WASM (pglite,
+# unpdf), so nothing here needs a native build step (§16).
+RUN pnpm install --frozen-lockfile --prod --ignore-scripts
 
 # Compiled output, in the same relative layout the server expects.
 COPY --from=build /app/packages/contracts/dist packages/contracts/dist

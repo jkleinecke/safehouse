@@ -1,0 +1,46 @@
+# Build context hygiene for infra/Dockerfile (context = repo root).
+#
+# node_modules is the load-bearing entry: without it, `COPY apps/ apps/` lays
+# the HOST's (Windows, pnpm-symlinked) tree over the Linux install done in the
+# layer above, and the build dies on `Cannot find module .../vite/bin/vite.js`.
+# The rest is weight: the rulebook PDFs alone are ~250 MB of context that the
+# image neither wants nor is allowed to ship (§14 — books never ship).
+
+# Dependencies and build output — reinstalled/rebuilt inside the image
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+*.tsbuildinfo
+coverage/
+
+# The owner's rulebooks and local models: never in an image (DESIGN §14/§16)
+*.pdf
+models/
+
+# Runtime state, backups and secrets
+data/
+**/data/
+uploads/
+backups/
+.env
+.env.*
+!.env.example
+
+# Vendored at install/build time by apps/web/scripts/vendor-pdfjs.mjs
+apps/web/public/pdfjs/
+
+# Test and tooling artefacts
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+*.log
+
+# VCS, editors, CI
+.git/
+.github/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
