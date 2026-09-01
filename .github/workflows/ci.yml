@@ -35,11 +35,18 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Typecheck
-        run: pnpm -r --workspace-concurrency=1 typecheck
-
+      # Build BEFORE typecheck, not after. Cross-package imports resolve
+      # through each package's published types (`packages/*/dist/*.d.ts`), so
+      # on a clean checkout `packages/db` cannot see `@safehouse/contracts`
+      # until contracts has been built — TS2307. It passed locally only
+      # because a developer's `dist/` survives from an earlier build; CI
+      # starts with none, which is why this failed on every push and never
+      # once on a laptop. The other jobs already build their deps first.
       - name: Build
         run: pnpm -r --workspace-concurrency=1 build
+
+      - name: Typecheck
+        run: pnpm -r --workspace-concurrency=1 typecheck
 
       # The shared log's regression guard, and the only check that meets a
       # database it did not create: `seed:demo` runs in a child process, exits,
