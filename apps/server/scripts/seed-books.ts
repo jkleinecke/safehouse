@@ -158,12 +158,32 @@ export function calibrationTable(results: SeedBookResult[]): string[] {
   return out;
 }
 
+/**
+ * Resolve `--dir` the way the person typing it means it.
+ *
+ * pnpm runs this script with cwd = apps/server, so a GM standing in the repo
+ * root who types `--dir books` (the obvious thing, and where the books now
+ * live) got "no such folder: books" — the path was resolved against the
+ * package, not the repo. Try the literal path first, then the same path
+ * relative to the repo root, and only then give up.
+ */
+export function resolveBooksDir(dir: string): string | null {
+  if (existsSync(dir)) return dir;
+  const fromRepoRoot = resolve(REPO_ROOT, dir);
+  if (existsSync(fromRepoRoot)) return fromRepoRoot;
+  return null;
+}
+
 export async function main(): Promise<number> {
   const cli = parseArgs(process.argv.slice(2));
-  if (!existsSync(cli.dir)) {
-    console.error(`[seed:books] no such folder: ${cli.dir}`);
+  const dir = resolveBooksDir(cli.dir);
+  if (dir === null) {
+    console.error(
+      `[seed:books] no such folder: ${cli.dir} (looked there and under ${REPO_ROOT})`,
+    );
     return 1;
   }
+  cli.dir = dir;
 
   const pdfs = readdirSync(cli.dir)
     .filter((f) => /\.pdf$/i.test(f))

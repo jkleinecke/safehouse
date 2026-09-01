@@ -15,7 +15,17 @@ import { seedBooks, type SeedBookResult } from '../src/services/books.js';
 import { bootstrapCampaign, joinAs, makeTestApp, type TestApp } from './core-helpers.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
-const CORE_PDF = `${REPO_ROOT}shadowrunfiftheditioncorerulebook_V2.pdf`;
+
+/**
+ * The rulebook corpus moved from the repo root into `books/`. These tests skip
+ * gracefully when a PDF is absent, so a stale path would not fail — it would
+ * quietly stop testing, which is worse. Prefer `books/`, fall back to the root.
+ */
+const BOOKS_DIR = existsSync(`${REPO_ROOT}books`) ? `${REPO_ROOT}books/` : REPO_ROOT;
+function booksPath(name: string): string {
+  return `${BOOKS_DIR}${name}`;
+}
+const CORE_PDF = booksPath('shadowrunfiftheditioncorerulebook_V2.pdf');
 const HAVE_CORE = existsSync(CORE_PDF);
 
 /** `--max-pages 40` at offset +5 covers printed pages 1–35. */
@@ -42,7 +52,7 @@ describe.skipIf(!HAVE_CORE)('books library API (M11)', () => {
     playerToken = (await joinAs(app, campaignId, gmToken, 'player', 'Wisp')).token;
 
     const results = await seedBooks(t.db, {
-      dir: REPO_ROOT,
+      dir: BOOKS_DIR,
       only: 'SR5',
       maxPages: MAX_PAGES,
       dataDir: t.dataDir,
@@ -347,7 +357,7 @@ describe.skipIf(!HAVE_CORE)('books library API (M11)', () => {
       payload: { pageOffset: 5, shared: true },
     });
     const again = await seedBooks(t.db, {
-      dir: REPO_ROOT,
+      dir: BOOKS_DIR,
       only: 'SR5',
       maxPages: 8,
       dataDir: t.dataDir,

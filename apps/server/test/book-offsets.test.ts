@@ -35,7 +35,17 @@ import { calibrationTable, parseArgs } from '../scripts/seed-books.js';
 import { bootstrapCampaign, joinAs, makeTestApp, type TestApp } from './core-helpers.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
-const CORE_PDF = `${REPO_ROOT}shadowrunfiftheditioncorerulebook_V2.pdf`;
+
+/**
+ * The rulebook corpus moved from the repo root into `books/`. These tests skip
+ * gracefully when a PDF is absent, so a stale path would not fail — it would
+ * quietly stop testing, which is worse. Prefer `books/`, fall back to the root.
+ */
+const BOOKS_DIR = existsSync(`${REPO_ROOT}books`) ? `${REPO_ROOT}books/` : REPO_ROOT;
+function booksPath(name: string): string {
+  return `${BOOKS_DIR}${name}`;
+}
+const CORE_PDF = booksPath('shadowrunfiftheditioncorerulebook_V2.pdf');
 /** Rigger 5.0 — seeded at +0, actually +1. The bug this feature exists for. */
 const RIGGER_PDF = `${REPO_ROOT}rigger5.pdf`;
 const RUN_AND_GUN_PDF = `${REPO_ROOT}runandgun.pdf`;
@@ -470,7 +480,7 @@ describe.skipIf(!existsSync(RIGGER_PDF))('seed:books --calibrate (FR11.1, FR11.7
 
   const seed = async (over: { calibrate?: boolean; recalibrate?: boolean } = {}) => {
     const results = await seedBooks(t.db, {
-      dir: REPO_ROOT,
+      dir: BOOKS_DIR,
       only: 'R5',
       maxPages: MAX_PAGES,
       dataDir: t.dataDir,
