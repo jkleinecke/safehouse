@@ -9,6 +9,12 @@
  * Binds 0.0.0.0 — the LAN posture (§8/§13): the table's Wi-Fi during
  * sessions, localhost between them; nothing ever faces the internet.
  */
+// Before anything reads process.env: fills in the repo-root .env for shell
+// starts (compose supplies its own, and already-set variables always win).
+import { loadEnvFile } from './dotenv.js';
+
+loadEnvFile();
+
 import { buildApp } from './app.js';
 import { installSignalHandlers } from './shutdown.js';
 import { lanAddress } from './services/auth.js';
