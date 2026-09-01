@@ -40,6 +40,7 @@ import QRCode from 'qrcode';
 import { z } from 'zod';
 import { RoleSchema, type Role } from '@safehouse/contracts';
 import { campaigns, devices, invites, memberships, users, type Db } from '@safehouse/db';
+import { installStarterArchetypes } from './archetypes.js';
 
 // ---------------------------------------------------------------------------
 // Error envelope helper (§12: { error: { code, message, details? } })
@@ -180,6 +181,22 @@ export class AuthService {
       .insert(memberships)
       .values({ campaignId: campaign.id, userId, role: 'gm' })
       .onConflictDoNothing();
+
+    // M10 cold start (FR10.1/G9): a brand-new campaign's NPC generator would
+    // otherwise open on an empty dropdown, and the fix — hand-authoring
+    // attribute curves and tier dials — is the evening M10 exists to give
+    // back. `onlyWhenEmpty` makes this strictly additive: it can only ever
+    // fire on a campaign that owns no templates at all. The rows are ordinary
+    // editable templates, so undoing it is deleting them.
+    //
+    // Best-effort by construction: a malformed catalogue must never be able to
+    // fail campaign creation, which is the one call the whole app bootstraps
+    // through. The library route stays available to install by hand.
+    try {
+      await installStarterArchetypes(this.db, campaign.id, { onlyWhenEmpty: true });
+    } catch (err) {
+      console.warn('[archetypes] starter library not installed for new campaign:', err);
+    }
     const token = mintToken();
     const device = (
       await this.db

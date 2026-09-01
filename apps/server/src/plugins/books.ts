@@ -8,6 +8,7 @@
  *   GET    /api/books/search?q=       ranked FTS over extracted pages
  *   GET    /api/books/:id             one registry row
  *   PATCH  /api/books/:id             GM: code/title/offset/shared — calibration
+ *   POST   /api/books/:id/detect-offset  GM: measure the offset, propose only
  *   DELETE /api/books/:id             GM
  *   GET    /api/books/:id/pages/:printed   extracted page text (GM; retrieval)
  *   GET    /read/:code?p=426          → { fileUrl, pdfPage } for the web viewer
@@ -29,6 +30,13 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { searchBookPages, type BookPageHit } from '@safehouse/db';
 import { assertCampaign, httpError, requireAuth, requireRole } from '../services/auth.js';
+import {
+  buildOffsetProposal,
+  detectOffsetFromDb,
+  detectOffsetFromPdf,
+  type OffsetDetection,
+  type OffsetProposal,
+} from '../services/book-offsets.js';
 import {
   BooksService,
   parseRangeHeader,
@@ -67,6 +75,12 @@ const PatchBookBody = z
     shared: z.boolean().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, { message: 'no fields to update' });
+
+/** `POST /api/books/:id/detect-offset` — everything is optional. */
+const DetectOffsetBody = z.object({
+  /** How many pages to read. More is slower and rarely more certain. */
+  maxSample: z.coerce.number().int().min(8).max(200).optional(),
+});
 
 const SearchQuery = z.object({
   q: z.string().min(1).max(400),
@@ -122,9 +136,24 @@ interface BookDto {
   hasFile: boolean;
   fileUrl: string;
   readUrl: string;
+  /**
+   * How many pages of this book hold extracted, searchable text.
+   *
+   * Sent only on the listing, where one grouped count covers every row. The
+   * shelf uses it to explain the thing that otherwise reads as a bug: a book
+   * whose scans are pure image indexes zero pages, so it is invisible to
+   * search and to the Fixer, and the GM deserves to be told that rather than
+   * left wondering why their 300-page book never matches anything.
+   *
+   * There is deliberately no `pdfPages` beside it. Nothing in the schema
+   * records a book's PDF page count, and the only way to get one is to open
+   * the file — too expensive for a listing, and a guessed number here would be
+   * worse than the honest "unknown" the shelf already renders.
+   */
+  indexedPages?: number;
 }
 
-function toDto(row: BookRow): BookDto {
+function toDto(row: BookRow, indexedPages?: number): BookDto {
   return {
     id: row.id,
     code: row.code,
@@ -136,6 +165,52 @@ function toDto(row: BookRow): BookDto {
     hasFile: row.attachmentId !== null,
     fileUrl: `/files/books/${encodeURIComponent(row.code)}`,
     readUrl: `/read/${encodeURIComponent(row.code)}`,
+    ...(indexedPages !== undefined ? { indexedPages } : {}),
+  };
+}
+
+/**
+ * An offset *proposal* on the wire. Deliberately carries `applied: false` and
+ * the exact call that would apply it: detection measures, the GM confirms.
+ */
+function toOffsetDto(
+  book: BookRow,
+  proposal: OffsetProposal,
+  source: 'pages' | 'pdf',
+): Record<string, unknown> {
+  const d = proposal.detection;
+  return {
+    book: { id: book.id, code: book.code, title: book.title },
+    source,
+    /** Why the weaker source was used, and what that costs the answer. */
+    sourceNote:
+      source === 'pdf'
+        ? null
+        : 'measured from indexed pages, not the PDF: those rows are keyed by the offset that was in force when the book was last seeded, so re-seed for an absolute answer',
+    applied: false,
+    currentOffset: proposal.currentOffset,
+    proposedOffset: proposal.proposedOffset,
+    wouldChange: proposal.wouldChange,
+    status: proposal.status,
+    message: proposal.message,
+    confidence: Number(d.confidence.toFixed(3)),
+    agreed: d.agreed,
+    sampled: d.sampled,
+    withText: d.withText,
+    numbered: d.numbered,
+    runnerUp: d.runnerUp,
+    evidence: d.evidence,
+    skipped: d.skipped,
+    reason: d.reason ?? null,
+    /** What the "Detect" button's confirm step should send. */
+    apply:
+      proposal.proposedOffset === null || !proposal.wouldChange
+        ? null
+        : {
+            method: 'PATCH',
+            url: `/api/books/${book.id}`,
+            body: { pageOffset: proposal.proposedOffset },
+          },
   };
 }
 
@@ -195,7 +270,11 @@ export default async function booksPlugin(app: FastifyInstance): Promise<void> {
 
   app.get('/api/books', async (req, reply) => {
     const rows = await svc.listBooks(scopeOf(req));
-    return reply.send({ books: rows.map(toDto) });
+    // One grouped count for the shelf, not one per row. A book with no rows in
+    // `book_pages` reports 0 rather than being left silent: "0 indexed" is the
+    // answer to "why does search never find anything in this book".
+    const indexed = await svc.indexedPageCounts(rows.map((r) => r.id));
+    return reply.send({ books: rows.map((r) => toDto(r, indexed.get(r.id) ?? 0)) });
   });
 
   app.post('/api/books', async (req, reply) => {
@@ -264,6 +343,64 @@ export default async function booksPlugin(app: FastifyInstance): Promise<void> {
     const updated = await svc.updateBook(id, patch);
     if (!updated) throw httpError(404, 'not_found', 'unknown book');
     return reply.send(toDto(updated));
+  });
+
+  /**
+   * Measure this book's page offset (FR11.1) and *propose* it — nothing is
+   * written. The GM's "Detect" button shows the number, the confidence and an
+   * example ("printed 36 was found on PDF page 41"), then confirms by PATCHing
+   * `pageOffset` itself. An offset applied without a human looking is how every
+   * ref chip in a book starts opening the wrong page silently.
+   *
+   * Measured from the PDF in the file store, not from `book_pages`: the
+   * indexed rows are keyed by the offset that was in force when they were
+   * written, so a book whose offset was changed by hand without a re-seed
+   * would have its wrong offset *confirmed* by its own rows. The PDF is the
+   * only absolute reference, and reading ~48 of its pages costs under a
+   * second. Indexed pages are the fallback for a registry row with no file.
+   *
+   * The consumer is the GM shelf, `apps/web/src/features/gm/books`: its
+   * "detect" button POSTs here and renders `proposedOffset`, `confidence`,
+   * `message` and the `evidence` pairs; applying is a second, human click that
+   * sends `apply.body` as `PATCH /api/books/:id`. `apply` is null when there is
+   * nothing to change (declined, or already correct), and the shelf's "detect
+   * all" walks the queue one book at a time — each call holds a whole PDF in
+   * memory, so seventeen at once is a 350 MB spike for no gain when a book
+   * takes well under a second.
+   *
+   * After applying, re-extract that book (`pnpm seed:books --only <CODE>`) so
+   * `book_pages` is keyed by the new printed numbers; `--calibrate` at seed
+   * time avoids the round trip entirely and is what docs/BOOKS.md §2 tells the
+   * GM to run for a first import.
+   */
+  app.post('/api/books/:id/detect-offset', async (req, reply) => {
+    requireRole(req, 'gm');
+    const { id } = req.params as { id: string };
+    const body = parse(DetectOffsetBody, req.body);
+    const book = await readableBook(req, { id });
+    const sample = body.maxSample !== undefined ? { maxSample: body.maxSample } : {};
+
+    let detection: OffsetDetection | null = null;
+    if (book.attachmentId !== null) {
+      const attachment = await svc.getAttachment(book.attachmentId);
+      if (attachment) {
+        try {
+          detection = await detectOffsetFromPdf(svc.bookFilePath(attachment), sample);
+        } catch {
+          detection = null; // file missing from the store — fall back below
+        }
+      }
+    }
+    const source: 'pages' | 'pdf' = detection === null ? 'pages' : 'pdf';
+    detection ??= await detectOffsetFromDb(app.db, {
+      bookId: book.id,
+      currentOffset: book.pageOffset,
+      ...sample,
+    });
+    // No `seededOffset` here: the route never writes, so "was this set by a
+    // human?" is the confirm dialog's question, not ours.
+    const proposal = buildOffsetProposal(detection, { currentOffset: book.pageOffset });
+    return reply.send(toOffsetDto(book, proposal, source));
   });
 
   app.delete('/api/books/:id', async (req, reply) => {

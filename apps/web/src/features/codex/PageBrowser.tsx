@@ -7,9 +7,10 @@
  * every tag here is honest for whoever is looking at it.
  */
 import { useMemo, useState } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
 import type { Visibility } from '@safehouse/contracts';
 import { useCreatePage, usePages, useUnresolvedLinks } from './api.js';
+import { NewPagePrompt } from './ai/index.js';
 import {
   PAGE_KINDS,
   collectTags,
@@ -37,6 +38,7 @@ export default function PageBrowser({
   pendingTitle,
   onPendingHandled,
 }: PageBrowserProps) {
+  const navigate = useNavigate();
   const pages = usePages(campaignId);
   const unresolved = useUnresolvedLinks(campaignId, isGm);
   const create = useCreatePage(campaignId);
@@ -61,9 +63,13 @@ export default function PageBrowser({
       // GM-only until deliberately revealed — the codex defaults to secret.
       { title: trimmed, kind: chosenKind, visibility: 'gm' as Visibility },
       {
-        onSuccess: () => {
+        // Land on the page you just made. Creating a page and being left on
+        // "Pick a page" reads as a failure — and the next thing the GM wants
+        // is to write in it.
+        onSuccess: (created) => {
           setNewTitle('');
           onPendingHandled?.();
+          navigate(`/c/${campaignId}/codex/${created.id}`);
         },
       },
     );
@@ -130,9 +136,22 @@ export default function PageBrowser({
         {pages.isLoading && <li className="py-4 text-sm text-faint">Reading the codex…</li>}
         {!pages.isLoading && rows.length === 0 && (
           <li className="py-4 text-sm text-faint">
-            {all.length === 0
-              ? 'Nothing in the codex yet.'
-              : 'No page matches those filters.'}
+            {all.length === 0 ? (
+              <>
+                <span className="block text-dim">
+                  The codex is the campaign&rsquo;s memory: the NPCs, factions, locations, runs and
+                  lore the table has earned. Pages start GM-only and you reveal them a section at a
+                  time.
+                </span>
+                <span className="mt-2 block">
+                  {isGm
+                    ? 'Name one below — or describe what you want and let the Fixer write the first draft.'
+                    : 'Nothing has been shared with the table yet.'}
+                </span>
+              </>
+            ) : (
+              'No page matches those filters.'
+            )}
           </li>
         )}
         {rows.map((p) => (
@@ -201,6 +220,12 @@ export default function PageBrowser({
           </div>
           <p className="mono-label mt-1.5 text-faint">Created GM-only — reveal it deliberately.</p>
         </form>
+      )}
+
+      {/* A title and a kind is not a page. Describe one instead and the Fixer
+          drafts it — as a draft you accept or reject (Principle 8). */}
+      {isGm && (
+        <NewPagePrompt campaignId={campaignId} {...(pendingTitle ? { seedTitle: pendingTitle } : {})} />
       )}
 
       {isGm && (unresolved.data?.length ?? 0) > 0 && (

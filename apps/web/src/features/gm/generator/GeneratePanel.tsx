@@ -4,12 +4,13 @@
  * with the statblock + persona stub, promote-to-template, add-to-encounter.
  * Generation is server-authoritative — this panel only asks.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { NpcTemplate } from '@safehouse/contracts';
 import type { GeneratedGruntGroup, GeneratedNpc } from '@safehouse/rules';
 import { randomSeed } from '../common.js';
 import { ErrorNote, Field, inputClass, SectionTitle, Spinner } from '../ui.js';
 import { LOCK_ASPECTS, useGenerateGroup, useGenerateNpc, type LockAspect } from './api.js';
+import GeneratorEmptyState from './EmptyState.js';
 import ResultCard from './ResultCard.js';
 import { entryFromGroup, entryFromNpc, type RosterEntry } from './roster.js';
 
@@ -24,6 +25,14 @@ export interface GeneratePanelProps {
    * than an answer.
    */
   initialTemplateId?: string | undefined;
+  /** Cold start: the list is empty and the GM needs a way out, not a dead select. */
+  onBrowseLibrary?: (() => void) | undefined;
+  onCreateOwn?: (() => void) | undefined;
+  /** Tune the archetype you are looking at (edit in place / fork it first). */
+  onEditTemplate?: ((tpl: NpcTemplate) => void) | undefined;
+  onDuplicateTemplate?: ((tpl: NpcTemplate) => void) | undefined;
+  /** Still fetching — an empty list is not yet news. */
+  isLoading?: boolean | undefined;
 }
 
 type Mode = 'npc' | 'gruntGroup';
@@ -51,9 +60,19 @@ export default function GeneratePanel({
   templates,
   onAddEntry,
   initialTemplateId,
+  onBrowseLibrary,
+  onCreateOwn,
+  onEditTemplate,
+  onDuplicateTemplate,
+  isLoading,
 }: GeneratePanelProps) {
-  const [templateId, setTemplateId] = useState('');
-  const [tierId, setTierId] = useState('');
+  // The picker's *pending* choice. Empty (or stale, after a delete) means
+  // "whatever the list says is first" — resolved during render below rather
+  // than written back by an effect, so the very first paint already shows a
+  // real archetype with real tiers instead of a blank select that fills in a
+  // frame later.
+  const [pickedId, setPickedId] = useState('');
+  const [pickedTier, setPickedTier] = useState('');
   const [mode, setMode] = useState<Mode>('npc');
   const [size, setSize] = useState(4);
   const [seed, setSeed] = useState<number>(() => randomSeed());
@@ -61,29 +80,43 @@ export default function GeneratePanel({
   const [prevSeed, setPrevSeed] = useState<number | undefined>(undefined);
   const [npc, setNpc] = useState<GeneratedNpc | null>(null);
   const [group, setGroup] = useState<GeneratedGruntGroup | null>(null);
+  /**
+   * Which archetype + tier the card on screen actually came from.
+   *
+   * The picker keeps moving after a roll — that is the point of the tier dial —
+   * and the result card carries `templateId` into promote-to-template
+   * (FR10.3). Reading it off the *current* selection meant switching archetype
+   * with a card still up promoted the visible NPC under a different
+   * archetype's id, so re-rolling that promoted copy produced someone else.
+   */
+  const [source, setSource] = useState<{ templateId: string; tierId: string } | null>(null);
 
   const genNpc = useGenerateNpc();
   const genGroup = useGenerateGroup();
 
+  const templateId = useMemo(
+    () =>
+      templates.some((t) => t.id === pickedId)
+        ? pickedId
+        : pickInitialTemplate(templates, initialTemplateId),
+    [templates, pickedId, initialTemplateId],
+  );
   const template = useMemo(
     () => templates.find((t) => t.id === templateId),
     [templates, templateId],
   );
+  const resultTemplate = useMemo(
+    () => (source ? templates.find((t) => t.id === source.templateId) : undefined),
+    [templates, source],
+  );
   const tiers = template?.gen?.tiers ?? [];
-
-  // Keep the selection valid as templates load / change underneath.
-  useEffect(() => {
-    if (templateId || templates.length === 0) return;
-    setTemplateId(pickInitialTemplate(templates, initialTemplateId));
-  }, [templates, templateId, initialTemplateId]);
-  useEffect(() => {
-    if (tiers.length > 0 && !tiers.some((t) => t.id === tierId)) setTierId(tiers[0]!.id);
-  }, [tiers, tierId]);
+  const tierId = tiers.some((t) => t.id === pickedTier) ? pickedTier : (tiers[0]?.id ?? '');
 
   const toggleLock = (aspect: LockAspect) =>
     setLocks((l) => (l.includes(aspect) ? l.filter((x) => x !== aspect) : [...l, aspect]));
 
   const canGenerate = Boolean(templateId && tierId) && !genNpc.isPending && !genGroup.isPending;
+  const sameSource = source?.templateId === templateId && source?.tierId === tierId;
 
   const run = (nextSeed: number) => {
     if (!templateId || !tierId) return;
@@ -96,13 +129,16 @@ export default function GeneratePanel({
             setGroup(res.group);
             setNpc(null);
             setPrevSeed(res.seed);
+            setSource({ templateId, tierId });
           },
         },
       );
       return;
     }
-    // Locks replay a prior roll and re-roll only the unlocked aspects.
-    const useLocks = locks.length > 0 && prevSeed !== undefined;
+    // Locks replay a prior roll and re-roll only the unlocked aspects — but
+    // only within the archetype and tier that roll came from. Replaying a seed
+    // through different ranges is not "keep the stats", it is new stats.
+    const useLocks = locks.length > 0 && prevSeed !== undefined && sameSource;
     genNpc.mutate(
       {
         templateId,
@@ -115,10 +151,31 @@ export default function GeneratePanel({
           setNpc(res.npc);
           setGroup(null);
           setPrevSeed(res.npc.seed);
+          setSource({ templateId, tierId });
         },
       },
     );
   };
+
+  // Cold start (G9): an empty select over a dead Generate button is the moment
+  // a GM decides the generator is broken. While the list is still in flight an
+  // empty array is not yet news — say "loading", never "you have none".
+  if (templates.length === 0 && isLoading) {
+    return (
+      <div className="panel p-6">
+        <Spinner label="loading archetypes" />
+      </div>
+    );
+  }
+  if (templates.length === 0) {
+    return (
+      <GeneratorEmptyState
+        campaignId={campaignId}
+        onBrowseLibrary={onBrowseLibrary}
+        onCreateOwn={onCreateOwn}
+      />
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -132,9 +189,11 @@ export default function GeneratePanel({
             <select
               className={`${inputClass} w-56`}
               value={templateId}
-              onChange={(e) => setTemplateId(e.target.value)}
+              onChange={(e) => {
+                setPickedId(e.target.value);
+                setPickedTier('');
+              }}
             >
-              {templates.length === 0 && <option value="">— no archetypes yet —</option>}
               {templates.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
@@ -142,6 +201,31 @@ export default function GeneratePanel({
               ))}
             </select>
           </Field>
+
+          {template && (onEditTemplate || onDuplicateTemplate) && (
+            <Field label="This archetype">
+              <span className="flex gap-1.5">
+                {onEditTemplate && (
+                  <button
+                    className="btn px-2.5 py-1.5"
+                    onClick={() => onEditTemplate(template)}
+                    title="Open this archetype's ranges in the editor"
+                  >
+                    edit
+                  </button>
+                )}
+                {onDuplicateTemplate && (
+                  <button
+                    className="btn px-2.5 py-1.5"
+                    onClick={() => onDuplicateTemplate(template)}
+                    title="Fork it into a new archetype — tune the copy, keep this one"
+                  >
+                    duplicate &amp; edit
+                  </button>
+                )}
+              </span>
+            </Field>
+          )}
 
           <Field label="Output">
             <span className="flex gap-1.5">
@@ -185,14 +269,19 @@ export default function GeneratePanel({
                 className={`chip cursor-pointer ${
                   t.id === tierId ? 'border-cyan text-cyan' : 'text-dim hover:text-ink'
                 }`}
-                onClick={() => setTierId(t.id)}
+                onClick={() => setPickedTier(t.id)}
               >
                 {t.label}
               </button>
             ))}
             {tiers.length === 0 && (
-              <span className="text-sm text-faint">
-                This archetype has no tiers — add one in the archetype editor.
+              <span className="flex items-center gap-2 text-sm text-faint">
+                This archetype has no tiers, so there is nothing to roll inside.
+                {template && onEditTemplate && (
+                  <button className="btn px-2.5 py-1" onClick={() => onEditTemplate(template)}>
+                    add a tier
+                  </button>
+                )}
               </span>
             )}
           </div>
@@ -231,7 +320,12 @@ export default function GeneratePanel({
         {mode === 'npc' && (
           <div className="mt-3">
             <span className="mono-label">
-              Locks {prevSeed === undefined && <span className="text-faint">(generate once first)</span>}
+              Locks{' '}
+              {prevSeed === undefined ? (
+                <span className="text-faint">(generate once first)</span>
+              ) : !sameSource ? (
+                <span className="text-faint">(generate once on this archetype and tier)</span>
+              ) : null}
             </span>
             <div className="mt-1.5 flex flex-wrap gap-1.5">
               {LOCK_ASPECTS.map((aspect) => (
@@ -253,24 +347,29 @@ export default function GeneratePanel({
         <ErrorNote error={genNpc.error ?? genGroup.error} />
       </div>
 
-      {npc && template && (
+      {npc && resultTemplate && (
         <ResultCard
           npc={npc}
           campaignId={campaignId}
-          templateId={template.id}
-          templateName={template.name}
-          gen={template.gen}
+          templateId={resultTemplate.id}
+          templateName={resultTemplate.name}
+          gen={resultTemplate.gen}
           onAddToEncounter={() =>
-            onAddEntry(entryFromNpc(npc, { templateId: template.id, templateName: template.name }))
+            onAddEntry(
+              entryFromNpc(npc, {
+                templateId: resultTemplate.id,
+                templateName: resultTemplate.name,
+              }),
+            )
           }
         />
       )}
 
-      {group && template && (
+      {group && resultTemplate && (
         <div className="space-y-3">
           <div className="panel flex flex-wrap items-center gap-2 p-4">
             <span className="text-base font-semibold">
-              {template.name} ×{group.members.length}
+              {resultTemplate.name} ×{group.members.length}
             </span>
             <span className="chip text-dim">{group.metatype}</span>
             <span className="chip border-warn/40 text-warn">PR {group.professionalRating}</span>
@@ -282,7 +381,10 @@ export default function GeneratePanel({
               className="btn ml-auto px-3 py-1.5"
               onClick={() =>
                 onAddEntry(
-                  entryFromGroup(group, { templateId: template.id, templateName: template.name }),
+                  entryFromGroup(group, {
+                    templateId: resultTemplate.id,
+                    templateName: resultTemplate.name,
+                  }),
                 )
               }
             >
@@ -303,13 +405,16 @@ export default function GeneratePanel({
             <ResultCard
               npc={{ ...group.members[0], sheet: group.statblock }}
               campaignId={campaignId}
-              templateId={template.id}
-              templateName={template.name}
-              gen={template.gen}
+              templateId={resultTemplate.id}
+              templateName={resultTemplate.name}
+              gen={resultTemplate.gen}
               addLabel="add squad to encounter"
               onAddToEncounter={() =>
                 onAddEntry(
-                  entryFromGroup(group, { templateId: template.id, templateName: template.name }),
+                  entryFromGroup(group, {
+                    templateId: resultTemplate.id,
+                    templateName: resultTemplate.name,
+                  }),
                 )
               }
             />

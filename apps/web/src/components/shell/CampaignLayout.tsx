@@ -5,6 +5,7 @@
  */
 import { useState } from 'react';
 import { Link, Outlet, useParams } from 'react-router-dom';
+import type { Role } from '@safehouse/contracts';
 import { useCampaign, useMyCharacterId } from '../../api/campaigns.js';
 import { getSession } from '../../api/session.js';
 import FixerDock from '../../features/gm/fixer/FixerDock.js';
@@ -39,7 +40,7 @@ export default function CampaignLayout() {
   const status = useLiveConnection(campaignId);
   const { data: campaign } = useCampaign(campaignId);
   const myCharacterId = useMyCharacterId(campaignId);
-  const [qrOpen, setQrOpen] = useState(false);
+  const [qr, setQr] = useState<{ open: boolean; role: Role }>({ open: false, role: 'player' });
 
   if (!session || !campaignId) return <NoSession />;
 
@@ -48,7 +49,13 @@ export default function CampaignLayout() {
 
   return (
     <div className="flex min-h-dvh bg-ground text-ink">
-      {isGm && <GmSidebar campaignId={campaignId} onShowQr={() => setQrOpen(true)} />}
+      {isGm && (
+        <GmSidebar
+          campaignId={campaignId}
+          onShowQr={() => setQr({ open: true, role: 'player' })}
+          onShowDisplayQr={() => setQr({ open: true, role: 'display' })}
+        />
+      )}
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-40 flex items-center gap-3 border-b border-edge bg-deck/95 px-4 py-2.5 backdrop-blur">
@@ -64,7 +71,7 @@ export default function CampaignLayout() {
           {isGm && (
             <button
               className="btn btn-accent px-3 py-1.5"
-              onClick={() => setQrOpen(true)}
+              onClick={() => setQr({ open: true, role: 'player' })}
               aria-label="Show join QR"
             >
               QR
@@ -83,7 +90,12 @@ export default function CampaignLayout() {
         />
       </div>
 
-      <JoinQrModal campaignId={campaignId} open={qrOpen} onClose={() => setQrOpen(false)} />
+      <JoinQrModal
+        campaignId={campaignId}
+        open={qr.open}
+        initialRole={qr.role}
+        onClose={() => setQr((s) => ({ ...s, open: false }))}
+      />
 
       {/* Follows the GM across every screen; hides itself when AI is off (NG7). */}
       {isGm && (

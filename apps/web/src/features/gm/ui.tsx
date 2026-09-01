@@ -48,6 +48,46 @@ export function EstBadge() {
   return <span className="chip border-warn/40 text-warn">est</span>;
 }
 
+/**
+ * An empty panel that tells the GM what to do next — and gives them the
+ * control to do it.
+ *
+ * "Nothing here yet" is a bug, not a state: every empty surface in this app is
+ * a GM standing in front of a job they cannot start. `actions` is required for
+ * exactly that reason — a working button or link, not prose about one. Use
+ * `hint` for the command-line escape hatch when one exists (`pnpm seed:books`).
+ */
+export function EmptyState({
+  title,
+  blurb,
+  hint,
+  actions,
+  testId,
+}: {
+  title: string;
+  blurb: string;
+  hint?: ReactNode;
+  actions: ReactNode;
+  testId?: string;
+}) {
+  return (
+    <div
+      data-testid={testId ?? 'empty-state'}
+      className="rounded-md border border-dashed border-edge-bright bg-deck/40 p-5 text-center"
+    >
+      <div className="mono-label text-cyan">{title}</div>
+      <p className="mx-auto mt-2 max-w-md text-sm text-dim">{blurb}</p>
+      <div
+        data-testid="empty-state-actions"
+        className="mt-4 flex flex-wrap items-center justify-center gap-2"
+      >
+        {actions}
+      </div>
+      {hint && <div className="mono-label mt-3 text-faint">{hint}</div>}
+    </div>
+  );
+}
+
 export function ErrorNote({ error }: { error: unknown }) {
   if (!error) return null;
   const message = error instanceof Error ? error.message : String(error);

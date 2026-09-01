@@ -150,7 +150,10 @@ describe('read tools return live, engine-derived state (FR12.17)', () => {
     expect(ledger).toHaveLength(2);
 
     const npcs = (await call('list_npcs'))['npcs'] as Array<{ id: string; roleTags: string[] }>;
-    expect(npcs[0]?.roleTags).toEqual(['muscle']);
+    // Every campaign is born with the starter archetype library installed
+    // (M10 cold start), so `list_npcs` is no longer a one-row answer — find
+    // this suite's own template instead of assuming it is first.
+    expect(npcs.find((n) => n.id === fx.templateId)?.roleTags).toEqual(['muscle']);
 
     const npc = await call('get_npc', { npcId: fx.templateId });
     expect(npc['name']).toBe('Street enforcer');

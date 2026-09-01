@@ -20,6 +20,7 @@ import type {
   TokenInput,
 } from '@safehouse/contracts';
 import { apiDelete, apiGet, apiPatch, apiPost, queryClient } from '../../api/client.js';
+import { getToken } from '../../api/session.js';
 import { useLiveStore } from '../../live/store.js';
 import { normalizeGeometry } from './geometryEdit.js';
 import { mapImageId } from './mapImage.js';
@@ -222,9 +223,23 @@ export function useUploadAttachment() {
  * URL for a stored attachment (map images, token art). Map refs may carry a
  * `#rot=…` adjustment fragment (see `mapImage.ts`); the file route wants the
  * bare id.
+ *
+ * The token rides as a query parameter because the consumers are `<img src>`,
+ * pixi's texture loader and an `<a href>` — none of which can set an
+ * `Authorization` header, and `/files/:id` is authenticated (`app.ts`'s
+ * `QUERY_TOKEN_PREFIXES`). Without it every map image on the GM's own screens
+ * answered 401: the Grid drew a blank floor and the Scenes list drew a broken
+ * thumbnail, on a campaign whose map was sitting right there in the file
+ * store. `TvStageView` already did this for the kiosk; this is the same rule at
+ * the one helper the GM surfaces share.
+ *
+ * The query string leaves the URL without a file extension, which pixi needs a
+ * parser hint for — `stage/assetUrl.ts` already registers one for every stage.
  */
 export function fileUrl(attachmentId: string): string {
-  return `/files/${mapImageId(attachmentId)}`;
+  const token = getToken();
+  const id = mapImageId(attachmentId);
+  return token ? `/files/${id}?token=${encodeURIComponent(token)}` : `/files/${id}`;
 }
 
 // ---------------------------------------------------------------------------

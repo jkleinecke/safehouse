@@ -10,15 +10,41 @@ import { useJoinQr } from '../../api/campaigns.js';
 
 const ROLES: Role[] = ['player', 'observer', 'display'];
 
+/** Says what each invite is FOR — the display one is the non-obvious case. */
+const ROLE_HINT: Record<Role, string> = {
+  gm: 'a second GM machine — pair it with a code from the GM console',
+  player: 'a runner at the table: their own sheet, the log, the map',
+  observer: 'read-only — the active scene, the roll log, shared lore',
+  display: 'the table TV: open /tv on that screen and scan this from it',
+};
+
 export interface JoinQrModalProps {
   campaignId: string;
   open: boolean;
   onClose: () => void;
+  /**
+   * Which invite to mint first. The sidebar's "Pair the TV" opens straight on
+   * `display`, because a table TV needs a display-role invite of its own and
+   * nothing used to say so (the GM's own laptop already counts as bound, so
+   * opening the kiosk there just shows "Standing by").
+   */
+  initialRole?: Role;
 }
 
-export default function JoinQrModal({ campaignId, open, onClose }: JoinQrModalProps) {
-  const [role, setRole] = useState<Role>('player');
+export default function JoinQrModal({
+  campaignId,
+  open,
+  onClose,
+  initialRole = 'player',
+}: JoinQrModalProps) {
+  const [role, setRole] = useState<Role>(initialRole);
   const { data, isLoading, error } = useJoinQr(campaignId, role, open);
+
+  // Re-opening for a different purpose starts on that purpose's role rather
+  // than on whatever the GM last looked at.
+  useEffect(() => {
+    if (open) setRole(initialRole);
+  }, [open, initialRole]);
 
   useEffect(() => {
     if (!open) return;
@@ -60,6 +86,8 @@ export default function JoinQrModal({ campaignId, open, onClose }: JoinQrModalPr
             </button>
           ))}
         </div>
+
+        <p className="mono-label mt-2 text-faint">{ROLE_HINT[role]}</p>
 
         <div className="mt-4 flex min-h-72 items-center justify-center rounded-md border border-edge bg-deck p-4">
           {isLoading && <p className="mono-label animate-pulse">Minting invite…</p>}

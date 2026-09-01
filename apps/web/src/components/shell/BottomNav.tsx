@@ -1,6 +1,14 @@
-/** Phone-first bottom navigation: Sheet / Table / Grid (+ GM for the GM). */
+/**
+ * Phone-first bottom navigation (Principle 7 — 390 px first).
+ *
+ * The tabs come from `PLAYER_NAV` so the phone and the campaign home offer the
+ * same set. Books is on it now: FR11.5 shares the library with the table by
+ * default, and a player used to be able to reach a rulebook only by tapping a
+ * ref chip that happened to be embedded in something they were already reading.
+ */
 import { NavLink } from 'react-router-dom';
 import type { Role } from '@safehouse/contracts';
+import { PLAYER_NAV } from './gmNav.js';
 
 export interface BottomNavProps {
   campaignId: string;
@@ -18,30 +26,29 @@ export default function BottomNav({ campaignId, role, characterId }: BottomNavPr
   // no character of its own — the GM, an observer, the TV — gets no Sheet tab
   // rather than a link to a sheet that does not exist.
   const sheetPath = characterId ? `/c/${campaignId}/sheet/${characterId}` : null;
+  const tabs = PLAYER_NAV.filter((e) => e.glyph !== undefined);
 
   return (
     <nav className="sticky bottom-0 z-40 flex border-t border-edge bg-deck/95 backdrop-blur md:hidden">
       {sheetPath && (
-        <NavLink to={sheetPath} className={linkClass}>
+        <NavLink to={sheetPath} data-nav="sheet" className={linkClass}>
           <span aria-hidden>▚</span>
           Sheet
         </NavLink>
       )}
-      <NavLink to={`/c/${campaignId}/table`} className={linkClass}>
-        <span aria-hidden>⬡</span>
-        Table
-      </NavLink>
-      <NavLink to={`/c/${campaignId}/grid`} className={linkClass}>
-        <span aria-hidden>▦</span>
-        Grid
-      </NavLink>
-      {/* Shared lore during sessions (§4) — the server decides what is shared. */}
-      <NavLink to={`/c/${campaignId}/codex`} className={linkClass}>
-        <span aria-hidden>❖</span>
-        Codex
-      </NavLink>
+      {tabs.map((tab) => (
+        <NavLink
+          key={tab.key}
+          to={`/c/${campaignId}${tab.to}`}
+          data-nav={tab.key}
+          className={linkClass}
+        >
+          <span aria-hidden>{tab.glyph}</span>
+          {tab.label}
+        </NavLink>
+      ))}
       {role === 'gm' && (
-        <NavLink to={`/c/${campaignId}/gm`} className={linkClass}>
+        <NavLink to={`/c/${campaignId}/gm`} data-nav="gm" className={linkClass}>
           <span aria-hidden>◆</span>
           GM
         </NavLink>

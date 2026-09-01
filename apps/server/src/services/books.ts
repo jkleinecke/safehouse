@@ -3,20 +3,29 @@
  *
  * - Filename → {code, offset, title} guessing for `pnpm seed:books` (FR11.7).
  *   The core rulebook's +5 offset is measured (printed p.426 = PDF p.431) and
- *   hardcoded; every other guess starts at 0 for the GM to calibrate (FR11.1).
+ *   hardcoded; every other guess starts at 0 — which is wrong for essentially
+ *   every book, so `seed:books --calibrate` measures the real offset from each
+ *   book's own printed page numbers (see `./book-offsets.ts`) instead of
+ *   leaving 16 manual nudges (FR11.1) on the GM's to-do list.
  * - File-store copy: PDFs land at DATA_DIR/files/books/<CODE>.pdf with an
  *   `attachments` row; the `books` row points at it. PDFs never enter git.
  * - Per-page text extraction via unpdf into `book_pages` (batch inserts);
  *   `maxPages` keeps tests fast. Printed page = PDF page − offset; front
- *   matter (printed < 1) is skipped.
+ *   matter (printed < 1) is skipped, as are image-only pages (no text at all —
+ *   invisible to search and to the Fixer).
  * - `parseRef('SR5 p.426')` → `{book, page}` for codex/log autolinking (FR11.4).
  */
 import { copyFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
-import { and, asc, eq, inArray, isNull, or } from 'drizzle-orm';
-import { getDocumentProxy } from 'unpdf';
+import { and, asc, count, eq, inArray, isNull, or } from 'drizzle-orm';
 import { attachments, bookPages, books, type Db } from '@safehouse/db';
+import {
+  buildOffsetProposal,
+  detectOffsetFromPdf,
+  extractPdfPageText,
+  openPdf,
+  type OffsetProposal,
+} from './book-offsets.js';
 
 export type BookRow = typeof books.$inferSelect;
 export type AttachmentRow = typeof attachments.$inferSelect;
@@ -202,6 +211,27 @@ export class BooksService {
     return opts.sharedOnly === true ? rows.filter((b) => b.shared) : rows;
   }
 
+  /**
+   * How many pages each of these books has extracted text for.
+   *
+   * One grouped count for the whole listing rather than a count per row: the
+   * shelf renders every book at once, and N+1 counts over a sixteen-book
+   * library is a page load the GM can feel.
+   *
+   * A book missing from the returned map has zero indexed pages — which is
+   * exactly the case worth surfacing, because a book of pure image scans looks
+   * perfectly healthy right up until search never matches it.
+   */
+  async indexedPageCounts(bookIds: readonly string[]): Promise<Map<string, number>> {
+    if (bookIds.length === 0) return new Map();
+    const rows = await this.db
+      .select({ bookId: bookPages.bookId, pages: count() })
+      .from(bookPages)
+      .where(inArray(bookPages.bookId, [...bookIds]))
+      .groupBy(bookPages.bookId);
+    return new Map(rows.map((r) => [r.bookId, Number(r.pages)]));
+  }
+
   /** Extracted text of one printed page (the Fixer's `get_page`, FR12.17). */
   async getPageText(
     bookId: string,
@@ -365,8 +395,7 @@ export class BooksService {
     pdfPath: string,
     opts: { pageOffset: number; maxPages?: number },
   ): Promise<ExtractResult> {
-    const buf = await readFile(pdfPath);
-    const doc = await getDocumentProxy(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength));
+    const doc = await openPdf(pdfPath);
     const totalPdfPages: number = doc.numPages;
     const scan = Math.min(totalPdfPages, opts.maxPages ?? totalPdfPages);
 
@@ -385,21 +414,7 @@ export class BooksService {
       for (let pdfPage = 1; pdfPage <= scan; pdfPage++) {
         const printedPage = pdfToPrintedPage(pdfPage, opts.pageOffset);
         if (printedPage < 1) continue; // front matter has no printed number
-        const page = await doc.getPage(pdfPage);
-        const content = await page.getTextContent();
-        const text = content.items
-          .map((it) => {
-            const item = it as { str?: unknown; hasEOL?: unknown };
-            if (typeof item.str !== 'string') return '';
-            return item.str + (item.hasEOL === true ? '\n' : ' ');
-          })
-          .join('')
-          // Postgres text columns reject NUL; PDF glyph maps sometimes emit it.
-          .replace(/\u0000/g, '')
-          .replace(/[ \t]+/g, ' ')
-          .replace(/\s*\n\s*/g, '\n')
-          .trim();
-        page.cleanup();
+        const text = await extractPdfPageText(doc, pdfPage);
         if (text.length === 0) continue; // image-only page
         batch.push({ bookId, printedPage, text });
         if (batch.length >= PAGE_INSERT_CHUNK) await flush();
@@ -423,8 +438,28 @@ export interface SeedBooksOptions {
   only?: string;
   /** Extract at most N PDF pages per book (`--max-pages 40`) — fast tests. */
   maxPages?: number;
+  /**
+   * Measure each book's page offset from its own printed page numbers before
+   * indexing (`--calibrate`), so `RG p.104` opens printed page 104 instead of
+   * whatever PDF leaf happens to be 104th. Detection runs against the PDF, not
+   * the extracted rows, so pages are indexed at the right printed number the
+   * first time — no second pass, no re-keying of `book_pages`.
+   */
+  calibrate?: boolean;
+  /**
+   * Let calibration overwrite an offset that differs from the filename guess —
+   * i.e. one a human (or an earlier `--calibrate`) already set. Off by default:
+   * a silently-replaced calibration is how every ref chip in a book starts
+   * landing on the wrong page.
+   */
+  recalibrate?: boolean;
   dataDir?: string;
   log?: (line: string) => void;
+}
+
+/** What `--calibrate` decided for one book, applied or not. */
+export interface SeedCalibration extends OffsetProposal {
+  applied: boolean;
 }
 
 export interface SeedBookResult {
@@ -435,6 +470,8 @@ export interface SeedBookResult {
   bookId: string;
   pagesInserted: number;
   totalPdfPages: number;
+  /** Present only under `--calibrate`. */
+  calibration?: SeedCalibration;
 }
 
 /** One-shot library import: the folder next to DESIGN.md becomes the app's library. */
@@ -457,8 +494,30 @@ export async function seedBooks(db: Db, opts: SeedBooksOptions): Promise<SeedBoo
       pageOffset: guess.offset,
       shared: true, // library is shared with the table (Q12 / FR11.5)
     });
+
+    let pageOffset = book.pageOffset;
+    let calibration: SeedCalibration | undefined;
+    if (opts.calibrate === true) {
+      const detection = await detectOffsetFromPdf(pdfPath);
+      const proposal = buildOffsetProposal(detection, {
+        currentOffset: book.pageOffset,
+        seededOffset: guess.offset,
+      });
+      const applied =
+        proposal.proposedOffset !== null &&
+        proposal.wouldChange &&
+        (proposal.status === 'apply' ||
+          (proposal.status === 'human-set' && opts.recalibrate === true));
+      if (applied && proposal.proposedOffset !== null) {
+        const updated = await svc.updateBook(book.id, { pageOffset: proposal.proposedOffset });
+        pageOffset = updated?.pageOffset ?? proposal.proposedOffset;
+      }
+      calibration = { ...proposal, applied };
+      log(`[seed:books]   offset ${applied ? 'set' : 'kept'}: ${proposal.message}`);
+    }
+
     const extraction = await svc.extractPages(book.id, pdfPath, {
-      pageOffset: book.pageOffset,
+      pageOffset,
       ...(opts.maxPages !== undefined ? { maxPages: opts.maxPages } : {}),
     });
     log(
@@ -468,10 +527,11 @@ export async function seedBooks(db: Db, opts: SeedBooksOptions): Promise<SeedBoo
       file,
       code: book.code,
       title: book.title,
-      offset: book.pageOffset,
+      offset: pageOffset,
       bookId: book.id,
       pagesInserted: extraction.inserted,
       totalPdfPages: extraction.totalPdfPages,
+      ...(calibration !== undefined ? { calibration } : {}),
     });
   }
   return results;

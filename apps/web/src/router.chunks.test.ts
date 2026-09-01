@@ -21,7 +21,13 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
-const ROUTER = path.join(SRC, 'router.tsx');
+/**
+ * The route table, which is `routes.tsx` now — `router.tsx` kept only
+ * `createBrowserRouter(routes)` so the table could be imported without a DOM
+ * (see `components/shell/navigation.test.tsx`, which walks it). The lazy
+ * `import()` calls moved with the table, so this tripwire follows them.
+ */
+const ROUTER = path.join(SRC, 'routes.tsx');
 
 /** Every `.ts`/`.tsx` under `src/`, excluding tests. */
 function sourceFiles(dir: string, out: string[] = []): string[] {

@@ -34,6 +34,20 @@ export { aiDisabledFrom, isAiDisabled, useFixerStatus } from './fixer/api.js';
 export { default as PairPanel } from './pairing/PairPanel.js';
 export type { PairPanelProps } from './pairing/PairPanel.js';
 
+/**
+ * `EmptyState` is the house rule for a surface with nothing on it: say what
+ * this is for, and hand over the control that fills it. `actions` is a required
+ * prop precisely so "Nothing here yet." cannot be shipped again.
+ */
+export { EmptyState, ErrorNote, Field, GmGuard, SectionTitle, Spinner, inputClass } from './ui.js';
+
+/** The party roster — reusable wherever a screen needs "who is at the table". */
+export { default as PartyPanel, ownerOptions, rosterLabel } from './home/PartyPanel.js';
+export type { PartyPanelProps } from './home/PartyPanel.js';
+export { default as AddCharacter } from './home/AddCharacter.js';
+export { useAssignOwner, useCreateCharacter, useRoster } from './home/api.js';
+export type { RosterCharacter } from './home/api.js';
+
 export { default as ThreatReadout } from './generator/ThreatReadout.js';
 export type { ThreatReadoutProps } from './generator/ThreatReadout.js';
 export { actionEconomy, profileFromSheet, readoutRows } from './generator/readout.js';

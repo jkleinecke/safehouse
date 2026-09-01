@@ -320,13 +320,17 @@ export class ThreatService {
         throw httpError(403, 'forbidden', 'template belongs to another campaign');
       }
       const seed = part.seed ?? randomInt(0, 0x1_0000_0000);
+      // The FR10.6 PR lever, honoured exactly as `build` honours it — the GM
+      // moving the dial and hitting recompute has to see the same squad the
+      // build would create, or the preview is lying about the thing being
+      // previewed.
       if (part.kind === 'gruntGroup') {
         const size = part.size ?? 1;
         const { group } = this.generator.generateGroupFromTemplate(template, part.tierId, size, seed);
         opposition.push(
           unitFromSheet(`part:${p}`, `${template.name} x${size}`, 'opposition', group.statblock, {
             bodies: size,
-            professionalRating: group.professionalRating,
+            professionalRating: part.professionalRating ?? group.professionalRating,
           }),
         );
       } else {
@@ -334,7 +338,7 @@ export class ThreatService {
           const { npc } = this.generator.generateFromTemplate(template, part.tierId, memberSeed);
           opposition.push(
             unitFromSheet(`part:${p}:${i}`, npc.name, 'opposition', npc.sheet, {
-              professionalRating: npc.professionalRating,
+              professionalRating: part.professionalRating ?? npc.professionalRating,
             }),
           );
         }

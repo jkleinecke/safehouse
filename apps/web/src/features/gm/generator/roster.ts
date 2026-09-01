@@ -26,8 +26,10 @@ export interface BuildPart {
   /**
    * GM override of the rolled Professional Rating (FR10.6 lever; drives morale,
    * FR10.9, not the readout math).
-   * INTEGRATION: not in the server's BuildPartInput yet — the generator plugin
-   * should apply it to the built combatant's grunt/copilot state.
+   *
+   * The server applies it AFTER generation — to the grunt group row and to both
+   * copies inside the combatant's `copilot` — so the sheet the seed reproduces
+   * is untouched. Same seed, same body, different nerve.
    */
   professionalRating?: number;
 }

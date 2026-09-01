@@ -12,7 +12,7 @@ rulebook library, campaign memory, and the Fixer — a fully local AI copilot.
 ```bash
 pnpm install
 pnpm build
-pnpm seed:books      # register the PDF library + extract page text (PDFs stay out of git)
+pnpm seed:books --calibrate   # register the PDF rulebook library, measure page offsets
 pnpm seed:demo       # seed the demo campaign
 pnpm dev:server      # API + WS on :8787
 pnpm dev:web         # web app on :5173
@@ -20,7 +20,20 @@ pnpm dev:web         # web app on :5173
 
 Dev/test database is embedded PGlite (real Postgres in-process, `./data/pglite`) —
 no Docker needed to develop or to run a session. Set `DATABASE_URL` to use a real
-Postgres; the production stack is `infra/docker-compose.yml`.
+Postgres; the production stack is `infra/docker-compose.yml`. PGlite is
+single-process: stop the server before seeding, and let the seeder exit before
+starting it again.
+
+## The rulebook library
+
+The GM's own purchased PDFs become the app's library: ref chips like `SR5 p.426`
+open the right page in-app, and the page text backs search and the Fixer. The
+PDFs stay on the machine — gitignored, never uploaded. **[docs/BOOKS.md](docs/BOOKS.md)**
+is the whole story: where the files live, what `pnpm seed:books` does, and why
+page offsets are the step nobody can skip. Front matter shifts printed page
+numbers against PDF pages, and the seeder's `+0` guess is wrong for 15 of the
+17 production books — `--calibrate` measures the real number from the pages
+themselves instead, so a chip for `RG p.104` opens page 104.
 
 Players join by scanning the QR on the GM screen. The TV joins as a `display`
 device at `/tv`. The Fixer activates when `LLM_BASE_URL` points at an

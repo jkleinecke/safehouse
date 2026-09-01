@@ -49,3 +49,4 @@ export {
   type ExchangeSide,
 } from './heuristics.js';
 export { NAME_TABLE, QUIRK_TABLE, APPEARANCE_TABLE, MOTIVATION_TABLE } from './tables.js';
+export * from './archetypes/index.js';

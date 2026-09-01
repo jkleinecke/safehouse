@@ -6,7 +6,6 @@
  */
 import { useMemo, useState } from 'react';
 import type { GenTier, NpcTemplate } from '@safehouse/contracts';
-import { ATTRIBUTE_CODES } from '@safehouse/contracts';
 import { ErrorNote, Field, inputClass, SectionTitle, Spinner } from '../ui.js';
 import {
   useDeleteTemplate,
@@ -14,32 +13,11 @@ import {
   useSaveTemplate,
   type NpcTemplateDraft,
 } from './api.js';
+import { blankDraft, defaultTier, draftFor, duplicateDraft } from './drafts.js';
+import GeneratorEmptyState from './EmptyState.js';
 import { LoadoutEditor, RangeMapEditor, TagInput, WeightMapEditor } from './editors.js';
 
 const DEFAULT_ROLE_TAGS = ['muscle', 'face', 'mage', 'adept', 'decker', 'rigger', 'sniper'];
-
-function defaultTier(id: string, label: string): GenTier {
-  const attributes: Record<string, { min: number; max: number }> = {};
-  for (const code of ATTRIBUTE_CODES) attributes[code] = { min: 2, max: 4 };
-  return {
-    id,
-    label,
-    attributes,
-    skills: {},
-    professionalRating: { min: 1, max: 2 },
-    metatypeWeights: { human: 3, ork: 1, elf: 1, dwarf: 1, troll: 1 },
-    loadout: [],
-    spells: [],
-    augments: [],
-  };
-}
-
-function blankDraft(): NpcTemplateDraft {
-  return {
-    name: 'New archetype',
-    gen: { roleTags: [], tiers: [defaultTier('street', 'Street')] },
-  };
-}
 
 function TierForm({ tier, onChange }: { tier: GenTier; onChange: (tier: GenTier) => void }) {
   return (
@@ -163,14 +141,29 @@ export interface TemplateEditorProps {
   campaignId: string;
   /** Notifies the generate panel when the template list changes underneath it. */
   onSaved?: (template: NpcTemplate) => void;
+  /**
+   * Open on this draft instead of on the "pick something" pane — how
+   * "duplicate & edit" arrives from the generate panel and the library. The
+   * parent re-keys the editor when it pushes a new one, so the draft is
+   * genuinely initial state and typing is never clobbered mid-edit.
+   */
+  initialDraft?: NpcTemplateDraft | undefined;
+  /** Cold start: no archetypes here yet, offer the shipped library. */
+  onBrowseLibrary?: (() => void) | undefined;
 }
 
-export default function TemplateEditor({ campaignId, onSaved }: TemplateEditorProps) {
+export default function TemplateEditor({
+  campaignId,
+  onSaved,
+  initialDraft,
+  onBrowseLibrary,
+}: TemplateEditorProps) {
   const templates = useNpcTemplates(campaignId);
   const save = useSaveTemplate(campaignId);
   const del = useDeleteTemplate(campaignId);
-  const [draft, setDraft] = useState<NpcTemplateDraft | null>(null);
+  const [draft, setDraft] = useState<NpcTemplateDraft | null>(initialDraft ?? null);
   const [tierIdx, setTierIdx] = useState(0);
+  const list = templates.data ?? [];
 
   const tiers = useMemo(() => draft?.gen?.tiers ?? [], [draft]);
   const tier = tiers[Math.min(tierIdx, Math.max(0, tiers.length - 1))];
@@ -192,14 +185,14 @@ export default function TemplateEditor({ campaignId, onSaved }: TemplateEditorPr
         {templates.isLoading && <div className="mt-3"><Spinner label="loading" /></div>}
         <ErrorNote error={templates.error} />
         <ul className="mt-3 space-y-1">
-          {(templates.data ?? []).map((t) => (
+          {list.map((t) => (
             <li key={t.id} className="flex items-center gap-2">
               <button
                 className={`min-w-0 flex-1 truncate rounded-md px-2 py-1 text-left text-sm ${
                   draft?.id === t.id ? 'bg-raised text-cyan' : 'text-dim hover:text-ink'
                 }`}
                 onClick={() => {
-                  setDraft({ ...t, gen: t.gen ?? { roleTags: [], tiers: [defaultTier('street', 'Street')] } });
+                  setDraft(draftFor(t));
                   setTierIdx(0);
                 }}
               >
@@ -209,8 +202,20 @@ export default function TemplateEditor({ campaignId, onSaved }: TemplateEditorPr
                 ) : null}
               </button>
               <button
+                className="btn px-2 py-1"
+                title={`Duplicate ${t.name} and edit the copy — the original is untouched`}
+                aria-label={`Duplicate ${t.name}`}
+                onClick={() => {
+                  setDraft(duplicateDraft(t, list));
+                  setTierIdx(0);
+                }}
+              >
+                ⧉
+              </button>
+              <button
                 className="btn px-2 py-1 text-danger"
                 title="Delete template"
+                aria-label={`Delete ${t.name}`}
                 onClick={() => {
                   del.mutate(t.id);
                   if (draft?.id === t.id) setDraft(null);
@@ -221,8 +226,10 @@ export default function TemplateEditor({ campaignId, onSaved }: TemplateEditorPr
             </li>
           ))}
         </ul>
-        {templates.data && templates.data.length === 0 && (
-          <p className="mt-3 text-sm text-dim">No archetypes yet — start one.</p>
+        {templates.data && list.length === 0 && (
+          <p className="mt-3 text-sm text-dim">
+            No archetypes yet — install the starter library, or start one below.
+          </p>
         )}
         <button
           className="btn btn-accent mt-3 w-full"
@@ -333,10 +340,22 @@ export default function TemplateEditor({ campaignId, onSaved }: TemplateEditorPr
           </div>
           <ErrorNote error={save.error} />
         </div>
+      ) : list.length === 0 && !templates.isLoading ? (
+        <div className="panel p-6">
+          <GeneratorEmptyState
+            campaignId={campaignId}
+            onBrowseLibrary={onBrowseLibrary}
+            onCreateOwn={() => {
+              setDraft(blankDraft());
+              setTierIdx(0);
+            }}
+          />
+        </div>
       ) : (
         <div className="panel p-6 text-sm text-dim">
-          Pick an archetype to edit, or start a new one. Tiers hold the sampling ranges the
-          generator rolls inside — your numbers, your gear records, no book content.
+          Pick an archetype to edit, duplicate one to fork it, or start a new one. Tiers hold the
+          sampling ranges the generator rolls inside — your numbers, your gear records, no book
+          content.
         </div>
       )}
     </div>

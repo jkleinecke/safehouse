@@ -405,6 +405,79 @@ describe('encounter builder (FR10.4)', () => {
     );
   });
 
+  /**
+   * The FR10.6 Professional Rating lever. A GM who decides these particular
+   * guards are conscripts is describing how they behave when the first one
+   * drops (morale, FR10.9) — not asking for different bodies. So the override
+   * has to reach the durable state AND leave the seeded statblock alone; a
+   * silently dropped override is a dial that does nothing, which is worse than
+   * no dial.
+   */
+  it('applies a GM Professional Rating override without changing the rolled body', async () => {
+    const parts = [
+      { templateId, tierId: 'pro', count: 1, seed: 90210 },
+      { templateId, tierId: 'street', size: 3, seed: 5150 },
+    ];
+    const build = async (withOverride: boolean) => {
+      const res = await t.app.inject({
+        method: 'POST',
+        url: '/api/encounters/build',
+        headers: gm(),
+        payload: {
+          campaignId,
+          name: withOverride ? 'Conscripts' : 'As rolled',
+          parts: withOverride ? parts.map((p) => ({ ...p, professionalRating: 1 })) : parts,
+        },
+      });
+      expect(res.statusCode).toBe(201);
+      return res.json() as {
+        combatants: Array<{
+          source: string;
+          name: string;
+          initBase: number;
+          copilot: {
+            sheet: unknown;
+            generator?: { professionalRating?: number };
+            grunt?: { professionalRating?: number };
+          };
+        }>;
+      };
+    };
+
+    const rolled = await build(false);
+    const overridden = await build(true);
+
+    for (const c of overridden.combatants) {
+      expect(c.copilot.generator?.professionalRating).toBe(1);
+    }
+    const grunt = overridden.combatants.find((c) => c.source === 'grunt_group');
+    // Both copies inside `copilot`, so morale and the tracker chip agree.
+    expect(grunt?.copilot.grunt?.professionalRating).toBe(1);
+
+    // Same seeds, same bodies: the override is behaviour, not generation.
+    expect(overridden.combatants.map((c) => c.name)).toEqual(rolled.combatants.map((c) => c.name));
+    expect(overridden.combatants.map((c) => c.initBase)).toEqual(
+      rolled.combatants.map((c) => c.initBase),
+    );
+    expect(overridden.combatants.map((c) => c.copilot.sheet)).toEqual(
+      rolled.combatants.map((c) => c.copilot.sheet),
+    );
+  });
+
+  it('rejects a Professional Rating outside the 0–6 dial', async () => {
+    const res = await t.app.inject({
+      method: 'POST',
+      url: '/api/encounters/build',
+      headers: gm(),
+      payload: {
+        campaignId,
+        name: 'Impossible pros',
+        parts: [{ templateId, tierId: 'street', count: 1, professionalRating: 9 }],
+      },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
   it('refuses a scene from another campaign', async () => {
     const other = (
       await t.db.insert(campaigns).values({ name: 'Other Table', gmUserId }).returning()

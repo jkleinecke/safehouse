@@ -4,6 +4,8 @@
  * Routes
  *   GET/POST    /api/campaigns/:campaignId/npc-templates      (FR10.1)
  *   GET/PATCH/DELETE /api/npc-templates/:id                   (FR10.1)
+ *   GET         /api/campaigns/:campaignId/archetype-library  (FR10.1 cold start)
+ *   POST        /api/campaigns/:campaignId/archetype-library/install
  *   POST        /api/generator/npc                            (FR10.2)
  *   POST        /api/generator/group                          (FR10.2)
  *   POST        /api/generator/promote                        (FR10.3)
@@ -20,6 +22,12 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { GenTemplateSchema, PersonaSchema, RefSchema, SheetV1Schema } from '@safehouse/contracts';
 import { assertCampaign, httpError, requireRole } from '../services/auth.js';
+import {
+  archetypeLibrary,
+  installStarterArchetypes,
+  preserveStarterId,
+  unknownStarterIds,
+} from '../services/archetypes.js';
 import {
   GeneratorService,
   type BuildPartInput,
@@ -81,6 +89,15 @@ const PartBody = z.object({
   count: z.number().int().min(1).max(20).optional(),
   size: z.number().int().min(1).max(50).optional(),
   seed: Seed.optional(),
+  /**
+   * GM override of the rolled Professional Rating (the FR10.6 lever).
+   *
+   * PR is a morale and Edge-spend dial (FR10.9), not readout math — a GM who
+   * decides these particular guards are conscripts rather than corp security
+   * is describing how they behave when the first one drops, and the number has
+   * to survive the build or the lever does nothing.
+   */
+  professionalRating: z.number().int().min(0).max(6).optional(),
 });
 
 const BuildBody = z.object({
@@ -91,6 +108,11 @@ const BuildBody = z.object({
 });
 
 const RecomputeBody = z.object({ parts: z.array(PartBody).min(1).max(24) });
+
+/** Install the whole starter catalogue, or just the entries the GM ticked. */
+const InstallArchetypesBody = z.object({
+  ids: z.array(z.string().min(1)).max(64).optional(),
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -119,6 +141,9 @@ function partOf(part: z.output<typeof PartBody>): BuildPartInput {
     ...(part.count !== undefined ? { count: part.count } : {}),
     ...(part.size !== undefined ? { size: part.size } : {}),
     ...(part.seed !== undefined ? { seed: part.seed } : {}),
+    ...(part.professionalRating !== undefined
+      ? { professionalRating: part.professionalRating }
+      : {}),
   };
 }
 
@@ -167,13 +192,17 @@ export default async function generatorPlugin(app: FastifyInstance): Promise<voi
 
   app.patch('/api/npc-templates/:id', async (req) => {
     const { id } = req.params as { id: string };
-    await templateFor(req, id);
+    const existing = await templateFor(req, id);
     const body = parse(TemplatePatchBody, req.body);
     return {
       template: await generator.updateTemplate(id, {
         ...(body.name !== undefined ? { name: body.name } : {}),
         ...(body.statblock !== undefined ? { statblock: body.statblock } : {}),
-        ...(body.gen !== undefined ? { gen: body.gen } : {}),
+        // `GenTemplateSchema` strips unknown keys, so a plain assignment would
+        // erase `gen.starterId` — the mark that says this row came from the
+        // starter library. Retuning a tier curve must not make the library
+        // offer the archetype again as if it had never been installed.
+        ...(body.gen !== undefined ? { gen: preserveStarterId(existing.gen, body.gen) } : {}),
         ...(body.persona !== undefined ? { persona: body.persona } : {}),
         ...(body.pageRef !== undefined ? { pageRef: body.pageRef ?? null } : {}),
       }),
@@ -185,6 +214,70 @@ export default async function generatorPlugin(app: FastifyInstance): Promise<voi
     await templateFor(req, id);
     await generator.deleteTemplate(id);
     return reply.status(204).send();
+  });
+
+  // --- starter archetype library (FR10.1 cold start) -----------------------
+  //
+  // The catalogue is shipped ORIGINAL content (§14/D10 forbids transcribing
+  // book stat blocks, not shipping our own), and installing it writes ordinary
+  // `npc_templates` rows: editable, retierable, renamable, deletable. Nothing
+  // here emits — opposition prep is GM-only and the table hears nothing (§13).
+  //
+  // A campaign is also born with the catalogue installed (see
+  // `AuthService.createCampaign`), so these two routes are the recovery path
+  // rather than the only door: they are what a GM uses after deleting rows, or
+  // to pull in archetypes added to a later build.
+  //
+  // The web shelf that consumes these is
+  // `apps/web/src/features/gm/generator/StarterLibrary.tsx`, reachable at
+  // `/c/:campaignId/gm/generator?tab=library`. It reads `installed`,
+  // `templateId` and `installedAs` off each entry, so a GM who renamed their
+  // copy is still told they own it, and POSTs `{ ids }` for the rest.
+  // Installing twice is safe, so the button needs no guard.
+
+  app.get('/api/campaigns/:campaignId/archetype-library', async (req) => {
+    const { campaignId } = req.params as { campaignId: string };
+    gmFor(req, campaignId);
+    const entries = await archetypeLibrary(app.db, campaignId);
+    return {
+      entries,
+      installedCount: entries.filter((e) => e.installed).length,
+      availableCount: entries.filter((e) => !e.installed).length,
+    };
+  });
+
+  app.post('/api/campaigns/:campaignId/archetype-library/install', async (req) => {
+    const { campaignId } = req.params as { campaignId: string };
+    gmFor(req, campaignId);
+    const body = parse(InstallArchetypesBody, req.body ?? {});
+    if (body.ids) {
+      const unknown = unknownStarterIds(body.ids);
+      if (unknown.length > 0) {
+        throw httpError(400, 'bad_request', `unknown archetype ids: ${unknown.join(', ')}`, {
+          unknown,
+        });
+      }
+    }
+
+    // One transaction over read-then-insert. The idempotency check is a read
+    // of this campaign's templates followed by an insert of what is missing,
+    // and a doubled click (or a retry on a slow first response) is exactly the
+    // interleaving that would install the catalogue twice. `atomic` emits
+    // nothing here — it is used purely for the transaction, so every read
+    // inside goes through `tx.db` (the deadlock rule in `Hub.atomic`).
+    const result = await app.hub.atomic(campaignId, async (tx) =>
+      installStarterArchetypes(tx.db, campaignId, {
+        ...(body.ids ? { ids: body.ids } : {}),
+      }),
+    );
+
+    // 200, not 201: this is a converge-to-installed operation whose second
+    // call legitimately creates nothing. `installed` says what actually landed.
+    return {
+      installed: result.installed,
+      alreadyInstalled: result.alreadyInstalled,
+      entries: result.entries,
+    };
   });
 
   // --- generation (FR10.2): seeded, returned directly, nothing persisted ---

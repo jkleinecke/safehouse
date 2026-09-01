@@ -6,32 +6,132 @@ row below was re-read in the source, and every number below was produced by
 running the command named beside it, not carried forward from a previous
 revision.
 
-- **Repo state:** 358 TS/TSX files of shipping source (~71.4k lines) across 5 workspace packages; 512 files / ~108.2k lines counting tests and the browser E2E suite. (`*.ts`/`*.tsx` under `apps/` and `packages/`, excluding `node_modules` and `dist`; seeds and scripts count as source, `test/`, `*.test.*` and `e2e/` do not.)
-- **Verified on:** 2026-08-29. `pnpm -r --workspace-concurrency=1 typecheck` → exit 0. `pnpm -r --workspace-concurrency=1 build` → exit 0. `pnpm -r --workspace-concurrency=1 test` → **1733 passed, 3 skipped, 0 failed** across **127 test files**.
-- **Scripted playthrough:** `pnpm playthrough` → **267 checks, 267 passed, 0 failed, 0 n/a**, 10.6 s (`docs/demo/SESSION_REPORT.md`). The count can move by one or two between runs because a handful of assertions are conditional on the night's dice; this run had no content-dependent skips.
-- **Browser E2E:** `pnpm --filter @safehouse/web e2e` → **38 passed, 2 skipped**, chromium, **14 spec files**, 42.4 s. The two skips are the perf harness, which runs only under `SAFEHOUSE_PERF=1`. **There is no `test.fail` marker in the suite any more** — the one that stood in for the spoiler-guard gap came off with the fix, and its assertion passes on its own terms.
-- **The two §15 NFRs now have numbers.** Both were "no harness exists" last revision. Roll-to-visible: **p95 3.5 ms** client-visible over 200 rolls with six sockets in the room, against §15's 250 ms LAN budget — **71× headroom** (`apps/server/test/latency.test.ts`, in the ordinary suite). Grid frame budget with 60 tokens and fog: **main-thread p95 19.8–22.8 ms** across idle/pan/zoom/drag on both a laptop and a phone canvas under a 4× CPU throttle, inside §15's 33.3 ms floor, with camera gestures costing ~1.1× idle rather than an order of magnitude; the wall-clock interval misses in headless for a reason the harness measures rather than asserts (`apps/web/e2e/perf.spec.ts`). Full tables and the honest caveats: §4.
-- **Bundle against §15:** initial JS **236.63 KB gz** (798.66 KB raw) against a < 500 KB gz budget, with PixiJS verified absent from the entry chunk. The Grid's lazy chunk is **107.07 KB gz** plus Pixi's own runtime splits (**76.7 KB gz** across eight files) — **≈184 KB gz** worst case against a < 900 KB gz budget. CSS 9.70 KB gz. **Every §15 bundle sub-clause is now met in the letter**, the codex editor included. Details: §4.
+> **How to read this document, and what went wrong with the last revision.**
+> Every previous revision led with §1's FR tables, and those tables grade *code*:
+> a row said `done` when the server route existed, was server-authoritative, and
+> had a test. By that bar the app was ~complete. The GM's verdict on sitting down
+> to prep a session was **"this is not as complete as represented"**, and he was
+> right on every count: there was nowhere to see the player characters, the scene
+> screen was a placeholder, and the codex had no AI affordance at all — while the
+> FR rows for all three read `done`, because the *capabilities* were there and the
+> *doors* were not.
+>
+> So the headline grade is now **§1 — can a GM actually do the job?**, one row per
+> real task with the route a GM takes. §2's FR tables are supporting detail
+> underneath it, and rows whose GM-facing surface is thin now say so in the row.
+> **A capability reachable only through a chat panel, a CLI step, or a UUID is
+> not done.**
+
+- **Repo state:** 400 TS/TSX files of shipping source (~81.6k lines) across 5 workspace packages; 569 files / ~124.0k lines counting tests and the browser E2E suite. (`*.ts`/`*.tsx` under `apps/` and `packages/`, excluding `node_modules` and `dist`; seeds and scripts count as source, `test/`, `*.test.*` and `e2e/` do not.)
+- **Verified on:** 2026-08-31. `pnpm -r --workspace-concurrency=1 typecheck` → exit 0. `pnpm -r --workspace-concurrency=1 build` → exit 0. `pnpm -r --workspace-concurrency=1 test` → **2031 passed, 3 skipped, 0 failed** across **142 test files** (contracts 7/52 · db 4/34 · rules 12/191 · server 52/723 · web 67/1034). Up from 1733/127 on 2026-08-29.
+- **Scripted playthrough:** `pnpm playthrough` → **266 checks, 265 passed, 0 failed, 1 not applicable** (`docs/demo/SESSION_REPORT.md`). The count moves by one or two between runs because a handful of assertions are conditional on the night's dice; this run had one such skip. The last revision measured 267/267 on a luckier night.
+- **Browser E2E:** **carried forward from 2026-08-29, not re-run this revision** — `pnpm --filter @safehouse/web e2e` → 38 passed, 2 skipped, chromium, 14 spec files, 42.4 s. The two skips are the perf harness, which runs only under `SAFEHOUSE_PERF=1`. There is no `test.fail` marker in the suite. **The spec count did not move this round, and that is itself a finding**: the three surfaces this round built — the party roster, the scene manager, the codex AI panel — have unit coverage and no browser spec. It is item 2 of §7.
+- **The two §15 NFRs now have numbers.** Both were "no harness exists" last revision. Roll-to-visible: **p95 3.5 ms** client-visible over 200 rolls with six sockets in the room, against §15's 250 ms LAN budget — **71× headroom** (`apps/server/test/latency.test.ts`, in the ordinary suite). Grid frame budget with 60 tokens and fog: **main-thread p95 19.8–22.8 ms** across idle/pan/zoom/drag on both a laptop and a phone canvas under a 4× CPU throttle, inside §15's 33.3 ms floor, with camera gestures costing ~1.1× idle rather than an order of magnitude; the wall-clock interval misses in headless for a reason the harness measures rather than asserts (`apps/web/e2e/perf.spec.ts`). Full tables and the honest caveats: §5.
+- **Bundle against §15** (re-measured 2026-08-31): initial JS **273.41 KB gz** (930.49 KB raw) against a < 500 KB gz budget, with PixiJS verified absent from the entry chunk (`grep -i pixi` → 0 hits in the entry, 6 in the Grid chunk). The Grid's lazy chunk is **107.07 KB gz** plus Pixi's own runtime splits (**76.70 KB gz** across eight files) — **≈183.8 KB gz** worst case against a < 900 KB gz budget. CSS 9.99 KB gz. **Every §15 bundle sub-clause is still met in the letter**, the codex editor included. **The entry chunk grew 236.63 → 273.41 KB gz this round** — +36.8 KB gz for the roster, the scene manager, the codex AI panel, the library route and the nav rewrite. That is 55% of the 500 KB budget, up from 47%: still comfortable, and the first revision where the trend is worth watching rather than noting. Details: §5.
 
 Status vocabulary:
 
 | Term | Meaning |
 | --- | --- |
-| `done` | Implemented end to end, server-authoritative where the FR requires it, covered by a test, a playthrough assertion, or an E2E spec. |
+| `done` | Implemented end to end, server-authoritative where the FR requires it, covered by a test, a playthrough assertion, or an E2E spec — **and reachable by a GM from a named screen**. |
+| `done · thin surface` | The capability is complete and tested on the server, and the GM-facing entry point is missing, hidden, or CLI-only. **This used to be graded `done`. It is the failure mode that produced "not as complete as represented", so it now has its own word.** Every one names what is missing. |
 | `partial` | Core of the FR works; a named sub-clause is missing. Every one is itemized. |
 | `deferred` | Not built, and §18 puts it in a phase we have not reached (P6) or Q9/Q3 resolved it as unused. Not a defect. |
 | `not built` | In a phase we have otherwise shipped, but absent. These are the real gaps. |
 
 ---
 
-## 1. Status by module
+## 1. Can a GM actually do the job?
+
+**This is the grade.** One row per thing a GM actually sits down to do, with the
+route they take to do it. The bar is not "does the endpoint exist" and not "do
+the tests pass" — it is *a GM finishes the task without knowing a UUID, reading
+the source, or being told where the feature secretly lives*. §2's FR tables are
+the supporting detail underneath this table, not a substitute for it.
+
+Verdicts were taken by driving the app in a browser as GM, as a player on a
+375×812 phone and as the table display (`docs/UX_AUDIT.md` carries the walk-through
+and the evidence), then re-verified against the source on 2026-08-31.
+
+| # | The job | Verdict | Route |
+| --- | --- | --- | --- |
+| 1 | **See the party** — every PC, condition, Edge, the pools you ask for out loud — and open one sheet | **works** | GM console → *Campaign* → **Party** (`/c/:id/gm/party`). Rows link to each sheet by href. |
+| 2 | **Build a scene** — create it, put a map on it, cut fog regions, set the environment, activate it | **works** | GM console → *At the table* → **Scenes** for the list and the levers; **Grid** for the drawing. Both cards say which is which. |
+| 3 | **Write a codex page with AI help** — draft one, expand a stub, turn tonight's log into lore | **works** | **Codex** → open a page → the AI panel beside it (*draft · expand · summarise the log · suggest links*). Every result is a proposal the GM accepts or bins. |
+| 4 | **Prep opposition** — author an archetype, roll a squad, check it against the party, stage it on the map | works-but-awkward | GM console → *Prep* → **Generator**. Completes end to end. Three warts, listed below. |
+| 5 | **Run a fight** — pick tonight's encounter, start it, roll initiative, apply damage, use the copilot | **cannot-complete** | **There is no route.** The tracker shows whichever encounter `pickLiveEncounter` guesses; no screen lists encounters, sets one live, adds a combatant by hand, or rolls initiative. |
+| 6 | **Look up a rule, show a player the page** | works-but-awkward | **Books** on both the GM rail and the phone nav; the reader is excellent. But there is no search box anywhere, and nothing pushes a page to the table. |
+| 7 | **Close a session** — approve karma, draft and publish a recap | **works** | GM console → *Prep* → **Sessions**. Awards can also be originated from the Party roster now. |
+| 8 | **Onboard** — start a campaign, get a character into it, get a player's phone onto that sheet, get the TV up | **works** | **Party** → *add a runner* / *import .chum5*; then pick the player's device on that row. *Pair the TV* is its own rail entry. |
+| 9 | **Play as a phone player** — sheet, roll with its provenance, map, Edge, the rulebook | **works** | Bottom nav. One wart: a `SR5 p.426` chip on the sheet still opens a new tab. |
+
+**Six of nine complete. Two are completable but awkward. One cannot be finished
+at all, and it is the main event.**
+
+For contrast, the same nine jobs when the GM's complaint was filed — before this
+round — were: **jobs 1, 3, 5 and 8 cannot-complete outright**, job 6
+cannot-complete for a player and awkward for the GM, job 9 blocked in practice by
+job 8, job 2 landing on a placeholder, and only 4 and 7 clean. The audit's own
+headline was "five of the nine jobs cannot be completed". Six of the nine moved,
+and every one of them moved by
+being given a door onto a capability that already existed and already had tests.
+**Not one of the six needed a new server route.** That is the shape of this whole
+round, and it is why "the tests pass" was never going to be the grade.
+
+### The warts inside the green rows
+
+These do not stop the job, and naming them here rather than burying them is the
+point of this table:
+
+- **(4) the generated NPC card is lost on a tab switch.** `GeneratePanel` owns
+  the seed and the result in its own state and `GeneratorWorkspace` renders tabs
+  conditionally, so going to check the threat readout unmounts the card and
+  mints a new seed. The roster you added it to survives; the card does not.
+- **(4) "save encounter" always creates a new row.** `EncounterBuilder.tsx:88`
+  never PATCHes on `savedId`. Clicking it twice — the natural thing after picking
+  the linked scene you forgot — leaves two identically named encounters. **This
+  is what makes job 5 worse than merely missing**: the picker that does not exist
+  would be picking between duplicates the app itself made.
+- **(4) "stage on map" is disabled with no scene linked and says nothing.**
+- **(6) no book search UI.** `GET /api/books/search` (FR12.14's FTS) has exactly
+  one consumer in the repo: the Fixer's `search_books` tool. Without a local
+  model, "look up a rule" is "already know the page number".
+- **(6) FR11.6's bookmarks and recents trail have no UI at all.**
+- **(6/9) two ref-chip implementations.** `features/gm/books/RefChip.tsx` opens
+  the reader in place; `features/sheet/components/ui.tsx:167` is a separate
+  `<a target="_blank">`, so a chip on a phone sheet leaves the sheet mid-fight.
+- **(7) awards still cannot be originated from the Sessions screen**, which is
+  where the GM is standing when they want to give the table karma. The Party
+  roster is the workaround, and it is a good one.
+
+### What job 5 needs, precisely
+
+Everything *inside* a fight is built and good — end-pass over the socket, the
+damage dialog that previews before it commits, wound modifiers moving derived
+numbers in front of you, the copilot rack, morale, interrupts, the
+server-authoritative resolve chain. What is missing is the list and the switch:
+
+| Missing | Already written, uncalled |
+| --- | --- |
+| an encounter list on the tracker | `useEncounterList` (`features/table/commands.ts:120`) — exported, consumed by nothing |
+| set live / end / rename / relink / delete | `PATCH`/`DELETE /api/encounters/:id` — **no caller in `apps/web/src`** |
+| add a combatant by hand (FR4.1) | `POST /api/encounters/:id/combatants` — no caller |
+| roll initiative as a deliberate act | `POST /api/encounters/:id/roll-initiative` — no caller |
+| a button that says it starts the fight | today it is "New turn", whose tooltip says "Re-roll initiative (FR4.3)" |
+
+Until someone presses "New turn", `encounter.state` never becomes `live`, so the
+TV cannot draw the initiative ribbon either (`features/tv/encounterState.ts:203`).
+
+---
+
+## 2. Status by module
 
 ### M1 — Accounts, campaign, membership *(P0)*
 
 | FR | Status | Where |
 | --- | --- | --- |
 | FR1.1 QR join, GM at install | done | `services/auth.ts` (`POST /api/campaigns` bootstrap, `GET /api/campaigns/:id/join-qr`, `GET\|POST /api/join/:code`), `plugins/auth.ts` (`POST /api/campaigns/:id/gm-device`, `POST …/gm-pair` — single-use GM pairing code). `web/src/components/shell/Landing.tsx` offers three tabs (start a campaign · pair with a code · paste a token) over `signin.ts` / `signin-api.ts`. `test/auth-gm.test.ts` (18), `e2e/gm-signin.spec.ts` (3). |
-| FR1.2 one GM + players + observers; transfer ownership | done | Roles and membership in `memberships`/`Role`. Transfer: `POST /api/campaigns/:id/transfer-ownership` and `PATCH /api/characters/:id/owner` in `plugins/campaigns-admin.ts`. |
+| FR1.2 one GM + players + observers; transfer ownership | **done · thin surface** | Roles and membership in `memberships`/`Role`. Transfer: `POST /api/campaigns/:id/transfer-ownership` and `PATCH /api/characters/:id/owner` in `plugins/campaigns-admin.ts`. **`PATCH …/owner` now has a real control** — the owner picker on each Party roster row (`features/gm/home/PartyPanel.tsx`), which is how a player's phone gets a sheet at all. **`transfer-ownership` still has no caller in `apps/web/src`**: handing the campaign itself to another GM is an API-only act. |
 | FR1.3 expiring, role-scoped, revocable invites | done | `createInvite` (`expiresInMinutes`, `maxUses`), `POST /api/devices/:id/revoke`. `join-qr` refuses `role=gm` by construction — GM devices come only from bootstrap / `gm-device` / single-use `gm-pair`. |
 | FR1.4 roles gate everything per §13 | done | `requireAuth`/`requireRole`/`assertCampaign`; hub filters by visibility server-side. Playthrough + `e2e/secrecy.spec.ts` (4). |
 | FR1.5 campaign settings incl. house-rule flags + webhook | done | `PATCH /api/campaigns/:id`. The flag system now carries one real flag — `tacticalHints` (FR10.10) — and otherwise plays RAW per Q4. |
@@ -56,23 +156,23 @@ Status vocabulary:
 
 | FR | Status | Where |
 | --- | --- | --- |
-| FR3.1 Chummer `.chum5` import, raw file kept, unmapped listed, re-import diff | done | `services/chummer.ts` + `chummer-xml.ts`, `diffSheets`, `POST /api/characters/:id/import`. |
+| FR3.1 Chummer `.chum5` import, raw file kept, unmapped listed, re-import diff | **done · thin surface** | `services/chummer.ts` + `chummer-xml.ts`, `diffSheets`, `POST /api/characters/:id/import`. **The first import now has a door** — `features/gm/home/AddCharacter.tsx` takes a blank sheet or a `.chum5` file into `POST /api/characters`, from the Party roster's empty state. Until this round nothing in the browser had ever created a character and `pnpm seed:demo` was the only thing that ever had. **Re-import onto an existing sheet, and the diff that is the interesting half of this FR, still have no UI.** |
 | FR3.2 phone-first sheet with tabs | partial | Skills, Combat, **Magic**, Gear, Contacts, Background, Ledger + pinned identity/vitals strip (`features/sheet/playState.ts` `SHEET_TABS`). **Missing: Matrix tab** — consistent with M7 being deferred, and the only thing holding this row at `partial`. |
 | FR3.3 derived values with provenance | done | `deriveCharacter`, `GET /api/characters/:id/derived` (which also returns `combatantId` when the tracker is live — that is what makes Seize/Blitz offerable). |
-| FR3.4 monitors, wound modifiers, Edge, ammo, progressive recoil, sustained, statuses | done | `services/character-play.ts`, `POST …/damage\|edge\|ammo\|recoil\|sustained`. |
+| FR3.4 monitors, wound modifiers, Edge, ammo, progressive recoil, sustained, statuses | done | `services/character-play.ts`, `POST …/damage\|edge\|ammo\|recoil\|sustained`. **The GM can now read and drive these without opening a sheet**: `features/gm/party/PartyRow.tsx` shows both monitors, the wound modifier they imply, Edge, defence, soak and perception, and applies damage and heals through the same routes. |
 | FR3.5 manual override on any derived value, flagged, with a note | done | `POST/DELETE /api/characters/:id/overrides`. |
-| FR3.6 karma & nuyen ledgers, pending-until-approved | done | `plugins/ledger.ts`; approve/reject, now inside `Hub.atomic`. Run awards post through it (FR5.5). |
-| FR3.7 advancement (guided karma spends) | deferred | Not built. Deliberate — see §5's deferred list. |
-| FR3.8 revisions + rollback | done | `GET …/revisions`, `POST …/rollback`. |
+| FR3.6 karma & nuyen ledgers, pending-until-approved | done | `plugins/ledger.ts`; approve/reject, now inside `Hub.atomic`. Run awards post through it (FR5.5). **Awards can now be originated from the Party roster**, not only from `RunsBoard` — still as *pending* rows, so the housekeeping beat is unchanged. They still cannot be originated from the Sessions screen, which is where a GM is standing when they want to give the table karma for turning up. |
+| FR3.7 advancement (guided karma spends) | deferred | Not built. Deliberate — see §6's deferred list. |
+| FR3.8 revisions + rollback | **done · thin surface** | `GET …/revisions`, `POST …/rollback`. Neither route has a caller anywhere in `apps/web/src`: a GM cannot see that a sheet has history, let alone roll one back. |
 | FR3.9 native priority char-gen | deferred | P6 by design (D5 — Chummer is the builder until then). |
 
 ### M4 — Combat tracker *(P1)*
 
 | FR | Status | Where |
 | --- | --- | --- |
-| FR4.1 encounters from PCs / templates / generator / grunt groups; prep + launch, incl. from a scene | done | `plugins/encounters.ts`, `POST /api/scenes/:id/stage-encounter`. |
+| FR4.1 encounters from PCs / templates / generator / grunt groups; prep + launch, incl. from a scene | **done · thin surface — the worst one in this document** | `plugins/encounters.ts`, `POST /api/scenes/:id/stage-encounter`. The server does all of it. The browser does **prep only**: `POST /api/encounters/build` from the generator and `stage-encounter` from a scene. **Nothing in `apps/web/src` lists encounters, picks one, launches one, renames or relinks one, deletes one, or adds a combatant by hand** — `PATCH`/`DELETE /api/encounters/:id` and `POST …/combatants` have no caller, and `useEncounterList` (`features/table/commands.ts:120`) is written, exported and consumed by nothing. The tracker shows whatever `pickLiveEncounter` (`live/merge.ts:368`) guesses. This row read `done` for four revisions; it is job 5 in §1. |
 | FR4.2 SR5 initiative incl. astral / cold-sim / hot-sim variants, wound mods | done | `rules/src/combat/initiative.ts`. Staged encounters derive through the engine too (FR9.10). |
-| FR4.3 native pass structure (−10 loop, re-roll on new turn) | done | `services/encounters.ts:365` — `rollInitiativeAll` opens on turn 1 / pass 1. |
+| FR4.3 native pass structure (−10 loop, re-roll on new turn) | **done · thin surface** | `services/encounters.ts:365` — `rollInitiativeAll` opens on turn 1 / pass 1. The engine is right; the button is not. **Starting a fight is done by pressing "New turn", whose tooltip reads "Re-roll initiative (FR4.3)"** — the flip to `state: 'live'` is a side effect of `newTurn` (`services/encounters.ts:524`), and `POST …/roll-initiative` has no UI at all. A GM opening the tracker has no reason to press it, and until they do the TV cannot draw the initiative ribbon (`features/tv/encounterState.ts:203`). |
 | FR4.4 interrupt menu with editable costs | done | `DEFAULT_INTERRUPTS` + custom cost. Seize/Blitz reachable from the sheet and stamped into the tracker's order (`services/rolls-edge.ts`). |
 | FR4.5 damage → monitor → overflow → wound recompute, one-tap undo | done | `services/encounters-damage.ts`, both write paths now inside `Hub.atomic`. |
 | FR4.6 grunt groups, shared PR + Group Edge | done | `professionalRating` on `AddCombatantBody` and `PATCH /api/combatants/:id`. Playthrough asserts `pressure 4 vs PR 3`. |
@@ -85,7 +185,7 @@ Status vocabulary:
 
 | FR | Status | Where |
 | --- | --- | --- |
-| FR9.1 scenes, configurable grid, notes, activate, private staging | done | `plugins/scenes.ts`, `contracts/src/scene.ts`. |
+| FR9.1 scenes, configurable grid, notes, activate, private staging | done | `plugins/scenes.ts`, `contracts/src/scene.ts`. **The GM surface is now two screens with a stated division of labour**: `features/gm/ScenesPage.tsx` (+ `gm/scenes/`) is the inventory — create, duplicate, rename, archive, delete, activate for the table, environment (FR9.11), staged reveals (FR9.14) — and the Grid's GM panel is the in-canvas authoring tool. Until this round `/c/:id/gm/scenes` was a placeholder card that the sidebar and the console both linked to. `sceneManager.test.tsx` (24). |
 | FR9.2 map building | done | Image upload, multi-image background list, grid alignment, walls/doors/zones with a GM authoring UI (`web/features/grid/gm/GeometryTab.tsx`, 20 tests), and scan-friendly rotate / crop / contrast / brightness (`gm/MapTab.tsx`, `mapImage.ts`, 13 tests). Prop/tile stamp library remains P3+ by design. |
 | FR9.3 map pins → codex / handouts | done | `gm/PinsTab.tsx` and `stage/layers.ts drawPins`; GM-only pins stripped server-side in `sceneForViewer`. |
 | FR9.4 tokens (PC/NPC/grunt/spirit/drone/prop), art, sizes, facing | done | `contracts/src/token.ts`, `POST /api/scenes/:id/tokens`. A summoned spirit can now become one of these (FR8.3). |
@@ -95,7 +195,7 @@ Status vocabulary:
 | FR9.8 ruler in metres, walk/run colouring | done | `grid/geometry.ts` + tests. |
 | FR9.9 range bands → range modifier into the roll | done | Range band lands in the receipt. |
 | FR9.10 encounter ↔ scene both ways | done | `services/scenes.ts` `stageEncounter` derives through `deriveFor`, so wired reflexes and adept powers survive staging. |
-| FR9.11 scene environment as a modifier source with provenance | done | `rules/src/env.ts`, `activeSceneModifiers`. Applied **once** — see LIVE-2 in §2, pinned by `e2e/pool-parity.spec.ts`. |
+| FR9.11 scene environment as a modifier source with provenance | done | `rules/src/env.ts`, `activeSceneModifiers`. Applied **once** — see LIVE-2 in §3, pinned by `e2e/pool-parity.spec.ts`. |
 | FR9.12 AoE circles + grenade scatter helper | done | `POST /api/scenes/:id/scatter`; client `rollScatter`. |
 | FR9.13 manual fog, server-authoritative, persisted | done | `POST /api/scenes/:id/fog`. |
 | FR9.14 named staged reveals with announcement | done | Same. |
@@ -115,8 +215,8 @@ Status vocabulary:
 | FR10.2 seeded generation, original flavour tables, engine-derived values | done | `rules/src/generator/`; `tables.ts` is original writing (G6). |
 | FR10.3 promote to reusable template, edits round-trip | done | `POST /api/generator/promote`. |
 | FR10.4 encounter builder | done | `POST /api/encounters/build`. |
-| FR10.5 party-aware threat readout with visible math | done | `GET /api/encounters/:id/threat`, `services/generator-threat.ts`. |
-| FR10.6 balance levers recompute live | done | `POST /api/encounters/:id/threat/recompute`. |
+| FR10.5 party-aware threat readout with visible math | done | `GET /api/encounters/:id/threat`, `services/generator-threat.ts`. **The readout the GM actually reads is computed in the browser**, by `features/gm/generator/readout.ts` over the shared `@safehouse/rules` engine, so the levers move instantly — the server route has no caller. It is not a second implementation and it does not lie: every number carries an `est` badge and the module's own docblock says `hits ≈ pool ÷ 3`, which is P3 satisfied by honesty rather than by provenance. Worth knowing before quoting a number from it. |
+| FR10.6 balance levers recompute live | **done · thin surface** | `POST /api/encounters/:id/threat/recompute` — **no caller in `apps/web/src`**; the live recompute the GM sees is `readout.ts` running locally (see FR10.5). The FR's behaviour is delivered; the server route it names is not the thing delivering it. |
 | FR10.7 quick-roll rack | done | `GET /api/combatants/:id/quick-rolls`, `POST …/quick-roll`, stamped with the active session. |
 | FR10.8 resolved chains, card-per-step, override before commit | done | `services/encounters-rolls.ts` writes one `rolls` row per pool (attack / defence / soak) at `gm` visibility the moment the server throws them, linked by `request.meta.chainId`, inside a transaction; damage lands only on `…/resolve-chain/commit` (Principle 2). `test/encounters-chain-rolls.test.ts`. The tracker's card UI is now on that endpoint too: `web/features/table/resolveChain.ts` posts the exchange and reads every face off the response, with **no local fallback anywhere in the feature** — an unreachable endpoint draws no dice rather than browser ones. `resolveChain.test.tsx` (22) includes a source-level assertion that the feature does not import `resolveAttackChain`. |
 | FR10.9 morale from Professional Rating triggers | done | GM-only, never acts; measured against a real PR for hand-added rows too. |
@@ -126,12 +226,12 @@ Status vocabulary:
 
 | FR | Status | Where |
 | --- | --- | --- |
-| FR11.1 registry: code, title, page offset, calibration helper | done | `plugins/books.ts`, `PATCH /api/books/:id`; `web/features/gm/BooksPage.tsx` calibration stepper. |
+| FR11.1 registry: code, title, page offset, calibration helper | **done · thin surface** | `plugins/books.ts`, `PATCH /api/books/:id`; `web/features/gm/BooksPage.tsx` calibration stepper, now with `books/BookShelfCard.tsx` and `books/SeedInstructions.tsx`. **Registering a book is still CLI-only**: `POST /api/books` and `POST /api/attachments` have no caller, so adding a rulebook means stopping the server (PGlite is single-writer and `seed-books.ts` opens the same `DATA_DIR`), running `pnpm seed:books`, and starting it again. The instruction card now says so plainly, which is honest, not fixed. |
 | FR11.2 structured `{book, page, note?}` refs | done | `contracts/src/common.ts`; used across sheet, templates, tables, codex. |
 | FR11.3 one-tap open at the printed page, in-app, on phones | **done** | Self-hosted pdf.js, per §13. `apps/web/scripts/vendor-pdfjs.mjs` copies `pdfjs-dist` into `public/pdfjs/` at `postinstall` and `build`, so the library costs zero bundle bytes and the worker stays a same-origin module worker. `features/reader/` holds the viewer (`pdfjs.ts`, `PdfSurface.tsx`, `ReaderCore/Shell/Route`), the printed-page arithmetic (`pageMath.ts`), byte-range fetching (`range.ts`) and `mode.ts`, which keeps the browser's own viewer as the documented fallback reachable three ways — `?native=1`, a remembered per-device preference, and automatically when pdf.js cannot start. `test/reader-route.test.ts` (9), web `mode`/`pageMath`/`range`/`pdfjs`/`layout`/`ReaderShell` (12)/`refChipViewer` (4), `e2e/reader.spec.ts` (3 — a ref chip opens the printed page over byte ranges, the jump box moves the page under it, pinch and the zoom controls both change scale). |
 | FR11.4 ref autolinking of `SR5 p.426` patterns | done | `web/features/gm/books/refs.ts` + tests; also used by the codex renderer. |
-| FR11.5 shared with the table, per-book GM-only toggle | done | A player's search returns real page provenance. |
-| FR11.6 named bookmarks + recently-opened trail | done | `services/bookmarks.ts` + routes; `test/books-bookmarks.test.ts` (13). |
+| FR11.5 shared with the table, per-book GM-only toggle | done | A player's search returns real page provenance. **Players can now reach the shelf**: `/c/:campaignId/books` (`features/library/LibraryPage.tsx`) is role-aware — the GM's calibration shelf, or the shared shelf — and **Books** is on `PLAYER_NAV`, so it is a card on the campaign home and a glyph in the phone's bottom nav. Before this round the shelf existed only behind the GM guard, and a player could reach a rulebook only through a ref chip that happened to be embedded in something they were already reading. |
+| FR11.6 named bookmarks + recently-opened trail | **done · thin surface — nothing renders it** | `services/bookmarks.ts` + routes; `test/books-bookmarks.test.ts` (13). `GET/POST/DELETE /api/campaigns/:id/bookmarks`, `GET …/library` and `GET …/library/recent` have **no caller anywhere in `apps/web/src`**. The whole FR is invisible to a GM. |
 | FR11.7 `pnpm seed:books` folder import with guessed codes | done | `apps/server/scripts/seed-books.ts`. PDFs stay out of git. |
 
 ### M12 — The Fixer *(assistant core P1)*
@@ -141,17 +241,17 @@ Status vocabulary:
 | FR12.1 GM-only dockable streaming panel, history, two model slots | done | `plugins/fixer.ts`, `fixer/conversations.ts`, `web/features/gm/fixer/`. |
 | FR12.2 grounded rules research, citations from retrieval not the model | done | `search_books` returns `{book, printedPage}`; the chip is the server's. |
 | FR12.3 lore and state research | done | `search_codex` over a real codex (`fixer/state-codex.ts`). |
-| FR12.4 planning / brainstorming with "save to codex" | done | The draft lands as a `wiki_page` the codex UI can browse and edit. |
+| FR12.4 planning / brainstorming with "save to codex" | **done** | The draft lands as a `wiki_page` the codex UI can browse and edit — **and, as of this round, on the page it belongs to.** `features/codex/ai/AiPanel.tsx` hydrates the campaign's pending `wiki_page` drafts on mount, so a draft asked for from the Fixer chat two screens away is waiting beside the page rather than in an inbox the GM has to know about. |
 | FR12.5 NPC fiction layer onto procedural stats | done | `generate_npc` + persona; D13 split held. |
-| FR12.6 in-character conversations with knowledge boundary + secrets | done | `POST /api/npcs/:id/converse`. |
-| FR12.7 codex drafting | done | `draft_wiki_page` → `wiki_pages` on accept. |
+| FR12.6 in-character conversations with knowledge boundary + secrets | **done · thin surface** | `POST /api/npcs/:id/converse`. **No chat surface exists** — the route has no caller in `apps/web/src`, so talking to an NPC in character is an API-only act. |
+| FR12.7 codex drafting | **done** | `draft_wiki_page` → `wiki_pages` on accept. **This round gave it the door the user asked for.** `features/codex/ai/` puts four actions beside the page — *draft with the Fixer · expand · summarise the log · suggest links* — plus `NewPagePrompt` in the browser for an empty codex. Nothing applies itself: every result is a `ProposalCard` the GM accepts, edits or rejects (P8). Accepting an **expansion** is `PATCH /api/wiki/:id` (`ai/api.ts:240`), which is what makes "flesh out this stub" possible at all — the server's `applyWikiDraft` only ever inserts, and remains correct as the accept-as-new-page path. With `LLM_BASE_URL` unset the buttons stay visible and disabled with the reason (NG7), rather than vanishing as `FixerDock` does. `codex/ai/ai.test.tsx` (29). Before this round, grepping `PageView.tsx` for *fixer*, *draft*, *generate* or *ai* returned nothing at all. |
 | FR12.8 fog NL commands, proximity prompts, region auto-naming | done | `suggest_fog_reveal` + `fog_reveal` draft kind; `fixer/proximity.ts` behind `check_fog_proximity` and `GET /api/fixer/fog-proximity` — GM-only, never written down. |
 | FR12.9 token identification / labelling | done | `fixer/token-id.ts`, `identify_tokens`, `POST /api/fixer/identify-tokens`. |
 | FR12.10 stagecraft (music tagging + scene matching) | deferred | `audio_tracks` table only. |
 | FR12.11 map assistance (layout copilot) | **done, both lanes** | Lane 1 unchanged: `fixer/geometry.ts` / `propose_geometry` compiles guided-JSON rectangles to walls / doors / named fog regions as a draft. Lane 2 is new — **map vision**: `fixer/vision.ts` + `vision-probe.ts` probe the configured model once, cache the answer, and offer `read_map_image` **only** when the box actually reads images (`fixer/agent.ts:363` filters it out otherwise). The route distinguishes the two "no" cases honestly: `503 ai_disabled` for no box, `501 vision_unsupported` for a box whose model is text-only. `test/fixer-vision.test.ts` (17). |
 | FR12.12 recap drafts | **done** | `fixer/tools-recap.ts` (`draft_recap`) + `fixer/recap.ts` (`assembleRecap`): the model writes prose only, the server adds tallies, casualties, reveals and awards from the log itself, and the FR12.19 spoiler guard runs **unconditionally** because a recap is player-facing by definition. The deterministic client-side skeleton survives as the no-model path (`web/features/gm/sessions/recap.ts`). `test/fixer-recap.test.ts` (8), `e2e/recap.spec.ts` (3). |
 | FR12.13 OpenAI-compatible local provider; unset base URL hides everything | done | `fixer/llm.ts`, `GET /api/fixer/status`. Nothing touches the internet. |
-| FR12.14 retrieval over extracted book text, Postgres FTS | done | `book_pages.tsv` generated tsvector, `searchBookPages`. |
+| FR12.14 retrieval over extracted book text, Postgres FTS | **done · thin surface** | `book_pages.tsv` generated tsvector, `searchBookPages`. **`GET /api/books/search` has exactly one consumer in the repo — the Fixer's `search_books` tool.** Nothing in `apps/web/src` calls it and the reader has no in-page find, so a GM without a local inference box cannot search the rules at all: "look up a rule" degrades to "already know the page number". |
 | FR12.15 every generation an `ai_generation` draft; usage meter | **done** | `fixer/drafts.ts` for drafts; the meter is now durable — `ai_usage` (`schema.ts:432`, migration `0002_macros_and_usage.sql`) records every chat turn, `fixer/usage.ts` `persistTurnUsage` / `campaignUsage` read it back, and `GET /api/campaigns/:id/fixer/usage` reports both the durable total and the per-process live one. `test/fixer-usage.test.ts` (7) includes "reads the same number back from a fresh server on the same directory"; the playthrough asserts 4 turns / 1261 tokens survive a restart while the per-process half correctly reads zero. |
 | FR12.16 fast/primary slot discipline | done | `fast` defaults to `primary` when unconfigured. |
 | FR12.17 read-only state tool catalog | done | 26 tools registered plus the capability-flagged `read_map_image`: `get_campaign`, `list_characters`, `get_character`, `get_ledger`, `get_encounter`, `get_scene`, `get_session_log`, `search_books`, `get_page`, `search_codex`, `list_contacts`, `list_runs`/`get_run`, `get_calendar`, `list_npcs`, `get_npc`, `get_threat_readout`, `get_magic_state`, `get_matrix_state` — plus `generate_npc`, `draft_wiki_page`, `draft_recap`, `suggest_fog_reveal`, `check_fog_proximity`, `identify_tokens`, `propose_geometry`. `get_magic_state` now returns `spirits: { tracked: true, list }` because the tracker exists (FR8.3); `get_matrix_state` still returns `tracked: false` with a note for Overwatch and marks rather than a misleading zero — honest about M7 not existing. |
@@ -166,7 +266,8 @@ revealed), `plugins/codex-runs.ts` (runs, awards posting to the ledger as
 *pending*), `plugins/codex-calendar.ts`, `plugins/contacts.ts`. Services in
 `services/codex.ts` / `codex-store.ts` / `codex-templates.ts`. Web:
 `features/codex/` (`CodexPage`, `PageBrowser`, `PageView`, `Markdown`,
-`RunsBoard`, `CalendarView`, `ContactsPanel`, `HandoutsPanel`, `TemplatePanel`)
+`RunsBoard`, `CalendarView`, `ContactsPanel`, `HandoutsPanel`, `TemplatePanel`,
+and now `ai/` — `AiPanel`, `NewPagePrompt`, `ProposalCard`)
 at `/c/:id/codex`, `/c/:id/codex/:pageId`, `/c/:id/calendar`, `/c/:id/gm/runs`.
 
 | FR | Status |
@@ -211,12 +312,18 @@ FR7.1–7.6: not built. This is also the only thing holding FR3.2 at `partial`.
 | Phase | State |
 | --- | --- |
 | P0 Skeleton | **Done.** |
-| P1 Run the table | **Done.** FR2.8's server half closed the last sub-clause. |
+| P1 Run the table | **Done on capability; not on the job.** FR2.8's server half closed the last sub-clause, and the dice, the log and the sheet are all real. But "run the table" contains "start tonight's fight", and P1's own FR4.1 has no launch UI — §1's job 5. **This phase should not have been marked Done on the strength of `plugins/encounters.ts` alone.** |
 | P2 The Grid | **Done.** Map on the TV, geometry and pins authoring, pointer and focus across the wire, and both lanes of FR12.11 including map vision. |
 | P3 Opposition Kit | **Done.** FR10.10 hints were the last row and they shipped off by default, as the FR requires. |
 | P4 Campaign memory | **Done.** M5 codex, runs, calendar, contacts, handouts; M6 sessions; FR3.6 approvals; FR5.6 template↔codex linkage; FR12.12 AI recap drafting. |
 | P5 Deep SR5 | **Done bar FR3.7 and FR12.10.** FR8.1–8.5 all ship. The advancement editor and stagecraft audio remain deliberately unbuilt. |
 | P6 Stretch | Deferred as designed: M7, FR9.16, FR9.17, FR3.9, image adapter, PWA, export. |
+
+**A note on these six "Done"s, since one of them just moved.** A phase was
+marked Done when its FRs were. FRs were marked done when the server was. That is
+two inferences away from "a GM can run a session", and this revision is the bill
+for both of them. Phase state is now the weakest of (capability, surface) and
+not the strongest.
 
 ### Roll20 exit checklist (§18)
 
@@ -226,8 +333,8 @@ FR7.1–7.6: not built. This is also the only thing holding FR3.2 at `partial`.
 | Fog of war | shipped (manual + staged) |
 | Measurement / ruler | shipped, SR5-native |
 | Dice + macros | **shipped — macros now follow the person, not the handset** (FR2.8) |
-| Initiative tracker | shipped |
-| Character sheets | shipped via Chummer import |
+| Initiative tracker | shipped, **with no way to choose which encounter it tracks** — see job 5 in §1 |
+| Character sheets | shipped via Chummer import — **and the import finally has a button** (`home/AddCharacter.tsx`); re-import and rollback are still API-only |
 | Handouts | shipped — upload, attach, stage, reveal, TV takeover |
 | Journal / notes | shipped (M5 codex, with templates page-referenced) |
 | Rollable tables | shipped |
@@ -235,23 +342,59 @@ FR7.1–7.6: not built. This is also the only thing holding FR3.2 at `partial`.
 | Jukebox, dynamic lighting | not used, by decision (Q9) |
 | PDFs deep-linked in-app | **shipped — self-hosted pdf.js, page-accurate on a phone** (FR11.3) |
 
-No red rows, and no asterisks left on the two that used to carry them. §18's
-condition for cancelling the Roll20 subscription is met.
+No red rows. **Two rows carry an honest asterisk again**, and both are the same
+kind of thing this revision exists to stop hiding: the initiative tracker is
+genuinely better than Roll20's *once a fight is running*, and there is no way to
+choose which fight that is; the Chummer pipeline is real and now has a button for
+the first import only. §18's condition for cancelling the Roll20 subscription is
+met on features and **not yet on the tracker's ergonomics** — a GM running a
+second encounter in one night would find Roll20 easier today.
 
 ---
 
-## 2. Found by driving the app
+## 3. Found by driving the app
 
-The defects below were **not** found by the automated suite. Against the build
-they were reported on, `pnpm -r test` was 1194 green, `pnpm playthrough` was 187
-green, and the browser E2E suite was green. They were found by a human opening a
-browser — or, for the last one, a terminal — and using the thing for ten
-minutes. The first three lived in the seam between a correct server and a
-rendered page, precisely the seam an in-process `app.inject` harness cannot see
-because it never mounts a component. The fourth lived one layer down, in a blind
-spot of the same shape: not the seam between two *processes* — the browser
-harness already crossed that — but the *state* one process can hand the next,
-which nothing anywhere manufactured.
+This section holds **seven** findings in two families, and the difference between
+the families is the most useful thing in this document.
+
+**LIVE-1 … LIVE-4 are broken behaviours.** They were not found by the automated
+suite: against the build they were reported on, `pnpm -r test` was 1194 green,
+`pnpm playthrough` was 187 green, and the browser E2E suite was green. They were
+found by a human opening a browser — or, for the last one, a terminal — and using
+the thing for ten minutes. The first three lived in the seam between a correct
+server and a rendered page, precisely the seam an in-process `app.inject` harness
+cannot see because it never mounts a component. The fourth lived one layer down,
+in a blind spot of the same shape: not the seam between two *processes* — the
+browser harness already crossed that — but the *state* one process can hand the
+next, which nothing anywhere manufactured.
+
+**UX-1 … UX-3 are missing entry points**, and they are a different animal. They
+were found by a human trying to *prep a session* — not by driving the app as a
+machine, but by sitting down to do the job it exists for. Read the next paragraph
+before the findings; it is the point of the section.
+
+> **No automated harness would ever have flagged UX-1, UX-2 or UX-3, and adding
+> one would not have helped, because every one of them is a missing entry point
+> rather than a broken behaviour.** LIVE-1 to LIVE-4 each had a right answer some
+> test could have compared against: a store that should have been full, a pool
+> that should have been 5, a route that should have returned HTML, an append that
+> should have succeeded. UX-1 to UX-3 had nothing to compare against. There was
+> no assertion to write, because every line of code involved did exactly what it
+> said. `GET /api/campaigns/:id/characters` returned all three PCs to a GM,
+> correctly, with tests. `ScenesPage.tsx` rendered its placeholder, correctly.
+> `draft_wiki_page` produced a codex draft, correctly, and the playthrough
+> asserted it. **The defect was in the set of things the app offered to do, and a
+> test suite can only check the things it was told about.** A suite is a
+> conversation with the code; these three were the questions nobody asked. The
+> only instrument that finds them is a person with a job to do and a Friday
+> night, which is why `docs/UX_AUDIT.md` exists and why it is a walk-through
+> rather than a test file.
+>
+> The corollary is the practical part: for LIVE-defects the right response is
+> "what state does nothing construct?", and it produces a test. For UX-defects
+> the right response is "what did the user come here to *do*, and what is the
+> route?", and it produces §1. Both questions have to be asked; only one of them
+> can be automated.
 
 ### LIVE-1 — the web UI never backfilled state on mount *(systemic, severe)*
 
@@ -530,6 +673,91 @@ with a real CHECK constraint and asserting both halves; its last two tests scan
 `src/` for a bare `hub.emit(` and allow that one call, by file and by name, so
 the sweep stays swept as the code moves.
 
+### UX-1 — there was nowhere to see the player characters *(blocked the GM's first job)*
+
+**What it cost at the table.** A GM filling in a campaign could not look at a
+player's sheet. `/c/:id/gm` rendered campaign settings, invites, devices and the
+join QR, and no roster. The sidebar had no party entry. `/c/:id` offered no Sheet
+card, because a GM device owns no character. The **only two links to
+`/sheet/:characterId` in the entire web app** were `BottomNav.tsx:20` and
+`CampaignHome.tsx:26`, both gated on `useMyCharacterId`, which resolves *this
+device's own* character by `ownerUserId === session.userId`. For a GM the count
+of reachable sheets was therefore zero, and the documented workaround was to
+paste a UUID into the address bar. The only GM surface showing real party numbers
+was the Opposition Kit's threat readout — reachable by building an encounter
+first.
+
+**Why nothing caught it.** `GET /api/campaigns/:id/characters` returns all three
+PCs with full sheets to a GM, correctly, under test. `useCharacters(campaignId)`
+already existed at `features/grid/api.ts:87` and was used for the Grid's token
+placer and for session attendance chips, which render the same three names as
+*toggle buttons*. Every piece was present, correct and tested. Nothing asserted
+that a GM could get from a screen to a sheet, because that is not a behaviour —
+it is an absence.
+
+**The fix.** `/c/:campaignId/gm/party` (`features/gm/party/`), reached from a
+sidebar whose entries now come from one list, `gmNav.ts` `GM_NAV`, rendered by
+both the rail and the console home so a screen cannot exist in one and be
+invisible in the other. Rows link by href; they carry monitors, wound modifier,
+Edge, defence, soak, perception, initiative and the ledger balances, and apply
+damage and awards through the sheet's own routes. `roster.test.ts` (25),
+`party.test.tsx` (14), `navigation.test.tsx` (20).
+
+### UX-2 — the Scenes screen was a placeholder that argued for its own deletion
+
+**What it cost at the table.** `/c/:id/gm/scenes` rendered a card reading
+"Scenes — Placeholder — scene authoring, activation, fog regions land here", with
+no link out. It was offered **twice**: from the sidebar and from the GM home's
+tool chips. The real authoring lives in the Grid's GM panel and is very good, and
+nothing on the placeholder said so.
+
+**The part worth recording.** The file's own docblock admitted the route was the
+bug — and concluded that the fix was to delete the link. That conclusion was
+wrong, and it is a specific failure mode worth naming: *a placeholder that
+explains itself to a code reader has discharged nothing, because the person who
+needed the explanation is a GM looking at a screen.* The docblock was, in effect,
+a comment addressed to the wrong audience. It also reasoned from the wrong
+premise: the Grid panel is an in-canvas drawing tool that does the list badly —
+one line per scene, no map preview, no token count, no fog inventory, no rename,
+no duplicate, no delete, and an environment editor reachable only by first
+putting a scene on screen — and a GM prepping Friday is doing list work.
+
+**The fix.** `ScenesPage.tsx` is the scene manager, with the division of labour
+written on the cards: here for inventory, create, duplicate, rename, archive,
+delete, activate, environment (FR9.11) and staged reveals (FR9.14); the Grid for
+walls, doors, zones, pins, painting fog, tokens and calibration. It hydrates from
+REST on mount and lets live events only invalidate (LIVE-1). `sceneManager.test.tsx` (24).
+
+### UX-3 — the codex had no AI affordance, and "expand a stub" was impossible
+
+**What it cost at the table.** "I should be able to use AI to help fill out the
+codex" was the user's third complaint, and
+`grep -niE "fixer|draft|generate|ai" features/codex/PageView.tsx` returned
+nothing. The capability existed: `draft_wiki_page` (`fixer/tools.ts:238`) had
+been in the tool catalog since M12 and FR12.7 read `done`. Reaching it meant
+leaving the page, opening the Fixer chat, phrasing a request so the model chose
+that tool, then finding the drafts inbox. The affordance lived two screens from
+the writing and was *conversational* rather than a control on the thing being
+edited.
+
+Worse, one obvious use was **not merely missing but impossible**:
+`applyWikiDraft` (`fixer/drafts.ts:245`) always did `db.insert(wikiPages)` and
+the draft carried no page target, so asking the Fixer to flesh out an existing
+page and accepting the result produced a **second page with the same title**.
+
+**The fix.** `features/codex/ai/` — four actions beside the page (*draft with the
+Fixer · expand · summarise the log · suggest links*) and `NewPagePrompt` in the
+browser for an empty codex. Principle 8 is untouched and now visible: every
+result is a `ProposalCard` the GM accepts, edits or rejects, and the panel
+hydrates pending `wiki_page` drafts on mount so a draft asked for from the chat
+is waiting on the page it belongs to. "Expand" resolves by accepting into
+`PATCH /api/wiki/:id` (`ai/api.ts:240`) rather than by teaching the server's
+applier an update branch — an edited draft is never written back as the model's
+own text, which is the one thing P8 exists to prevent. With no `LLM_BASE_URL` the
+buttons stay on screen **disabled with the reason**, deliberately unlike
+`FixerDock`'s `return null`: a GM should learn that the feature exists and is
+asleep (NG7). `ai.test.tsx` (29).
+
 ### What changed structurally
 
 `apps/web/e2e/` exists: Playwright, chromium, 14 spec files, 40 tests, run
@@ -544,7 +772,7 @@ naming here rather than in the tables: `perf.spec.ts` does not assert what is
 drawn, it asserts how long drawing took. It is the first harness in the repo
 whose failure mode is "the app got slower", and it skips itself unless
 `SAFEHOUSE_PERF=1` because a throttled timing run has no business gating a
-merge. §4 carries its output.
+merge. §5 carries its output.
 
 The cross-process seam has its own layer, separate from the browser one:
 `seeded-boot.test.ts`, `restore-boot.test.ts` and `seed-durability.test.ts` on
@@ -567,9 +795,32 @@ against the states someone thought to build for it. Every suite here now runs on
 every push, and the newest ones exist to construct a state rather than to
 exercise a path.
 
+**And restated once more after UX-1 … UX-3, which is where it stops being about
+harnesses at all.** The four LIVE defects were found by driving the app *as a
+machine* — open a page, cut a socket, restart a process, watch what breaks. The
+three UX defects were found by a human trying to prep a session, and **no
+automated harness would ever have flagged any of them, because every one is a
+missing entry point rather than a broken behaviour.** There was no wrong answer
+to assert against: the roster endpoint returned the right characters, the
+placeholder rendered the string it contained, `draft_wiki_page` produced a
+correct draft the playthrough checked. Tests compare an outcome to an
+expectation; a missing door has no outcome. What finds it is someone with a task
+and no patience, and the artefact that captures it is a table of *jobs* — §1 —
+not a table of *routes*.
+
+The three harness questions this repo now asks of itself, in the order they were
+learned:
+
+1. **Which seam does this cross that nothing else crosses?** (LIVE-1 … LIVE-3.)
+2. **Which state does this construct that nothing else constructs?** (LIVE-4 —
+   and the honest answer for most suites is "the happy one".)
+3. **Which job does this let someone finish that they could not finish before?**
+   (UX-1 … UX-3. Only a person can answer it, and the answer belongs at the top
+   of this document rather than in a spec file.)
+
 ---
 
-## 3. How to run
+## 4. How to run
 
 Node ≥ 22, pnpm 11.24. No Docker and no internet are required for anything in
 this section.
@@ -722,21 +973,35 @@ LAN, no reverse proxy.
 
 ---
 
-## 4. Verification summary
+## 5. Verification summary
 
-`pnpm -r --workspace-concurrency=1 test`, 2026-08-29:
+`pnpm -r --workspace-concurrency=1 test`, **2026-08-31** (previous revision's
+figures in the last column, for the delta this round actually bought):
 
-| Package | Test files | Tests |
-| --- | --- | --- |
-| `@safehouse/contracts` | 7 | 52 |
-| `@safehouse/db` | 4 | 34 |
-| `@safehouse/rules` | 11 | 175 |
-| `@safehouse/server` | 48 | 634 (631 passed, 3 skipped) |
-| `@safehouse/web` | 57 | 841 |
-| **Total** | **127** | **1733 passed, 3 skipped, 0 failed** |
+| Package | Test files | Tests | was (2026-08-29) |
+| --- | --- | --- | --- |
+| `@safehouse/contracts` | 7 | 52 | 7 / 52 |
+| `@safehouse/db` | 4 | 34 | 4 / 34 |
+| `@safehouse/rules` | 12 | 191 | 11 / 175 |
+| `@safehouse/server` | 52 | 723 (720 passed, 3 skipped) | 48 / 634 |
+| `@safehouse/web` | 67 | 1034 | 57 / 841 |
+| **Total** | **142** | **2031 passed, 3 skipped, 0 failed** | 127 / 1733 |
+
+**+298 tests and +15 test files this round.** The web additions are the ones that
+matter for §1: `gm/party/roster.test.ts` (25) and `party.test.tsx` (14),
+`gm/scenes/sceneManager.test.tsx` (24), `codex/ai/ai.test.tsx` (29),
+`components/shell/navigation.test.tsx` (20), `gm/books/booksShelf.test.tsx` (18)
+and `calibration.test.ts` (24), `gm/generator/coldstart.test.tsx` (18) and
+`starters.test.ts` (17). **`navigation.test.tsx` is the structural one**: it walks
+`routes` and asserts that every path the GM rail and the phone nav offer resolves
+to a real element rather than the 404 catch-all, that no prep screen renders
+placeholder copy, that every empty surface ships a working control, and that the
+roster links to each sheet by href. That is UX-1 and UX-2 turned into a tripwire —
+about as close as a test file can get to the question only a person can ask.
 
 `pnpm -r --workspace-concurrency=1 typecheck` → exit 0 across all five packages.
-`pnpm -r --workspace-concurrency=1 build` → exit 0.
+`pnpm -r --workspace-concurrency=1 build` → exit 0. Both re-run 2026-08-31, and
+the bundle table below was re-measured from that build's own output.
 
 Server tests run against throwaway PGlite instances with migrations applied; no
 Docker, no network. The three skips are all environmental and all deliberate:
@@ -747,24 +1012,28 @@ rather than on a developer laptop (BUILD_CONVENTIONS: never require Docker).
 
 **Bundle against §15.** From the `apps/web` vite build:
 
-| Chunk | Raw | gzip | Budget |
-| --- | --- | --- | --- |
-| `index-BCO3Iz3T.js` — the entry | 798.66 KB | **236.63 KB** | initial JS < 500 KB gz ✅ |
-| `index-BMxhWpBE.css` | 51.79 KB | 9.70 KB | — |
-| `index-CiBAUt_0.js` — the Grid's lazy chunk (PixiJS) | 339.21 KB | 107.07 KB | Grid chunk < 900 KB gz ✅ |
-| Pixi's own runtime splits (WebGL/WebGPU renderers, render targets, `browserAll`, canvas, bitmap fonts, buffers, worker) — 8 files | 269.78 KB | 76.71 KB | counted against the same 900 KB |
-| the codex tree — `CodexPage` 6.35, `RunsBoard` 2.75, `Markdown` 2.27, `CalendarView` 1.73, plus two shared leaves | 45.79 KB | 15.26 KB | codex editor lazy-loaded ✅ |
-| `PdfSurface-W0WP8vTv.js` — the reader surface | 6.88 KB | 2.89 KB | — |
+| Chunk | Raw | gzip | Budget | was (08-29) |
+| --- | --- | --- | --- | --- |
+| `index-CtMiSuhY.js` — the entry | 930.49 KB | **273.41 KB** | initial JS < 500 KB gz ✅ | 236.63 |
+| `index-B9TZd222.css` | 53.67 KB | 9.99 KB | — | 9.70 |
+| `index-C4K1TQ6l.js` — the Grid's lazy chunk (PixiJS) | 339.21 KB | 107.07 KB | Grid chunk < 900 KB gz ✅ | 107.07 |
+| Pixi's own runtime splits (WebGL 19.63, WebGPU 13.21, render targets 14.36, `browserAll` 11.28, canvas 5.96, bitmap fonts 4.66, worker 4.75, buffers 2.85) — 8 files | 269.78 KB | 76.70 KB | counted against the same 900 KB | 76.71 |
+| the codex tree — `CodexPage` 13.44 (now carrying `ai/`), `RunsBoard` 2.75, `Markdown` 2.17, `CalendarView` 1.72, plus two shared leaves | 69.05 KB | 22.22 KB | codex editor lazy-loaded ✅ | 15.26 |
+| `PdfSurface-BpSZdKxb.js` — the reader surface | 6.88 KB | 2.89 KB | — | 2.89 |
 
-Pixi is verified **absent** from the entry chunk (`grep pixi` finds nothing in
-it and 5 hits in the Grid chunk), which is the condition §15's "no Pixi"
-clause attaches to. Worst-case Grid cost is ≈184 KB gz against 900. pdf.js is
+Pixi is verified **absent** from the entry chunk (`grep -i pixi` finds nothing in
+it and 6 hits in the Grid chunk), which is the condition §15's "no Pixi"
+clause attaches to. Worst-case Grid cost is ≈183.8 KB gz against 900. pdf.js is
 not in any chunk at all: `pdfjs-dist` is copied to `public/pdfjs/` (`pdf.mjs`
 389 KB, `pdf.worker.mjs` 1.4 MB raw) and imported at runtime from our own
 origin, costing zero bytes until a ref chip is tapped.
 
-**Every §15 bundle sub-clause is now met in the letter.** The last one open —
-"codex editor lazy-loaded" — closed by moving `CodexPage` / `RunsBoard` /
+**Every §15 bundle sub-clause is still met in the letter**, and the codex lazy
+chunk earned its keep this round: `features/codex/ai/` (the AI panel, its
+proposal card and its data layer — about 78 KB of source) landed **inside** the
+lazy chunk rather than in the entry, which is why `CodexPage` went 6.35 → 13.44
+KB gz while the entry's growth came from elsewhere. The clause was closed
+originally by moving `CodexPage` / `RunsBoard` /
 `CalendarView` behind `React.lazy` in `router.tsx`; the entry chunk lost
 10.7 KB gz for it (247.35 → 236.63). The interesting part is not the bytes but
 the tripwire: `src/router.chunks.test.ts` (4) scans every source file and fails
@@ -871,7 +1140,14 @@ skipped**, 42.4 s, one worker against one shared live table:
 **Scripted playthrough** — `pnpm playthrough`, report at
 `docs/demo/SESSION_REPORT.md`:
 
-- **267 checks: 267 passed, 0 failed, 0 not applicable**, 10.6 s.
+- **266 checks: 265 passed, 0 failed, 1 not applicable** (2026-08-31; the last
+  revision ran 267/267 — the total moves by one or two because a few assertions
+  are conditional on the night's dice).
+- **It is still an API-and-socket harness and it always will be**, which is worth
+  saying next to §1: the playthrough plays a whole session and would have been
+  perfectly green through UX-1, UX-2 and UX-3, because it never needs a link to
+  exist in order to reach a screen. It proves the machine underneath the job, not
+  the job.
 - Boots the real Fastify app on a loopback port against a fresh PGlite database,
   seeds SR5 (55 pages indexed) and the demo campaign, then plays a whole session
   from five devices — the GM's laptop, three phones and the TV.
@@ -911,14 +1187,72 @@ after in its log) · a multi-arch image build. `LLM_BASE_URL` and
 
 ---
 
-## 5. The previous gap list, resolved
+## 6. The record
 
-Every item from the last revision's §6 — the five-item ranked list this round
-was worked from — with what closed it, verified by reading the code rather than
-by taking the claim. **Four of the five are closed in code. The fifth was never
-a code item**: the Matrix tab is a decision the table has not made, it stays
-deferred, and it carries forward to §6 unchanged rather than being quietly
-retired here.
+### 6.1 This round — what was reported, what landed, what is still awkward
+
+**This round was not worked from the previous revision's ranked list.** That list
+had four entries and the last revision closed with the sentence *"the ranked list
+below is short, and three of its four entries are decisions for the table rather
+than work for a build agent… the project is in the state where the next genuinely
+useful input is a session at the table, not another pass over the source."* That
+was correct about the source and wrong about the state, and the next genuinely
+useful input arrived exactly as predicted and said something the document had no
+row for.
+
+**What the GM reported**, verbatim: *"The UX is tough to use. I'm trying to fill
+out info in the campaign and there is nowhere to see the player characters. The
+scene screen isn't implemented. This is not as complete as represented. I should
+be able to use AI to help fill out the codex."*
+
+**Every clause was true, and this document said otherwise.** The three findings
+are written up as UX-1, UX-2 and UX-3 in §3; in short:
+
+| Reported | What was actually there | What this report said |
+| --- | --- | --- |
+| "nowhere to see the player characters" | No roster anywhere. The only two links to `/sheet/:characterId` were gated on the device's *own* character, and a GM owns none — so the count of sheets a GM could reach was **zero** and the workaround was pasting a UUID. | M3 read as shipped — FR3.1, 3.3–3.6 and 3.8 all `done`, and no FR anywhere covered "a GM can reach a sheet" |
+| "the scene screen isn't implemented" | A 24-line placeholder card, offered **twice** (sidebar + console chips), whose own docblock admitted the route was the bug and argued the fix was to delete the link rather than build the screen. | FR9.1 `done` |
+| "I should be able to use AI to help fill out the codex" | `grep -niE "fixer\|draft\|generate\|ai" features/codex/PageView.tsx` → nothing. The capability existed as `draft_wiki_page`, reachable only by leaving the page for the Fixer chat and hunting a drafts inbox. Expanding an existing page was **impossible**: accepting produced a duplicate. | FR12.7 `done` |
+
+**What landed** (files, not claims):
+
+| Job | What was built | Tests |
+| --- | --- | --- |
+| see the party | `features/gm/party/` (`PartyPage`, `PartyRoster`, `PartyRow`, `roster.ts`, `api.ts`) + `features/gm/home/` (`GmHome`, `PartyPanel`, `SetupChecklist`, `AddCharacter`, `api.ts`) | `roster.test.ts` (25), `party.test.tsx` (14) |
+| find anything at all | `components/shell/gmNav.ts` — one ordered `GM_NAV` + `PLAYER_NAV`, rendered by both `GmSidebar` and the console home; `routes.tsx` split out of `router.tsx` so the table is importable without a DOM | `navigation.test.tsx` (20) |
+| build a scene | `features/gm/ScenesPage.tsx` rewritten as a manager + `features/gm/scenes/` (`CreateSceneForm`, `SceneCard`, `EnvironmentEditor`, `summary.ts`, `api.ts`) | `sceneManager.test.tsx` (24) |
+| write a codex page with AI | `features/codex/ai/` (`AiPanel`, `NewPagePrompt`, `ProposalCard`, `lib.ts`, `api.ts`), wired into `PageView.tsx:341` and `PageBrowser.tsx:228` | `ai.test.tsx` (29) |
+| get a character into the app | `home/AddCharacter.tsx` — blank sheet **or** `.chum5`, the first caller `POST /api/characters` has ever had from a browser | in `party.test.tsx` / `navigation.test.tsx` |
+| bind a sheet to a phone | owner picker on the roster (`PATCH /api/characters/:id/owner`), plus a `no-character-note` on `CampaignHome` telling an unbound player exactly what to ask for | `navigation.test.tsx` |
+| let a player reach the rulebook | `features/library/LibraryPage.tsx` at `/c/:id/books`, role-aware, on `PLAYER_NAV` | `booksShelf.test.tsx` (18) |
+| pair the TV without confusion | `GmSidebar` "Table display" section: *Pair the TV* (display-role QR) and *Preview kiosk ↗*, replacing a "TV view ↗" that landed the GM's own laptop on a kiosk it counted as bound | `navigation.test.tsx` |
+| start the Opposition Kit from nothing | `generator/StarterLibrary.tsx` + `starters.ts` (original content, §14) | `coldstart.test.tsx` (18), `starters.test.ts` (17) |
+
+**What is still awkward, stated plainly** — the honest half:
+
+1. **Job 5 did not move at all.** No encounter picker, no `PATCH`/`DELETE
+   /api/encounters/:id` caller, no add-combatant UI, no roll-initiative UI, and
+   the start button is still called "New turn". `useEncounterList` is still
+   exported and consumed by nothing. This is the one job a GM cannot finish and
+   it is Friday night's main event.
+2. **The three new surfaces have no browser spec.** The E2E suite is unchanged at
+   14 files. A spec that walks the rail, opens the roster, follows a row into a
+   sheet and back is the harness that would keep UX-1 shut.
+3. **The generator's warts survive** — result card lost on tab switch, save always
+   inserting, disabled stage button with no reason. The second of these is what
+   manufactures the duplicate encounters job 5 cannot pick between.
+4. **No book search UI** (FR12.14), **no bookmarks UI at all** (FR11.6), and the
+   sheet still ships its own `target="_blank"` ref chip alongside the in-place one.
+5. **Re-import, rollback and transfer-ownership** still have no callers; NPC
+   in-character conversation (FR12.6) still has no chat surface.
+
+### 6.2 The previous gap list, resolved
+
+Every item from the last revision's ranked list, with what closed it, verified by
+reading the code rather than by taking the claim. **Four of the five are closed in
+code. The fifth was never a code item**: the Matrix tab is a decision the table
+has not made, it stays deferred, and it carries forward to §7 unchanged rather
+than being quietly retired here.
 
 | # | Item | State | What closed it |
 | --- | --- | --- | --- |
@@ -928,9 +1262,9 @@ retired here.
 | 4 | A Matrix tab, if and only if someone rolls a decker | **open, and correctly so** | Unchanged and deliberately unbuilt (Q3). `SHEET_TABS` has seven tabs and no Matrix; `get_matrix_state` still answers `tracked: false` with a note rather than a zero. This is the one FR row whose status is set by a table decision. |
 | 5a | Lazy-load `features/codex/` (§15's letter) | **closed** | `router.tsx` puts `CodexPage` / `RunsBoard` / `CalendarView` behind `React.lazy`; the entry chunk dropped 247.35 → **236.63 KB gz**. `src/router.chunks.test.ts` (4) is the tripwire: `features/codex/` may be reached from outside itself only through a dynamic `import()`. |
 | 5b | The stale "spirit services not built" comment | **closed** | `apps/server/src/fixer/state-codex.ts` now says the opposite, and says why: spirit services *used* to be on the not-tracked list and no longer are, because `state-play.ts` returns `tracked: true` from the real tracker. |
-| 5c | The two §15 NFRs nothing measured | **closed — and these are the first real numbers for either** | `apps/server/test/latency.test.ts` (4): roll-to-visible **p95 3.5 ms** over 200 rolls with six sockets, 71× inside the 250 ms LAN budget, gating in the ordinary suite. `apps/web/e2e/perf.spec.ts` (2) + `features/grid/perf/frames.ts` (24 tests) + `perf/scene.ts` (16 tests): **main-thread p95 19.8–22.8 ms** with 60 tokens and fog on laptop and phone canvases, inside the 33.3 ms floor, with camera gestures at ~1.1× idle. Both tabulated in §4, both honest about what they exclude. |
+| 5c | The two §15 NFRs nothing measured | **closed — and these are the first real numbers for either** | `apps/server/test/latency.test.ts` (4): roll-to-visible **p95 3.5 ms** over 200 rolls with six sockets, 71× inside the 250 ms LAN budget, gating in the ordinary suite. `apps/web/e2e/perf.spec.ts` (2) + `features/grid/perf/frames.ts` (24 tests) + `perf/scene.ts` (16 tests): **main-thread p95 19.8–22.8 ms** with 60 tokens and fog on laptop and phone canvases, inside the 33.3 ms floor, with camera gestures at ~1.1× idle. Both tabulated in §5, both honest about what they exclude. |
 
-And the four browser/terminal findings from §2, unchanged since they closed:
+And the four browser/terminal findings from §3, unchanged since they closed:
 
 | # | Defect | State | Evidence |
 | --- | --- | --- | --- |
@@ -945,38 +1279,71 @@ lighting (FR9.16, Q9), the Matrix overlay (FR9.17), native priority char-gen
 (FR3.9, D5), the advancement editor (FR3.7), stagecraft audio (FR12.10 /
 FR9.18), the prop/tile stamp library (FR9.2's P3+ half), the image-gen adapter,
 the PWA offline cache, and campaign export. The full list with its reasons is
-§6, item 3; none of it is work anyone should start unsolicited.
+§7, item 3; none of it is work anyone should start unsolicited.
 
 ---
 
-## 6. What is still worth doing
+## 7. What is still worth doing
 
-**Nothing on this list is a defect, and that is the finding.** Every item the
-last two revisions were working from is closed — the twelve before, the five
-this round, verified here by reading the code rather than by taking the claim.
-All four LIVE defects stayed closed. P0 through P5 are done bar two deliberate
-deferrals. The Roll20 exit checklist has no red rows and no asterisks. No suite
-carries a `test.fail` marker any more — the string survives in exactly one
-place, the docblock in `recap.spec.ts` recording that it came off and why; the
-only skips are the three
-environmental ones in §4 and the two perf specs behind `SAFEHOUSE_PERF`; and a
-grep for `TODO`, `FIXME` and `// INTEGRATION:` across `apps/*/src`,
-`packages/*/src`, both test trees and `e2e/` returns nothing. Both §15 NFRs
-that had no harness now print numbers, and both are inside budget.
+**Something on this list is a defect again, and that is the finding.** The last
+revision opened this section with "nothing on this list is a defect" and closed
+it with "the next genuinely useful input is a session at the table". Both
+sentences were written from a reading of the source. A GM then sat down at the
+table and found three things the source could not have told anyone, so the
+opening sentence was wrong and the closing one was right for the wrong reason.
+This revision's list is therefore ordered by **what stops a GM finishing a job**,
+and only then by everything else.
 
-So the ranked list below is short, and three of its four entries are decisions
-for the table rather than work for a build agent. Ranked by the order in which
-they would actually matter:
+Ranked by the order in which they would actually matter:
 
-1. **The Matrix tab, if and only if someone rolls a decker (FR3.2 / M7).** The
-   single FR row not at `done`, and the only one whose status is set by a table
+1. **Give the tracker an encounter list, and rename the button that starts a
+   fight. (§1 job 5 · FR4.1 · FR4.3.)** The only job on the grade that cannot be
+   completed, and the one the whole app exists for. It is additive and touches
+   nothing load-bearing: a strip across the top of `Tracker.tsx` fed by the
+   already-written `useEncounterList` (name · state · linked scene · body count ·
+   select / go live / end), and "New turn" reading "Start fight" while
+   `turn === 0`. `PATCH`/`DELETE /api/encounters/:id`, `POST …/combatants` and
+   `POST …/roll-initiative` are all built, tested and uncalled. Neither change
+   goes near G5 or the damage path. **Fix `EncounterBuilder`'s
+   save-always-inserts wart in the same pass** — it is what manufactures the
+   duplicate encounters the picker would be picking between, and it is a two-line
+   change (`savedId ? PATCH : POST`).
+2. **A browser spec for the three surfaces this round built.** The E2E suite did
+   not grow: 14 spec files before, 14 after. The party roster, the scene manager
+   and the codex AI panel are covered by unit tests that render to static markup
+   in a package with no DOM, and by `navigation.test.tsx`, which is a good
+   structural tripwire and still not the same thing as a browser opening the
+   rail, clicking Party, following a row into a sheet and coming back. One spec —
+   `wayfinding.spec.ts` — closes UX-1 and UX-2 the way `hydration.spec.ts` closed
+   LIVE-1. Note the honest limit while writing it: it will pin the doors that now
+   exist and would not have found their absence.
+3. **A search box on the library. (FR12.14 · FR11.6.)** `GET /api/books/search`
+   is full-text over `book_pages`, works, is tested, and has exactly one consumer
+   in the repo: the Fixer's `search_books` tool. So a GM **without** a local
+   inference box cannot search the rules at all, which is the opposite of the
+   dependency order this project chose everywhere else — the AI is meant to be
+   the accelerant, never the only path (NG7). The same screen should render
+   `bookmarks` and `library/recent`, which today have no UI whatsoever. While
+   there: delete the sheet's private `RefChip`
+   (`features/sheet/components/ui.tsx:167`, an `<a target="_blank">`) and import
+   the in-place overlay from `features/gm`, so a chip tapped on a phone mid-fight
+   does not throw the player out of their sheet.
+4. **The remaining uncalled routes, in one honest sweep.** Not urgent, but they
+   are the same defect as UX-1 in smaller print, and listing them is cheaper than
+   rediscovering them: re-import and its diff (`POST /api/characters/:id/import`
+   onto an existing sheet), revisions and rollback (FR3.8), campaign
+   transfer-ownership (FR1.2), NPC in-character conversation (FR12.6), and
+   `POST /api/books` so registering a rulebook stops being a stop-the-server CLI
+   step (FR11.1). Each is a control on a screen that already exists.
+5. **The Matrix tab, if and only if someone rolls a decker (FR3.2 / M7).** The
+   single FR row at `partial`, and the only one whose status is set by a table
    decision instead of by us. Q3 says there is no decker; `SHEET_TABS` has seven
-   tabs and no Matrix; `get_matrix_state` answers `tracked: false` with a note
-   so nothing invents an Overwatch score in the meantime. If a player rolls a
+   tabs and no Matrix; `get_matrix_state` answers `tracked: false` with a note so
+   nothing invents an Overwatch score in the meantime. If a player rolls a
    decker, this becomes real work (FR7.1–7.6 plus the tab). Until then, building
    it would be the most expensive way to make one table in this document read
    `done`.
-2. **Measure the NFRs once on real hardware.** Both harnesses are honest about
+6. **Measure the NFRs once on real hardware.** Both harnesses are honest about
    being floors rather than estimates, and both gaps are the same shape: the
    roll-latency figure (p95 3.5 ms) is loopback, so the venue's Wi-Fi RTT is
    simply not in it; the Grid's wall-clock frame interval misses the 30 fps
@@ -992,7 +1359,7 @@ they would actually matter:
    contracted, tested for *correctness*, and exercised by the frame harness's
    drag phase — but nobody has ever timed the gap between the two devices,
    because timing it needs two devices.
-3. **The rest of P6, when the table asks.** Deferred by design and not defects:
+7. **The rest of P6, when the table asks.** Deferred by design and not defects:
    the Matrix toolkit (M7, Q3), token vision and dynamic lighting (FR9.16, Q9 —
    manual fog is the permanent plan, not a placeholder), the Matrix overlay
    (FR9.17), native priority char-gen (FR3.9, D5 — Chummer is the builder), the
@@ -1000,18 +1367,29 @@ they would actually matter:
    prop/tile stamp library (FR9.2's P3+ half), the image-gen adapter, the PWA
    offline cache, and campaign export. Each stays unbuilt until someone at the
    table wants it, which is the only signal worth building on.
-4. **Taste.** Two standing exemptions that are correct today and worth
-   re-reading if the code around them moves: the single audited bare
-   `hub.emit` (`plugins/scenes.ts:730` — `display.set` has no domain row, and
-   the docblock says the day a `display_state` row appears it becomes an
-   `atomic` block), and the three environmental test skips (one PDF the repo
-   does not ship, two that need a real Postgres and run in CI's own job).
+8. **Taste.** Three standing notes that are correct today and worth re-reading if
+   the code around them moves: the single audited bare `hub.emit`
+   (`plugins/scenes.ts:730` — `display.set` has no domain row, and the docblock
+   says the day a `display_state` row appears it becomes an `atomic` block); the
+   three environmental test skips (one PDF the repo does not ship, two that need
+   a real Postgres and run in CI's own job); and the entry chunk's growth this
+   round (236.63 → 273.41 KB gz, 55% of the §15 budget) — comfortable, and the
+   first revision where the direction is worth a glance.
 
-**And that is the whole list.** There is no fifth item, and inventing one would
-be worse than useless: it would put work in front of the next reader that the
-code does not need, and quietly devalue the four entries that are real. The
-project is in the state where the next genuinely useful input is a session at
-the table, not another pass over the source.
+**Housekeeping the last revision claimed and this one corrects.** The previous
+§6 said a grep for `TODO`, `FIXME` and `// INTEGRATION:` across `apps/*/src`,
+`packages/*/src`, both test trees and `e2e/` "returns nothing". It now returns
+**four hits, and none is a `TODO` or a `FIXME`** — all four are `// INTEGRATION:`
+cross-reference notes: `generator/api.ts:241` (the threat readout is computed
+locally; see FR10.5), `home/SetupChecklist.tsx:87` (a docblock recording that it
+*closed* an earlier note), `rules/src/combat/roll.ts:3` (why the combat module
+keeps its own pure roller), and `rules/src/generator/generate.ts:200` (an
+unresolved loadout option falls back to a named slot). Only the first and last
+describe work; both are small and neither costs anything at the table. There is
+still no `test.fail` marker in any suite — the string survives only in
+`recap.spec.ts`'s docblock recording that it came off — and the only skips are
+the three environmental ones in §5 and the two perf specs behind
+`SAFEHOUSE_PERF`.
 
 **The standing lesson from LIVE-1 through LIVE-4.** Each of the four was
 invisible to harnesses that were individually correct and collectively blind in
@@ -1024,8 +1402,8 @@ else constructs" — and the answer for most suites, honestly, is "the happy one
 All four defects were found in ten minutes of ordinary use against a fully green
 build.
 
-That lesson kept earning through this round. The spoiler-guard item — the last
-one with a cost at the table — was found the same way the LIVE defects were:
+That lesson kept earning through the previous round. The spoiler-guard item — the
+last one with a cost at the table then — was found the same way the LIVE defects were:
 not by a failing assertion, but by reading what the GM's screen actually renders
 and noticing that a guarantee the server keeps perfectly never arrived anywhere
 a human could see it. The root cause is worth one sentence, because it is a
@@ -1043,3 +1421,26 @@ occluding, the acting token glowing — and not one of them asked how long a fra
 took, so a change that re-tessellated the fog on every pan could have halved the
 framerate at the table with the whole suite green. That is not a seam and not a
 state; it is a whole *dimension* nothing measured. It has two numbers in it now.
+
+**And the lesson this round added, which is the one to keep if only one
+survives.** LIVE-1 through LIVE-4 were found by driving the app *as a machine*.
+UX-1 through UX-3 were found by a human trying to prep a session, and **no
+automated harness would ever have flagged them, because every one is a missing
+entry point rather than a broken behaviour.** Nothing returned a wrong answer.
+The roster endpoint served all three PCs to a GM; the placeholder rendered its
+own string; `draft_wiki_page` produced a correct draft the playthrough asserted.
+A test compares an outcome against an expectation, and a door that does not exist
+produces no outcome to compare. That is why this document now opens with §1 and
+why §1 is written as *jobs* rather than as routes: it is the only part of the
+report that can be wrong in the direction the user was complaining about.
+
+The mechanism behind all three is worth one sentence, because it is a mechanism
+and not an accident: **this report graded capability and called it completeness,
+and every layer above it inherited the error** — an FR row said `done` because the
+server was, a phase said Done because its FR rows did, and the Roll20 checklist
+said "shipped" because the phase did. Three inferences, each individually
+reasonable, stacked into "this is not as complete as represented". The fix is
+structural rather than editorial: `done` now requires a named screen, `done ·
+thin surface` exists as a word, phase state is the weakest of (capability,
+surface) rather than the strongest, and the headline grade is a table of things a
+person does on a Friday night.

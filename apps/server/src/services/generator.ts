@@ -126,6 +126,15 @@ export interface BuildPartInput {
   /** gruntGroup parts: shared-statblock squad size. */
   size?: number;
   seed?: number;
+  /**
+   * GM override of the rolled Professional Rating (the FR10.6 lever).
+   *
+   * Applied to the combatant AFTER generation rather than fed into it: PR is
+   * morale and Edge-spend behaviour (FR10.9), not an input the statblock is
+   * rolled from, so overriding it must not change a single die of the sheet
+   * the seed reproduces. Same seed, same body, different nerve.
+   */
+  professionalRating?: number;
 }
 
 export interface BuildResult {
@@ -246,12 +255,22 @@ export class GeneratorService {
       }
       const seed = part.seed ?? newSeed();
       resolvedParts.push({ kind: part.kind, templateId: part.templateId, tierId: part.tierId, seed });
+      const prOverride = part.professionalRating;
       if (part.kind === 'gruntGroup') {
-        rows.push(await this.insertGruntCombatant(encounter.id, template, part.tierId, part.size ?? 1, seed));
+        rows.push(
+          await this.insertGruntCombatant(
+            encounter.id,
+            template,
+            part.tierId,
+            part.size ?? 1,
+            seed,
+            prOverride,
+          ),
+        );
       } else {
         for (const memberSeed of this.memberSeeds(seed, part.count ?? 1)) {
           const { npc } = this.generateFromTemplate(template, part.tierId, memberSeed);
-          rows.push(await this.insertNpcCombatant(encounter.id, template, npc));
+          rows.push(await this.insertNpcCombatant(encounter.id, template, npc, prOverride));
         }
       }
     }
@@ -292,8 +311,10 @@ export class GeneratorService {
     encounterId: string,
     template: NpcTemplateRow,
     npc: GeneratedNpc,
+    prOverride?: number,
   ): Promise<CombatantRow> {
     const derived = deriveCharacter(npc.sheet);
+    const professionalRating = prOverride ?? npc.professionalRating;
     return (
       await this.db
         .insert(combatants)
@@ -313,7 +334,7 @@ export class GeneratorService {
               templateId: template.id,
               tierId: npc.tierId,
               seed: npc.seed,
-              professionalRating: npc.professionalRating,
+              professionalRating,
               loadout: npc.loadout,
               flavor: npc.flavor,
             },
@@ -329,8 +350,13 @@ export class GeneratorService {
     tierId: string,
     size: number,
     seed: number,
+    prOverride?: number,
   ): Promise<CombatantRow> {
     const { group } = this.generateGroupFromTemplate(template, tierId, size, seed);
+    // The override lands on the group row AND both copies inside `copilot`, so
+    // the morale check, the tracker chip and the readout can never disagree
+    // about how professional this squad is.
+    const professionalRating = prOverride ?? group.professionalRating;
     const groupRow = (
       await this.db
         .insert(gruntGroups)
@@ -338,7 +364,7 @@ export class GeneratorService {
           campaignId: template.campaignId,
           templateId: template.id,
           size,
-          professionalRating: group.professionalRating,
+          professionalRating,
           groupEdge: 0,
         })
         .returning()
@@ -363,11 +389,11 @@ export class GeneratorService {
               templateId: template.id,
               tierId: group.tierId,
               seed: group.seed,
-              professionalRating: group.professionalRating,
+              professionalRating,
             },
             grunt: {
               size,
-              professionalRating: group.professionalRating,
+              professionalRating,
               groupEdge: 0,
               members: group.members.map((m) => ({ label: m.name, filled: 0, down: false })),
             },
