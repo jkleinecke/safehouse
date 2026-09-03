@@ -434,6 +434,15 @@ export class BooksService {
 export interface SeedBooksOptions {
   /** Folder to scan for *.pdf (the 17 rulebooks sit at repo root). */
   dir: string;
+  /**
+   * Skip any book already registered under its code WITH pages indexed
+   * (`--if-needed`). This is what makes seeding safe to run on every
+   * `docker compose up`: the first boot indexes ~3,500 pages, every boot after
+   * that costs one query per book. A book registered but never indexed (an
+   * interrupted first run) is NOT skipped, so a half-seeded library heals
+   * itself on the next start.
+   */
+  ifNeeded?: boolean;
   /** Limit to one guessed code (`--only SR5`) — fast targeted runs/tests. */
   only?: string;
   /** Extract at most N PDF pages per book (`--max-pages 40`) — fast tests. */
@@ -485,6 +494,13 @@ export async function seedBooks(db: Db, opts: SeedBooksOptions): Promise<SeedBoo
   for (const file of pdfs) {
     const guess = guessBookFromFilename(file);
     if (opts.only && guess.code !== opts.only.toUpperCase()) continue;
+    if (opts.ifNeeded === true) {
+      const already = await svc.getBookByCode(guess.code, null);
+      if (already && ((await svc.indexedPageCounts([already.id])).get(already.id) ?? 0) > 0) {
+        log(`[seed:books] ${guess.code} already indexed — skipping`);
+        continue;
+      }
+    }
     const pdfPath = join(opts.dir, file);
     log(`[seed:books] ${file} -> ${guess.code} (offset ${guess.offset >= 0 ? '+' : ''}${guess.offset})`);
     const book = await svc.registerBookFromPdf({

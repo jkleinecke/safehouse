@@ -58,10 +58,23 @@ export interface Cli {
   /** Also overwrite offsets a human already set (implies `calibrate`). */
   recalibrate: boolean;
   list: boolean;
+  /**
+   * Idempotent-startup mode (`--if-needed`), for the compose `seed` service
+   * that runs on every `docker compose up`: skip books already indexed, and
+   * treat "no books configured" as success rather than an error, so an
+   * unconfigured or empty library never blocks the stack from starting.
+   */
+  ifNeeded: boolean;
 }
 
 export function parseArgs(argv: string[]): Cli {
-  const cli: Cli = { dir: REPO_ROOT, calibrate: false, recalibrate: false, list: false };
+  const cli: Cli = {
+    dir: REPO_ROOT,
+    calibrate: false,
+    recalibrate: false,
+    list: false,
+    ifNeeded: false,
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     const next = (): string => {
@@ -90,6 +103,9 @@ export function parseArgs(argv: string[]): Cli {
         // so it has to turn detection on as well.
         cli.calibrate = true;
         cli.recalibrate = true;
+        break;
+      case '--if-needed':
+        cli.ifNeeded = true;
         break;
       case '--list':
         cli.list = true;
@@ -177,6 +193,12 @@ export function resolveBooksDir(dir: string): string | null {
 export async function main(): Promise<number> {
   const cli = parseArgs(process.argv.slice(2));
   const dir = resolveBooksDir(cli.dir);
+  if (dir === null && cli.ifNeeded) {
+    // Nothing configured is a legitimate state: the app runs fine with no
+    // library (NG7-style graceful degradation), so startup must not fail.
+    console.log(`[seed:books] no books folder at ${cli.dir} — nothing to seed`);
+    return 0;
+  }
   if (dir === null) {
     console.error(
       `[seed:books] no such folder: ${cli.dir} (looked there and under ${REPO_ROOT})`,
@@ -189,6 +211,10 @@ export async function main(): Promise<number> {
     .filter((f) => /\.pdf$/i.test(f))
     .sort();
   if (pdfs.length === 0) {
+    if (cli.ifNeeded) {
+      console.log(`[seed:books] no *.pdf in ${cli.dir} — nothing to seed`);
+      return 0;
+    }
     console.error(`[seed:books] no *.pdf found in ${cli.dir}`);
     return 1;
   }
@@ -220,10 +246,19 @@ export async function main(): Promise<number> {
     if (cli.dataDir !== undefined) opts.dataDir = cli.dataDir;
     if (cli.calibrate) opts.calibrate = true;
     if (cli.recalibrate) opts.recalibrate = true;
+    if (cli.ifNeeded) opts.ifNeeded = true;
 
     const started = Date.now();
     const results = await seedBooks(db, opts);
     if (results.length === 0) {
+      if (cli.ifNeeded) {
+        // The steady state on every boot after the first: every book was
+        // skipped because it is already indexed. That is success, not "nothing
+        // matched" — treating it as an error would fail the compose `seed`
+        // service and hold the app down from the second start onward.
+        console.log('[seed:books] library already seeded — nothing to do');
+        return 0;
+      }
       console.error(
         `[seed:books] nothing matched${cli.only ? ` --only ${cli.only}` : ''} in ${cli.dir}`,
       );

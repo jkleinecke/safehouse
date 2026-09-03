@@ -54,6 +54,65 @@ export function chatCompletionsUrl(baseUrl: string): string {
     : `${trimmed}/v1/chat/completions`;
 }
 
+/**
+ * The server's root, with any `/v1` suffix removed.
+ *
+ * Not every endpoint lives under `/v1`: llama.cpp serves `/props` — the
+ * capability report the vision probe reads — at the root, so a base URL
+ * written the documented way (ending in `/v1`) turns that into `/v1/props`
+ * and a 404. Both spellings have to land in the same place.
+ */
+export function serverRootUrl(baseUrl: string): string {
+  return baseUrl.replace(/\/+$/, '').replace(/\/v\d+$/, '');
+}
+
+/** `…/v1/models`, tolerating a base URL that already ends in `/v1`. */
+export function modelsUrl(baseUrl: string): string {
+  const trimmed = baseUrl.replace(/\/+$/, '');
+  return /\/v\d+$/.test(trimmed) ? `${trimmed}/models` : `${trimmed}/v1/models`;
+}
+
+/** Model ids the box admits to serving. Empty when it will not say. */
+export async function listServedModels(baseUrl: string, timeoutMs = 5_000): Promise<string[]> {
+  try {
+    const res = await fetch(modelsUrl(baseUrl), { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) return [];
+    const body = (await res.json()) as { data?: unknown };
+    if (!Array.isArray(body.data)) return [];
+    return body.data
+      .map((m) => (typeof m === 'object' && m !== null ? (m as { id?: unknown }).id : undefined))
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Turn a 404 into the sentence that ends the investigation.
+ *
+ * A wrong model name is the likeliest thing to break when the box behind
+ * `LLM_BASE_URL` changes hands, and the same weights are legitimately called
+ * three different things: vLLM answers only to its `--served-model-name`,
+ * llama.cpp to its `--alias`, Ollama to `name:tag`. Configure one and meet
+ * another and you get a bare 404 whose body — the part that actually says
+ * which — lands in `details` where the UI need not show it.
+ *
+ * So the message names what we asked for AND what the box offers. "LLM
+ * responded 404" sends a person to read proxy logs; this sends them to one
+ * line of `.env`.
+ */
+export async function explain404(baseUrl: string, model: string): Promise<string> {
+  const served = await listServedModels(baseUrl);
+  if (served.length === 0) {
+    return `the inference server at ${baseUrl} has no model called "${model}" (404), and would not list what it does serve — check that the base URL points at the server root or its /v1 path`;
+  }
+  if (served.includes(model)) {
+    // The name is right, so the 404 is about the ROUTE, not the model.
+    return `the inference server at ${baseUrl} does serve "${model}" but answered 404 — the base URL path is wrong, not the model name`;
+  }
+  return `the inference server has no model called "${model}" — it serves: ${served.join(', ')}. Set LLM_MODEL_PRIMARY (and LLM_MODEL_FAST) to one of those.`;
+}
+
 // ---------------------------------------------------------------------------
 // Wire shapes (OpenAI chat-completions subset we actually use)
 // ---------------------------------------------------------------------------
@@ -264,6 +323,16 @@ export class LlmClient {
     }
     if (!res.ok) {
       const text = await res.text().catch(() => '');
+      if (res.status === 404) {
+        // The one status with a specific, checkable cause worth spending a
+        // round-trip on: ask the box what it serves and say so (explain404).
+        throw httpError(
+          502,
+          'ai_error',
+          await explain404(this.config.baseUrl, req.model),
+          text.slice(0, 500),
+        );
+      }
       throw httpError(502, 'ai_error', `LLM responded ${res.status}`, text.slice(0, 500));
     }
     if (!res.body) throw httpError(502, 'ai_error', 'LLM response carried no body');

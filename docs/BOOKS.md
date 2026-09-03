@@ -5,6 +5,18 @@ seeder actually does, and the step nobody can skip: page offsets.
 
 Read this once when you set the library up, and again the day you buy a book.
 
+**Two ways to run Safehouse, two places the PDFs go.** Find your row before you
+copy a command out of here:
+
+| You start the app with | The PDFs sit in | You seed with |
+|---|---|---|
+| `pnpm dev:server` — native | any folder; the repo root by default, `--dir` for anywhere else | `pnpm seed:books --calibrate` — **§2** |
+| `docker compose … up -d` | any folder **on the host** — the repo root by default, `BOOKS_DIR` for anywhere else | one `docker compose … run --rm seed` — **§3** |
+
+Everything else in this file is the same on both: the same seeder, the same
+flags, the same codes, the same offsets, the same shelf. Only the two lines
+above differ.
+
 ---
 
 ## 1. Where the PDFs live, and why they never leave
@@ -13,15 +25,21 @@ The books are **your copies**. Nothing about this feature moves them anywhere.
 
 - **They stay in a folder you point the seeder at.** The default is the repo
   root — the folder `DESIGN.md` sits in — and `--dir` points it anywhere else
-  (`--dir D:/books`). The seeder reads `*.pdf` from that folder; it never
-  writes to it, renames anything, or deletes anything.
+  (`--dir D:/books`). Under the Docker stack the same folder defaults to the
+  same place and is named by `BOOKS_DIR` when it is somewhere else, mounted
+  read-only (§3). The seeder reads `*.pdf` from that folder; it never writes to
+  it, renames anything, or deletes anything.
 - **They never enter git.** `.gitignore` has excluded `*.pdf` since the first
   commit, which is why the PDFs can sit in the repo root at all.
+- **They never enter a Docker image.** `.dockerignore` excludes `*.pdf` from
+  the build context, and nothing `COPY`s a book into a layer. The Docker flow
+  bind-mounts them read-only at run time instead (§3) — an image carrying the
+  owner's purchased rulebooks is exactly what DESIGN.md §14.8 rules out.
 - **They are never uploaded.** Seeding copies each PDF into the local file
   store at `DATA_DIR/files/books/<CODE>.pdf` (`DATA_DIR` defaults to `./data`,
-  also gitignored). That copy is what the app serves — over your LAN, behind
-  device-token auth, streamed by byte range so a phone opening one page does
-  not pull the whole book.
+  also gitignored; under compose it is the `files` volume). That copy is what
+  the app serves — over your LAN, behind device-token auth, streamed by byte
+  range so a phone opening one page does not pull the whole book.
 - **The extracted text stays on the machine too.** With local inference
   (`LLM_BASE_URL` pointing at the inference box on your LAN, or unset), book
   text is processed on your hardware and never touches the internet — which is
@@ -34,11 +52,15 @@ already own; nothing here is redistributed.
 **Disk:** the 17 production books are ~311 MB in the source folder, and the
 file-store copy is another ~311 MB — budget roughly 620 MB plus the extracted
 text in the database. The largest single file is the core rulebook at ~44 MB,
-comfortably inside the 200 MB per-book cap (§15).
+comfortably inside the 200 MB per-book cap (DESIGN.md §15).
 
 ---
 
 ## 2. Loading the full set
+
+The commands here are the **native** form — the one for `pnpm dev:server`. On
+the Docker stack, §3 gives the container form of each; everything else in this
+section (the flags, the output, the numbers) reads the same either way.
 
 Look before you write:
 
@@ -54,7 +76,7 @@ pnpm seed:books --calibrate
 ```
 
 `--calibrate` measures each book's page offset from the page numbers printed
-in the book itself, **before** the text is indexed (§4). It is the form to use
+in the book itself, **before** the text is indexed (§5). It is the form to use
 for a first import: without it every book but the core rulebook lands at offset
 +0, and every ref chip into those books opens the wrong page. Plain
 `pnpm seed:books` does everything except that.
@@ -91,11 +113,14 @@ printed number.
 
 It is a one-shot; you will not run it again until you buy a book.
 
-### Stop the server first
+### Stop the server first (native only)
 
 The embedded database (PGlite) is **single-process**. A running server and the
 seed script cannot hold the same `DATA_DIR` at once. Order: stop the server →
 run the seeder → let it exit → start the server.
+
+This is a *laptop* rule and it does not apply to the Docker stack, which runs
+real Postgres and is perfectly happy with a second client (§3).
 
 ### Reading the output
 
@@ -106,7 +131,7 @@ run the seeder → let it exit → start the server.
 ```
 
 Line 1 is the filename → code guess. Line 2 only appears under `--calibrate`
-and is the measurement (§4). Line 3 is the extraction.
+and is the measurement (§5). Line 3 is the extraction.
 
 `202/202` is every page of the file opened. `199` is how many carried text.
 The three that did not are **image-only pages** — pure scans with no text
@@ -129,7 +154,7 @@ any page whose printed number would be less than 1. With the core rulebook's
 | Flag | Effect |
 |---|---|
 | `--list` | print the filename → code/offset/title guesses and exit; writes nothing |
-| `--calibrate` | measure each book's page offset before indexing, and print the report (§4) |
+| `--calibrate` | measure each book's page offset before indexing, and print the report (§5) |
 | `--recalibrate` | implies `--calibrate`, and also overwrites an offset a human set |
 | `--dir <path>` | folder to scan (default: repo root) |
 | `--only <CODE>` | just the one book whose guessed code matches |
@@ -143,7 +168,206 @@ flag list for your checkout.
 
 ---
 
-## 3. Codes
+## 3. Loading the library into the Docker stack
+
+If you launch with `docker compose -f infra/docker-compose.yml … up -d`, this
+section is your answer to "where do the PDFs go and what do I run". It replaces
+§2's commands and nothing else in this file.
+
+The stack changes exactly two things about seeding:
+
+- the app's file store is a **named volume** (`files`), not a folder on the
+  host — so there is no `data/files` to drop PDFs into and be done;
+- the runtime image is production-only (no `tsx`, no source), so
+  `pnpm seed:books` **cannot** run inside the `app` container.
+
+The answer to both is the compose stack's one-shot **`seed` service**: the same
+seeder, built from the Dockerfile's `seed` stage (source, dev deps and `tsx` —
+everything the production image deliberately drops), run on the compose network,
+writing into the same `files` volume the app reads and the same Postgres the app
+talks to. It sits behind the `seed` profile, so `up -d` never starts it.
+
+### The PDFs are never copied into an image
+
+They are **bind-mounted read-only from the host at run time**. No `COPY` puts a
+book into a layer, and `.dockerignore` excludes `*.pdf` from the build context
+so an accidental one cannot either. That is not a convenience choice: an image
+carrying the owner's purchased rulebooks is precisely what DESIGN.md §14.8
+forbids — the app never bundles, ships or publicly serves them. Same posture as
+the gitignored `models/` folder the `llm` profile mounts.
+
+### The one command
+
+**Put the PDFs in a folder on the host.** If that folder is the repo root — the
+one `DESIGN.md` sits in, where §1 already puts them — you are done setting up.
+It is never written to, and it is not part of the stack's state; the file
+store's copy is (§6, backups).
+
+Keeping them somewhere else? Name that folder once in your env file. `BOOKS_DIR`
+defaults to `..`, this compose file's own parent, so this is the only line you
+touch:
+
+```
+BOOKS_DIR=D:/books
+```
+
+> **If you copied `.env.example`, check this line before your first run.** The
+> example ships `BOOKS_DIR=../books` — a `books/` folder next to `DESIGN.md`,
+> which the repo does not create for you. Either make that folder and move the
+> PDFs into it, or point the line at wherever they actually are. Left as-is with
+> no such folder, the seeder mounts an empty directory and reports no PDFs
+> found.
+
+**Then seed:**
+
+```bash
+docker compose -f infra/docker-compose.yml --env-file .env \
+  run --rm --build seed
+```
+
+That is the whole procedure. `run` enables the `seed` profile by itself; the
+service builds (`--build` is worth it on the first run and after a `git pull`,
+and skippable after), waits for `postgres` to come up healthy, mounts your
+folder read-only at `/books` and the app's `files` volume at `/data`, applies
+migrations, and runs the `seed:books` §2 describes — same guesses, same
+calibration, same report. Budget the minute or so §2 measured for the seventeen
+production books. The container exits when the seeding does.
+
+**`--calibrate` is already the default here.** The service's `command` is
+`["--calibrate"]`, so a bare `run --rm seed` measures every book's page offset
+without you asking (§5). That matters for the next part.
+
+**You do not have to stop the app.** The single-process rule in §2 is PGlite's;
+this stack is real Postgres. Seed with a session live if you want to — reload
+the browser and the shelf is populated.
+
+### Passing flags
+
+Everything after the service name goes to the seeder, so §2's flag table applies
+here as written, with two adjustments:
+
+- **Do not pass `--dir`.** The service's entrypoint already supplies
+  `--dir /books`, which is where your folder is mounted. Change `BOOKS_DIR`
+  instead.
+- **Any flag you pass replaces `--calibrate`**, because it replaces the whole
+  default `command`. So re-add it whenever you want calibration:
+
+```bash
+# the plan — filenames → code/offset guesses; writes nothing
+docker compose -f infra/docker-compose.yml --env-file .env run --rm seed --list
+
+# one book, calibrated
+docker compose -f infra/docker-compose.yml --env-file .env \
+  run --rm seed --only SR5 --calibrate
+```
+
+Forgetting `--calibrate` on a targeted run is the easy mistake: it leaves that
+one book at the seeded `+0` guess while the rest of the shelf is measured, and
+nothing announces it (§5).
+
+### Why there is no copy step
+
+The seeding container mounts the **same `files` volume** as `app` and points at
+the **same `postgres` service**, so it writes the library exactly where the app
+already looks:
+
+- PDFs → `files:/data/files/books/<CODE>.pdf`, the volume `app` serves from;
+- registry rows, measured offsets and extracted page text → the compose
+  Postgres, the database `app` reads.
+
+Book paths are stored **relative** to the file store, so nothing is pinned to a
+host path and nothing needs rewriting after the fact.
+
+This replaces the older host-side workaround printed in the compose header —
+seed on the host against the published Postgres port, then
+`docker compose … cp ./data/files/. app:/data/files`. That still works if you
+already have a `data/files` from a native run and want to lift it in, but you
+no longer need Node, a repo checkout, or host→container networking to load
+books.
+
+### Where the env file lives — this one bites
+
+Compose takes its **project directory from the directory of the first `-f`
+file**, not from where you are standing. So:
+
+```bash
+docker compose -f infra/docker-compose.yml up -d                   # reads infra/.env
+docker compose -f infra/docker-compose.yml --env-file .env up -d   # reads ./.env
+```
+
+A `.env` in the repo root is **silently ignored** by the first form. `BOOKS_DIR`
+comes out empty, the mount fails or lands somewhere you did not mean, and the
+seeder reports no PDFs found.
+
+Pick one and hold it:
+
+- **keep the file at `infra/.env`** and drop the flag from every command, or
+- **keep it at the repo root** and pass `--env-file .env` on *every* command —
+  `up`, `run`, `exec`, all of them. Mixing the two is how you end up with the
+  seeder writing to one database and the app reading another.
+
+The commands in this section use the second form, because that is what the
+README and the compose header print.
+
+The same rule governs `BOOKS_DIR`, which is why its default is `..` and not `.`:
+relative paths resolve against `infra/`, so `..` is the repo root and
+`BOOKS_DIR=./books` would mean `infra/books`, not `<repo>/books`. Give it an
+**absolute path** (`D:/books`, `/srv/books`) and the question never comes up.
+
+### Confirming it worked
+
+From the app, which is the real check: **GM → Books**. Seventeen cards, each
+showing a measured page offset rather than "not calibrated" (§5). Tap a ref
+chip; it should open the right page.
+
+From the host, without a browser:
+
+```bash
+# the PDFs, in the volume the app serves from
+docker compose -f infra/docker-compose.yml --env-file .env \
+  exec app ls /data/files/books
+
+# the registry rows and the offsets the seeder measured
+docker compose -f infra/docker-compose.yml --env-file .env \
+  exec postgres psql -U safehouse -d safehouse \
+  -c 'select code, page_offset from books order by code'
+```
+
+Seventeen `<CODE>.pdf` files and seventeen rows, `SR5` at `+5`. (Swap
+`safehouse` for your `POSTGRES_USER` / `POSTGRES_DB` if you changed them.) Files
+present but the shelf empty means the seeder wrote to a different database than
+the app reads — which is the env-file trap above.
+
+### Adding a book later, under Docker
+
+Drop the new PDF into the folder the others are in and run the same command
+again:
+
+```bash
+docker compose -f infra/docker-compose.yml --env-file .env run --rm seed
+```
+
+**The seeder is re-runnable** (§6): for a code that already exists it refreshes
+the file and title and replaces the extracted text, and leaves your calibrated
+`pageOffset` and `shared` flag alone. Nothing you have calibrated is at risk, so
+a full re-run for one new book is the safe, boring choice — and at a minute, the
+cheap one.
+
+Narrow it if you prefer, remembering that a flag replaces the default
+`--calibrate`:
+
+```bash
+docker compose -f infra/docker-compose.yml --env-file .env \
+  run --rm seed --only SS --calibrate
+```
+
+Not sure the mount points where you think? `run --rm seed --list` prints the
+filename → code/offset guesses for everything it can see and writes nothing.
+Run that first.
+
+---
+
+## 4. Codes
 
 A code is a book's identity everywhere in the app. `SR5 p.426` typed into a
 codex page, a ref on a sheet item, a citation the Fixer returns — all of them
@@ -175,7 +399,7 @@ becomes `MYSCAN`. Two ways to fix that, and the first is better:
 
 ---
 
-## 4. Page offsets — the part that actually matters
+## 5. Page offsets — the part that actually matters
 
 **Printed page** is the number printed on the paper. **PDF page** is the
 position in the file. Front matter — cover, credits, table of contents —
@@ -334,14 +558,18 @@ before extraction, so the index is right on the first pass.
 
 ---
 
-## 5. Adding a book later
+## 6. Adding a book later
 
 1. Drop the PDF in the same folder as the others.
 2. `pnpm seed:books --list` — check the code it guessed.
 3. `pnpm seed:books --calibrate --only <CODE>` — a full re-run is also safe
    and leaves the other sixteen books' calibration alone.
 4. Check the calibration line it printed. If it declined to measure one, open
-   the shelf and nudge (§4).
+   the shelf and nudge (§5).
+
+Same four steps on the Docker stack, through the seeding container: the folder
+is `BOOKS_DIR`, and each `pnpm seed:books` above becomes
+`docker compose … --profile seed run --rm seed`, carrying the same flags (§3).
 
 **Re-running the seeder is safe.** For a code that already exists it refreshes
 the file and title, replaces the extracted text, and leaves your `pageOffset`
@@ -370,11 +598,11 @@ way the files sit behind auth — a device token opens them, nothing else.
 
 ---
 
-## 6. Troubleshooting
+## 7. Troubleshooting
 
 **A ref chip opens the wrong page.** Offset. The book is almost certainly still
 at +0 — the shelf will say "not calibrated". Fix the whole shelf at once with
-`pnpm seed:books --calibrate`, or that one book on the shelf (§4). Quick check
+`pnpm seed:books --calibrate`, or that one book on the shelf (§5). Quick check
 without a chip: `/read/RG?p=104` opens printed page 104 of that book through
 the same mapping.
 
@@ -394,7 +622,7 @@ layer: the reader works, search and the Fixer cannot see it. A partial gap
 (`199 of 202`) means a handful of scanned pages inside an otherwise fine book.
 
 **Search hits point a few pages off.** The offset changed after extraction.
-Re-run `pnpm seed:books --only <CODE>` (§4).
+Re-run `pnpm seed:books --only <CODE>` (§5).
 
 **`unknown flag: --`.** Something inserted a bare `--` between the script name
 and the flags — the old form printed in the script header before it was fixed.
@@ -402,18 +630,58 @@ Drop it: `pnpm seed:books --list`.
 
 **Two rows for the same book.** A code was renamed in the app and then the file
 was seeded again under its guessed code. Delete the stray row; rename the file
-instead (§3).
+instead (§4).
 
 **The seeder errors on the database, or hangs.** A server is already holding
 that `DATA_DIR`. PGlite is single-process: stop the server, seed, let it exit,
 start the server. Never point two processes at one data directory, and never
-delete a `DATA_DIR` a running server is holding.
+delete a `DATA_DIR` a running server is holding. This is native-only — on the
+Docker stack, real Postgres takes the second client without complaint.
+
+### Docker stack
+
+**"no PDFs found", or it seeds the wrong folder.** Two causes, in order of
+likelihood. **One:** you copied `.env.example`, which ships
+`BOOKS_DIR=../books`, and there is no `books/` folder — put the PDFs there or
+repoint the line (§3). **Two:** `BOOKS_DIR` never reached Compose at all and it
+fell back to its default `..`, the repo root; that is the env file,
+`-f infra/docker-compose.yml` auto-reads `infra/.env` and not the repo root's
+(§3). Ask Compose what it actually resolved rather than guessing:
+
+```bash
+docker compose -f infra/docker-compose.yml --env-file .env --profile seed config
+```
+
+The `seed` service's `/books` volume line prints the host path it will mount. A
+path you did not expect there is the whole bug — and remember a relative one is
+read from `infra/`, not the repo root.
+
+**`no such service: seed`.** Either you are pointing `-f` at a compose file that
+predates the seeding service, or at an older copy of the repo. This lists what
+your file really defines:
+
+```bash
+docker compose -f infra/docker-compose.yml --profile seed config --services
+```
+
+**It seeded, but the shelf says "not calibrated".** You passed a flag, and a
+flag replaces the service's default `command` — which was the `--calibrate`
+(§3). Re-run with it spelled out: `run --rm seed --only <CODE> --calibrate`.
+
+**The files are in the volume but the shelf is empty.** The seeder wrote to a
+different database than the app reads — a different env file, or a different
+`POSTGRES_DB`, between the `up` and the `run`. Use one env file for both (§3).
+
+**`docker compose cp` — do I still need it?** No. The seeding container writes
+straight into the `files` volume (§3). The `cp` in the compose header is only
+for lifting a `data/files` produced by a *native* run into the stack.
 
 ---
 
 Spec: DESIGN.md §6 M11 (FR11.1–11.7), §14.8–14.9 (content and licensing),
-§15 (media caps, durability), §16 (the PDFs stay out of git).
-Code: `apps/server/scripts/seed-books.ts` (the CLI and its report),
+§15 (media caps, durability), §16 (deployment; the PDFs stay out of git).
+Code: `infra/docker-compose.yml` (the stack and its seeding service, §3),
+`apps/server/scripts/seed-books.ts` (the CLI and its report),
 `apps/server/src/services/books.ts` (guessing, registering, extracting),
 `apps/server/src/services/book-offsets.ts` (the measurement itself),
 `apps/web/src/features/gm/books/` (the GM's calibration shelf),

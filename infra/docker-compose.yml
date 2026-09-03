@@ -16,12 +16,59 @@
 #   docker buildx build -f infra/Dockerfile \
 #     --platform linux/amd64,linux/arm64 -t safehouse/app:latest --push .
 #
-# ONE-SHOTS RUN FROM THE REPO, NOT FROM THE CONTAINER. The runtime image is
-# production-only (no tsx, no source), so `seed:books` (FR11.7) and the PGlite
-# migration below run on the host against the loopback port `postgres`
-# publishes. Moving a campaign that started on the laptop's embedded database
-# into this stack — ids and sequences preserved, which is exactly what a
-# hand-rolled row copy gets wrong (see the script's header):
+# ---------------------------------------------------------------------------
+# THE BOOK LIBRARY, IN ONE COMMAND (FR11.7)
+#
+# Put your PDFs in one folder on the host and name it once in .env, as
+# `BOOKS_DIR`. Relative paths resolve against THIS file's directory, so the
+# default `..` is the repo root and `BOOKS_DIR=../books` is the folder beside
+# it (which is where the shipped .env points); an absolute path — `D:/books`,
+# `/srv/books` — sidesteps the question. Then:
+#
+#   docker compose -f infra/docker-compose.yml --env-file .env \
+#     run --rm --build seed
+#
+# That is the whole procedure. The `seed` service builds from the Dockerfile's
+# `build` stage (source + tsx, none of which is in the app image), starts
+# `postgres` if it is down, mounts your folder READ-ONLY at /books and the
+# app's own `files` volume at /data, and runs
+# `seed:books --dir /books --calibrate` — codes, measured page offsets, and
+# per-page text for search and the Fixer. ~17 books / ~3,500 pages ≈ a minute.
+# The PDFs land in the volume the running app already serves, so there is
+# nothing to copy afterwards and no reason to stop the app first (Postgres is a
+# server; the single-process rule in docs/BOOKS.md is about embedded PGlite).
+# Reload the browser and the shelf is populated.
+#
+# Your books stay yours: mounted read-only, never copied into an image, never
+# committed, never uploaded (§14). Point BOOKS_DIR at a dedicated folder if you
+# would rather not expose a whole checkout to the container.
+#
+# Everything after `seed` goes to the seeder, so its flags work as documented
+# in docs/BOOKS.md (--dir is already supplied):
+#
+#   … run --rm seed --list                     # the plan; writes nothing
+#   … run --rm seed --only SR5 --calibrate     # one book
+#
+# Same service, the demo campaign instead of books (a fresh stack usually wants
+# both) — only the script changes:
+#
+#   … run --rm --entrypoint \
+#       "pnpm --filter @safehouse/server seed:demo" seed
+#
+# `seed` sits behind the `seed` profile so `up -d` never starts it; `run`
+# enables that profile by itself. The container exits when the seeding does.
+#
+# THE HOST-SIDE PATH STILL WORKS, if you keep a checkout with Node in it and
+# prefer it: `pnpm seed:books --calibrate` against the published loopback port,
+# then `docker compose -f infra/docker-compose.yml cp ./data/files/. app:/data/files`.
+# It needs Node, the repo, and host→container networking; the service above
+# needs none of the three.
+#
+# STILL A ONE-SHOT FROM THE REPO: moving a campaign that started on the
+# laptop's embedded database into this stack. Its source is a PGlite directory
+# on the host, so this one cannot run inside the stack. Ids and sequences are
+# preserved, which is exactly what a hand-rolled row copy gets wrong (see the
+# script's header):
 #
 #   docker compose -f infra/docker-compose.yml up -d postgres
 #   pnpm --filter @safehouse/server exec tsx scripts/migrate-to-postgres.ts \
@@ -48,11 +95,23 @@ services:
     build:
       context: ..
       dockerfile: infra/Dockerfile
+      # Explicit because the file has more than one final stage now: `seed`
+      # sits above this one and must never be what `app` runs.
+      target: runtime
     image: ${APP_IMAGE:-safehouse/app:latest}
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
+    # Reach the laptop's own ports from inside the container. `127.0.0.1` in
+    # here is the CONTAINER, not the host — so an inference server running on
+    # the laptop (llama.cpp, vllm) is unreachable at 127.0.0.1 no matter what
+    # port it is on, and the failure looks like a dead endpoint rather than a
+    # config mistake. Set LLM_BASE_URL=http://host.docker.internal:<port>/v1.
+    # Docker Desktop and Rancher provide this name already; the mapping is
+    # what makes it work on plain Linux too.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       PORT: 8787
       DATA_DIR: /data
@@ -65,6 +124,11 @@ services:
       LLM_MODEL_FAST: ${LLM_MODEL_FAST:-}
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Open table: any device that can reach this server may list every
+      # campaign and claim its GM. Unset (the default) keeps GM recovery
+      # gated on the loopback interface, which in a bridge network means
+      # nobody — use `gm:token` instead. Set it only on a home network.
+      SAFEHOUSE_OPEN_TABLE: ${SAFEHOUSE_OPEN_TABLE:-}
       # Origin the join QR encodes. Empty is correct here — this container
       # serves the SPA itself, so the server's own LAN address is the one a
       # phone should scan. Only a split dev setup (Vite on 5173) needs it.
@@ -73,7 +137,8 @@ services:
       # Bound on every interface: phones join over the venue Wi-Fi (§8).
       - "${PORT:-8787}:8787"
     volumes:
-      # Maps, token art, audio, and the book PDFs seeded by `pnpm seed:books`.
+      # Maps, token art, audio, and the book PDFs — which the `seed` service
+      # writes into this same volume, at this same path.
       - files:/data
     healthcheck:
       test:
@@ -104,14 +169,70 @@ services:
       retries: 10
       start_period: 10s
     ports:
-      # LOOPBACK ONLY — the venue Wi-Fi never sees the database. `app` and
-      # `backup` reach it over the compose network and do not need this; the
-      # host-side one-shots in the header do, because the production image
-      # carries no tsx and no source to run them from. Without a published
-      # port there is no way to seed the book library (FR11.7) into this stack
-      # or to migrate a laptop campaign in. Move it with POSTGRES_PORT if
-      # something else on the laptop already owns 5432.
+      # LOOPBACK ONLY — the venue Wi-Fi never sees the database. `app`,
+      # `backup` and `seed` reach it over the compose network and do not need
+      # this. It is here for the one-shots that still run from a checkout: the
+      # PGlite migration (whose source is a directory on the host) and the
+      # host-side seeding path, for a GM who prefers it. Move it with
+      # POSTGRES_PORT if something else on the laptop already owns 5432.
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+
+  # One-shot seeding, run from inside the stack — the library (FR11.7) and the
+  # demo campaign. See "THE BOOK LIBRARY, IN ONE COMMAND" in the header for the
+  # exact invocations. Behind a profile, so `up -d` never starts it; started
+  # with `run`, which enables the profile on its own and exits when the seeding
+  # is done. `restart` is deliberately absent: this is a job, not a service.
+  #
+  # Deliberately NOT a startup dependency of `app`. Seeding is the GM's explicit
+  # act, not a precondition for the table: a corrupt PDF, a mistyped BOOKS_DIR or
+  # an interrupted index must never be the reason the app fails to come up on
+  # game night (NG7). The library degrades to an empty shelf; the session does
+  # not degrade at all.
+  seed:
+    profiles: ["seed"]
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+      # The build stage plus a node-owned /data — source, dev deps and tsx,
+      # none of which the production image carries. That is the whole reason
+      # this service exists instead of `docker compose exec app`.
+      target: seed
+    # Its own tag: `app` and `seed` are different images from one Dockerfile,
+    # and sharing APP_IMAGE would have each overwrite the other.
+    image: ${SEED_IMAGE:-safehouse/seed:latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATA_DIR: /data
+      # The `postgres` SERVICE on compose's own network — not the published
+      # loopback port. Nothing about seeding depends on host→container
+      # networking any more, and migrations are applied by the seeder itself,
+      # so this works against a database the app has never touched.
+      DATABASE_URL: postgres://${POSTGRES_USER:-safehouse}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-safehouse}
+      # `seed:demo` boots the real app in-process to seed through its own API.
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      # The SAME named volume `app` mounts, at the same path: the seeder writes
+      # the PDFs straight into the running app's file store. This is what
+      # replaces the old `docker compose cp ./data/files/. app:/data/files`.
+      - files:/data
+      # The GM's own library, READ-ONLY (§14). The seeder only ever reads these
+      # files, and the owner's shelf must not be writable by a container. The
+      # default is this file's parent — the repo root, where the PDFs already
+      # live; set BOOKS_DIR in .env to point anywhere else.
+      - ${BOOKS_DIR:-..}:/books:ro
+    # Fixed prefix + overridable tail: `run --rm seed` seeds the library with
+    # calibration, `run --rm seed --list` or `--only SR5` passes the GM's own
+    # flags through, and `run --entrypoint …` swaps in `seed:demo`.
+    #
+    # `--calibrate` alone, with no `--if-needed`: a bare `run --rm seed` is the
+    # command docs/BOOKS.md §5 tells a GM to re-run when a book's offset is
+    # wrong, and skipping already-indexed books would make that fix a silent
+    # no-op — the exact failure mode §5 warns about.
+    entrypoint: ["pnpm", "--filter", "@safehouse/server", "seed:books", "--dir", "/books"]
+    command: ["--calibrate"]
 
   # Nightly pg_dump + file-store sync, retained 30 days (§15 data durability).
   # Sketch, deliberately: the loop and the dump are real, but "copied off-box"

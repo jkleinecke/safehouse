@@ -51,6 +51,72 @@ export function parseEnvFile(text: string): Record<string, string> {
 }
 
 /**
+ * Which file each key would come from, and where two files disagree.
+ *
+ * The trap this exists for: there are two legitimate `.env` locations and the
+ * loader is non-overriding, so the repo root silently beats `infra/.env` for
+ * every key both define. Edit the wrong one and nothing happens — no error, no
+ * warning, and the app keeps using a value you can no longer see anywhere on
+ * screen. That is indistinguishable from "the .env file isn't working", and it
+ * cost a real debugging session.
+ *
+ * Key names only, never values: these files hold SESSION_SECRET and the
+ * database password, and a diagnostic that leaks them into the log is worse
+ * than the confusion it solves.
+ */
+export interface EnvConflict {
+  key: string;
+  /** The file that wins, then the one shadowed by it. */
+  winner: string;
+  shadowed: string;
+}
+
+export function envFileConflicts(files: readonly string[] = ENV_FILES): EnvConflict[] {
+  const seen = new Map<string, { file: string; value: string }>();
+  const out: EnvConflict[] = [];
+  for (const file of files) {
+    if (!existsSync(file)) continue;
+    let parsed: Record<string, string>;
+    try {
+      parsed = parseEnvFile(readFileSync(file, 'utf8'));
+    } catch {
+      continue;
+    }
+    for (const [key, value] of Object.entries(parsed)) {
+      const first = seen.get(key);
+      if (first === undefined) {
+        seen.set(key, { file, value });
+      } else if (first.value !== value) {
+        // Same key, different value, two files. Exactly the silent-shadow case.
+        out.push({ key, winner: first.file, shadowed: file });
+      }
+    }
+  }
+  return out;
+}
+
+/** Which of the env files defines `key`, in win order. Null if none does. */
+export function envFileFor(key: string, files: readonly string[] = ENV_FILES): string | null {
+  for (const file of files) {
+    if (!existsSync(file)) continue;
+    try {
+      if (key in parseEnvFile(readFileSync(file, 'utf8'))) return file;
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+/**
+ * A URL safe to print. Strips `user:pass@` — some OpenAI-compatible setups put
+ * a key there, and this string goes to a log the GM may well paste into a chat.
+ */
+export function redactUrl(url: string): string {
+  return url.replace(new RegExp(String.raw`//[^/@]*@`), '//***@');
+}
+
+/**
  * Fill in anything the environment does not already define. Returns the keys
  * it actually set, so a caller can log them; missing file is not an error.
  */

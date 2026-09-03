@@ -28,7 +28,7 @@
  *
  * Nothing here touches the internet: the only destination is `LLM_BASE_URL`.
  */
-import { chatCompletionsUrl, type LlmConfig, type ModelSlot } from './llm.js';
+import { chatCompletionsUrl, serverRootUrl, type LlmConfig, type ModelSlot } from './llm.js';
 
 /** A 2x2 PNG. Small enough to be free, real enough to be a genuine image part. */
 export const PROBE_IMAGE_DATA_URI =
@@ -135,9 +135,18 @@ export function readPropsVision(raw: unknown): boolean | null {
   return null;
 }
 
+/**
+ * llama.cpp's `/props`, which lives at the SERVER ROOT and not under `/v1`.
+ *
+ * The documented base URL ends in `/v1`, so appending directly asked for
+ * `/v1/props` and got a 404 from the one server that implements this — the
+ * probe then reported "cannot tell" for a box that would happily have said.
+ * A 404 is still a fine answer here (vLLM has no `/props` at all): unknown
+ * degrades to the image probe, it never fails the caller.
+ */
 async function askProps(baseUrl: string): Promise<boolean | null> {
   try {
-    const res = await fetch(`${baseUrl.replace(/\/+$/, '')}/props`, {
+    const res = await fetch(`${serverRootUrl(baseUrl)}/props`, {
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
     if (!res.ok) return null;

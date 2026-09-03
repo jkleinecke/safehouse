@@ -158,8 +158,19 @@ describe('docs/BOOKS.md facts', () => {
   });
 
   it('documents no flag the parser does not have', () => {
+    // Scoped to the seeder's OWN flags, from the two places the document
+    // promises one is real: §2's flag table, and the flags its worked commands
+    // actually pass. §3 documents `docker compose` as well — `--build`,
+    // `--env-file`, `--profile` are that CLI's, guarded by
+    // infra-seed-compose.test.ts, and feeding them to `parseArgs` proves
+    // nothing about either tool.
+    const table = doc.slice(doc.indexOf('### Flags')).split(/^---$/m)[0]!;
+    expect(doc, 'the flag table §3 defers to is gone').toContain('### Flags');
     // Backtick, flag, then a space (`--dir <path>`) or the closing backtick.
-    const flags = new Set([...doc.matchAll(/`(--[a-z][a-z-]*)(?=[ `])/g)].map((m) => m[1]!));
+    const flags = new Set([
+      ...[...table.matchAll(/`(--[a-z][a-z-]*)(?=[ `])/g)].map((m) => m[1]!),
+      ...extractCommands(doc).flatMap(argvOf).filter((t) => t.startsWith('--')),
+    ]);
     expect(flags.size).toBeGreaterThan(4);
     for (const flag of flags) {
       // A flag that takes a value throws "needs a value" — still proof it exists.

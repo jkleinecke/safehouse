@@ -10,7 +10,13 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadEnvFile, parseEnvFile } from '../src/dotenv.js';
+import {
+  envFileConflicts,
+  envFileFor,
+  loadEnvFile,
+  parseEnvFile,
+  redactUrl,
+} from '../src/dotenv.js';
 
 const touched: string[] = [];
 function setEnv(key: string, value: string | undefined): void {
@@ -77,5 +83,76 @@ describe('loadEnvFile', () => {
 
   it('is silent when the file does not exist', () => {
     expect(loadEnvFile(join(tmpdir(), 'safehouse-absent', '.env'))).toEqual([]);
+  });
+});
+
+describe('envFileConflicts', () => {
+  it('is quiet when two files agree', () => {
+    const a = envFile('LLM_BASE_URL=http://127.0.0.1:18020/v1\n');
+    const b = envFile('LLM_BASE_URL=http://127.0.0.1:18020/v1\n');
+    expect(envFileConflicts([a, b])).toEqual([]);
+  });
+
+  it('names the key when two files disagree, and says which one wins', () => {
+    // The exact trap: the loader is non-overriding and reads the repo root
+    // first, so editing the second file changes nothing and says nothing.
+    const root = envFile('LLM_BASE_URL=http://127.0.0.1:8080/v1\n');
+    const infra = envFile('LLM_BASE_URL=http://127.0.0.1:18020/v1\n');
+    expect(envFileConflicts([root, infra])).toEqual([
+      { key: 'LLM_BASE_URL', winner: root, shadowed: infra },
+    ]);
+  });
+
+  it('never reports a value, only a key name', () => {
+    const root = envFile('SESSION_SECRET=hunter2\n');
+    const infra = envFile('SESSION_SECRET=correct-horse\n');
+    const json = JSON.stringify(envFileConflicts([root, infra]));
+    // These files hold the session secret and the database password; a
+    // diagnostic that leaks them is worse than the confusion it solves.
+    expect(json).not.toContain('hunter2');
+    expect(json).not.toContain('correct-horse');
+    expect(json).toContain('SESSION_SECRET');
+  });
+
+  it('ignores a key only one file defines', () => {
+    const a = envFile('ONLY_HERE=1\n');
+    const b = envFile('SOMETHING_ELSE=2\n');
+    expect(envFileConflicts([a, b])).toEqual([]);
+  });
+
+  it('skips files that do not exist', () => {
+    expect(envFileConflicts([join(tmpdir(), 'safehouse-absent', '.env')])).toEqual([]);
+  });
+});
+
+describe('envFileFor', () => {
+  it('names the first file defining the key', () => {
+    const root = envFile('LLM_BASE_URL=http://a\n');
+    const infra = envFile('LLM_BASE_URL=http://b\n');
+    expect(envFileFor('LLM_BASE_URL', [root, infra])).toBe(root);
+  });
+
+  it('falls through to the file that actually has it', () => {
+    const root = envFile('OTHER=1\n');
+    const infra = envFile('LLM_BASE_URL=http://b\n');
+    expect(envFileFor('LLM_BASE_URL', [root, infra])).toBe(infra);
+  });
+
+  it('is null when nothing defines it — meaning it came from the environment', () => {
+    expect(envFileFor('LLM_BASE_URL', [envFile('OTHER=1\n')])).toBeNull();
+  });
+});
+
+describe('redactUrl', () => {
+  it('leaves an ordinary endpoint alone', () => {
+    expect(redactUrl('http://127.0.0.1:18020/v1')).toBe('http://127.0.0.1:18020/v1');
+    expect(redactUrl('http://host.docker.internal:18020/v1')).toBe(
+      'http://host.docker.internal:18020/v1',
+    );
+  });
+
+  it('strips credentials, because this string goes in a log people paste', () => {
+    expect(redactUrl('http://user:secret@box.lan:18020/v1')).toBe('http://***@box.lan:18020/v1');
+    expect(redactUrl('http://user:secret@box.lan:18020/v1')).not.toContain('secret');
   });
 });

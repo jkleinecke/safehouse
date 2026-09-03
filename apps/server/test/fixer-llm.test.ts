@@ -8,8 +8,12 @@ import {
   ChatAccumulator,
   LlmClient,
   chatCompletionsUrl,
+  explain404,
   isAiEnabled,
+  listServedModels,
   llmConfigFromEnv,
+  modelsUrl,
+  serverRootUrl,
 } from '../src/fixer/llm.js';
 import { MockLlmServer } from '../src/fixer/mock-llm.js';
 
@@ -134,5 +138,106 @@ describe('failure modes', () => {
     await expect(
       client.chat({ model: 'p', messages: [{ role: 'user', content: 'hi' }] }),
     ).rejects.toMatchObject({ statusCode: 502, code: 'ai_error' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The 404 that cost an evening
+// ---------------------------------------------------------------------------
+
+/**
+ * A wrong model name is what actually breaks when the inference box changes
+ * hands, and every server spells the same weights differently: vLLM answers
+ * only to its `--served-model-name`, llama.cpp to its `--alias`, Ollama to
+ * `name:tag`. Configure one, meet another, get a bare 404 whose explanation
+ * sits in a `details` field the UI is free not to render.
+ *
+ * Pinned here so the message stays useful: it must name the model we asked
+ * for AND the models the box says it has.
+ */
+describe('URL shaping beyond /v1', () => {
+  it('finds the server root whether or not the base URL carries a version', () => {
+    // llama.cpp's /props lives at the root; the documented base URL ends /v1.
+    expect(serverRootUrl('http://box.lan:8080/v1')).toBe('http://box.lan:8080');
+    expect(serverRootUrl('http://box.lan:8080/v1/')).toBe('http://box.lan:8080');
+    expect(serverRootUrl('http://box.lan:8080')).toBe('http://box.lan:8080');
+    expect(serverRootUrl('http://box.lan:8080/')).toBe('http://box.lan:8080');
+  });
+
+  it('does not mistake a path segment for a version', () => {
+    expect(serverRootUrl('http://box.lan/openai/v1')).toBe('http://box.lan/openai');
+    expect(serverRootUrl('http://box.lan/v1beta')).toBe('http://box.lan/v1beta');
+  });
+
+  it('builds /v1/models from either spelling', () => {
+    expect(modelsUrl('http://box.lan:8080')).toBe('http://box.lan:8080/v1/models');
+    expect(modelsUrl('http://box.lan:8080/v1')).toBe('http://box.lan:8080/v1/models');
+    expect(modelsUrl('http://box.lan:8080/v1/')).toBe('http://box.lan:8080/v1/models');
+  });
+});
+
+describe('explain404', () => {
+  /** A stand-in for the box's `GET /v1/models`. */
+  async function withModels<T>(
+    body: unknown,
+    status: number,
+    fn: (baseUrl: string) => Promise<T>,
+  ): Promise<T> {
+    const { createServer } = await import('node:http');
+    const server = createServer((req, res) => {
+      if (req.url?.endsWith('/v1/models')) {
+        res.writeHead(status, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(body));
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const addr = server.address();
+    const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+    try {
+      return await fn(`http://127.0.0.1:${port}/v1`);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  }
+
+  const vllmish = {
+    object: 'list',
+    data: [{ id: 'qwen3.8-27b', object: 'model', owned_by: 'vllm' }],
+  };
+
+  it('lists what the box actually serves', async () => {
+    const msg = await withModels(vllmish, 200, (base) =>
+      explain404(base, 'unsloth/Qwen3.8-27B-GGUF:Q4_K_M'),
+    );
+    // Both halves matter: the name that failed, and the name that would work.
+    expect(msg).toContain('unsloth/Qwen3.8-27B-GGUF:Q4_K_M');
+    expect(msg).toContain('qwen3.8-27b');
+    expect(msg).toContain('LLM_MODEL_PRIMARY');
+  });
+
+  it('blames the path, not the name, when the model IS served', async () => {
+    const msg = await withModels(vllmish, 200, (base) => explain404(base, 'qwen3.8-27b'));
+    expect(msg).toContain('base URL path is wrong');
+    expect(msg).not.toContain('LLM_MODEL_PRIMARY');
+  });
+
+  it('stays honest when the box will not list its models', async () => {
+    const msg = await withModels({}, 500, (base) => explain404(base, 'anything'));
+    expect(msg).toContain('would not list');
+    // No invented advice about a model list we never saw.
+    expect(msg).not.toContain('it serves:');
+  });
+
+  it('survives a models endpoint that answers with junk', async () => {
+    await expect(withModels({ data: 'not-an-array' }, 200, (b) => listServedModels(b))).resolves.toEqual([]);
+    await expect(withModels({ data: [{}, { id: 7 }, { id: 'ok' }] }, 200, (b) => listServedModels(b))).resolves.toEqual(['ok']);
+  });
+
+  it('returns an empty list rather than throwing when nothing is there', async () => {
+    // Port 1 is reserved and refuses instantly; a dead box must not surface as
+    // a crash inside an error handler.
+    await expect(listServedModels('http://127.0.0.1:1/v1', 1_000)).resolves.toEqual([]);
   });
 });

@@ -78,7 +78,7 @@ export async function seedFixerFixture(db: Db, campaignId: string): Promise<Fixe
         campaignId,
         name: 'Rooftop, Redmond',
         state: 'active',
-        grid: { unitM: 1, cols: 20, rows: 20, offset: { x: 0, y: 0 } },
+        grid: { unitM: 1, cols: 20, rows: 20, offset: { x: 0, y: 0 }, projection: 'topdown' as const },
         // Severity tiers 0..3 (the engine maps them to -1/-3/-6/-10).
         environment: { light: 2, visibility: 1, glare: 0, wind: 1, note: 'sheeting rain' },
         geometry: { walls: [], doors: [], zones: [], pins: [] },

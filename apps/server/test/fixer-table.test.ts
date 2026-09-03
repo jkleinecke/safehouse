@@ -102,7 +102,7 @@ beforeAll(async () => {
         campaignId: boot.campaignId,
         name: 'Warehouse floor',
         state: 'draft',
-        grid: { unitM: 2, cols: 20, rows: 20, offset: { x: 0, y: 0 } },
+        grid: { unitM: 2, cols: 20, rows: 20, offset: { x: 0, y: 0 }, projection: 'topdown' as const },
         geometry: { walls: [], doors: [], zones: [], pins: [] },
         fog: { regions: [], revealed: [], revealedShapes: [] },
       })
@@ -213,7 +213,7 @@ describe('layout copilot produces grid-true geometry (FR12.11)', () => {
   it('snaps rooms to the grid and cuts real doorways in the walls', () => {
     const compiled = compileLayout(
       { ...OFFICE, notes: '' },
-      { unitM: 1, cols: 20, rows: 20, offset: { x: 0, y: 0 } },
+      { unitM: 1, cols: 20, rows: 20, offset: { x: 0, y: 0 }, projection: 'topdown' as const },
     );
     expect(compiled.warnings).toEqual([]);
     expect(compiled.rooms.map((r) => r.name)).toEqual(['Lobby', 'Corridor', 'Server room']);
