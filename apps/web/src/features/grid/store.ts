@@ -83,6 +83,12 @@ export interface GridUiState {
    * Defaults to null because a GM permanently limited to one token's view
    * cannot run the rest of the map. This is a lens they pick up and put down.
    */
+  /**
+   * Which floor the GM is looking at and painting (FR9.22). 0 is the ground,
+   * which is the only floor a flat scene has — so this is 0 for almost every
+   * scene and costs nothing.
+   */
+  activeLevel: number;
   losTokenId: string | null;
   /**
    * Whether PLAYERS see their own character's sightline shroud.
@@ -117,6 +123,7 @@ export interface GridUiState {
   setTilesetId: (tilesetId: string) => void;
   setTileId: (tileId: string | null) => void;
   setTileCategory: (category: 'ground' | 'building' | 'interior' | 'decoration') => void;
+  setActiveLevel: (level: number) => void;
   setLosTokenId: (tokenId: string | null) => void;
   setLosForPlayers: (on: boolean) => void;
   setCoverOverride: (cover: 'none' | 'partial' | 'full' | null) => void;
@@ -170,6 +177,7 @@ export const useGridStore = create<GridUiState>()((set) => ({
   tilesetId: DEFAULT_TILESET_ID,
   tileId: null,
   tileCategory: 'ground',
+  activeLevel: 0,
   losTokenId: null,
   losForPlayers: false,
   coverOverride: null,
@@ -209,6 +217,10 @@ export const useGridStore = create<GridUiState>()((set) => ({
   // the wrong thing on the first click.
   // A cover ruling is about one pair of tokens, so changing either end drops
   // it. Carrying it over would silently apply "no cover" to a different shot.
+  // Changing floor drops the tile selection: a tile id means the same thing
+  // on any storey, but the SELECTION is part of "what am I doing right now",
+  // and arriving on a new floor mid-brush is how a GM paints the wrong one.
+  setActiveLevel: (activeLevel) => set({ activeLevel: Math.max(0, Math.floor(activeLevel)) }),
   setLosTokenId: (losTokenId) => set({ losTokenId, coverOverride: null }),
   setLosForPlayers: (losForPlayers) => set({ losForPlayers }),
   setCoverOverride: (coverOverride) => set({ coverOverride }),

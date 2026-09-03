@@ -144,6 +144,16 @@ export const apiPost = <T>(path: string, body?: unknown, opts?: Omit<ApiOptions,
 export const apiPatch = <T>(path: string, body?: unknown, opts?: Omit<ApiOptions, 'method' | 'body'>) =>
   api<T>(path, { ...opts, method: 'PATCH', body });
 
+/**
+ * Whole-resource replacement, as distinct from `apiPatch`'s merge.
+ *
+ * The difference is load-bearing for ordered lists: "remove the middle floor"
+ * cannot be expressed as a patch without inventing ids for positions, so those
+ * endpoints take the whole list and PUT says so.
+ */
+export const apiPut = <T>(path: string, body?: unknown, opts?: Omit<ApiOptions, 'method' | 'body'>) =>
+  api<T>(path, { ...opts, method: 'PUT', body });
+
 export const apiDelete = <T>(path: string, opts?: Omit<ApiOptions, 'method' | 'body'>) =>
   api<T>(path, { ...opts, method: 'DELETE' });
 

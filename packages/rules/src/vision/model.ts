@@ -9,13 +9,15 @@
  */
 import type { Point } from '@safehouse/contracts';
 import { tilesetById } from '../tilesets/catalogue.js';
-import { migrateTileLayer, type LayeredTiles } from '../tilesets/layers.js';
+import { levelTiles, migrateTileLayer, type LayeredTiles } from '../tilesets/layers.js';
 import { givesCover, parseCellKey, stopsMovement, stopsSight } from '../tilesets/types.js';
 import type { SightCell, SightModel, SightSegment } from './los.js';
 
 /** The parts of a scene this needs — kept structural so callers stay free. */
 export interface SightSceneInput {
   tiles?: LayeredTiles | undefined;
+  /** Floors above the ground one. Sight is computed on ONE of them. */
+  levels?: readonly { id: string; name: string; tiles?: LayeredTiles | undefined }[] | undefined;
   geometry?: {
     walls?: readonly { id: string; a: Point; b: Point }[];
     doors?: readonly { id: string; a: Point; b: Point; open?: boolean }[];
@@ -27,10 +29,13 @@ export interface SightSceneInput {
  * than guessed at: a scene painted from a set this build does not have should
  * lose its *cover*, not become an impassable slab.
  */
-export function sightModelFor(scene: SightSceneInput): SightModel {
+export function sightModelFor(scene: SightSceneInput, level = 0): SightModel {
   const cells = new Map<string, SightCell>();
 
-  const layer = scene.tiles;
+  // ONE floor's tiles. A wall on the catwalk must not block a shot across
+  // the warehouse floor beneath it, and a scene with no levels resolves to
+  // its ground floor, which is every scene ever painted.
+  const layer = levelTiles(scene, level);
   if (layer) {
     const set = tilesetById(layer.tilesetId);
     if (set !== null) {

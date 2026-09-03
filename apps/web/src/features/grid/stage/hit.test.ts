@@ -15,6 +15,7 @@ function token(id: string, x: number, y: number, size = 1): Token {
     size,
     rotation: 0,
     hidden: false,
+    level: 0,
     barsVisibility: 'owner',
   };
 }

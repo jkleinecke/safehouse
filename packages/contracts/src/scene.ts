@@ -135,6 +135,28 @@ export const TileLayerSchema = z.object({
 });
 export type TileLayer = z.infer<typeof TileLayerSchema>;
 
+/**
+ * One floor of a scene (FR9.22).
+ *
+ * A warehouse has a catwalk; an office block has six storeys and a stairwell.
+ * Modelling those as separate scenes almost works and then does not: the party
+ * splits, half of them are upstairs, and the GM needs both floors on one map
+ * with tokens that can walk between them.
+ *
+ * Levels carry TILES and nothing else. Fog, geometry, tokens and the grid stay
+ * scene-wide, because a building has one footprint and one set of dimensions —
+ * a floor that could be a different size from the one below it would be a
+ * different building. Tokens say which level they are ON (`Token.level`),
+ * which is what lets one scene hold a firefight on two storeys.
+ */
+export const SceneLevelSchema = z.object({
+  id: z.string().min(1),
+  /** What the GM calls it: "Ground", "Catwalk", "Sub-basement". */
+  name: z.string().min(1).max(60),
+  tiles: TileLayerSchema.optional(),
+});
+export type SceneLevel = z.infer<typeof SceneLevelSchema>;
+
 export const SceneGeometrySchema = z.object({
   walls: z.array(WallSchema).default([]),
   doors: z.array(DoorSchema).default([]),
@@ -173,8 +195,24 @@ export const SceneSchema = z.object({
   grid: GridSchema,
   environment: SceneEnvironmentSchema.default({ light: 0, visibility: 0, glare: 0, wind: 0 }),
   geometry: SceneGeometrySchema.default({ walls: [], doors: [], zones: [], pins: [] }),
-  /** Painted tiles, when the GM built the floor rather than uploading one. */
+  /**
+   * Painted tiles for the GROUND floor.
+   *
+   * Kept as the level-0 slot rather than folded into `levels` so every scene
+   * ever painted still opens, and so the overwhelmingly common case — one
+   * floor — costs nothing extra to store or reason about. `sceneLevels()`
+   * presents both as one list.
+   */
   tiles: TileLayerSchema.optional(),
+  /**
+   * Floors ABOVE and below the ground one, in display order (FR9.22).
+   *
+   * Empty for a flat scene, which is most of them. Levels carry tiles only:
+   * fog, geometry and the grid stay scene-wide, because a building has one
+   * footprint, and a storey that could be a different size from the one below
+   * would be a different building.
+   */
+  levels: z.array(SceneLevelSchema).default([]),
   fog: FogStateSchema.default({ regions: [], revealed: [], revealedShapes: [] }),
   /** Background map image attachment ids, draw order first→last. */
   mapAttachmentIds: z.array(z.string()).default([]),

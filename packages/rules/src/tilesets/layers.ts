@@ -77,3 +77,56 @@ export function cellContents(
   if (o !== undefined) out.object = o;
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Floors
+// ---------------------------------------------------------------------------
+
+/** One floor, resolved: always has an id, a name and a tile layer to draw. */
+export interface ResolvedLevel {
+  id: string;
+  name: string;
+  tiles: LayeredTiles | undefined;
+}
+
+/** What a scene needs to expose for its floors to be read. */
+export interface LevelledScene {
+  tiles?: LayeredTiles | undefined;
+  levels?: readonly { id: string; name: string; tiles?: LayeredTiles | undefined }[] | undefined;
+}
+
+/** The name a scene's ground floor gets when nobody has named it. */
+export const GROUND_LEVEL_NAME = 'Ground';
+
+/**
+ * Every floor of a scene, ground first.
+ *
+ * `scene.tiles` IS level 0. Keeping it there rather than folding it into the
+ * array means every scene ever painted is already a one-level scene with no
+ * migration at all, and the overwhelmingly common case — a building with one
+ * floor — costs nothing extra to store or reason about.
+ *
+ * Always returns at least one entry, so callers never have to handle "a scene
+ * with no floors", which is not a thing a map can be.
+ */
+export function sceneLevels(scene: LevelledScene): ResolvedLevel[] {
+  const ground: ResolvedLevel = {
+    id: 'ground',
+    name: GROUND_LEVEL_NAME,
+    tiles: scene.tiles,
+  };
+  return [ground, ...(scene.levels ?? []).map((l) => ({ id: l.id, name: l.name, tiles: l.tiles }))];
+}
+
+/**
+ * The tiles on one floor, clamped to the floors that exist.
+ *
+ * Clamped rather than throwing: a token left on floor 3 of a scene the GM has
+ * since cut back to two is a data state that WILL happen, and dropping that
+ * token off the map is worse than standing it on the top floor.
+ */
+export function levelTiles(scene: LevelledScene, level: number): LayeredTiles | undefined {
+  const all = sceneLevels(scene);
+  const index = Math.min(Math.max(0, Math.floor(level)), all.length - 1);
+  return all[index]?.tiles;
+}

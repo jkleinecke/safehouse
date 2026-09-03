@@ -223,6 +223,7 @@ export default function GridPage() {
         fogDraft: store.fogDraft,
         selectedPinId: store.selectedPinId,
         shroud,
+        level: store.activeLevel,
       }),
     [
       scene,
@@ -237,6 +238,7 @@ export default function GridPage() {
       store.fogDraft,
       store.selectedPinId,
       shroud,
+      store.activeLevel,
     ],
   );
 
@@ -318,7 +320,7 @@ export default function GridPage() {
         }
 
         setTileNotice(null);
-        strokeRef.current?.add(scene.id, st.tilesetId, `${col},${row}`, placing);
+        strokeRef.current?.add(scene.id, st.tilesetId, `${col},${row}`, placing, st.activeLevel);
       },
       onTileStrokeEnd: () => strokeRef.current?.flush(),
       onPinSelect: (pinId) => {

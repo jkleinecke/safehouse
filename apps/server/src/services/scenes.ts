@@ -36,6 +36,8 @@ import {
   type Visibility,
   TileLayerSchema,
   type TileLayer,
+  SceneLevelSchema,
+  type SceneLevel,
 } from '@safehouse/contracts';
 import { environment } from '@safehouse/rules';
 import {
@@ -123,6 +125,7 @@ function geometryColumn(
   mapAttachmentIds: string[],
   notes?: string,
   tiles?: TileLayer,
+  levels?: SceneLevel[],
 ) {
   // `tiles` rides in the existing geometry JSONB rather than earning a column:
   // it is scene-shaped authoring data like walls and pins, and this keeps the
@@ -132,6 +135,7 @@ function geometryColumn(
     mapAttachmentIds,
     ...(notes !== undefined ? { notes } : {}),
     ...(tiles !== undefined ? { tiles } : {}),
+    ...(levels !== undefined ? { levels } : {}),
   };
 }
 
@@ -152,11 +156,28 @@ export function serializeScene(row: SceneRow): Scene {
   const tiles = tilesParsed.success
     ? { ...migrateTileLayer(tilesParsed.data), cells: {} }
     : undefined;
+  // Floors above the ground one. Each level's tiles go through the SAME
+  // migration as `tiles`, so a storey painted before layers existed reads
+  // identically to one painted after: neither sight nor the renderer should
+  // care which floor it is looking at, or when that floor was drawn.
+  const levels = (Array.isArray(geoRaw['levels']) ? geoRaw['levels'] : []).flatMap(
+    (raw): SceneLevel[] => {
+      const parsed = SceneLevelSchema.safeParse(raw);
+      if (!parsed.success) return [];
+      const lvl = parsed.data;
+      return [
+        lvl.tiles === undefined
+          ? lvl
+          : { ...lvl, tiles: { ...migrateTileLayer(lvl.tiles), cells: {} } },
+      ];
+    },
+  );
   return {
     id: row.id,
     campaignId: row.campaignId,
     name: row.name,
     state: row.state,
+    levels,
     grid: normalizeGrid(row.grid),
     environment: normalizeEnvironment(row.environment),
     geometry: normalizeGeometry(geoRaw),
@@ -230,6 +251,7 @@ export function serializeToken(row: TokenRow): TokenDto {
     name: row.name,
     x: row.x,
     y: row.y,
+    level: row.level ?? 0,
     size: row.size,
     rotation: row.rotation,
     artRef: row.artRef,
@@ -389,6 +411,8 @@ export interface SceneWriteInput {
   environment?: Record<string, unknown>;
   geometry?: SceneGeometry;
   tiles?: TileLayer;
+  /** Floors above the ground one (FR9.22). Replaces the list wholesale. */
+  levels?: SceneLevel[];
   fog?: FogState;
   mapAttachmentIds?: string[];
   notes?: string;
@@ -401,6 +425,8 @@ export interface TokenCreateInput {
   name?: string;
   x?: number;
   y?: number;
+  /** Which floor it stands on (FR9.22); 0 is the ground. */
+  level?: number;
   size?: number;
   rotation?: number;
   artRef?: string | null;
@@ -501,6 +527,10 @@ export class ScenesService {
     const mapAttachmentIds = patch.mapAttachmentIds ?? current.mapAttachmentIds;
     const notes = patch.notes !== undefined ? patch.notes : current.notes;
     const tiles = patch.tiles !== undefined ? patch.tiles : current.tiles;
+    // Whole-list replacement, like geometry: a level patch carries every floor
+    // it wants to keep. Merging by index would make "delete the top storey"
+    // impossible to express.
+    const levels = patch.levels !== undefined ? patch.levels : current.levels;
     const updated = (
       await this.db
         .update(scenes)
@@ -509,7 +539,7 @@ export class ScenesService {
           state: patch.state ?? row.state,
           grid,
           environment: env,
-          geometry: geometryColumn(geometry, mapAttachmentIds, notes, tiles),
+          geometry: geometryColumn(geometry, mapAttachmentIds, notes, tiles, levels),
           fog,
         })
         .where(eq(scenes.id, row.id))

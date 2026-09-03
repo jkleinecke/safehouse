@@ -29,6 +29,13 @@
       "when": 1787905795854,
       "tag": "0003_npc_template_wiki_link",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1787905795855,
+      "tag": "0004_token_level",
+      "breakpoints": true
     }
   ]
 }

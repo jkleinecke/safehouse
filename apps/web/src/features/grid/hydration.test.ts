@@ -23,6 +23,7 @@ function scene(patch: Partial<Scene> = {}): Scene {
     environment: { light: 0, visibility: 0, glare: 0, wind: 0 },
     geometry: emptyGeometry(),
     fog: { regions: [], revealed: [], revealedShapes: [] },
+    levels: [],
     mapAttachmentIds: [],
     ...patch,
   };
@@ -40,6 +41,7 @@ function token(patch: Partial<Token> = {}): Token {
     size: 1,
     rotation: 0,
     hidden: false,
+    level: 0,
     barsVisibility: 'public',
     ...patch,
   };

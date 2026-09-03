@@ -58,6 +58,7 @@ export interface PerfTokenSpec {
   y: number;
   size: number;
   source: 'prop' | 'npc_template' | 'character' | 'combatant';
+  level: 0,
   barsVisibility: 'gm' | 'owner' | 'public';
   aura?: { radiusM: number; color?: string };
 }
@@ -111,6 +112,7 @@ export function perfTokens(count = PERF_TOKEN_COUNT): PerfTokenSpec[] {
       y: round2((cy + 1) * stepY + (rand() - 0.5) * 0.7),
       size,
       source: i % 5 === 0 ? 'npc_template' : 'prop',
+      level: 0,
       barsVisibility: 'public',
     };
     if (i % 11 === 4) spec.aura = { radiusM: 3 + (i % 3), color: '#c026d3' };

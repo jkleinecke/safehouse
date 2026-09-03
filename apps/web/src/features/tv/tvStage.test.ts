@@ -25,6 +25,7 @@ function scene(): Scene {
     environment: { light: 1, visibility: 0, glare: 0, wind: 0 },
     geometry: { walls: [], doors: [], zones: [], pins: [] },
     fog: { regions: [], revealed: [], revealedShapes: [] },
+    levels: [],
     mapAttachmentIds: ['map-1'],
   };
 }
@@ -39,6 +40,7 @@ const token: Token = {
   size: 1,
   rotation: 0,
   hidden: false,
+  level: 0,
   barsVisibility: 'public',
 };
 

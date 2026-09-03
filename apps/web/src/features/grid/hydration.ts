@@ -143,6 +143,8 @@ export interface StageComposeInput {
   selectedPinId?: string | null;
   /** Cells outside the viewer's sightline, or null to draw no scrim. */
   shroud?: ShroudState | null;
+  /** Which floor to draw (FR9.22). */
+  level?: number;
 }
 
 /**
@@ -170,5 +172,6 @@ export function composeStageState(input: StageComposeInput): StageSceneState | n
     fogDraft: input.fogDraft,
     selectedPinId: input.selectedPinId ?? null,
     shroud: input.shroud ?? null,
+    level: input.level ?? 0,
   };
 }

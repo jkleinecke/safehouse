@@ -23,6 +23,7 @@ import {
   layerOf,
   migrateTileLayer,
   parseCellKey,
+  sceneLevels,
   tileById,
   tilesetById,
 } from '@safehouse/rules';
@@ -119,6 +120,12 @@ const CellKeySchema = z
  * entries rather than one request per cell, and two GMs painting different
  * rooms do not clobber each other the way a whole-layer PUT would.
  */
+/**
+ * Floors per scene. Generous for a tower block and low enough that a typo in
+ * a level index cannot allocate an unbounded array of tile layers.
+ */
+const MAX_LEVELS = 12;
+
 const TilePaintBody = z.object({
   tilesetId: z.string().min(1).max(64),
   /** `"col,row"` -> tile id. */
@@ -141,6 +148,12 @@ const TilePaintBody = z.object({
    * ask for one in the decoration layer.
    */
   layer: z.enum(TILE_LAYERS).optional(),
+  /**
+   * Which floor to paint, 0 being the ground (FR9.22). Out of range is a 400
+   * rather than a clamp: silently painting the wrong storey is the one
+   * outcome a GM cannot see happening.
+   */
+  level: z.number().int().min(0).max(MAX_LEVELS - 1).default(0),
 });
 
 const TokenCreateBody = z.object({
@@ -149,6 +162,7 @@ const TokenCreateBody = z.object({
   name: z.string().min(1).max(120).optional(),
   x: z.number().default(0),
   y: z.number().default(0),
+  level: z.number().int().min(0).max(MAX_LEVELS - 1).default(0),
   size: z.number().positive().default(1),
   rotation: z.number().default(0),
   artRef: z.string().nullable().optional(),
@@ -161,12 +175,25 @@ const TokenPatchBody = z.object({
   name: z.string().min(1).max(120).optional(),
   x: z.number().optional(),
   y: z.number().optional(),
+  /** Which floor the token stands on (FR9.22) — how a runner takes the stairs. */
+  level: z.number().int().min(0).max(MAX_LEVELS - 1).optional(),
   size: z.number().positive().optional(),
   rotation: z.number().optional(),
   artRef: z.string().nullable().optional(),
   hidden: z.boolean().optional(),
   barsVisibility: z.enum(['gm', 'owner', 'public']).optional(),
   aura: TokenAuraSchema.nullable().optional(),
+});
+
+const SceneLevelsBody = z.object({
+  /**
+   * Floors ABOVE the ground one, in display order. At most `MAX_LEVELS - 1`
+   * because the ground floor is `scene.tiles` and is always present.
+   */
+  levels: z
+    .array(z.object({ id: z.string().min(1).max(64), name: z.string().min(1).max(60) }))
+    .max(MAX_LEVELS - 1)
+    .default([]),
 });
 
 const FogOpBody = z.object({
@@ -472,7 +499,19 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       const fresh = await txSvc.sceneRow(id);
       // The tile layer rides inside the geometry JSONB, so read it back
       // through the serializer rather than off the row.
-      const existing = serializeScene(fresh).tiles;
+      const scene0 = serializeScene(fresh);
+      // Which FLOOR this stroke lands on. A level the scene does not have yet
+      // is a 400, not an auto-create: a client off by one should not silently
+      // build a storey the GM never asked for.
+      const floors = sceneLevels(scene0);
+      if (body.level >= floors.length) {
+        throw httpError(
+          400,
+          'unknown_level',
+          `this scene has ${floors.length} level(s); no level ${body.level}`,
+        );
+      }
+      const existing = floors[body.level]?.tiles;
       // A layer carries exactly one tileset id, so a stroke from a different
       // set cannot be merged into it — painting with a new set REPLACES the
       // floor. Destructive and deliberate; the palette warns before it.
@@ -515,7 +554,17 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       // `cells` is written empty on purpose: the legacy field drains as soon
       // as a scene is touched, so the migration is self-retiring.
       const tiles = { ...layers, cells: {} };
-      const written = await txSvc.updateScene(fresh, { tiles });
+      // Level 0 lives in `scene.tiles`; anything above it in `scene.levels`.
+      // The split is what keeps every one-floor scene exactly as it was.
+      const patch =
+        body.level === 0
+          ? { tiles }
+          : {
+              levels: (scene0.levels ?? []).map((l, i) =>
+                i === body.level - 1 ? { ...l, tiles } : l,
+              ),
+            };
+      const written = await txSvc.updateScene(fresh, patch);
       await tx.emit({
         type: 'scene.updated',
         payload: { sceneId: id, changed: written.changed, tilesPainted: painted },
@@ -531,6 +580,41 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         ? Object.keys(t.ground).length + Object.keys(t.structure).length + Object.keys(t.object).length
         : 0,
     };
+  });
+
+  /**
+   * Add, rename or remove a floor (FR9.22).
+   *
+   * Whole-list replacement rather than per-level verbs: the GM is editing a
+   * short ordered list, and "delete the middle storey" is not expressible as a
+   * patch without inventing ids for positions. The ground floor is NOT in this
+   * list — it is `scene.tiles` — so it can never be deleted, which is right:
+   * a building with no ground floor is not a building.
+   */
+  app.put('/api/scenes/:id/levels', async (req) => {
+    const { id } = req.params as { id: string };
+    const { scene } = await openScene(req, id, { gmOnly: true });
+    const body = parseBody(SceneLevelsBody, req.body);
+
+    const updated = await app.hub.atomic(scene.campaignId, async (tx) => {
+      const txSvc = svc.withDb(tx.db);
+      const fresh = await txSvc.sceneRow(id);
+      const current = serializeScene(fresh);
+      // Keep the tiles already painted on a floor the GM is only renaming.
+      // Sending a level without tiles must not wipe the storey.
+      const byId = new Map((current.levels ?? []).map((l) => [l.id, l]));
+      const levels = body.levels.map((l) => {
+        const existing = byId.get(l.id);
+        return existing?.tiles === undefined ? l : { ...l, tiles: existing.tiles };
+      });
+      const written = await txSvc.updateScene(fresh, { levels });
+      await tx.emit({
+        type: 'scene.updated',
+        payload: { sceneId: id, changed: written.changed, levels: levels.length + 1 },
+      });
+      return written.scene;
+    });
+    return { scene: updated };
   });
 
   app.post('/api/scenes/:id/fog', async (req) => {

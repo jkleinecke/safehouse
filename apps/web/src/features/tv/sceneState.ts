@@ -91,6 +91,7 @@ function asToken(v: unknown): Token | null {
     name: str(raw['name']) ?? 'token',
     size: num(raw['size']) ?? 1,
     rotation: num(raw['rotation']) ?? 0,
+    level: 0,
     barsVisibility: bars === 'gm' || bars === 'owner' || bars === 'public' ? bars : 'owner',
     hidden: raw['hidden'] === true,
   };

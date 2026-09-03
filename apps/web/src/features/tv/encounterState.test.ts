@@ -121,6 +121,7 @@ function token(over: Partial<Token> & { id: string }): Token {
     size: 1,
     rotation: 0,
     hidden: false,
+    level: 0,
     barsVisibility: 'public',
     ...over,
   };

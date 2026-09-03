@@ -58,6 +58,7 @@ export default function TokensTab({
         y: center.y,
         size,
         hidden: kind !== 'character',
+        level: 0,
         barsVisibility: kind === 'character' ? 'owner' : 'gm',
       },
     });

@@ -7,6 +7,7 @@
  * persist with the scene; see `../mapImage.ts` for the encoding.
  */
 import { useRef, useState } from 'react';
+import LevelsPanel from './LevelsPanel.js';
 import type { Scene } from '@safehouse/contracts';
 import { fileUrl, usePatchScene, useUploadAttachment } from '../api.js';
 import {
@@ -132,6 +133,10 @@ export default function MapTab({ scene }: { scene: Scene }) {
           {upload.isPending ? 'uploading…' : 'upload image'}
         </button>
         {err && <p className="mono-label text-danger">{err}</p>}
+      </PanelSection>
+
+      <PanelSection title="Floors" hint="stairs, catwalks, storeys">
+        <LevelsPanel scene={scene} />
       </PanelSection>
 
       <PanelSection title="View" hint="how this scene is drawn — changes nothing about the rules">

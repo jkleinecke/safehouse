@@ -8,7 +8,8 @@
  */
 import { Application, Assets, Container, Graphics, Text, type Texture } from 'pixi.js';
 import type { Point, Token } from '@safehouse/contracts';
-import { TILESETS } from '@safehouse/rules';
+import { TILESETS, levelTiles } from '@safehouse/rules';
+import type { TileLayer } from '@safehouse/contracts';
 import {
   metricsFor,
   metricsKey,
@@ -276,8 +277,11 @@ class Stage implements StageApi, PointerHost {
 
     // Painted tiles: content-hashed key so a redraw happens on any paint that
     // changed a cell, and not once per frame (see `tileLayerKey`).
-    const tiles = next.scene.tiles;
-    const tileKey = tileLayerKey(next.scene.id, tiles);
+    // ONE floor's tiles. A catwalk painted above the warehouse must not draw
+    // over the warehouse when the GM is looking at the ground.
+    const level = next.level ?? 0;
+    const tiles = levelTiles(next.scene, level) as TileLayer | undefined;
+    const tileKey = `L${level}|${tileLayerKey(next.scene.id, tiles)}`;
     if (tileKey !== this.lastTileKey) {
       this.lastTileKey = tileKey;
       if (tiles) {

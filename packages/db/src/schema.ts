@@ -209,6 +209,11 @@ export const tokens = pgTable(
     /** Positions in grid units (§9.2). */
     x: doublePrecision('x').notNull().default(0),
     y: doublePrecision('y').notNull().default(0),
+    /**
+     * Which floor of the scene (FR9.22). 0 is the ground, which is the only
+     * floor a flat scene has — so every existing token is already correct.
+     */
+    level: integer('level').notNull().default(0),
     size: doublePrecision('size').notNull().default(1),
     rotation: doublePrecision('rotation').notNull().default(0),
     artRef: uuid('art_ref'),

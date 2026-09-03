@@ -58,6 +58,9 @@ describe('TileStrokeBuffer coalesces a drag into one request', () => {
         tilesetId: 'docklands',
         paint: { '0,0': 'floor', '1,0': 'floor', '2,0': 'wall' },
         erase: [],
+        // The floor is part of every stroke; 0 is the ground, which is where
+        // a scene with no upper storeys paints.
+        level: 0,
       },
     ]);
   });
@@ -287,5 +290,33 @@ describe('the paint tool’s UI state', () => {
     useGridStore.getState().setTool('tile-erase');
     useGridStore.getState().setTileId(null);
     expect(useGridStore.getState().tool).toBe('tile-erase');
+  });
+});
+
+describe('a stroke belongs to one floor', () => {
+  it('flushes when the GM changes storey mid-buffer', () => {
+    // The floor is part of a stroke's identity, exactly like the scene and the
+    // tileset. Without that, cells painted on the catwalk would ride along in
+    // the same request as the warehouse floor and land on the wrong level —
+    // one request, the wrong storey, nothing on screen to explain it.
+    const { buf, sent } = buffer();
+    buf.add('s1', 'docklands', '0,0', 'floor', 0);
+    buf.add('s1', 'docklands', '1,0', 'floor', 1);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ level: 0, paint: { '0,0': 'floor' } });
+
+    buf.flush();
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toMatchObject({ level: 1, paint: { '1,0': 'floor' } });
+  });
+
+  it('keeps a whole stroke together while the floor does not change', () => {
+    const { buf, sent } = buffer();
+    for (const col of [0, 1, 2]) buf.add('s1', 'docklands', `${col},0`, 'floor', 2);
+    expect(sent).toHaveLength(0);
+    buf.flush();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ level: 2 });
+    expect(Object.keys((sent[0] as { paint: Record<string, string> }).paint)).toHaveLength(3);
   });
 });

@@ -20,7 +20,7 @@ import type {
   TokenInput,
 } from '@safehouse/contracts';
 import type { TilePattern } from '@safehouse/rules';
-import { apiDelete, apiGet, apiPatch, apiPost, queryClient } from '../../api/client.js';
+import { apiDelete, apiGet, apiPatch, apiPut, apiPost, queryClient } from '../../api/client.js';
 import { getToken } from '../../api/session.js';
 import { useLiveStore } from '../../live/store.js';
 import { normalizeGeometry } from './geometryEdit.js';
@@ -480,6 +480,23 @@ export function tileDefsFrom(tilesets: readonly TilesetDef[]): Record<string, Ti
 }
 
 /**
+ * Replace a scene's floors above the ground one (FR9.22).
+ *
+ * Whole-list, like the geometry patch: the GM is editing a short ordered list,
+ * and "remove the middle storey" cannot be said as a per-item patch without
+ * inventing ids for positions. The server keeps the tiles already painted on a
+ * floor that is only being renamed.
+ */
+export function useSetSceneLevels() {
+  return useMutation({
+    mutationFn: async (body: { sceneId: string; levels: { id: string; name: string }[] }) =>
+      (await apiPut<{ scene: Scene }>(`/api/scenes/${body.sceneId}/levels`, { levels: body.levels }))
+        .scene,
+    onSuccess: (_data, vars) => invalidateScene(vars.sceneId),
+  });
+}
+
+/**
  * The built-in tilesets (FR9.2). Served rather than imported so the palette
  * cannot drift from what the server will accept, and cached indefinitely
  * because the catalogue ships with the build.
@@ -504,6 +521,10 @@ export interface TilePaint {
   paint: Record<string, string>;
   erase: string[];
   clear?: boolean;
+  /** Which floor the stroke lands on (FR9.22). Absent means the ground. */
+  level?: number;
+  /** Which layer `erase`/`clear` act on; absent means all three. */
+  layer?: 'ground' | 'structure' | 'object';
 }
 
 /**
@@ -565,6 +586,8 @@ export interface TileStrokeOptions {
 export class TileStrokeBuffer {
   private sceneId: string | null = null;
   private tilesetId: string | null = null;
+  /** The floor this stroke belongs to; null until the first cell. */
+  private level: number | null = null;
   private readonly paint = new Map<string, string>();
   private readonly erase = new Set<string>();
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -577,15 +600,27 @@ export class TileStrokeBuffer {
   }
 
   /** Buffer one cell. `tileId` null erases it. */
-  add(sceneId: string, tilesetId: string, key: string, tileId: string | null): void {
+  add(
+    sceneId: string,
+    tilesetId: string,
+    key: string,
+    tileId: string | null,
+    level = 0,
+  ): void {
+    // The FLOOR is part of a stroke's identity, exactly like the scene and the
+    // tileset. Without it, a GM who changes storey mid-buffer would have the
+    // cells they painted on the catwalk land on the warehouse floor — one
+    // request, the wrong level, and nothing on screen to explain it.
     if (
       (this.sceneId !== null && this.sceneId !== sceneId) ||
-      (this.tilesetId !== null && this.tilesetId !== tilesetId)
+      (this.tilesetId !== null && this.tilesetId !== tilesetId) ||
+      (this.level !== null && this.level !== level)
     ) {
       this.flush();
     }
     this.sceneId = sceneId;
     this.tilesetId = tilesetId;
+    this.level = level;
     if (tileId === null) {
       this.erase.add(key);
       this.paint.delete(key);
@@ -607,11 +642,13 @@ export class TileStrokeBuffer {
       tilesetId,
       paint: Object.fromEntries(this.paint),
       erase: [...this.erase],
+      level: this.level ?? 0,
     };
     this.paint.clear();
     this.erase.clear();
     this.sceneId = null;
     this.tilesetId = null;
+    this.level = null;
     void this.opts.send(body).catch((error: unknown) => {
       this.restore(body);
       this.opts.onError?.(error);

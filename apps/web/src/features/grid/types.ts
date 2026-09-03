@@ -226,6 +226,11 @@ export interface StageSceneState {
    * draws nothing at all. An unselected token must never black out the table.
    */
   shroud?: ShroudState | null;
+  /**
+   * Which floor to draw (FR9.22). Absent means the ground, which is the only
+   * floor a flat scene has.
+   */
+  level?: number;
 }
 
 /** Callbacks the stage raises back into React land. */

@@ -23,6 +23,16 @@ export const TokenSchema = z.object({
   name: z.string().min(1),
   x: z.number(),
   y: z.number(),
+  /**
+   * Which floor this token is on — an index into the scene's levels, 0 being
+   * the ground (FR9.22).
+   *
+   * On the token rather than derived from position, because two tokens can
+   * stand on the same square of two different storeys and the map has to tell
+   * them apart. Optional and defaulting to 0, so every existing token and
+   * every flat scene is already correct.
+   */
+  level: z.number().int().min(0).default(0),
   /** Size in grid units (metahuman 1; drones/vehicles/spirits any) — FR9.4. */
   size: z.number().positive().default(1),
   rotation: z.number().default(0),
