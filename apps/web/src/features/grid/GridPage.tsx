@@ -21,6 +21,10 @@ import {
   useScene,
   useSceneTokens,
   useScenes,
+  usePaintTiles,
+  useTilesets,
+  tileDefsFrom,
+  TileStrokeBuffer,
 } from './api.js';
 import { GridCommands } from './commands.js';
 import { rollScatter } from './geometry.js';
@@ -35,6 +39,8 @@ import {
   rangedWeapons,
   type Viewer,
 } from './projection.js';
+import { autoTileFor } from './autoPlace.js';
+import { useShroud } from './useShroud.js';
 import { useGridStore } from './store.js';
 import type { RulerState, StageApi, StageCallbacks, StageSceneState } from './types.js';
 import {
@@ -103,6 +109,48 @@ export default function GridPage() {
   const encounter = useHydratedEncounter(campaignId, sceneId);
   const drags = useRemoteDrags();
   const patchGeometry = usePatchGeometry();
+  const paintTiles = usePaintTiles();
+  const { data: tilesets } = useTilesets();
+
+  /** The palette the canvas paints with (FR9.2) — see `tileDefsFrom`. */
+  const tileDefs = useMemo(() => (tilesets ? tileDefsFrom(tilesets) : null), [tilesets]);
+
+  /**
+   * Stroke buffer: filled per cell by the pointer, sent as one request when the
+   * stroke ends. See `TileStrokeBuffer` for what it is defending against.
+   */
+  const [tileNotice, setTileNotice] = useState<string | null>(null);
+  const paintRef = useRef(paintTiles.mutateAsync);
+  paintRef.current = paintTiles.mutateAsync;
+  const strokeRef = useRef<TileStrokeBuffer | null>(null);
+  if (!strokeRef.current) {
+    strokeRef.current = new TileStrokeBuffer({
+      send: (body) => paintRef.current(body),
+      onError: () => setTileNotice('that stroke did not save — paint it again'),
+    });
+  }
+  // A stroke still buffered when the GM navigates away is work they did.
+  useEffect(() => () => strokeRef.current?.dispose(), []);
+
+  /**
+   * The floor-wipe warning, on the canvas rather than in the panel.
+   *
+   * The server replaces the ENTIRE painted layer when a stroke arrives under a
+   * different tileset (`plugins/scenes.ts` — there is no merge across sets and
+   * no confirmation). `TilesTab` says so, but only while the Tiles tab is
+   * open, and both the selected set and the paint tool outlive the panel: a GM
+   * who closes the panel and keeps painting could wipe a scene's floor with one
+   * click and never see the sentence. It follows the tool now, so it is on
+   * screen exactly when the next stroke is the destructive one.
+   */
+  const tileWipeWarning = useMemo(() => {
+    if (!isGm || (store.tool !== 'tile' && store.tool !== 'tile-erase')) return null;
+    const painted = scene?.tiles;
+    if (!painted || painted.tilesetId === store.tilesetId) return null;
+    const count = Object.keys(painted.cells).length;
+    if (count === 0) return null;
+    return `painting now replaces ${count} cells painted with “${painted.tilesetId}”`;
+  }, [isGm, store.tool, store.tilesetId, scene?.tiles]);
 
   // -- commands -------------------------------------------------------------
 
@@ -148,6 +196,18 @@ export default function GridPage() {
     [store.ruler, weapon, sheet],
   );
 
+  // Whose eyes the canvas is showing. Players see their own character's
+  // sightline when the GM has switched it on for the scene; the GM sees a
+  // viewpoint they pick, and by default none at all.
+  const shroud = useShroud({
+    scene,
+    tokens,
+    isGm,
+    losTokenId: store.losTokenId,
+    myCharacterId: myCharacterId ?? null,
+    enabledForPlayers: store.losForPlayers,
+  });
+
   const stageState: StageSceneState | null = useMemo(
     () =>
       composeStageState({
@@ -162,6 +222,7 @@ export default function GridPage() {
         scatter: store.scatter,
         fogDraft: store.fogDraft,
         selectedPinId: store.selectedPinId,
+        shroud,
       }),
     [
       scene,
@@ -175,6 +236,7 @@ export default function GridPage() {
       store.scatter,
       store.fogDraft,
       store.selectedPinId,
+      shroud,
     ],
   );
 
@@ -224,6 +286,41 @@ export default function GridPage() {
         s.setGmTab('pins');
         s.openGmPanel();
       },
+      // -- tile painting (FR9.2) --------------------------------------------
+      // Both halves are buffered: the coalescer knows which scene and which
+      // tileset a cell was painted under, so nothing is submitted under a set
+      // the GM has since switched away from.
+      onTilePaint: (col, row, erase) => {
+        if (!scene || !isGm) return;
+        const st = useGridStore.getState();
+
+        // Auto (`tileId === null`) is the DEFAULT, so this cannot bail out on
+        // an empty selection any more — that is the mode where the click means
+        // "you decide". `autoTileFor` answers from the square: what ground is
+        // under it, whether a wall adjoins it, what is already there.
+        //
+        // It can still answer null, and that is a real answer rather than a
+        // failure: Decor on ground no prop declares should place nothing,
+        // instead of standing a fire hydrant somewhere it makes no sense.
+        let placing: string | null = null;
+        if (!erase) {
+          const picked = autoTileFor({
+            scene,
+            tilesets: tilesets ?? [],
+            tilesetId: st.tilesetId,
+            category: st.tileCategory,
+            tileId: st.tileId,
+            col,
+            row,
+          });
+          if (picked === null) return;
+          placing = picked.tileId;
+        }
+
+        setTileNotice(null);
+        strokeRef.current?.add(scene.id, st.tilesetId, `${col},${row}`, placing);
+      },
+      onTileStrokeEnd: () => strokeRef.current?.flush(),
       onPinSelect: (pinId) => {
         const s = useGridStore.getState();
         s.selectPin(pinId);
@@ -231,7 +328,7 @@ export default function GridPage() {
         s.openGmPanel();
       },
     }),
-    [commands, scene, isGm, patchGeometry],
+    [commands, scene, isGm, patchGeometry, tilesets],
   );
 
   const urlFor = useCallback((id: string) => fileUrl(id), []);
@@ -243,6 +340,23 @@ export default function GridPage() {
     drags,
   });
   apiRef.current = api;
+
+  /**
+   * Hand the canvas the served palette. The dependency on `api` is the whole
+   * point of this effect.
+   *
+   * It used to be keyed `[tilesets, scene?.id]` and to call through `apiRef`,
+   * which is assigned during render from a handle that arrives asynchronously
+   * (`useStage` dynamically imports the pixi chunk). On a cold load the last
+   * run was the one where the scene id first appeared — the import had not
+   * resolved, the ref was still null, and `setTileDefs` was a silent no-op,
+   * after which neither dep ever changed again. The stage kept an empty
+   * palette, `drawTiles` skipped every cell for want of a definition, and the
+   * painted floor appeared only if the GM switched scenes and came back.
+   */
+  useEffect(() => {
+    if (api && tileDefs) api.setTileDefs(tileDefs);
+  }, [api, tileDefs]);
 
   // Leaving the ruler drops its line from the canvas as well as the readout.
   useEffect(() => {
@@ -330,6 +444,16 @@ export default function GridPage() {
             )}
           </span>
           {focusNotice && <span className="chip bg-panel/90 text-cyan">{focusNotice}</span>}
+          {tileWipeWarning && (
+            <span data-testid="tile-wipe-warning" className="chip bg-panel/90 text-magenta">
+              {tileWipeWarning}
+            </span>
+          )}
+          {tileNotice && (
+            <span data-testid="tile-notice" className="chip bg-panel/90 text-danger">
+              {tileNotice}
+            </span>
+          )}
         </div>
 
         <MeasurePanel

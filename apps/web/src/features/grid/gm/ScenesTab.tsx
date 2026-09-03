@@ -84,7 +84,7 @@ export default function ScenesTab({
           disabled={!name.trim() || create.isPending}
           onClick={() =>
             create.mutate(
-              { name: name.trim(), grid: { unitM: 1, cols: 40, rows: 30, offset: { x: 0, y: 0 } } },
+              { name: name.trim(), grid: { unitM: 1, cols: 40, rows: 30, offset: { x: 0, y: 0 }, projection: 'topdown' as const } },
               { onSuccess: (s: Scene) => { setName(''); setViewSceneId(s.id); } },
             )
           }

@@ -19,15 +19,25 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import '@fastify/multipart';
 import { z } from 'zod';
 import {
+  TILESETS,
+  layerOf,
+  migrateTileLayer,
+  parseCellKey,
+  tileById,
+  tilesetById,
+} from '@safehouse/rules';
+import {
   DisplaySetCommandSchema,
   FogRegionSchema,
   GridSchema,
   PointSchema,
   SceneEnvironmentSchema,
   SceneGeometrySchema,
+  TileLayerSchema,
   TokenAuraSchema,
   VisibilitySchema,
   type Visibility,
+  TILE_LAYERS,
 } from '@safehouse/contracts';
 import {
   assertCampaign,
@@ -44,6 +54,7 @@ import {
   computeScatter,
   normalizeGrid,
   sceneForViewer,
+  serializeScene,
   serializeToken,
   type SceneRow,
   type TokenRow,
@@ -65,6 +76,7 @@ const SceneCreateBody = z.object({
   grid: GridSchema.partial().optional(),
   environment: SceneEnvironmentSchema.partial().optional(),
   geometry: SceneGeometrySchema.optional(),
+  tiles: TileLayerSchema.optional(),
   mapAttachmentIds: z.array(z.string()).optional(),
   notes: z.string().max(20_000).optional(),
 });
@@ -77,6 +89,58 @@ const ScenePatchBody = z.object({
   geometry: SceneGeometrySchema.optional(),
   mapAttachmentIds: z.array(z.string()).optional(),
   notes: z.string().max(20_000).optional(),
+});
+
+/**
+ * Cell budget for the painted floor. The layer lives inside the
+ * `scenes.geometry` JSONB and nothing ever reclaims it — cells outside the
+ * grid are deliberately RETAINED so shrinking a scene cannot lose its paint
+ * (contracts/src/scene.ts) — so an unbounded record here is an unbounded
+ * column. Both caps sit far above any real floor: the layer cap is a fully
+ * painted 240x240 scene, roughly 40x the default grid.
+ */
+const MAX_STROKE_CELLS = 20_000;
+const MAX_LAYER_CELLS = 60_000;
+
+/**
+ * `"col,row"`, validated against the same parser the renderer uses rather than
+ * a second copy of the regex. Zod 4 checks record KEYS, so a malformed cell
+ * arrives as a normal `bad_request` with issues instead of needing a
+ * hand-rolled loop — and `__proto__` never reaches an `Object.assign`.
+ */
+const CellKeySchema = z
+  .string()
+  .max(64)
+  .refine((k) => parseCellKey(k) !== null, { message: 'cell key must be "col,row" integers' });
+
+/**
+ * A paint stroke (FR9.2): cells the GM just painted or erased, not the whole
+ * layer. A drag across a warehouse floor is one request of a few hundred
+ * entries rather than one request per cell, and two GMs painting different
+ * rooms do not clobber each other the way a whole-layer PUT would.
+ */
+const TilePaintBody = z.object({
+  tilesetId: z.string().min(1).max(64),
+  /** `"col,row"` -> tile id. */
+  paint: z
+    .record(CellKeySchema, z.string().min(1).max(64))
+    .refine((p) => Object.keys(p).length <= MAX_STROKE_CELLS, {
+      message: `at most ${MAX_STROKE_CELLS} cells per stroke`,
+    })
+    .default({}),
+  /** `"col,row"` keys to clear. */
+  erase: z.array(CellKeySchema).max(MAX_STROKE_CELLS).default([]),
+  /** Wipe the layer before applying (a "fill floor then paint" reset). */
+  clear: z.boolean().default(false),
+  /**
+   * Which layer `erase` and `clear` act on. Omitted means all three — the
+   * eraser as a GM understands it, taking whatever is in the square.
+   *
+   * PAINTING never uses this. A tile's layer is a property of the tile
+   * (`layerOf`), so the catalogue decides where a wall goes and no client can
+   * ask for one in the decoration layer.
+   */
+  layer: z.enum(TILE_LAYERS).optional(),
 });
 
 const TokenCreateBody = z.object({
@@ -367,6 +431,107 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
   }
 
   // --- fog (FR9.13/9.14) ----------------------------------------------------
+
+  /** The built-in tilesets a GM can build a floor from (FR9.2). */
+  app.get('/api/tilesets', async (req) => {
+    requireAuth(req);
+    return { tilesets: TILESETS };
+  });
+
+  /**
+   * Paint or erase tiles. GM-only like the rest of scene authoring; players
+   * receive the result by re-GETting the scene, same as geometry.
+   *
+   * The catalogue checks run BEFORE the transaction (they touch no database,
+   * and `atomic`'s deadlock rule says hoist what you can); the merge runs
+   * INSIDE it, against a row re-read through `tx.db`. That second point is
+   * load-bearing: `updateScene` re-derives every field it is not handed from
+   * the row it is given, so merging against the snapshot `openScene` took
+   * would let a paint stroke silently roll back a wall drawn or a fog region
+   * revealed a moment earlier — and would let two strokes in flight lose one
+   * another. Two strokes in flight is not a contrived race: the client
+   * flushes its paint buffer on any pause mid-drag.
+   */
+  app.post('/api/scenes/:id/tiles', async (req) => {
+    const { id } = req.params as { id: string };
+    const { scene } = await openScene(req, id, { gmOnly: true });
+    const body = parseBody(TilePaintBody, req.body);
+    if (tilesetById(body.tilesetId) === null) {
+      throw httpError(400, 'unknown_tileset', `no such tileset: ${body.tilesetId}`);
+    }
+    // Reject the whole stroke, not the cell: a half-applied stroke is paint
+    // the GM watched themselves lay down and will not find again.
+    for (const tileId of new Set(Object.values(body.paint))) {
+      if (tileById(body.tilesetId, tileId) === null) {
+        throw httpError(400, 'unknown_tile', `no such tile: ${body.tilesetId}/${tileId}`);
+      }
+    }
+
+    const updated = await app.hub.atomic(scene.campaignId, async (tx) => {
+      const txSvc = svc.withDb(tx.db);
+      const fresh = await txSvc.sceneRow(id);
+      // The tile layer rides inside the geometry JSONB, so read it back
+      // through the serializer rather than off the row.
+      const existing = serializeScene(fresh).tiles;
+      // A layer carries exactly one tileset id, so a stroke from a different
+      // set cannot be merged into it — painting with a new set REPLACES the
+      // floor. Destructive and deliberate; the palette warns before it.
+      const keep = !body.clear && existing && existing.tilesetId === body.tilesetId;
+      // Read through the migration, so a scene painted before layers existed
+      // upgrades itself the first time the GM touches it.
+      const layers = keep
+        ? migrateTileLayer(existing)
+        : { tilesetId: body.tilesetId, ground: {}, structure: {}, object: {} };
+
+      if (body.clear && body.layer !== undefined && keep) {
+        // Clearing ONE layer: everything else stands. Wiping the furniture out
+        // of a room should not take the room with it.
+        layers[body.layer] = {};
+      }
+
+      // Where a tile goes is the tile's business (`layerOf`), never the
+      // client's: that is what stops a wall being painted into the layer that
+      // line of sight does not read.
+      for (const [key, tileId] of Object.entries(body.paint)) {
+        const tile = tileById(body.tilesetId, tileId)!;
+        layers[layerOf(tile)][key] = tileId;
+      }
+
+      // No layer named means the eraser as a GM understands it: take whatever
+      // is in the square.
+      const eraseFrom = body.layer !== undefined ? [body.layer] : [...TILE_LAYERS];
+      for (const key of body.erase) {
+        for (const name of eraseFrom) delete layers[name][key];
+      }
+
+      const painted =
+        Object.keys(layers.ground).length +
+        Object.keys(layers.structure).length +
+        Object.keys(layers.object).length;
+      if (painted > MAX_LAYER_CELLS) {
+        throw httpError(400, 'tile_layer_full', `a scene holds at most ${MAX_LAYER_CELLS} painted cells`);
+      }
+
+      // `cells` is written empty on purpose: the legacy field drains as soon
+      // as a scene is touched, so the migration is self-retiring.
+      const tiles = { ...layers, cells: {} };
+      const written = await txSvc.updateScene(fresh, { tiles });
+      await tx.emit({
+        type: 'scene.updated',
+        payload: { sceneId: id, changed: written.changed, tilesPainted: painted },
+      });
+      return written.scene;
+    });
+    // Across all three layers — `cells` is the drained legacy field and would
+    // report zero for every scene.
+    const t = updated.tiles;
+    return {
+      scene: updated,
+      painted: t
+        ? Object.keys(t.ground).length + Object.keys(t.structure).length + Object.keys(t.object).length
+        : 0,
+    };
+  });
 
   app.post('/api/scenes/:id/fog', async (req) => {
     const { id } = req.params as { id: string };

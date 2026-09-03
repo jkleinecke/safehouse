@@ -19,7 +19,7 @@ function scene(patch: Partial<Scene> = {}): Scene {
     campaignId: 'c1',
     name: 'Loading dock',
     state: 'active',
-    grid: { unitM: 1, cols: 20, rows: 12, offset: { x: 0, y: 0 } },
+    grid: { unitM: 1, cols: 20, rows: 12, offset: { x: 0, y: 0 }, projection: 'topdown' as const },
     environment: { light: 0, visibility: 0, glare: 0, wind: 0 },
     geometry: emptyGeometry(),
     fog: { regions: [], revealed: [], revealedShapes: [] },

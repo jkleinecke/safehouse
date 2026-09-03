@@ -1,6 +1,25 @@
 import { z } from 'zod';
 import { PointSchema } from './common.js';
 
+/**
+ * How the grid is drawn. A pure PRESENTATION choice, per scene.
+ *
+ * `topdown` is the plan view: one cell, one square. `iso` is a 2:1 isometric
+ * projection where standing things extrude upward, so a wall is a solid you
+ * can see rather than a slightly different shade of floor — which is the whole
+ * reason it exists.
+ *
+ * Nothing downstream of the renderer knows about this. Cells, tokens, walls,
+ * fog and line of sight are all stored and computed in grid coordinates, so
+ * switching projection changes what the table SEES and never what is true:
+ * the same shot is legal, the same cover applies, the same tokens are where
+ * they were. That containment is the design, not an implementation detail —
+ * a projection that could change who can shoot whom would be a rules bug
+ * wearing a camera's clothes.
+ */
+export const GridProjectionSchema = z.enum(['topdown', 'iso']).default('topdown');
+export type GridProjection = z.infer<typeof GridProjectionSchema>;
+
 /** Square grid config — SR5 measures in meters; default 1 m per square (FR9.1). */
 export const GridSchema = z.object({
   unitM: z.number().positive().default(1),
@@ -8,6 +27,7 @@ export const GridSchema = z.object({
   rows: z.number().int().positive(),
   offset: PointSchema.default({ x: 0, y: 0 }),
   opacity: z.number().min(0).max(1).optional(),
+  projection: GridProjectionSchema,
 });
 export type Grid = z.infer<typeof GridSchema>;
 
@@ -65,6 +85,56 @@ export const PinSchema = z.object({
 });
 export type Pin = z.infer<typeof PinSchema>;
 
+/**
+ * Tile painting (FR9.2's "assemble" half): a scene can be BUILT from a tileset
+ * instead of, or on top of, an uploaded map image. Tiles are drawn from the
+ * catalogue in `@safehouse/rules` — original artwork-free definitions rendered
+ * procedurally, so nothing is shipped that we do not own (§14).
+ *
+ * The layer is SPARSE and keyed `"col,row"`: a 30x20 warehouse with a painted
+ * floor is ~600 short strings, which is nothing beside the map images this
+ * replaces, and an unpainted cell costs zero. Cells outside the grid are
+ * ignored rather than rejected, so shrinking a scene never corrupts its paint.
+ */
+/**
+ * The three things that can occupy one square at the same time.
+ *
+ * A single tile per cell cannot express a scene: a tree stands ON grass, an
+ * oil stain lies ON asphalt, a chair sits ON a floor, a window is set INTO a
+ * wall. Painting any of those over a one-tile cell would erase what it is
+ * standing on, so the layer a tile belongs to is part of what the tile IS.
+ *
+ * Three, not four, even though the palette offers four tools: Interior and
+ * Decorations both place things that stand on the ground, so they share the
+ * `object` layer. That is a real constraint and the right one — a square holds
+ * a chair or a potted plant, not both.
+ */
+export const TILE_LAYERS = ['ground', 'structure', 'object'] as const;
+export type TileLayerName = (typeof TILE_LAYERS)[number];
+
+/** `"col,row"` -> tile id within the layer's tileset. */
+const CellMap = z.record(z.string(), z.string()).default({});
+
+export const TileLayerSchema = z.object({
+  /** Catalogue id the cell ids belong to (e.g. `docklands`). */
+  tilesetId: z.string().min(1),
+  /**
+   * The original single-layer form, kept so scenes painted before layers
+   * existed still open. READ AND MIGRATED, never written: the server sorts
+   * these ids into the layer each tile belongs to on the way out
+   * (`migrateTileLayer`), so a scene upgrades itself the first time it is
+   * saved and this field drains to empty on its own.
+   */
+  cells: CellMap,
+  /** Floors, roads, grass — what the square is made of. */
+  ground: CellMap,
+  /** Walls, windows, doors — the building. */
+  structure: CellMap,
+  /** Furniture and props standing on the ground. */
+  object: CellMap,
+});
+export type TileLayer = z.infer<typeof TileLayerSchema>;
+
 export const SceneGeometrySchema = z.object({
   walls: z.array(WallSchema).default([]),
   doors: z.array(DoorSchema).default([]),
@@ -103,6 +173,8 @@ export const SceneSchema = z.object({
   grid: GridSchema,
   environment: SceneEnvironmentSchema.default({ light: 0, visibility: 0, glare: 0, wind: 0 }),
   geometry: SceneGeometrySchema.default({ walls: [], doors: [], zones: [], pins: [] }),
+  /** Painted tiles, when the GM built the floor rather than uploading one. */
+  tiles: TileLayerSchema.optional(),
   fog: FogStateSchema.default({ regions: [], revealed: [], revealedShapes: [] }),
   /** Background map image attachment ids, draw order first→last. */
   mapAttachmentIds: z.array(z.string()).default([]),

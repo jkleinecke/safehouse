@@ -14,7 +14,9 @@ import { mkdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { and, eq, inArray } from 'drizzle-orm';
+import { migrateTileLayer } from '@safehouse/rules';
 import {
+  GridProjectionSchema,
   GridSchema,
   SceneEnvironmentSchema,
   SceneGeometrySchema,
@@ -32,6 +34,8 @@ import {
   type Token,
   type TokenAura,
   type Visibility,
+  TileLayerSchema,
+  type TileLayer,
 } from '@safehouse/contracts';
 import { environment } from '@safehouse/rules';
 import {
@@ -62,14 +66,34 @@ export type AttachmentRow = typeof attachments.$inferSelect;
 // ---------------------------------------------------------------------------
 
 /** FR9.1 (Q11 resolved 0.6): default 1 m per square. */
-const DEFAULT_GRID = { unitM: 1, cols: 30, rows: 30, offset: { x: 0, y: 0 } };
+const DEFAULT_GRID = { unitM: 1, cols: 30, rows: 30, offset: { x: 0, y: 0 }, projection: 'topdown' as const };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+/**
+ * A stored grid, made safe to render.
+ *
+ * The fallback is all-or-nothing by design — a grid we cannot parse is not a
+ * grid — but that is dangerous the moment the schema grows an ENUM, because
+ * one unrecognised string then discards the whole object. Concretely: a scene
+ * saved by a build that knows a third projection, reopened by this one, would
+ * come back 30×30 at 1 m and the GM's calibration would be gone with no error
+ * anywhere. Losing a view preference is a shrug; losing the map's dimensions
+ * is an evening.
+ *
+ * So the one enum is normalised on its own first, and an unrecognised value is
+ * dropped rather than allowed to fail the parse. Everything else keeps the
+ * strict behaviour: a grid with a string where `cols` should be really is
+ * unusable, and the default really is the right answer for it.
+ */
 export function normalizeGrid(raw: unknown): Grid {
-  const parsed = GridSchema.safeParse({ ...DEFAULT_GRID, ...(isRecord(raw) ? raw : {}) });
+  const merged: Record<string, unknown> = { ...DEFAULT_GRID, ...(isRecord(raw) ? raw : {}) };
+  if (!GridProjectionSchema.safeParse(merged['projection']).success) {
+    delete merged['projection'];
+  }
+  const parsed = GridSchema.safeParse(merged);
   return parsed.success ? parsed.data : GridSchema.parse(DEFAULT_GRID);
 }
 
@@ -94,8 +118,21 @@ export function normalizeFog(raw: unknown): FogState {
  * schema strips them back out on read. Should the table ever grow the
  * columns, this is a straight lift — nothing else reads the envelope.
  */
-function geometryColumn(geometry: SceneGeometry, mapAttachmentIds: string[], notes?: string) {
-  return { ...geometry, mapAttachmentIds, ...(notes !== undefined ? { notes } : {}) };
+function geometryColumn(
+  geometry: SceneGeometry,
+  mapAttachmentIds: string[],
+  notes?: string,
+  tiles?: TileLayer,
+) {
+  // `tiles` rides in the existing geometry JSONB rather than earning a column:
+  // it is scene-shaped authoring data like walls and pins, and this keeps the
+  // painted floor inside the same atomic write as the geometry drawn over it.
+  return {
+    ...geometry,
+    mapAttachmentIds,
+    ...(notes !== undefined ? { notes } : {}),
+    ...(tiles !== undefined ? { tiles } : {}),
+  };
 }
 
 /** Full (GM-grade) API shape for a scene row. */
@@ -106,6 +143,15 @@ export function serializeScene(row: SceneRow): Scene {
     ? rawIds.filter((s): s is string => typeof s === 'string')
     : [];
   const notes = typeof geoRaw['notes'] === 'string' ? geoRaw['notes'] : undefined;
+  const tilesParsed = TileLayerSchema.safeParse(geoRaw['tiles']);
+  // Migrate on the way OUT, so the wire format is always layered and no client
+  // has to know that scenes were ever flat. A pre-layers scene therefore looks
+  // identical to a migrated one from the moment it is read — which is what
+  // lets line of sight, the renderer and the palette each assume layers
+  // without any of them carrying a compatibility branch.
+  const tiles = tilesParsed.success
+    ? { ...migrateTileLayer(tilesParsed.data), cells: {} }
+    : undefined;
   return {
     id: row.id,
     campaignId: row.campaignId,
@@ -116,6 +162,7 @@ export function serializeScene(row: SceneRow): Scene {
     geometry: normalizeGeometry(geoRaw),
     fog: normalizeFog(row.fog),
     mapAttachmentIds,
+    ...(tiles !== undefined ? { tiles } : {}),
     ...(notes !== undefined ? { notes } : {}),
     ...(row.audioRef ? { audioRef: row.audioRef } : {}),
   };
@@ -125,6 +172,20 @@ export function serializeScene(row: SceneRow): Scene {
  * Strip GM-layer data for player/observer/display viewers (Principle 4):
  * GM notes, GM-layer geometry (walls/doors/zones, non-public pins), and every
  * unrevealed fog region — players get only revealed geometry (FR9.13).
+ *
+ * `tiles` and `mapAttachmentIds` deliberately pass through UNFILTERED, and the
+ * distinction is worth stating because it looks like an oversight and is not.
+ * A painted tile layer is the MAP, not the GM's annotation of it — the same
+ * role an uploaded map image plays, which has always shipped whole and been
+ * occluded by fog in the client. Filtering one and not the other would be
+ * incoherent, and filtering both means occluding a raster image server-side,
+ * per viewer, which is a different feature.
+ *
+ * The cost is real and accepted: a player who opens devtools can read the
+ * layout of a room the GM has not revealed, including cells whose tile ids are
+ * `wall` and `door`. Fog is a *presentation* boundary for the map and a
+ * *secrecy* boundary for everything else. If that ever needs to change, it
+ * changes for map images at the same time, or not at all.
  */
 export function sceneForViewer(scene: Scene, gm: boolean): Scene {
   if (gm) return scene;
@@ -327,6 +388,7 @@ export interface SceneWriteInput {
   grid?: Record<string, unknown>;
   environment?: Record<string, unknown>;
   geometry?: SceneGeometry;
+  tiles?: TileLayer;
   fog?: FogState;
   mapAttachmentIds?: string[];
   notes?: string;
@@ -417,7 +479,7 @@ export class ScenesService {
           state: 'draft',
           grid,
           environment: env,
-          geometry: geometryColumn(geometry, input.mapAttachmentIds ?? [], input.notes),
+          geometry: geometryColumn(geometry, input.mapAttachmentIds ?? [], input.notes, input.tiles),
           fog,
         })
         .returning()
@@ -438,6 +500,7 @@ export class ScenesService {
     const fog = patch.fog !== undefined ? normalizeFog(patch.fog) : current.fog;
     const mapAttachmentIds = patch.mapAttachmentIds ?? current.mapAttachmentIds;
     const notes = patch.notes !== undefined ? patch.notes : current.notes;
+    const tiles = patch.tiles !== undefined ? patch.tiles : current.tiles;
     const updated = (
       await this.db
         .update(scenes)
@@ -446,7 +509,7 @@ export class ScenesService {
           state: patch.state ?? row.state,
           grid,
           environment: env,
-          geometry: geometryColumn(geometry, mapAttachmentIds, notes),
+          geometry: geometryColumn(geometry, mapAttachmentIds, notes, tiles),
           fog,
         })
         .where(eq(scenes.id, row.id))

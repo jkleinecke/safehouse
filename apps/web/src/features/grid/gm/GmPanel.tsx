@@ -13,16 +13,20 @@ import GeometryTab from './GeometryTab.js';
 import MapTab from './MapTab.js';
 import PinsTab from './PinsTab.js';
 import ScenesTab from './ScenesTab.js';
+import TilesTab from './TilesTab.js';
+import LosTab from './LosTab.js';
 import TokensTab from './TokensTab.js';
 
 const TABS: Array<{ id: GmTab; label: string }> = [
   { id: 'scenes', label: 'Scenes' },
   { id: 'map', label: 'Map' },
+  { id: 'tiles', label: 'Tiles' },
   { id: 'tokens', label: 'Tokens' },
   { id: 'geo', label: 'Geo' },
   { id: 'pins', label: 'Pins' },
   { id: 'fog', label: 'Fog' },
   { id: 'env', label: 'Env' },
+  { id: 'los', label: 'LOS' },
   { id: 'tv', label: 'TV' },
 ];
 
@@ -74,6 +78,8 @@ export default function GmPanel(props: GmPanelProps) {
           />
         )}
         {tab === 'map' && <MapTab scene={props.scene} />}
+        {tab === 'tiles' && <TilesTab scene={props.scene} />}
+        {tab === 'los' && <LosTab scene={props.scene} tokens={props.tokens} />}
         {tab === 'tokens' && (
           <TokensTab
             campaignId={props.campaignId}

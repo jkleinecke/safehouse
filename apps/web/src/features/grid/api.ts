@@ -19,11 +19,13 @@ import type {
   Token,
   TokenInput,
 } from '@safehouse/contracts';
+import type { TilePattern } from '@safehouse/rules';
 import { apiDelete, apiGet, apiPatch, apiPost, queryClient } from '../../api/client.js';
 import { getToken } from '../../api/session.js';
 import { useLiveStore } from '../../live/store.js';
 import { normalizeGeometry } from './geometryEdit.js';
 import { mapImageId } from './mapImage.js';
+import { tileDefKey, type TileDrawDef, tileDefsFromSets } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Queries
@@ -424,4 +426,234 @@ export function useRefetchOnReconnect(
     void qc.invalidateQueries({ queryKey: ['encounter'] });
     if (sceneId) void qc.invalidateQueries({ queryKey: ['scene', sceneId] });
   }, [status, campaignId, sceneId, qc]);
+}
+
+/** A tile definition as served by `GET /api/tilesets` (source: @safehouse/rules). */
+export interface TileDef {
+  id: string;
+  name: string;
+  kind: 'floor' | 'wall' | 'door' | 'feature';
+  pattern: TilePattern;
+  colors: [string, string];
+  /**
+   * Extrusion in cells — 0 flat, 0.5 waist-high, 1 full. Read by BOTH the
+   * isometric renderer (the silhouette) and `@safehouse/rules`' line of sight
+   * (cover and sight blocking), which is the point: one number, so a tile that
+   * looks waist-high cannot behave like a full wall.
+   */
+  height?: number;
+  /** Colour the tile gives off — neon, sodium light, a barrel fire. */
+  emissive?: string;
+  /**
+   * Which of the four tools offers it — Ground, Building, Interior, Decor —
+   * and so which layer it lands on. Absent on a set that predates the tools;
+   * the palette falls back to `kind`.
+   */
+  category?: 'ground' | 'building' | 'interior' | 'decoration';
+  /** Where it belongs, for single-click placement (see `pickTile` in rules). */
+  placement?: { againstWall?: boolean; inWall?: boolean; on?: readonly string[] };
+  /**
+   * Sight and movement blocking. Derived from `height` unless the tile says
+   * otherwise (glass is full height and see-through), so these are only set
+   * for the exceptions — see `stopsSight` / `stopsMovement` in the rules.
+   */
+  blocksMovement?: boolean;
+  blocksSight?: boolean;
+  hint?: string;
+}
+export interface TilesetDef {
+  id: string;
+  name: string;
+  blurb: string;
+  tiles: TileDef[];
+}
+
+/**
+ * Flatten the served catalogue into the canvas's palette (`StageApi.setTileDefs`).
+ *
+ * Keyed by `tileDefKey`, not by tile id: `wall` exists in every set, `door` in
+ * four and `floor` in two, and the flat map this replaces silently kept only
+ * the last one loaded.
+ */
+export function tileDefsFrom(tilesets: readonly TilesetDef[]): Record<string, TileDrawDef> {
+  return tileDefsFromSets(tilesets);
+}
+
+/**
+ * The built-in tilesets (FR9.2). Served rather than imported so the palette
+ * cannot drift from what the server will accept, and cached indefinitely
+ * because the catalogue ships with the build.
+ */
+export function useTilesets() {
+  return useQuery({
+    queryKey: ['tilesets'],
+    queryFn: async () => (await apiGet<{ tilesets: TilesetDef[] }>('/api/tilesets')).tilesets,
+    staleTime: Infinity,
+  });
+}
+
+/**
+ * One stroke's worth of delta. The scene rides in the body rather than being
+ * baked into the hook: a stroke buffered while the GM switches scenes must go
+ * to the scene it was painted on, not to whichever one is on screen when the
+ * timer fires.
+ */
+export interface TilePaint {
+  sceneId: string;
+  tilesetId: string;
+  paint: Record<string, string>;
+  erase: string[];
+  clear?: boolean;
+}
+
+/**
+ * Paint or erase cells as a delta — one request per stroke, not per cell.
+ *
+ * The response carries the whole updated scene, so it is written straight into
+ * the composed-scene cache: the floor appears the moment the POST lands. The
+ * old `invalidateScene` threw that payload away and refetched, and then the
+ * server's own `scene.updated` broadcast invalidated the same key again — one
+ * stroke cost a POST plus up to two full composed-scene GETs, and the paint
+ * did not show until the first of them came back.
+ */
+export function usePaintTiles() {
+  return useMutation({
+    mutationFn: async ({ sceneId, ...body }: TilePaint) =>
+      (await apiPost<{ scene: Scene; painted: number }>(`/api/scenes/${sceneId}/tiles`, body)).scene,
+    onSuccess: (scene, vars) => {
+      queryClient.setQueryData<ComposedScene>(['scene', vars.sceneId], (old) =>
+        old ? { ...old, scene } : old,
+      );
+      void queryClient.invalidateQueries({ queryKey: ['scenes'] });
+    },
+  });
+}
+
+export interface TileStrokeOptions {
+  send(body: TilePaint): Promise<unknown>;
+  /** A stroke the server refused; its cells are back in the buffer. */
+  onError?(error: unknown): void;
+  /** Idle window before an un-ended stroke drains itself. */
+  idleMs?: number;
+}
+
+/**
+ * Coalesces a paint drag into one request.
+ *
+ * A stroke raises one callback per cell; the server wants one per stroke,
+ * because each write is a full read-modify-write of the layer and two in
+ * flight lose each other's cells. This lived inline in `GridPage` as a bare
+ * `setTimeout` and got four things wrong, all of which cost the GM work:
+ *
+ *   1. it stamped the buffer with whatever tileset was selected AT THAT MOMENT,
+ *      on every cell. Switching sets mid-stroke submitted set-A tile ids under
+ *      set B — a 400 `unknown_tile` that silently dropped the whole stroke, or,
+ *      for the ids that exist in several sets (`wall`, `door`, `floor`), cells
+ *      painted with the wrong tile. A stroke belongs to one scene and one
+ *      tileset; changing either flushes what is buffered first.
+ *   2. it cleared the buffer synchronously before the request resolved, and
+ *      the mutation declared no error path, so any 400/500/offline answer ate
+ *      the stroke with no feedback at all. A refused stroke now comes BACK into
+ *      the buffer and is reported.
+ *   3. it had no unmount cleanup: navigating away within the idle window
+ *      dropped the timer and the cells with it. `dispose()` flushes.
+ *   4. it re-armed on every cell, making it a debounce over painting ACTIVITY
+ *      rather than a per-stroke flush. `flush()` is now called on pointerup
+ *      (`StageCallbacks.onTileStrokeEnd`); the timer is the fallback for a
+ *      gesture that never reports an end.
+ */
+export class TileStrokeBuffer {
+  private sceneId: string | null = null;
+  private tilesetId: string | null = null;
+  private readonly paint = new Map<string, string>();
+  private readonly erase = new Set<string>();
+  private timer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(private readonly opts: TileStrokeOptions) {}
+
+  /** Cells waiting to be sent. */
+  get pending(): number {
+    return this.paint.size + this.erase.size;
+  }
+
+  /** Buffer one cell. `tileId` null erases it. */
+  add(sceneId: string, tilesetId: string, key: string, tileId: string | null): void {
+    if (
+      (this.sceneId !== null && this.sceneId !== sceneId) ||
+      (this.tilesetId !== null && this.tilesetId !== tilesetId)
+    ) {
+      this.flush();
+    }
+    this.sceneId = sceneId;
+    this.tilesetId = tilesetId;
+    if (tileId === null) {
+      this.erase.add(key);
+      this.paint.delete(key);
+    } else {
+      this.paint.set(key, tileId);
+      this.erase.delete(key);
+    }
+    this.arm();
+  }
+
+  /** Send what is buffered: stroke end, scene/tileset change, unmount. */
+  flush(): void {
+    this.cancelTimer();
+    const sceneId = this.sceneId;
+    const tilesetId = this.tilesetId;
+    if (sceneId === null || tilesetId === null || this.pending === 0) return;
+    const body: TilePaint = {
+      sceneId,
+      tilesetId,
+      paint: Object.fromEntries(this.paint),
+      erase: [...this.erase],
+    };
+    this.paint.clear();
+    this.erase.clear();
+    this.sceneId = null;
+    this.tilesetId = null;
+    void this.opts.send(body).catch((error: unknown) => {
+      this.restore(body);
+      this.opts.onError?.(error);
+    });
+  }
+
+  /** Flush anything outstanding; the component is going away. */
+  dispose(): void {
+    this.flush();
+  }
+
+  /**
+   * Put a refused stroke's cells back, WITHOUT re-arming the timer: a
+   * deterministic 400 would otherwise retry forever. They ride out with the
+   * GM's next stroke, and the notice tells them to make one. Cells the GM has
+   * since re-edited win — the buffer holds their latest intent, not ours.
+   */
+  private restore(body: TilePaint): void {
+    if (this.sceneId !== null && (this.sceneId !== body.sceneId || this.tilesetId !== body.tilesetId)) {
+      return; // the GM moved to another scene or set; these cells cannot merge
+    }
+    this.sceneId = body.sceneId;
+    this.tilesetId = body.tilesetId;
+    for (const [key, tileId] of Object.entries(body.paint)) {
+      if (!this.erase.has(key) && !this.paint.has(key)) this.paint.set(key, tileId);
+    }
+    for (const key of body.erase) {
+      if (!this.paint.has(key) && !this.erase.has(key)) this.erase.add(key);
+    }
+  }
+
+  private arm(): void {
+    this.cancelTimer();
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.flush();
+    }, this.opts.idleMs ?? 140);
+  }
+
+  private cancelTimer(): void {
+    if (this.timer === null) return;
+    clearTimeout(this.timer);
+    this.timer = null;
+  }
 }

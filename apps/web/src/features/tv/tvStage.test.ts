@@ -21,7 +21,7 @@ function scene(): Scene {
     campaignId: 'c1',
     name: 'Redmond rooftop',
     state: 'active',
-    grid: { unitM: 1, cols: 30, rows: 20, offset: { x: 0, y: 0 } },
+    grid: { unitM: 1, cols: 30, rows: 20, offset: { x: 0, y: 0 }, projection: 'topdown' as const },
     environment: { light: 1, visibility: 0, glare: 0, wind: 0 },
     geometry: { walls: [], doors: [], zones: [], pins: [] },
     fog: { regions: [], revealed: [], revealedShapes: [] },

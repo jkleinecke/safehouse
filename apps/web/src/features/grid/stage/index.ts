@@ -8,6 +8,7 @@
  */
 import { Application, Assets, Container, Graphics, Text, type Texture } from 'pixi.js';
 import type { Point, Token } from '@safehouse/contracts';
+import { TILESETS } from '@safehouse/rules';
 import {
   metricsFor,
   metricsKey,
@@ -15,18 +16,46 @@ import {
   worldFromGrid,
   type SceneMetrics,
 } from '../geometry.js';
-import type { MovementThresholds, StageApi, StageOptions, StageSceneState } from '../types.js';
+import {
+  tileDefsFromSets,
+  type MovementThresholds,
+  type StageApi,
+  type StageOptions,
+  type StageSceneState,
+  type TileDrawDef,
+} from '../types.js';
 import { parserSafeUrlFor, type AssetRegistry } from './assetUrl.js';
 import { Camera } from './camera.js';
 import { C } from './colors.js';
 import { FxLayer } from './fx.js';
 import { drawFog, drawGeometry, drawGrid, drawPins } from './layers.js';
+import { drawShroud, shroudKey } from './shroudLayer.js';
+import { drawTiles, tileDrawInput, tileLayerKey } from './tileLayer.js';
 import { MapLayer } from './mapLayer.js';
 import { PointerController, type PointerHost } from './pointer.js';
 import { TokenView } from './tokenView.js';
 
 /** How long an un-terminated remote drag ghost keeps overriding a position. */
 const GHOST_TTL_MS = 4000;
+
+/**
+ * The palette every stage starts with (FR9.2).
+ *
+ * `setTileDefs` exists so the canvas draws exactly what the SERVER accepted,
+ * and the Grid still calls it — but it was the ONLY palette path, and the two
+ * consumers that matter never completed it. The table display never called it
+ * at all (`tvStage.ts` builds a read-only handle that does not expose it), so
+ * the screen the feature exists for drew a blank floor forever. The Grid's own
+ * call lost a race: the stage arrives from a dynamic import, so on a cold load
+ * the palette effect ran while the handle was still null and the floor only
+ * appeared after the GM switched scenes and back.
+ *
+ * Seeding from the shipped catalogue removes the whole class of failure: it is
+ * the same data, from the same monorepo build, that the server serves at
+ * `GET /api/tilesets`, so a painted scene draws immediately and with no round
+ * trip — and the served palette still wins the moment it lands.
+ */
+const CATALOGUE_DEFS: Record<string, TileDrawDef> = tileDefsFromSets(TILESETS);
 
 function fogKey(state: StageSceneState): string {
   const fog = state.scene.fog;
@@ -67,6 +96,13 @@ class Stage implements StageApi, PointerHost {
 
   private readonly app = new Application();
   private readonly world = new Container();
+  /** Painted floor (FR9.2) — under the grid, above the map image. */
+  private readonly tileG = new Graphics();
+  private lastTileKey = '';
+  /** Cells outside the viewer's sightline (FR9.16). */
+  private readonly shroudG = new Graphics();
+  private lastShroudKey = '';
+  private tileDefs: Record<string, TileDrawDef> = CATALOGUE_DEFS;
   private readonly gridG = new Graphics();
   private readonly geoG = new Graphics();
   private readonly fogG = new Graphics();
@@ -136,6 +172,8 @@ class Stage implements StageApi, PointerHost {
     // server-side, but the GM's own view has to occlude too).
     this.world.addChild(
       this.map.root,
+      this.tileG,
+      this.shroudG,
       this.gridG,
       this.geoG,
       this.pinG,
@@ -214,6 +252,12 @@ class Stage implements StageApi, PointerHost {
 
   // -- StageApi --------------------------------------------------------------
 
+  /** Served palette wins; the shipped catalogue fills anything it omits. */
+  setTileDefs(defs: Record<string, TileDrawDef>): void {
+    this.tileDefs = { ...CATALOGUE_DEFS, ...defs };
+    this.lastTileKey = ''; // force a redraw with the new palette
+  }
+
   update(next: StageSceneState): void {
     this.sceneState = next;
     const m = metricsFor(next.scene.grid);
@@ -223,10 +267,34 @@ class Stage implements StageApi, PointerHost {
     if (mk !== this.lastMetricsKey) {
       this.lastMetricsKey = mk;
       drawGrid(this.gridG, m);
+      this.lastTileKey = ''; // tiles are metric-dependent too
       this.map.fitAll(m, next.scene.mapAttachmentIds.length === 0);
       this.lastFogKey = ''; // fog/geometry/pins are metric-dependent
       this.lastGeoKey = '';
       this.lastPinKey = '';
+    }
+
+    // Painted tiles: content-hashed key so a redraw happens on any paint that
+    // changed a cell, and not once per frame (see `tileLayerKey`).
+    const tiles = next.scene.tiles;
+    const tileKey = tileLayerKey(next.scene.id, tiles);
+    if (tileKey !== this.lastTileKey) {
+      this.lastTileKey = tileKey;
+      if (tiles) {
+        drawTiles(this.tileG, m, tileDrawInput(tiles, this.tileDefs));
+      } else {
+        this.tileG.clear();
+      }
+    }
+
+    // The sightline shroud. Keyed on the visible SET rather than its size: a
+    // token stepping sideways behind a pillar can reveal one cell and hide
+    // another, which leaves the count identical and the shape different.
+    const shroud = next.shroud ?? null;
+    const sKey = shroudKey(shroud);
+    if (sKey !== this.lastShroudKey) {
+      this.lastShroudKey = sKey;
+      drawShroud(this.shroudG, m, shroud);
     }
 
     const mapKey = next.scene.mapAttachmentIds.join(',');

@@ -28,7 +28,7 @@ export const PERF_GRID: Grid = {
   unitM: 1,
   cols: 40,
   rows: 30,
-  offset: { x: 0, y: 0 },
+  offset: { x: 0, y: 0 }, projection: 'topdown' as const,
   opacity: 0.35,
 };
 

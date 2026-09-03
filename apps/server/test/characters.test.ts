@@ -494,7 +494,7 @@ describe('the active scene feeds every pool (FR9.11)', () => {
       campaignId: boot.campaignId,
       name: 'Dockside — blackout',
       state: 'active',
-      grid: { unitM: 1, cols: 40, rows: 40, offset: { x: 0, y: 0 } },
+      grid: { unitM: 1, cols: 40, rows: 40, offset: { x: 0, y: 0 }, projection: 'topdown' as const },
       environment: { light: 3, visibility: 0, glare: 0, wind: 0 },
     });
     const res = await t.app.inject({

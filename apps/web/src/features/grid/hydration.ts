@@ -14,7 +14,7 @@ import {
   draggableTokenIds,
   type Viewer,
 } from './projection.js';
-import type { AoeTemplate, FogDraft, GridTool, ScatterResult, StageSceneState } from './types.js';
+import type { AoeTemplate, FogDraft, GridTool, ScatterResult, ShroudState, StageSceneState } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Which scene is on screen
@@ -141,6 +141,8 @@ export interface StageComposeInput {
   fogDraft: FogDraft | null;
   /** Pin open in the GM's editor (FR9.3). */
   selectedPinId?: string | null;
+  /** Cells outside the viewer's sightline, or null to draw no scrim. */
+  shroud?: ShroudState | null;
 }
 
 /**
@@ -167,5 +169,6 @@ export function composeStageState(input: StageComposeInput): StageSceneState | n
     scatter: input.scatter,
     fogDraft: input.fogDraft,
     selectedPinId: input.selectedPinId ?? null,
+    shroud: input.shroud ?? null,
   };
 }

@@ -17,7 +17,7 @@ import { Raster } from './png.js';
 // Dimensions
 // ---------------------------------------------------------------------------
 
-export const PIER23_GRID: Grid = { unitM: 1, cols: 30, rows: 20, offset: { x: 0, y: 0 } };
+export const PIER23_GRID: Grid = { unitM: 1, cols: 30, rows: 20, offset: { x: 0, y: 0 }, projection: 'topdown' as const };
 
 /** Sodium spill through the roof lights only: dim light, one tier (−1). */
 export const PIER23_ENVIRONMENT: SceneEnvironment = {

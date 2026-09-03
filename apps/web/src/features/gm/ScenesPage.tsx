@@ -129,7 +129,7 @@ export default function ScenesPage() {
         }
         const scene = await create.mutateAsync({
           name: input.name,
-          grid: { unitM: input.unitM, cols: input.cols, rows: input.rows, offset: { x: 0, y: 0 } },
+          grid: { unitM: input.unitM, cols: input.cols, rows: input.rows, offset: { x: 0, y: 0 }, projection: 'topdown' as const },
           ...(mapAttachmentIds.length > 0 ? { mapAttachmentIds } : {}),
         });
         if (input.activate) await activate.mutateAsync(scene.id);

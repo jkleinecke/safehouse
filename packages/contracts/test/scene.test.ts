@@ -6,7 +6,7 @@ const scene = {
   campaignId: 'cmp_1',
   name: 'Dockside Warehouse',
   state: 'active',
-  grid: { unitM: 1, cols: 40, rows: 30, offset: { x: 0.5, y: 0 } },
+  grid: { unitM: 1, cols: 40, rows: 30, offset: { x: 0.5, y: 0 }, projection: 'topdown' as const },
   environment: { light: 2, visibility: 1, glare: 0, wind: 0, note: 'dim, drizzle' },
   geometry: {
     walls: [{ id: 'w1', a: { x: 0, y: 0 }, b: { x: 12, y: 0 } }],

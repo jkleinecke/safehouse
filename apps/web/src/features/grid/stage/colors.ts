@@ -34,3 +34,25 @@ export function parseColor(s: string | undefined | null, fallback: number): numb
       : hex;
   return Number.parseInt(full, 16);
 }
+
+/**
+ * Scale a colour's brightness. `f > 1` lightens, `f < 1` darkens; channels
+ * clamp rather than wrap, so an already-bright face does not roll over to
+ * black at the top of its range.
+ */
+export function shade(color: number, f: number): number {
+  const r = Math.min(255, Math.round(((color >> 16) & 0xff) * f));
+  const g = Math.min(255, Math.round(((color >> 8) & 0xff) * f));
+  const b = Math.min(255, Math.round((color & 0xff) * f));
+  return (r << 16) | (g << 8) | b;
+}
+
+/**
+ * Face shading for the isometric extrusion.
+ *
+ * A single flat fill on all three faces reads as a hexagon, not a solid — the
+ * eye needs the brightness step to resolve it as a box standing on the floor.
+ * The top catches the light, the two sides fall away from it, and the two
+ * sides differ from each other so a corner where two walls meet is legible.
+ */
+export const FACE_SHADE = { top: 1.15, left: 0.72, right: 0.52 } as const;

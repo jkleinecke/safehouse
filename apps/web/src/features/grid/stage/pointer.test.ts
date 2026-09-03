@@ -1,0 +1,321 @@
+/**
+ * The paint-stroke state machine (FR9.2).
+ *
+ * Painting is the one pointer mode with no natural end-of-gesture signal in the
+ * data it produces: a stroke is N independent `onTilePaint` calls, and React
+ * has to know when they stop in order to send them as one request. So what is
+ * pinned here is the machine's edges rather than its middle —
+ *
+ *   - the stroke ends on pointerup, pointercancel AND pointerleave, so a drag
+ *     that finishes off the canvas neither strands the controller in
+ *     'painting' nor loses its cells;
+ *   - a second finger (pinch to zoom mid-floor) ends the stroke rather than
+ *     abandoning it;
+ *   - the per-cell de-duplication resets between strokes, so painting the same
+ *     cell twice in two strokes really does send it twice.
+ *
+ * The controller talks to a DOM element and a host object, both of which are
+ * small enough to fake — no jsdom, in a package that has none.
+ */
+import { describe, expect, it, vi } from 'vitest';
+import type { Point, Scene } from '@safehouse/contracts';
+import { metricsFor, CELL } from '../geometry.js';
+import type { StageCallbacks, StageSceneState } from '../types.js';
+import { Camera } from './camera.js';
+import { PointerController, type PointerHost, cellsBetween } from './pointer.js';
+
+const M = metricsFor({ unitM: 1, cols: 20, rows: 20, offset: { x: 0, y: 0 }, projection: 'topdown' as const });
+
+interface FakeEl {
+  el: HTMLElement;
+  fire(type: string, event: Record<string, unknown>): void;
+}
+
+/**
+ * Just enough element. `setPointerCapture` is deliberately absent: the
+ * controller already guards it for exactly this case (synthetic events), and
+ * leaving it out proves that guard still holds.
+ */
+function fakeElement(): FakeEl {
+  const handlers = new Map<string, (e: never) => void>();
+  const el = {
+    addEventListener: (type: string, fn: (e: never) => void) => void handlers.set(type, fn),
+    removeEventListener: (type: string) => void handlers.delete(type),
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }) as DOMRect,
+  };
+  return {
+    el: el as unknown as HTMLElement,
+    fire(type, event) {
+      handlers.get(type)?.(event as never);
+    },
+  };
+}
+
+function harness(tool: StageSceneState['tool']) {
+  const onTilePaint = vi.fn<(col: number, row: number, erase: boolean) => void>();
+  const onTileStrokeEnd = vi.fn<() => void>();
+  const noop = (): void => {};
+  const cb: StageCallbacks = {
+    onTokenMove: noop,
+    onTokenDrag: noop,
+    onSelectToken: noop,
+    onPing: noop,
+    onPointer: noop,
+    onRuler: noop,
+    onDoorToggle: noop,
+    onAoePlace: noop,
+    onFogVertex: noop,
+    onFocus: noop,
+    onSegmentDraw: noop,
+    onPinPlace: noop,
+    onPinSelect: noop,
+    onTilePaint,
+    onTileStrokeEnd,
+  };
+  const state = {
+    scene: { id: 's1', geometry: { walls: [], doors: [], zones: [], pins: [] } } as unknown as Scene,
+    tokens: [],
+    role: 'gm',
+    draggableIds: new Set<string>(),
+    bars: new Map(),
+    actingTokenId: null,
+    selectedTokenId: null,
+    tool,
+    snapEnabled: true,
+    aoe: null,
+    scatter: null,
+    fogDraft: null,
+  } as unknown as StageSceneState;
+
+  const host: PointerHost = {
+    camera: new Camera(),
+    metrics: () => M,
+    state: () => state,
+    callbacks: cb,
+    localDrag: () => {},
+    echoPing: () => {},
+    echoTrail: () => {},
+    drawRuler: () => {},
+    clearRuler: () => {},
+  };
+
+  const dom = fakeElement();
+  const controller = new PointerController(dom.el, host);
+  let clock = 1000;
+
+  /** Screen px at the centre of a grid cell (camera is identity by default). */
+  const at = (col: number, row: number): Point => ({
+    x: col * CELL + CELL / 2,
+    y: row * CELL + CELL / 2,
+  });
+
+  const send = (type: string, col: number, row: number, id = 1): void => {
+    // Timestamps well past the 320ms double-tap window, so consecutive strokes
+    // on one cell are two strokes and not a ping.
+    clock += 1000;
+    const p = at(col, row);
+    dom.fire(type, {
+      pointerId: id,
+      clientX: p.x,
+      clientY: p.y,
+      button: 0,
+      timeStamp: clock,
+      shiftKey: false,
+    });
+  };
+
+  const cells = (): Array<[number, number, boolean]> => onTilePaint.mock.calls.map((c) => [...c]);
+
+  return { onTilePaint, onTileStrokeEnd, controller, send, cells };
+}
+
+// ---------------------------------------------------------------------------
+
+describe('a paint stroke', () => {
+  it('emits the cell under the press, then each new cell of the drag once', () => {
+    const h = harness('tile');
+    h.send('pointerdown', 2, 3);
+    h.send('pointermove', 3, 3);
+    h.send('pointermove', 4, 3);
+    expect(h.cells()).toEqual([
+      [2, 3, false],
+      [3, 3, false],
+      [4, 3, false],
+    ]);
+  });
+
+  it('costs nothing to drag back over your own line', () => {
+    const h = harness('tile');
+    h.send('pointerdown', 2, 3);
+    h.send('pointermove', 3, 3);
+    h.send('pointermove', 2, 3);
+    h.send('pointermove', 3, 3);
+    expect(h.cells()).toEqual([
+      [2, 3, false],
+      [3, 3, false],
+    ]);
+  });
+
+  it('reports the erase flag from the tool, not from the cell', () => {
+    const h = harness('tile-erase');
+    h.send('pointerdown', 1, 1);
+    h.send('pointermove', 2, 1);
+    expect(h.cells()).toEqual([
+      [1, 1, true],
+      [2, 1, true],
+    ]);
+  });
+
+  it('ends on pointerup and hands React the flush signal', () => {
+    const h = harness('tile');
+    h.send('pointerdown', 2, 3);
+    expect(h.onTileStrokeEnd).not.toHaveBeenCalled();
+    h.send('pointerup', 2, 3);
+    expect(h.onTileStrokeEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops painting once it has ended', () => {
+    const h = harness('tile');
+    h.send('pointerdown', 2, 3);
+    h.send('pointerup', 2, 3);
+    h.send('pointermove', 9, 9);
+    expect(h.cells()).toEqual([[2, 3, false]]);
+  });
+
+  it('de-duplicates within a stroke, never between them', () => {
+    // Two deliberate strokes over the same cell are two edits. If `painted`
+    // survived the stroke, the second would silently do nothing.
+    const h = harness('tile');
+    h.send('pointerdown', 5, 5);
+    h.send('pointerup', 5, 5);
+    h.send('pointerdown', 5, 5);
+    h.send('pointerup', 5, 5);
+    expect(h.cells()).toEqual([
+      [5, 5, false],
+      [5, 5, false],
+    ]);
+    expect(h.onTileStrokeEnd).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('a stroke that does not end with a clean pointerup', () => {
+  for (const ender of ['pointercancel', 'pointerleave'] as const) {
+    it(`${ender} ends it, flushes it, and leaves the controller idle`, () => {
+      const h = harness('tile');
+      h.send('pointerdown', 2, 2);
+      h.send(ender, 2, 2);
+      expect(h.onTileStrokeEnd).toHaveBeenCalledTimes(1);
+
+      // Idle, not stuck in 'painting': a bare move paints nothing…
+      h.send('pointermove', 7, 7);
+      expect(h.cells()).toEqual([[2, 2, false]]);
+      // …and the next stroke works normally.
+      h.send('pointerdown', 8, 8);
+      expect(h.cells()).toEqual([
+        [2, 2, false],
+        [8, 8, false],
+      ]);
+    });
+  }
+
+  it('a second finger ends the stroke rather than abandoning its cells', () => {
+    const h = harness('tile');
+    h.send('pointerdown', 3, 3);
+    h.send('pointerdown', 6, 6, 2); // pinch to zoom mid-floor
+    expect(h.onTileStrokeEnd).toHaveBeenCalledTimes(1);
+    // The second finger starts a pinch, not a second painted cell.
+    expect(h.cells()).toEqual([[3, 3, false]]);
+    h.send('pointermove', 9, 9, 2);
+    expect(h.cells()).toEqual([[3, 3, false]]);
+  });
+});
+
+describe('the paint tool does not fire when it is not selected', () => {
+  it('the select tool paints nothing', () => {
+    const h = harness('select');
+    h.send('pointerdown', 2, 2);
+    h.send('pointermove', 3, 2);
+    h.send('pointerup', 3, 2);
+    expect(h.onTilePaint).not.toHaveBeenCalled();
+    expect(h.onTileStrokeEnd).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stroke continuity
+// ---------------------------------------------------------------------------
+
+/**
+ * Pointer moves do not arrive one per cell. Found by driving the real canvas:
+ * a single horizontal drag painted columns 4, 6 and 8 and left 5 and 7 bare,
+ * because each sample painted only the cell under it. A paint tool that draws
+ * a dotted line reads as broken, so the gap between samples is filled.
+ */
+describe('cellsBetween', () => {
+  it('is empty when the stroke has not left the cell', () => {
+    expect(cellsBetween({ col: 3, row: 3 }, { col: 3, row: 3 })).toEqual([]);
+  });
+
+  it('excludes the start, because the caller already painted it', () => {
+    const out = cellsBetween({ col: 4, row: 5 }, { col: 5, row: 5 });
+    expect(out).toEqual([{ col: 5, row: 5 }]);
+  });
+
+  it('fills a horizontal gap — the exact case seen on the canvas', () => {
+    expect(cellsBetween({ col: 4, row: 5 }, { col: 8, row: 5 })).toEqual([
+      { col: 5, row: 5 },
+      { col: 6, row: 5 },
+      { col: 7, row: 5 },
+      { col: 8, row: 5 },
+    ]);
+  });
+
+  it('fills a vertical gap', () => {
+    expect(cellsBetween({ col: 2, row: 1 }, { col: 2, row: 4 })).toEqual([
+      { col: 2, row: 2 },
+      { col: 2, row: 3 },
+      { col: 2, row: 4 },
+    ]);
+  });
+
+  it('walks backwards as happily as forwards', () => {
+    expect(cellsBetween({ col: 8, row: 5 }, { col: 5, row: 5 })).toEqual([
+      { col: 7, row: 5 },
+      { col: 6, row: 5 },
+      { col: 5, row: 5 },
+    ]);
+  });
+
+  it('yields a connected diagonal, every step touching the last', () => {
+    const out = cellsBetween({ col: 0, row: 0 }, { col: 4, row: 4 });
+    expect(out).toEqual([
+      { col: 1, row: 1 },
+      { col: 2, row: 2 },
+      { col: 3, row: 3 },
+      { col: 4, row: 4 },
+    ]);
+  });
+
+  it('never leaves a hole on a shallow diagonal', () => {
+    // The property that matters, asserted rather than the exact path: each
+    // step is 8-connected to the one before it, and the run ends on target.
+    const from = { col: 0, row: 0 };
+    const to = { col: 9, row: 3 };
+    const out = cellsBetween(from, to);
+    expect(out[out.length - 1]).toEqual(to);
+    let prev = from;
+    for (const cell of out) {
+      expect(Math.abs(cell.col - prev.col)).toBeLessThanOrEqual(1);
+      expect(Math.abs(cell.row - prev.row)).toBeLessThanOrEqual(1);
+      expect(cell).not.toEqual(prev);
+      prev = cell;
+    }
+  });
+
+  it('handles negative coordinates, which the grid allows', () => {
+    expect(cellsBetween({ col: -2, row: -1 }, { col: 0, row: -1 })).toEqual([
+      { col: -1, row: -1 },
+      { col: 0, row: -1 },
+    ]);
+  });
+});

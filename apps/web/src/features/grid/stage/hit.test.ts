@@ -98,7 +98,7 @@ describe('hitPin / hitWall (FR9.2/9.3 authoring)', () => {
 
 describe('gridTolerance', () => {
   it('shrinks in grid units as the camera zooms in', () => {
-    const m = metricsFor({ unitM: 1, cols: 10, rows: 10, offset: { x: 0, y: 0 } });
+    const m = metricsFor({ unitM: 1, cols: 10, rows: 10, offset: { x: 0, y: 0 }, projection: 'topdown' as const });
     const wide = gridTolerance(m, 0.5, 10);
     const close = gridTolerance(m, 2, 10);
     expect(close).toBeLessThan(wide);

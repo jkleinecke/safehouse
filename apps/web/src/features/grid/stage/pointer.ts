@@ -20,7 +20,7 @@ import type { StageCallbacks, StageSceneState } from '../types.js';
 import { Camera, wheelZoomFactor } from './camera.js';
 import { gridTolerance, hitDoor, hitPin, hitToken, isDoubleTap, type TapRecord } from './hit.js';
 
-type Mode = 'idle' | 'pan' | 'token' | 'ruler' | 'trail' | 'pinch' | 'segment';
+type Mode = 'idle' | 'pan' | 'token' | 'ruler' | 'trail' | 'pinch' | 'segment' | 'painting';
 
 /** React-facing ruler updates are rate-limited; the pixi line is not. */
 const RULER_REPORT_MS = 50;
@@ -48,8 +48,54 @@ interface ActivePointer {
   y: number;
 }
 
+/** A grid cell, as integer column/row. */
+export interface Cell {
+  col: number;
+  row: number;
+}
+
+/**
+ * Every cell on the straight line from `from` to `to`, EXCLUDING `from` and
+ * including `to`.
+ *
+ * Integer Bresenham, so a diagonal drag yields a connected 8-way line rather
+ * than a staircase with holes in it. `from` is excluded because the caller has
+ * already painted it — the previous sample of the same stroke.
+ */
+export function cellsBetween(from: Cell, to: Cell): Cell[] {
+  const out: Cell[] = [];
+  let { col, row } = from;
+  const dx = Math.abs(to.col - col);
+  const dy = -Math.abs(to.row - row);
+  const sx = col < to.col ? 1 : -1;
+  const sy = row < to.row ? 1 : -1;
+  let err = dx + dy;
+  // Bounded by construction — every step moves col or row at least one toward
+  // the target — but a guard costs nothing and a runaway loop here would hang
+  // the canvas on a bad coordinate.
+  for (let guard = dx - dy + 2; guard > 0; guard -= 1) {
+    if (col === to.col && row === to.row) break;
+    const e2 = 2 * err;
+    if (e2 >= dy) {
+      err += dy;
+      col += sx;
+    }
+    if (e2 <= dx) {
+      err += dx;
+      row += sy;
+    }
+    out.push({ col, row });
+  }
+  return out;
+}
+
 export class PointerController {
   private mode: Mode = 'idle';
+  /** Cells already sent this stroke, so a wandering drag sends each once. */
+  private readonly painted = new Set<string>();
+  private paintErase = false;
+  /** Last cell this stroke touched, so the gap to the next sample can be filled. */
+  private lastCell: { col: number; row: number } | null = null;
   private readonly pointers = new Map<number, ActivePointer>();
   private rect: DOMRect | null = null;
   private lastTap: TapRecord | null = null;
@@ -113,6 +159,53 @@ export class PointerController {
   private local(e: PointerEvent | WheelEvent): Point {
     if (!this.rect) this.rect = this.el.getBoundingClientRect();
     return { x: e.clientX - this.rect.left, y: e.clientY - this.rect.top };
+  }
+
+  /**
+   * Send the cells of a paint stroke (FR9.2), joining consecutive samples.
+   *
+   * Pointer moves do NOT arrive one per cell. A quick drag, a coarse device, a
+   * browser coalescing moves into one event — any of them puts the next sample
+   * several cells from the last, and painting only where the samples landed
+   * draws a dotted line. Observed live: one horizontal drag laid down columns
+   * 4, 6 and 8 and left 5 and 7 bare, which reads as a broken tool rather than
+   * a fast hand.
+   *
+   * So the gap between two samples is walked and filled. Cells already covered
+   * by this stroke are skipped, so dragging back over your own line is still
+   * free rather than a second request.
+   */
+  private paintCell(grid: Point): void {
+    const col = Math.floor(grid.x);
+    const row = Math.floor(grid.y);
+    const from = this.lastCell;
+    this.lastCell = { col, row };
+    if (from === null) {
+      this.emitCell(col, row);
+      return;
+    }
+    for (const cell of cellsBetween(from, { col, row })) this.emitCell(cell.col, cell.row);
+  }
+
+  /** One cell, at most once per stroke. */
+  private emitCell(col: number, row: number): void {
+    const key = `${col},${row}`;
+    if (this.painted.has(key)) return;
+    this.painted.add(key);
+    this.host.callbacks.onTilePaint?.(col, row, this.paintErase);
+  }
+
+  /**
+   * The stroke is over — button up, gesture abandoned, or a second finger
+   * arriving. React coalesces a stroke into one request, and until this existed
+   * it had no idea when one ended: the buffer drained on a 140ms idle timer, so
+   * a stroke with a pause in it became several full-layer writes and the last
+   * cell of every stroke sat unsent after the GM had already let go.
+   */
+  private endStroke(): void {
+    this.painted.clear();
+    this.lastCell = null;
+    this.host.callbacks.onTileStrokeEnd?.();
   }
 
   private toGrid(screen: Point): Point {
@@ -197,6 +290,19 @@ export class PointerController {
       case 'pin':
         this.mode = 'idle';
         this.host.callbacks.onPinPlace?.(grid.x, grid.y);
+        return;
+      case 'tile':
+      case 'tile-erase':
+        // Painting continues while the button is held: a floor is a drag, not
+        // a hundred clicks. `paintTile` de-duplicates per cell, so the stroke
+        // that crosses one cell twice still sends it once.
+        this.mode = 'painting';
+        this.paintErase = state.tool === 'tile-erase';
+        this.painted.clear();
+        // A new stroke has no previous cell: starting one across the map must
+        // not draw a line from wherever the last one ended.
+        this.lastCell = null;
+        this.paintCell(grid);
         return;
       default:
         this.beginSelect(grid, state, m);
@@ -289,6 +395,11 @@ export class PointerController {
       return;
     }
 
+    if (this.mode === 'painting') {
+      this.paintCell(this.toGrid(screen));
+      return;
+    }
+
     switch (this.mode) {
       case 'pan':
         this.host.camera.panBy(dx, dy);
@@ -369,6 +480,10 @@ export class PointerController {
       if (!isDegenerateSegment(this.segmentFrom, this.segmentTo)) {
         this.host.callbacks.onSegmentDraw?.(this.segmentKind, this.segmentFrom, this.segmentTo);
       }
+    } else if (this.mode === 'painting') {
+      // pointerup, pointercancel and pointerleave all land here, so a stroke
+      // that ends off-canvas still flushes and still returns to 'idle'.
+      this.endStroke();
     } else if (this.mode === 'pan' && !this.moved) {
       this.host.callbacks.onSelectToken(null);
     }
@@ -388,6 +503,9 @@ export class PointerController {
     }
     if (this.mode === 'ruler') this.host.clearRuler();
     if (this.mode === 'segment') this.host.clearSegment?.();
+    // A second finger ends the stroke rather than abandoning its cells: the
+    // GM painted them, and pinching to zoom mid-floor is a normal thing to do.
+    if (this.mode === 'painting') this.endStroke();
     this.mode = 'pinch';
   }
 

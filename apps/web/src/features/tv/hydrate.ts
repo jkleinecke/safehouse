@@ -87,6 +87,14 @@ export function useTvScene(sceneId: string | null) {
 export function useTvSceneRefresh(campaignId: string | undefined): void {
   const qc = useQueryClient();
   const reconnectEpoch = useLiveStore((s) => s.reconnectEpoch);
+  // Keyed on the event id, so a stroke that paints thirty cells in six events
+  // re-reads once per event and never loops: the id only moves forward.
+  const sceneEditId = useLiveStore((s) => lastUnfoldableSceneEventId(s.events));
+
+  useEffect(() => {
+    if (!campaignId || sceneEditId === 0) return;
+    void qc.invalidateQueries({ queryKey: TV_SCENE_KEY });
+  }, [campaignId, sceneEditId, qc]);
 
   useEffect(() => {
     if (!campaignId || reconnectEpoch === 0) return;
@@ -100,6 +108,36 @@ export function useTvSceneRefresh(campaignId: string | undefined): void {
     }, TV_REHYDRATE_MS);
     return () => clearInterval(timer);
   }, [campaignId, qc]);
+}
+
+/**
+ * The parts of a `scene.updated` the event fold can actually apply.
+ *
+ * `mergeSceneEvents` folds `environment` and nothing else, because the server
+ * deliberately keeps GM-layer geometry out of the broadcast payload — clients
+ * re-GET the scene and each receives its own role-filtered view. That is the
+ * right design, but it means every other kind of scene edit is invisible to a
+ * device that only listens. The grid re-reads on these events; the TV had its
+ * own path and did not, so a floor painted from a tileset did not reach the
+ * table display until the ten-minute drift timer fired.
+ */
+const FOLDABLE_SCENE_CHANGES = new Set(['environment']);
+
+/** The newest `scene.updated` carrying a change only a re-read can show. */
+export function lastUnfoldableSceneEventId(events: readonly { id: number; type: string; payload: unknown }[]): number {
+  let best = 0;
+  for (const e of events) {
+    if (e.type !== 'scene.updated' || e.id <= best) continue;
+    const changed = (e.payload as { changed?: unknown } | null)?.changed;
+    // An event that does not say what changed is treated as unfoldable: a
+    // re-read is cheap and unconditionally correct, guessing is not.
+    if (!Array.isArray(changed)) {
+      best = e.id;
+      continue;
+    }
+    if (changed.some((c) => typeof c !== 'string' || !FOLDABLE_SCENE_CHANGES.has(c))) best = e.id;
+  }
+  return best;
 }
 
 /** Everything the kiosk draws, hydrated from REST and merged with the stream. */

@@ -46,7 +46,7 @@ function scene(over: Partial<Scene> = {}): Scene {
     campaignId: 'c1',
     name: 'Aztechnology loading dock',
     state: 'draft',
-    grid: { unitM: 1, cols: 40, rows: 30, offset: { x: 0, y: 0 } },
+    grid: { unitM: 1, cols: 40, rows: 30, offset: { x: 0, y: 0 }, projection: 'topdown' as const },
     environment: { light: 0, visibility: 0, glare: 0, wind: 0 },
     geometry: { walls: [], doors: [], zones: [], pins: [] },
     fog: { regions: [], revealed: [], revealedShapes: [] },
@@ -133,7 +133,7 @@ describe('the scene list is the inventory the Grid panel never gave', () => {
         id: 's2',
         name: 'Penumbra rooftop',
         state: 'active',
-        grid: { unitM: 2, cols: 20, rows: 20, offset: { x: 0, y: 0 } },
+        grid: { unitM: 2, cols: 20, rows: 20, offset: { x: 0, y: 0 }, projection: 'topdown' as const },
       }),
     ]);
 
@@ -374,7 +374,7 @@ describe('create → activate → delete is one round trip a GM can complete', (
 
     const made = await createScene('c1', {
       name: 'Alley behind the Stuffer Shack',
-      grid: { unitM: 1.5, cols: 24, rows: 18, offset: { x: 0, y: 0 } },
+      grid: { unitM: 1.5, cols: 24, rows: 18, offset: { x: 0, y: 0 }, projection: 'topdown' as const },
     });
     expect(made.id).toBe('new-1');
 
@@ -479,7 +479,7 @@ describe('list projections', () => {
 
   it('summarises a scene without asking the server twice', () => {
     const s = scene({
-      grid: { unitM: 1.5, cols: 10, rows: 8, offset: { x: 0, y: 0 } },
+      grid: { unitM: 1.5, cols: 10, rows: 8, offset: { x: 0, y: 0 }, projection: 'topdown' as const },
       mapAttachmentIds: ['att_1#rot=90', 'att_2'],
       fog: { regions: [REGION_A, REGION_B], revealed: ['r2'], revealedShapes: [[]] },
       geometry: {

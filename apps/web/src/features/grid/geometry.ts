@@ -10,7 +10,7 @@
  * `scenes.grid` — and no px-per-square figure, so this mapping is the whole
  * calibration and there is nothing on the other side to disagree with it.
  */
-import type { Grid, Point } from '@safehouse/contracts';
+import type { Grid, GridProjection, Point } from '@safehouse/contracts';
 
 /** World pixels per grid square. */
 export const CELL = 64;
@@ -23,6 +23,8 @@ export interface SceneMetrics {
   offset: Point;
   /** Grid-line opacity from the scene config (FR9.1). */
   opacity: number;
+  /** Plan view, or 2:1 isometric. Presentation only — see `GridProjection`. */
+  projection: GridProjection;
 }
 
 export function metricsFor(grid: Grid): SceneMetrics {
@@ -33,27 +35,117 @@ export function metricsFor(grid: Grid): SceneMetrics {
     unitM: grid.unitM > 0 ? grid.unitM : 1,
     offset: grid.offset ?? { x: 0, y: 0 },
     opacity: typeof grid.opacity === 'number' ? Math.max(0, Math.min(1, grid.opacity)) : 0.35,
+    projection: grid.projection ?? 'topdown',
   };
 }
 
 /** Stable identity for the metrics — cheap "did calibration change?" check. */
 export function metricsKey(m: SceneMetrics): string {
-  return `${m.cols}x${m.rows}@${m.unitM}:${m.offset.x},${m.offset.y}:${m.opacity}`;
+  return `${m.cols}x${m.rows}@${m.unitM}:${m.offset.x},${m.offset.y}:${m.opacity}:${m.projection}`;
+}
+
+/**
+ * Isometric is 2:1 — a cell is twice as wide as it is tall on screen. That
+ * ratio is not arbitrary: it keeps every diagonal on a whole-pixel slope, so
+ * the diamond edges stay crisp instead of shimmering as the camera moves.
+ */
+export const ISO_HALF_W = 0.5;
+export const ISO_HALF_H = 0.25;
+
+/**
+ * How far right the scene has to be pushed so nothing lands at negative x.
+ *
+ * In isometric the leftmost point of the map is the BOTTOM-left cell, not the
+ * top-left one — the diamond hangs off to the left as rows increase. Without
+ * this shift half the map would sit outside the world box and the camera's
+ * fit-to-scene would frame empty space.
+ */
+export function isoOriginX(m: SceneMetrics): number {
+  return m.rows * m.cell * ISO_HALF_W;
 }
 
 /** Grid units → world px (top-left of the scene is world 0,0). */
 export function worldFromGrid(m: SceneMetrics, p: Point): Point {
-  return { x: (p.x + m.offset.x) * m.cell, y: (p.y + m.offset.y) * m.cell };
+  const gx = p.x + m.offset.x;
+  const gy = p.y + m.offset.y;
+  if (m.projection !== 'iso') return { x: gx * m.cell, y: gy * m.cell };
+  return {
+    x: (gx - gy) * m.cell * ISO_HALF_W + isoOriginX(m),
+    y: (gx + gy) * m.cell * ISO_HALF_H,
+  };
 }
 
-/** World px → grid units. */
+/** World px → grid units. The exact inverse of `worldFromGrid`. */
 export function gridFromWorld(m: SceneMetrics, w: Point): Point {
-  return { x: w.x / m.cell - m.offset.x, y: w.y / m.cell - m.offset.y };
+  if (m.projection !== 'iso') {
+    return { x: w.x / m.cell - m.offset.x, y: w.y / m.cell - m.offset.y };
+  }
+  const wx = (w.x - isoOriginX(m)) / (m.cell * ISO_HALF_W);
+  const wy = w.y / (m.cell * ISO_HALF_H);
+  return { x: (wx + wy) / 2 - m.offset.x, y: (wy - wx) / 2 - m.offset.y };
 }
 
 /** Scene pixel size (the stretched map / fog cover rectangle). */
 export function sceneWorldSize(m: SceneMetrics): { width: number; height: number } {
-  return { width: m.cols * m.cell, height: m.rows * m.cell };
+  if (m.projection !== 'iso') return { width: m.cols * m.cell, height: m.rows * m.cell };
+  // The diamond's bounding box. Height gets a cell of headroom because a
+  // full-height wall on the back row extrudes ABOVE the topmost floor corner.
+  return {
+    width: (m.cols + m.rows) * m.cell * ISO_HALF_W,
+    height: (m.cols + m.rows) * m.cell * ISO_HALF_H + m.cell,
+  };
+}
+
+/**
+ * The four world-space corners of one cell, clockwise from the "north" corner.
+ * A square in plan view, a diamond in isometric — every layer that fills a
+ * cell goes through this so none of them has to know which.
+ */
+export function cellCorners(m: SceneMetrics, col: number, row: number): [Point, Point, Point, Point] {
+  return rectCorners(m, col, row, col + 1, row + 1);
+}
+
+/**
+ * The corners of an arbitrary grid-space rectangle, in the same [N, E, S, W]
+ * clockwise order as `cellCorners`.
+ *
+ * Wall slabs are a third of a cell, so they need the same projection maths as
+ * a whole cell but not the same bounds. Keeping one function means the face
+ * order — and therefore which two faces the extrusion treats as visible — can
+ * never disagree between the two.
+ */
+export function rectCorners(
+  m: SceneMetrics,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+): [Point, Point, Point, Point] {
+  return [
+    worldFromGrid(m, { x: x0, y: y0 }),
+    worldFromGrid(m, { x: x1, y: y0 }),
+    worldFromGrid(m, { x: x1, y: y1 }),
+    worldFromGrid(m, { x: x0, y: y1 }),
+  ];
+}
+
+/**
+ * How far one cell of height lifts a face, in world px.
+ *
+ * Zero in plan view: there is no "up" to draw toward, which is exactly why a
+ * painted wall was previously indistinguishable from a slightly darker floor.
+ */
+export function heightRise(m: SceneMetrics, height: number): number {
+  return m.projection === 'iso' ? height * m.cell * 0.5 : 0;
+}
+
+/**
+ * Painter's-algorithm depth for a cell. Higher draws later, so it covers what
+ * is behind it. `col + row` is the isometric depth axis: cells further from
+ * the viewer share a lower sum and are drawn first.
+ */
+export function cellDepth(col: number, row: number): number {
+  return col + row;
 }
 
 /**

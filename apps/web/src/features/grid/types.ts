@@ -3,6 +3,7 @@
  * so the main bundle stays lean; the stage subtree is loaded lazily.
  */
 import type { Point, Role, Scene, Token } from '@safehouse/contracts';
+import type { TilePattern } from '@safehouse/rules';
 
 /** Active pointer tool on the canvas. */
 export type GridTool =
@@ -15,10 +16,113 @@ export type GridTool =
   | 'wall' // GM: drag to draw a wall segment (FR9.2)
   | 'door' // GM: drag to draw a door segment (FR9.2)
   | 'zone' // GM: click vertices to draw a named zone (FR9.2)
-  | 'pin'; // GM: click to drop a map pin (FR9.3)
+  | 'pin' // GM: click to drop a map pin (FR9.3)
+  | 'tile' // GM: paint tiles from a tileset (FR9.2 "assemble")
+  | 'tile-erase'; // GM: clear painted cells
 
 /** GM drawing tools that author scene geometry rather than play with it. */
 export const GEOMETRY_TOOLS: readonly GridTool[] = ['wall', 'door', 'zone', 'pin'];
+
+/**
+ * One tile as the canvas draws it (FR9.2).
+ *
+ * `pattern` is the rules union rather than a bare string on purpose:
+ * `stage/tileLayer.ts` switches on it and asserts the default branch is
+ * `never`, so a thirteenth pattern added to the catalogue fails the build
+ * instead of quietly rendering every cell as flat base colour.
+ */
+export interface TileDrawDef {
+  pattern: TilePattern;
+  colors: readonly [string, string];
+  /**
+   * Extrusion in cells — 0 flat, 0.5 waist-high, 1 full. The same number line
+   * of sight reads (`TILE_HEIGHTS` in @safehouse/rules), which is what stops a
+   * tile that LOOKS waist-high from behaving like a full wall.
+   */
+  height?: number;
+  /** Colour this tile gives off: neon, sodium light, a barrel fire. */
+  emissive?: string;
+  /**
+   * How much of the cell it occupies. `wall` draws a third-of-a-cell slab that
+   * orients itself from its neighbours; anything else fills the square.
+   * Purely visual — sight and movement always block the whole cell.
+   */
+  footprint?: 'fill' | 'wall';
+  /**
+   * The floor to draw UNDER a thin tile, from the same set.
+   *
+   * Without it every wall would be a hole in the map: a slab covers a third of
+   * its cell, and the other two thirds would show the empty grid where a
+   * room's edge should be. Attached at flatten time so the renderer does not
+   * need to know which tile in a set counts as its floor.
+   */
+  underlay?: { pattern: TilePattern; colors: readonly [string, string] };
+}
+
+/**
+ * Lookup key for a tile definition — tileset AND tile, never the tile id alone.
+ *
+ * Tile ids are only unique WITHIN a set. `wall` exists in all six catalogue
+ * sets, `door` in four and `floor` in two, so the flat `defs[tile.id]` map this
+ * replaces was last-write-wins in catalogue order: a Docklands warehouse drew
+ * its corrugated walls, roller doors and poured concrete in Club purple, three
+ * of its seven tiles wrong, on a canvas that looked plausible enough not to
+ * question.
+ */
+export function tileDefKey(tilesetId: string, tileId: string): string {
+  return `${tilesetId}/${tileId}`;
+}
+
+/** The shape both the shipped catalogue and the served one satisfy. */
+export interface TileSetLike {
+  id: string;
+  tiles: readonly {
+    id: string;
+    kind: string;
+    pattern: TilePattern;
+    colors: readonly [string, string];
+    height?: number;
+    emissive?: string;
+    footprint?: 'fill' | 'wall';
+  }[];
+}
+
+/**
+ * Flatten tilesets into the canvas's palette.
+ *
+ * ONE function, called by both the cold-load seed baked into the stage and the
+ * served catalogue from `GET /api/tilesets`, because they have already drifted
+ * once: the seed dropped `height` and every wall drew flat until the fetch
+ * landed, which on the isometric projection is the whole feature missing. Two
+ * copies of this logic is two chances to forget a field.
+ *
+ * Keyed by `tileDefKey`, not by tile id: `wall` exists in every set, `door` in
+ * four and `floor` in two, and a flat map keeps only the last one loaded.
+ */
+export function tileDefsFromSets(sets: readonly TileSetLike[]): Record<string, TileDrawDef> {
+  const defs: Record<string, TileDrawDef> = {};
+  for (const set of sets) {
+    // What a thin tile stands on. First floor in the set, so a warehouse wall
+    // stands on warehouse concrete rather than a hole in the map.
+    const floor = set.tiles.find((t) => t.kind === 'floor');
+    for (const t of set.tiles) {
+      const thin = t.footprint === 'wall';
+      defs[tileDefKey(set.id, t.id)] = {
+        pattern: t.pattern,
+        colors: t.colors,
+        // Spread conditionally: an absent field must stay absent rather than
+        // become an explicit `undefined` the renderer has to special-case.
+        ...(t.height !== undefined ? { height: t.height } : {}),
+        ...(t.emissive !== undefined ? { emissive: t.emissive } : {}),
+        ...(t.footprint !== undefined ? { footprint: t.footprint } : {}),
+        ...(thin && floor !== undefined
+          ? { underlay: { pattern: floor.pattern, colors: floor.colors } }
+          : {}),
+      };
+    }
+  }
+  return defs;
+}
 
 /** In-progress wall/door rubber band, reported by the stage while dragging. */
 export interface SegmentDraft {
@@ -78,6 +182,21 @@ export interface TokenBars {
   effectCount: number;
 }
 
+/**
+ * What the sightline shroud should darken (FR9.16).
+ *
+ * Computed in React, not in the stage. The set depends on the scene, the
+ * tokens and which character this device owns — a graph that lives in hooks —
+ * so deriving it inside the pixi chunk would drag all of that in for nothing.
+ * The stage's job is to draw the answer.
+ */
+export interface ShroudState {
+  /** `"col,row"` of every cell the viewer can see. */
+  visible: ReadonlySet<string>;
+  /** A GM previewing a viewpoint gets a lighter scrim than a player bound by it. */
+  gm: boolean;
+}
+
 /** Everything the pixi stage needs to (re)draw a frame of scene state. */
 export interface StageSceneState {
   scene: Scene;
@@ -98,6 +217,11 @@ export interface StageSceneState {
   fogDraft: FogDraft | null;
   /** Pin currently open in the GM's pin editor — drawn ringed (FR9.3). */
   selectedPinId?: string | null;
+  /**
+   * Cells outside the viewer's sightline, or null for "no viewpoint" — which
+   * draws nothing at all. An unselected token must never black out the table.
+   */
+  shroud?: ShroudState | null;
 }
 
 /** Callbacks the stage raises back into React land. */
@@ -129,6 +253,15 @@ export interface StageCallbacks {
   onSegmentDraw?(kind: 'wall' | 'door', a: Point, b: Point): void;
   /** pin tool click — drop a pin at grid coords (FR9.3). */
   onPinPlace?(x: number, y: number): void;
+  /** One cell of a tile paint stroke (FR9.2); `erase` clears instead. */
+  onTilePaint?(col: number, row: number, erase: boolean): void;
+  /**
+   * The paint stroke ended (button up, gesture abandoned). Without this the
+   * coalescer was a trailing debounce over painting ACTIVITY, not a per-stroke
+   * flush: a deliberate stroke with pauses became N full-layer writes, and the
+   * last cell of every stroke sat unsent for 140ms after the GM let go.
+   */
+  onTileStrokeEnd?(): void;
   /** select-tool click on an existing pin — open it in the editor. */
   onPinSelect?(pinId: string): void;
 }
@@ -136,6 +269,14 @@ export interface StageCallbacks {
 /** Imperative API of the lazily-loaded pixi stage. */
 export interface StageApi {
   update(state: StageSceneState): void;
+  /**
+   * Tile definitions for the painted floor (FR9.2), keyed by `tileDefKey` —
+   * tileset AND tile, because tile ids collide across sets. Supplied from the
+   * served catalogue so the canvas draws what the server accepted; the stage
+   * seeds itself from the shipped catalogue first, so a stage that never gets
+   * this call (the TV) still draws a floor rather than a blank screen.
+   */
+  setTileDefs(defs: Record<string, TileDrawDef>): void;
   /** Interim remote drag ghosts: tokenId → grid position (+ relay timestamp). */
   setDrags(drags: Record<string, { x: number; y: number; ts?: number }>): void;
   /** Flash a ping at grid coords (remote or local echo). */

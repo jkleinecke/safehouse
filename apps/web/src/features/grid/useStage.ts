@@ -57,7 +57,13 @@ export function useStage(params: UseStageParams): UseStageResult {
     setLoading(true);
     setError(null);
 
-    const stable: StageCallbacks = {
+    // `Required`, not `StageCallbacks`: this shim is a hand-copied key list, and
+    // every member added to the interface after it was written is optional, so a
+    // forgotten line here compiles clean and the stage simply never raises that
+    // callback. Tile painting shipped that way — `onTilePaint` reached
+    // `PointerController` as `undefined` and no stroke ever left the canvas.
+    // `Required` turns the next omission into a compile error instead.
+    const stable: Required<StageCallbacks> = {
       onTokenMove: (id, x, y) => cbRef.current.onTokenMove(id, x, y),
       onTokenDrag: (id, x, y) => cbRef.current.onTokenDrag(id, x, y),
       onSelectToken: (id) => cbRef.current.onSelectToken(id),
@@ -71,6 +77,8 @@ export function useStage(params: UseStageParams): UseStageResult {
       onSegmentDraw: (kind, a, b) => cbRef.current.onSegmentDraw?.(kind, a, b),
       onPinPlace: (x, y) => cbRef.current.onPinPlace?.(x, y),
       onPinSelect: (id) => cbRef.current.onPinSelect?.(id),
+      onTilePaint: (col, row, erase) => cbRef.current.onTilePaint?.(col, row, erase),
+      onTileStrokeEnd: () => cbRef.current.onTileStrokeEnd?.(),
     };
 
     void import('./stage/index.js')

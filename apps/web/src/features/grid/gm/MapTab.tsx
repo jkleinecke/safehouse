@@ -134,6 +134,26 @@ export default function MapTab({ scene }: { scene: Scene }) {
         {err && <p className="mono-label text-danger">{err}</p>}
       </PanelSection>
 
+      <PanelSection title="View" hint="how this scene is drawn — changes nothing about the rules">
+        <Row label="Projection">
+          <select
+            value={grid.projection ?? 'topdown'}
+            aria-label="Grid projection"
+            data-testid="projection-select"
+            className="w-full rounded border border-edge bg-deck px-2 py-1 text-sm"
+            onChange={(e) => setGrid({ projection: e.target.value as 'topdown' | 'iso' })}
+          >
+            <option value="topdown">Top-down (plan)</option>
+            <option value="iso">Isometric</option>
+          </select>
+        </Row>
+        <p className="mt-1 text-xs text-faint">
+          Isometric extrudes anything with height, so walls and cover read as solid objects
+          instead of a slightly different shade of floor. Tokens, distances and line of sight
+          are unchanged — this is only how the table sees it.
+        </p>
+      </PanelSection>
+
       <PanelSection title="Calibrate" hint="1 m per square by default">
         <Row label="Columns">
           <Num value={grid.cols} min={1} onChange={(n) => setGrid({ cols: Math.max(1, Math.round(n)) })} />
