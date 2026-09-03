@@ -757,3 +757,99 @@ describe('a bad projection does not take the calibration with it', () => {
     expect(g.rows).toBe(30);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Floors
+// ---------------------------------------------------------------------------
+
+/**
+ * A scene can have storeys (FR9.22), and a stroke belongs to exactly one.
+ *
+ * The failure worth guarding is quiet rather than loud: paint that lands on
+ * the wrong floor still looks like paint, and a count that reports a
+ * different storey's total is a number the GM cannot reconcile with what they
+ * just did.
+ */
+describe('painting a scene with floors', () => {
+  let sceneId: string;
+
+  beforeAll(async () => {
+    sceneId = await newScene('Two storeys');
+    await paint(sceneId, boot.gmToken, {
+      tilesetId: 'docklands',
+      paint: { '0,0': 'floor', '1,0': 'floor', '2,0': 'wall' },
+    });
+    const res = await t.app.inject({
+      method: 'PUT',
+      url: `/api/scenes/${sceneId}/levels`,
+      headers: auth(boot.gmToken),
+      payload: { levels: [{ id: 'catwalk', name: 'Catwalk' }] },
+    });
+    expect(res.statusCode).toBe(200);
+  }, 60_000);
+
+  it('keeps each floor’s paint to itself', async () => {
+    const res = await paint(sceneId, boot.gmToken, {
+      tilesetId: 'docklands',
+      paint: { '5,5': 'floor' },
+      level: 1,
+    });
+    expect(res.statusCode).toBe(200);
+
+    const scene = await sceneAs(sceneId, boot.gmToken);
+    // Ground still has its three; the catwalk has only the one.
+    expect(Object.keys({ ...scene.tiles?.ground, ...scene.tiles?.structure })).toHaveLength(3);
+    expect(scene.levels?.[0]?.tiles?.ground).toEqual({ '5,5': 'floor' });
+  });
+
+  it('reports the count for the floor it painted, not the ground', async () => {
+    // This reported the ground floor's total for every stroke: a catwalk of
+    // one cell answering with the warehouse's three.
+    const res = await paint(sceneId, boot.gmToken, {
+      tilesetId: 'docklands',
+      paint: { '6,6': 'floor' },
+      level: 1,
+    });
+    const body = res.json() as { painted: number };
+    const scene = await sceneAs(sceneId, boot.gmToken);
+    const catwalk = scene.levels?.[0]?.tiles;
+    const actual =
+      Object.keys(catwalk?.ground ?? {}).length +
+      Object.keys(catwalk?.structure ?? {}).length +
+      Object.keys(catwalk?.object ?? {}).length;
+    expect(body.painted).toBe(actual);
+  });
+
+  it('refuses a floor the scene does not have rather than building one', async () => {
+    const res = await paint(sceneId, boot.gmToken, {
+      tilesetId: 'docklands',
+      paint: { '0,0': 'floor' },
+      level: 5,
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('keeps a renamed floor’s paint', async () => {
+    // Sending a level without tiles must not wipe the storey.
+    const res = await t.app.inject({
+      method: 'PUT',
+      url: `/api/scenes/${sceneId}/levels`,
+      headers: auth(boot.gmToken),
+      payload: { levels: [{ id: 'catwalk', name: 'Upper gantry' }] },
+    });
+    expect(res.statusCode).toBe(200);
+    const scene = await sceneAs(sceneId, boot.gmToken);
+    expect(scene.levels?.[0]?.name).toBe('Upper gantry');
+    expect(Object.keys(scene.levels?.[0]?.tiles?.ground ?? {}).length).toBeGreaterThan(0);
+  });
+
+  it('is GM-only, like every other authoring route', async () => {
+    const res = await t.app.inject({
+      method: 'PUT',
+      url: `/api/scenes/${sceneId}/levels`,
+      headers: auth(player.token),
+      payload: { levels: [] },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+});

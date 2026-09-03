@@ -571,13 +571,18 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       });
       return written.scene;
     });
-    // Across all three layers — `cells` is the drained legacy field and would
-    // report zero for every scene.
-    const t = updated.tiles;
+    // The count for the floor that was actually painted. Reading
+    // `updated.tiles` reported the GROUND floor's total for every stroke, so
+    // painting a catwalk of 16 cells answered with the warehouse's 108 —
+    // a number the GM has no way to reconcile with what they just did.
+    // Across all three layers, because `cells` is the drained legacy field.
+    const t = sceneLevels(updated)[body.level]?.tiles;
     return {
       scene: updated,
       painted: t
-        ? Object.keys(t.ground).length + Object.keys(t.structure).length + Object.keys(t.object).length
+        ? Object.keys(t.ground ?? {}).length +
+          Object.keys(t.structure ?? {}).length +
+          Object.keys(t.object ?? {}).length
         : 0,
     };
   });
