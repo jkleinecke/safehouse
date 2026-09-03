@@ -53,7 +53,7 @@ export const DOCKLANDS: Tileset = {
 
     { id: 'crates', name: 'Pallet stack', kind: 'feature', category: 'interior', pattern: 'planks', colors: ['#8a6a3c', '#a8834f'], height: WAIST, hint: 'Cover, and a place to hide the crate that matters.' },
     { id: 'rail', name: 'Catwalk railing', kind: 'feature', category: 'interior', pattern: 'grating', colors: ['#5c646e', '#9aa3ae'], footprint: 'wall', height: WAIST, placement: { againstWall: true }, hint: 'Stops a body, not a sightline.' },
-    { id: 'barrel', name: 'Fuel drum', kind: 'feature', category: 'decoration', pattern: 'solid', colors: ['#6a5a2e', '#8a7638'], height: WAIST },
+    { id: 'barrel', name: 'Fuel drum', kind: 'feature', category: 'decoration', pattern: 'solid', colors: ['#6a5a2e', '#8a7638'], footprint: 'round', height: WAIST },
     { id: 'puddle', name: 'Oil slick', kind: 'feature', category: 'decoration', pattern: 'water', colors: ['#2f3238', '#43484f'], placement: { on: ['floor', 'stain'] } },
   ],
 };
@@ -72,11 +72,11 @@ export const CORP_INTERIOR: Tileset = {
     { id: 'door', name: 'Maglocked door', kind: 'door', category: 'building', pattern: 'solid', colors: ['#4d7f96', '#7fb8cf'], emissive: '#39d7f0', footprint: 'wall', height: FULL, placement: CUT },
 
     { id: 'desk', name: 'Workstation', kind: 'feature', category: 'interior', pattern: 'panel', colors: ['#6e7885', '#8b96a4'], height: WAIST, placement: { againstWall: true } },
-    { id: 'terminal', name: 'Terminal', kind: 'feature', category: 'interior', pattern: 'panel', colors: ['#3f5a68', '#5f8ea3'], emissive: '#39d7f0', height: WAIST, placement: { againstWall: true }, hint: 'A matrix access point, and something to hack from.' },
+    { id: 'terminal', name: 'Terminal', kind: 'feature', category: 'interior', pattern: 'panel', colors: ['#3f5a68', '#5f8ea3'], emissive: '#39d7f0', footprint: 'post', height: WAIST, placement: { againstWall: true }, hint: 'A matrix access point, and something to hack from.' },
     { id: 'bench', name: 'Reception bench', kind: 'feature', category: 'interior', pattern: 'solid', colors: ['#7c8797', '#95a1b1'], height: WAIST, footprint: 'wall', placement: { againstWall: true } },
-    { id: 'chair', name: 'Chair', kind: 'feature', category: 'interior', pattern: 'solid', colors: ['#5b6572', '#727d8c'], height: WAIST },
-    { id: 'fountain', name: 'Atrium fountain', kind: 'feature', category: 'interior', pattern: 'water', colors: ['#4a7f96', '#8fcfe2'], emissive: '#5fd8f0', height: WAIST, hint: 'Wants room around it — and it covers a conversation.' },
-    { id: 'plant', name: 'Lobby planter', kind: 'feature', category: 'decoration', pattern: 'gravel', colors: ['#3f6b46', '#5e9a63'], height: WAIST, placement: { on: ['carpet', 'lobby'] } },
+    { id: 'chair', name: 'Chair', kind: 'feature', category: 'interior', pattern: 'solid', colors: ['#5b6572', '#727d8c'], footprint: 'post', height: WAIST },
+    { id: 'fountain', name: 'Atrium fountain', kind: 'feature', category: 'interior', pattern: 'water', colors: ['#4a7f96', '#8fcfe2'], emissive: '#5fd8f0', footprint: 'round', height: WAIST, hint: 'Wants room around it — and it covers a conversation.' },
+    { id: 'plant', name: 'Lobby planter', kind: 'feature', category: 'decoration', pattern: 'gravel', colors: ['#3f6b46', '#5e9a63'], footprint: 'canopy', height: WAIST, placement: { on: ['carpet', 'lobby'] } },
   ],
 };
 
@@ -99,12 +99,12 @@ export const SPRAWL_STREET: Tileset = {
     { id: 'car', name: 'Parked car', kind: 'feature', category: 'interior', pattern: 'solid', colors: ['#48566b', '#63758f'], height: WAIST, hint: 'Cover until someone shoots the tank.' },
     { id: 'streetbench', name: 'Street bench', kind: 'feature', category: 'interior', pattern: 'planks', colors: ['#6a5340', '#856a52'], height: WAIST, footprint: 'wall', placement: { againstWall: true, on: ['walk', 'grass'] } },
 
-    { id: 'tree', name: 'Street tree', kind: 'feature', category: 'decoration', pattern: 'gravel', colors: ['#3c5c33', '#5c8a45'], height: FULL, blocksSight: false, placement: { on: ['grass', 'walk'] }, hint: 'Breaks up a sightline without stopping it.' },
-    { id: 'planter', name: 'Concrete planter', kind: 'feature', category: 'decoration', pattern: 'gravel', colors: ['#6b6a5e', '#4f7a44'], height: WAIST, placement: { on: ['walk', 'grass'] } },
-    { id: 'hydrant', name: 'Fire hydrant', kind: 'feature', category: 'decoration', pattern: 'solid', colors: ['#8e3b32', '#b45448'], height: WAIST, placement: { on: ['walk'] } },
+    { id: 'tree', name: 'Street tree', kind: 'feature', category: 'decoration', pattern: 'gravel', colors: ['#3c5c33', '#5c8a45'], footprint: 'canopy', height: FULL, blocksSight: false, placement: { on: ['grass', 'walk'] }, hint: 'Breaks up a sightline without stopping it.' },
+    { id: 'planter', name: 'Concrete planter', kind: 'feature', category: 'decoration', pattern: 'gravel', colors: ['#6b6a5e', '#4f7a44'], footprint: 'round', height: WAIST, placement: { on: ['walk', 'grass'] } },
+    { id: 'hydrant', name: 'Fire hydrant', kind: 'feature', category: 'decoration', pattern: 'solid', colors: ['#8e3b32', '#b45448'], footprint: 'post', height: WAIST, placement: { on: ['walk'] } },
     { id: 'drain', name: 'Storm drain', kind: 'feature', category: 'decoration', pattern: 'grating', colors: ['#33312f', '#57534e'], placement: { on: ['road'] } },
     { id: 'oilstain', name: 'Oil stain', kind: 'feature', category: 'decoration', pattern: 'water', colors: ['#302d2e', '#403b3c'], placement: { on: ['road'] } },
-    { id: 'trash', name: 'Refuse pile', kind: 'feature', category: 'decoration', pattern: 'rubble', colors: ['#4a4038', '#5f5245'], height: WAIST, placement: { on: ['road', 'walk'] } },
+    { id: 'trash', name: 'Refuse pile', kind: 'feature', category: 'decoration', pattern: 'rubble', colors: ['#4a4038', '#5f5245'], footprint: 'round', height: WAIST, placement: { on: ['road', 'walk'] } },
   ],
 };
 
@@ -122,7 +122,7 @@ export const MAINTENANCE: Tileset = {
     { id: 'vent', name: 'Vent grille', kind: 'wall', category: 'building', pattern: 'grating', colors: ['#47563f', '#7d9070'], footprint: 'wall', height: FULL, blocksSight: false, placement: CUT, hint: 'You can see through it. A face can fit if it has to.' },
     { id: 'hatch', name: 'Access hatch', kind: 'door', category: 'building', pattern: 'hatch', colors: ['#5e6a5f', '#93a394'], footprint: 'wall', height: FULL, placement: CUT, hint: 'Sight passes when it is open.' },
 
-    { id: 'valve', name: 'Valve cluster', kind: 'feature', category: 'interior', pattern: 'hatch', colors: ['#6a7161', '#8d9781'], height: WAIST, placement: { againstWall: true } },
+    { id: 'valve', name: 'Valve cluster', kind: 'feature', category: 'interior', pattern: 'hatch', colors: ['#6a7161', '#8d9781'], footprint: 'post', height: WAIST, placement: { againstWall: true } },
     { id: 'pipes', name: 'Pipe run', kind: 'feature', category: 'decoration', pattern: 'panel', colors: ['#57604d', '#727c63'], height: WAIST, footprint: 'wall', placement: { againstWall: true } },
     { id: 'moss', name: 'Damp bloom', kind: 'feature', category: 'decoration', pattern: 'gravel', colors: ['#3b5236', '#4f6b43'], placement: { on: ['duct', 'sludge'] } },
   ],
@@ -143,9 +143,9 @@ export const BARRENS: Tileset = {
     { id: 'doorway', name: 'Empty doorway', kind: 'door', category: 'building', pattern: 'brick', colors: ['#4e2c20', '#6b3c2b'], footprint: 'wall', height: FULL, blocksSight: false, placement: CUT },
 
     { id: 'halfwall', name: 'Collapsed wall', kind: 'feature', category: 'interior', pattern: 'brick', colors: ['#8a5a40', '#a06d4e'], footprint: 'wall', height: WAIST, placement: { againstWall: true }, hint: 'Waist high — cover, not concealment.' },
-    { id: 'fire', name: 'Barrel fire', kind: 'feature', category: 'decoration', pattern: 'solid', colors: ['#a2521f', '#d97a2b'], emissive: '#ff8324', height: WAIST, hint: 'A light source: everyone near it is visible.' },
-    { id: 'scrub', name: 'Scrub bush', kind: 'feature', category: 'decoration', pattern: 'gravel', colors: ['#4c5a30', '#63753c'], height: WAIST, placement: { on: ['dirt', 'weeds'] } },
-    { id: 'wreck', name: 'Burnt-out wreck', kind: 'feature', category: 'decoration', pattern: 'rubble', colors: ['#4a3a34', '#5f4a41'], height: WAIST, placement: { on: ['dirt', 'slab', 'rubble'] } },
+    { id: 'fire', name: 'Barrel fire', kind: 'feature', category: 'decoration', pattern: 'solid', colors: ['#a2521f', '#d97a2b'], emissive: '#ff8324', footprint: 'round', height: WAIST, hint: 'A light source: everyone near it is visible.' },
+    { id: 'scrub', name: 'Scrub bush', kind: 'feature', category: 'decoration', pattern: 'gravel', colors: ['#4c5a30', '#63753c'], footprint: 'canopy', height: WAIST, placement: { on: ['dirt', 'weeds'] } },
+    { id: 'wreck', name: 'Burnt-out wreck', kind: 'feature', category: 'decoration', pattern: 'rubble', colors: ['#4a3a34', '#5f4a41'], footprint: 'round', height: WAIST, placement: { on: ['dirt', 'slab', 'rubble'] } },
   ],
 };
 
@@ -164,8 +164,8 @@ export const CLUB: Tileset = {
 
     { id: 'counter', name: 'Bar counter', kind: 'feature', category: 'interior', pattern: 'panel', colors: ['#7a4f2e', '#9c663c'], emissive: '#39d7f0', footprint: 'wall', height: WAIST, placement: { againstWall: true } },
     { id: 'booth', name: 'Booth', kind: 'feature', category: 'interior', pattern: 'carpet', colors: ['#6d3a55', '#8a4a6b'], height: WAIST, placement: { againstWall: true }, hint: 'Sit here for the quiet conversation.' },
-    { id: 'stool', name: 'Bar stool', kind: 'feature', category: 'interior', pattern: 'solid', colors: ['#5d3f4e', '#77505f'], height: WAIST },
-    { id: 'speaker', name: 'Speaker stack', kind: 'feature', category: 'decoration', pattern: 'panel', colors: ['#2b2338', '#3d3050'], height: FULL, placement: { againstWall: true }, hint: 'Loud enough that nobody hears the fight start.' },
+    { id: 'stool', name: 'Bar stool', kind: 'feature', category: 'interior', pattern: 'solid', colors: ['#5d3f4e', '#77505f'], footprint: 'post', height: WAIST },
+    { id: 'speaker', name: 'Speaker stack', kind: 'feature', category: 'decoration', pattern: 'panel', colors: ['#2b2338', '#3d3050'], footprint: 'post', height: FULL, placement: { againstWall: true }, hint: 'Loud enough that nobody hears the fight start.' },
     { id: 'glassware', name: 'Broken glass', kind: 'feature', category: 'decoration', pattern: 'rubble', colors: ['#4a3f5c', '#6a5c80'], placement: { on: ['floor', 'bar'] } },
   ],
 };

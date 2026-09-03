@@ -47,7 +47,7 @@ export interface TileDrawDef {
    * orients itself from its neighbours; anything else fills the square.
    * Purely visual — sight and movement always block the whole cell.
    */
-  footprint?: 'fill' | 'wall';
+  footprint?: 'fill' | 'wall' | 'post' | 'canopy' | 'round';
   /**
    * The floor to draw UNDER a thin tile, from the same set.
    *
@@ -83,7 +83,7 @@ export interface TileSetLike {
     colors: readonly [string, string];
     height?: number;
     emissive?: string;
-    footprint?: 'fill' | 'wall';
+    footprint?: 'fill' | 'wall' | 'post' | 'canopy' | 'round';
   }[];
 }
 
@@ -106,7 +106,11 @@ export function tileDefsFromSets(sets: readonly TileSetLike[]): Record<string, T
     // stands on warehouse concrete rather than a hole in the map.
     const floor = set.tiles.find((t) => t.kind === 'floor');
     for (const t of set.tiles) {
-      const thin = t.footprint === 'wall';
+      // EVERY partial footprint needs floor beneath it, not just walls: a
+      // hydrant is a narrow post and a tree is a trunk, so without an underlay
+      // each one would be a hole in the map with the grid showing through.
+      const thin =
+        t.footprint !== undefined && t.footprint !== 'fill';
       defs[tileDefKey(set.id, t.id)] = {
         pattern: t.pattern,
         colors: t.colors,

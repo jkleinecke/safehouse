@@ -13,7 +13,7 @@
 import type { Graphics } from 'pixi.js';
 import type { Point, TileLayer } from '@safehouse/contracts';
 import { WALL_THICKNESS } from '@safehouse/rules';
-import { cellDepth, heightRise, rectCorners, type SceneMetrics } from '../geometry.js';
+import { cellDepth, heightRise, rectCorners, worldFromGrid, type SceneMetrics } from '../geometry.js';
 import { tileDefKey, type TileDrawDef } from '../types.js';
 import { FACE_SHADE, parseColor, shade } from './colors.js';
 
@@ -132,6 +132,54 @@ function drawBox(
     });
   }
 
+  poly(g, top).fill({ color: rise > 0 ? shade(base, FACE_SHADE.top) : base });
+  return top;
+}
+
+/**
+ * An extruded PRISM — a cylinder, near enough.
+ *
+ * A four-sided box makes a tree crown read as a green cube, which is exactly
+ * the complaint that "the decorations are just coloured cells" was about.
+ * Eight sides is the cheapest count that stops reading as boxy at table zoom
+ * and still costs a handful of polygons.
+ *
+ * Side faces are painted back to front by their own midpoint depth, so the
+ * ones turned toward the viewer cover the ones behind without needing to work
+ * out which those are — the same painter's-algorithm trick the cell sort uses.
+ */
+function drawPrism(
+  g: Graphics,
+  m: SceneMetrics,
+  centre: { x: number; y: number },
+  radius: number,
+  rise: number,
+  base: number,
+  sides = 8,
+): Point[] {
+  const ring: Array<{ grid: { x: number; y: number }; world: Point }> = [];
+  for (let i = 0; i < sides; i += 1) {
+    const a = (i / sides) * Math.PI * 2 + Math.PI / sides;
+    const grid = { x: centre.x + Math.cos(a) * radius, y: centre.y + Math.sin(a) * radius };
+    ring.push({ grid, world: worldFromGrid(m, grid) });
+  }
+
+  if (rise > 0) {
+    const faces = ring.map((p, i) => {
+      const q = ring[(i + 1) % sides]!;
+      return {
+        // Depth of the edge's midpoint in grid space; higher is nearer.
+        depth: (p.grid.x + p.grid.y + q.grid.x + q.grid.y) / 2,
+        quad: [p.world, q.world, { x: q.world.x, y: q.world.y - rise }, { x: p.world.x, y: p.world.y - rise }],
+        // Two shades so the curve reads as a curve rather than one flat band.
+        shade: i % 2 === 0 ? FACE_SHADE.left : FACE_SHADE.right,
+      };
+    });
+    faces.sort((a, b) => a.depth - b.depth);
+    for (const f of faces) poly(g, f.quad).fill({ color: shade(base, f.shade) });
+  }
+
+  const top = ring.map((p) => ({ x: p.world.x, y: p.world.y - rise }));
   poly(g, top).fill({ color: rise > 0 ? shade(base, FACE_SHADE.top) : base });
   return top;
 }
@@ -364,6 +412,65 @@ function drawWallTile(
   if (lastTop.length > 0) drawGlow(g, def, accent, lastTop);
 }
 
+/**
+ * An object standing on the floor, drawn as a SHAPE rather than a cuboid.
+ *
+ * A catalogue where every prop is a coloured box tells the GM nothing at a
+ * glance: colour alone does not separate a fire hydrant from a refuse pile at
+ * table zoom, and both read as "some cube". A silhouette does.
+ *
+ *  - `post`   a narrow column — hydrant, bollard, valve stack
+ *  - `canopy` a post carrying a wide crown — which is what makes a tree a tree
+ *  - `round`  a squat cylinder — barrel, fountain basin, planter
+ *
+ * All still drawn, so the catalogue stays kilobytes and stays ours (§14).
+ */
+function drawObjectTile(
+  g: Graphics,
+  def: TileDrawDef,
+  m: SceneMetrics,
+  col: number,
+  row: number,
+): void {
+  const base = parseColor(def.colors[0], 0x3b3f45);
+  const accent = parseColor(def.colors[1], 0x5a6068);
+  const rise = heightRise(m, def.height ?? 0);
+  const shape = def.footprint;
+
+  // Floor first: these cover a fraction of their cell, and without it every
+  // prop would be a hole in the map with the grid showing through.
+  const under = def.underlay;
+  if (under !== undefined) {
+    const floor = drawBox(g, m, [col, row, col + 1, row + 1], 0, parseColor(under.colors[0], base));
+    drawPattern(
+      g,
+      { ...def, pattern: under.pattern },
+      parseColor(under.colors[1], accent),
+      inscribed(floor),
+    );
+  }
+
+  const centre = { x: col + 0.5, y: row + 0.5 };
+  // A `round` prop is squat and wide; a post and a trunk are narrow.
+  const radius = shape === 'round' ? 0.34 : 0.15;
+
+  if (shape === 'canopy') {
+    // Trunk first, then the crown above it — drawing order IS the occlusion,
+    // so the crown has to come second or the trunk sits on top of it.
+    drawPrism(g, m, centre, radius, rise * 0.55, shade(base, 0.6), 6);
+    // A wide round crown on a narrow trunk: narrow-then-wide is the whole
+    // silhouette, and it is what a box crown could never give.
+    const lifted = drawPrism(g, m, centre, 0.42, rise, base, 8);
+    drawPattern(g, def, accent, inscribed(lifted));
+    drawGlow(g, def, accent, lifted);
+    return;
+  }
+
+  const top = drawPrism(g, m, centre, radius, rise, base, shape === 'round' ? 8 : 6);
+  drawPattern(g, def, accent, inscribed(top));
+  drawGlow(g, def, accent, top);
+}
+
 /** An ordinary tile: the whole cell, extruded by its height. */
 function drawFillTile(
   g: Graphics,
@@ -426,7 +533,10 @@ export function drawTiles(g: Graphics, m: SceneMetrics, input: TileDrawInput): v
   );
 
   for (const cell of drawable) {
-    if (cell.def.footprint === 'wall') {
+    const shape = cell.def.footprint;
+    if (shape === 'post' || shape === 'canopy' || shape === 'round') {
+      drawObjectTile(g, cell.def, m, cell.col, cell.row);
+    } else if (shape === 'wall') {
       // Joins are read from the finished set, not from draw order, so a run
       // looks the same whichever end the GM painted from.
       drawWallTile(g, cell.def, m, cell.col, cell.row, {

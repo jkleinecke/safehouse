@@ -137,9 +137,26 @@ export type TileHeight = (typeof TILE_HEIGHTS)[keyof typeof TILE_HEIGHTS];
  * the leftover slivers are not somewhere a runner stands, and cell-based
  * blocking is what keeps line of sight cheap and the ruler honest.
  */
-export const TILE_FOOTPRINTS = ['fill', 'wall'] as const;
+/**
+ * `post` is a narrow column in the middle of the cell — a fire hydrant, a
+ * bollard, a valve stack. `canopy` is a post carrying a wide crown, which is
+ * what makes a tree read as a tree rather than a green box. `round` is a
+ * squat cylinder: a barrel, a fountain basin, a planter.
+ *
+ * These exist because a catalogue where everything is a cuboid tells the GM
+ * nothing at a glance. Colour alone does not separate a hydrant from a
+ * refuse pile at table zoom; a silhouette does. They are still DRAWN, not
+ * blitted, so the catalogue is still kilobytes and still ours (§14).
+ */
+export const TILE_FOOTPRINTS = ['fill', 'wall', 'post', 'canopy', 'round'] as const;
 
 export type TileFootprint = (typeof TILE_FOOTPRINTS)[number];
+
+/**
+ * Footprints that occupy only part of their cell and therefore need floor
+ * drawn underneath them — otherwise every one is a hole in the map.
+ */
+export const PARTIAL_FOOTPRINTS: readonly TileFootprint[] = ['wall', 'post', 'canopy', 'round'];
 
 /**
  * Wall slab thickness, as a fraction of a cell. A third reads as a wall at
