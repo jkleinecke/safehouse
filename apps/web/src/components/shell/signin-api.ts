@@ -1,10 +1,12 @@
 /**
  * GM sign-in data layer (FR1.1/1.2).
  *
- * Three ways a GM device comes into existence, and no others:
+ * Four ways a GM device comes into existence, and no others:
  *   - `POST /api/campaigns`                    bootstrap a fresh install
  *   - `POST /api/campaigns/:id/gm-pair`        a short-lived pairing code + QR
  *   - `POST /api/campaigns/:id/gm-device`      a second token for this same GM
+ *   - `POST /api/gm/recover`                   loopback only, on the server's
+ *                                              own machine (`api/my-campaigns`)
  *
  * A pairing code is redeemed on the SPA route `/join/:code`, which calls
  * `GET /api/join/:code` — the API path, not the SPA one (LIVE-3).
@@ -115,11 +117,13 @@ export function useRedeemCode() {
  * cheapest authenticated read and it also runs the server's `assertCampaign`,
  * so a token for another campaign fails here rather than half-signing the
  * browser in. The header is passed explicitly because the stored session is,
- * by definition, not this token yet.
+ * by definition, not this token yet — which is also why a 401 here must not
+ * retire anything: a bad paste is a bad paste, not an expired session.
  */
 export async function verifyPastedSession(session: Session): Promise<{ id: string; name: string }> {
   return apiGet<{ id: string; name: string }>(`/api/campaigns/${session.campaignId}`, {
     anonymous: true,
+    keepSessionOn401: true,
     headers: { Authorization: `Bearer ${session.token}` },
   });
 }

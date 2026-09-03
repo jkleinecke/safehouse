@@ -10,6 +10,7 @@
     "test": "vitest run",
     "seed:books": "tsx scripts/seed-books.ts",
     "seed:demo": "tsx seed/demo.ts",
+    "gm:token": "tsx scripts/gm-token.ts",
     "playthrough": "tsx scripts/playthrough.ts"
   },
   "dependencies": {

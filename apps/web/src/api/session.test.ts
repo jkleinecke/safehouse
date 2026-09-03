@@ -1,23 +1,40 @@
 /**
- * Session storage rules (FR1.1/1.3) — and specifically the same-origin session
- * collision found by driving the real app: a GM keeps a player view open in a
- * second tab of the same browser, and the join wipes the GM out.
+ * Session storage rules (FR1.1/1.3) — two collisions, one store.
+ *
+ * The first was found by driving the real app: a GM keeps a player view open
+ * in a second tab of the same browser, and the join wipes the GM out. The
+ * second is the same shape one axis over: a GM running two tables holds two
+ * `gm` tokens, and with one slot per role the second table evicted the first,
+ * so "load back into the campaign I made last month" was impossible.
+ *
+ * Both fixes are asserted here, together, because the second must not undo the
+ * first: the tab pin still wins, the per-role slot is still there for the code
+ * that reads it with one `getItem`, the legacy blob still migrates, and a
+ * storage backend that throws still degrades instead of exploding.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Role } from '@safehouse/contracts';
 import {
+  ACTIVE_CAMPAIGN_KEY,
   ACTIVE_ROLE_KEY,
   LEGACY_KEY,
+  ROSTER_KEY,
+  ROSTER_LIMIT,
   SESSION_PREFIX,
+  TAB_CAMPAIGN_KEY,
   TAB_ROLE_KEY,
   activateSession,
   dropAllSessions,
   dropSession,
+  dropSessionForToken,
+  noteCampaignNames,
   readActiveRole,
   readSessions,
+  readTabCampaign,
   readTabRole,
   resolveSession,
   sessionFrom,
+  sessionKey,
   writeSession,
   type Session,
   type SessionStores,
@@ -52,9 +69,11 @@ class Blocked implements StorageLike {
   }
 }
 
-function sess(role: Role, token = `${role}-token`): Session {
-  return { token, role, campaignId: 'camp-1', deviceId: `dev-${role}`, userId: `u-${role}` };
+function sess(role: Role, token = `${role}-token`, campaignId = 'camp-1'): Session {
+  return { token, role, campaignId, deviceId: `dev-${role}`, userId: `u-${role}` };
 }
+
+const tokensOf = (sessions: Session[]) => sessions.map((s) => s.token).sort();
 
 let local: Mem;
 let tabA: SessionStores;
@@ -116,6 +135,133 @@ describe('same-origin session collision (two tabs, one browser)', () => {
     expect(() => writeSession(hostile, sess('gm'))).not.toThrow();
     expect(resolveSession(hostile)).toBeNull();
     expect(readSessions(hostile)).toEqual([]);
+    expect(() => activateSession(hostile, 'gm', 'camp-1')).not.toThrow();
+    expect(() => dropSession(hostile)).not.toThrow();
+    expect(() => dropSessionForToken(hostile, 'gm-token')).not.toThrow();
+    expect(() => dropAllSessions(hostile)).not.toThrow();
+    expect(() => noteCampaignNames(hostile, new Map([['camp-1', 'Static']]))).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The campaign axis — several tables, one browser, session after session
+// ---------------------------------------------------------------------------
+
+describe('several campaigns coexist', () => {
+  it('a second table does not evict the first: both gm tokens survive', () => {
+    writeSession(tabA, sess('gm', 'gm-a', 'camp-a'));
+    writeSession(tabA, sess('gm', 'gm-b', 'camp-b'));
+
+    // Newest first within a role, so "that role's session" still means the
+    // one in the chair.
+    expect(readSessions(tabA).map((s) => s.campaignId)).toEqual(['camp-b', 'camp-a']);
+    expect(resolveSession(tabA)?.token).toBe('gm-b');
+    expect(tokensOf(readSessions(tabA))).toEqual(['gm-a', 'gm-b']);
+  });
+
+  it('switching between them preserves both', () => {
+    writeSession(tabA, sess('gm', 'gm-a', 'camp-a'));
+    writeSession(tabA, sess('gm', 'gm-b', 'camp-b'));
+
+    expect(activateSession(tabA, 'gm', 'camp-a')?.token).toBe('gm-a');
+    expect(resolveSession(tabA)?.token).toBe('gm-a');
+    expect(tokensOf(readSessions(tabA))).toEqual(['gm-a', 'gm-b']);
+
+    expect(activateSession(tabA, 'gm', 'camp-b')?.token).toBe('gm-b');
+    expect(resolveSession(tabA)?.token).toBe('gm-b');
+    expect(tokensOf(readSessions(tabA))).toEqual(['gm-a', 'gm-b']);
+  });
+
+  it('a second table joined in another tab does not move a pinned gm tab', () => {
+    writeSession(tabA, sess('gm', 'gm-a', 'camp-a'));
+    expect(resolveSession(tabA)?.campaignId).toBe('camp-a');
+
+    writeSession(tabB, sess('gm', 'gm-b', 'camp-b'));
+
+    expect(resolveSession(tabB)?.token).toBe('gm-b');
+    expect(resolveSession(tabA)?.token).toBe('gm-a');
+  });
+
+  it('holds the same campaign as gm and player at once — two devices, two rows', () => {
+    writeSession(tabA, sess('gm', 'gm-a', 'camp-a'));
+    writeSession(tabB, sess('player', 'p-a', 'camp-a'));
+    expect(readSessions(tabA).map(sessionKey)).toEqual(['gm:camp-a', 'player:camp-a']);
+    expect(resolveSession(tabA)?.token).toBe('gm-a');
+    expect(resolveSession(tabB)?.token).toBe('p-a');
+  });
+
+  it('a tab pinned by the previous build (role, no campaign) still resolves', () => {
+    writeSession(tabA, sess('gm', 'gm-a', 'camp-a'));
+    writeSession(tabA, sess('gm', 'gm-b', 'camp-b'));
+
+    const oldTab: SessionStores = { local, tab: new Mem() };
+    oldTab.tab?.setItem(TAB_ROLE_KEY, 'gm'); // no campaign half — the old format
+
+    expect(resolveSession(oldTab)?.token).toBe('gm-b');
+    // …and resolving completes the pin, so it is a full pin from here on.
+    expect(readTabCampaign(oldTab)).toBe('camp-b');
+  });
+
+  it('keeps the tab in the same role when its pinned campaign is signed out', () => {
+    writeSession(tabA, sess('gm', 'gm-a', 'camp-a'));
+    writeSession(tabB, sess('gm', 'gm-b', 'camp-b'));
+    expect(resolveSession(tabA)?.token).toBe('gm-a');
+
+    dropSession(tabB, 'gm', 'camp-a'); // signed out from the other tab
+
+    expect(resolveSession(tabA)?.token).toBe('gm-b');
+    expect(readTabRole(tabA)).toBe('gm');
+  });
+
+  it('caps the roster rather than growing until the browser refuses to write', () => {
+    for (let i = 0; i < ROSTER_LIMIT + 4; i += 1) {
+      writeSession(tabA, sess('gm', `t-${i}`, `camp-${i}`));
+    }
+    const stored = readSessions(tabA);
+    expect(stored).toHaveLength(ROSTER_LIMIT);
+    expect(stored[0]?.token).toBe(`t-${ROSTER_LIMIT + 3}`);
+    expect(stored.some((s) => s.token === 't-0')).toBe(false);
+  });
+});
+
+describe('sign-out is campaign-scoped', () => {
+  it('signing this device out leaves the GM other table alone', () => {
+    writeSession(tabA, sess('gm', 'gm-a', 'camp-a'));
+    writeSession(tabB, sess('gm', 'gm-b', 'camp-b'));
+
+    dropSession(tabB); // tab B is looking at camp-b
+
+    expect(readSessions(tabB).map((s) => s.campaignId)).toEqual(['camp-a']);
+    expect(resolveSession(tabA)?.token).toBe('gm-a');
+  });
+
+  it('an explicit role with no campaign still signs that role out everywhere', () => {
+    writeSession(tabA, sess('gm', 'gm-a', 'camp-a'));
+    writeSession(tabA, sess('gm', 'gm-b', 'camp-b'));
+    writeSession(tabB, sess('player', 'p-a', 'camp-a'));
+
+    dropSession(tabB, 'gm');
+
+    expect(tokensOf(readSessions(tabB))).toEqual(['p-a']);
+    expect(local.getItem(`${SESSION_PREFIX}gm`)).toBeNull();
+  });
+
+  it('a 401 retires only the token that earned it', () => {
+    writeSession(tabA, sess('gm', 'gm-a', 'camp-a'));
+    writeSession(tabA, sess('gm', 'gm-b', 'camp-b'));
+    writeSession(tabB, sess('player', 'p-a', 'camp-a'));
+
+    dropSessionForToken(tabA, 'gm-a');
+
+    expect(tokensOf(readSessions(tabA))).toEqual(['gm-b', 'p-a']);
+    // The role slot follows the survivor rather than pointing at a dead token.
+    expect(JSON.parse(local.getItem(`${SESSION_PREFIX}gm`) ?? 'null')?.token).toBe('gm-b');
+  });
+
+  it('ignores a token nothing is stored under', () => {
+    writeSession(tabA, sess('gm', 'gm-a', 'camp-a'));
+    dropSessionForToken(tabA, 'never-minted');
+    expect(tokensOf(readSessions(tabA))).toEqual(['gm-a']);
   });
 });
 
@@ -135,6 +281,7 @@ describe('switching devices', () => {
   it('returns null for a role with no stored session', () => {
     writeSession(tabA, sess('gm'));
     expect(activateSession(tabA, 'observer')).toBeNull();
+    expect(activateSession(tabA, 'gm', 'camp-nope')).toBeNull();
     expect(resolveSession(tabA)?.role).toBe('gm');
   });
 
@@ -155,13 +302,17 @@ describe('sign-out', () => {
     expect(resolveSession(tabA)?.role).toBe('gm');
   });
 
-  it('dropAllSessions clears every slot, the pointer and the pin', () => {
-    writeSession(tabA, sess('gm'));
+  it('dropAllSessions clears every slot, the roster, the pointer and the pin', () => {
+    writeSession(tabA, sess('gm', 'gm-a', 'camp-a'));
+    writeSession(tabA, sess('gm', 'gm-b', 'camp-b'));
     writeSession(tabB, sess('player'));
     dropAllSessions(tabA);
     expect(readSessions(tabA)).toEqual([]);
     expect(readActiveRole(tabA)).toBeNull();
     expect(readTabRole(tabA)).toBeNull();
+    expect(local.getItem(ROSTER_KEY)).toBeNull();
+    expect(local.getItem(ACTIVE_CAMPAIGN_KEY)).toBeNull();
+    expect(tabA.tab?.getItem(TAB_CAMPAIGN_KEY)).toBeNull();
   });
 });
 
@@ -185,17 +336,73 @@ describe('legacy single-key sessions', () => {
     expect(readSessions(tabB).map((s) => s.role)).toEqual(['gm', 'player']);
   });
 
+  it('migrates the legacy blob into the roster instead of losing it to a new table', () => {
+    local.setItem(LEGACY_KEY, JSON.stringify(sess('gm', 'hand-written', 'camp-old')));
+    writeSession(tabA, sess('gm', 'gm-new', 'camp-new'));
+    expect(local.getItem(LEGACY_KEY)).toBeNull();
+    expect(tokensOf(readSessions(tabA))).toEqual(['gm-new', 'hand-written']);
+    expect(activateSession(tabA, 'gm', 'camp-old')?.token).toBe('hand-written');
+  });
+
+  it('still reads a browser that only ever had the per-role slot', () => {
+    local.setItem(`${SESSION_PREFIX}gm`, JSON.stringify(sess('gm', 'only-slot', 'camp-a')));
+    expect(resolveSession(tabA)?.token).toBe('only-slot');
+  });
+
   it('ignores junk and mismatched slots rather than trusting them', () => {
     local.setItem(LEGACY_KEY, 'not json');
+    local.setItem(ROSTER_KEY, 'not json either');
     local.setItem(`${SESSION_PREFIX}player`, JSON.stringify(sess('gm', 'smuggled')));
     local.setItem(ACTIVE_ROLE_KEY, 'wizard');
     expect(readSessions(tabA)).toEqual([]);
     expect(readActiveRole(tabA)).toBeNull();
   });
 
+  it('drops roster entries that are not sessions but keeps the ones that are', () => {
+    local.setItem(
+      ROSTER_KEY,
+      JSON.stringify([null, 'nope', { role: 'gm' }, sess('gm', 'kept', 'camp-a')]),
+    );
+    expect(tokensOf(readSessions(tabA))).toEqual(['kept']);
+  });
+
   it('rejects a session missing a token, role or campaign', () => {
     local.setItem(`${SESSION_PREFIX}gm`, JSON.stringify({ role: 'gm', campaignId: 'c' }));
     expect(readSessions(tabA)).toEqual([]);
+  });
+});
+
+describe('the per-role slot stays the one-getItem mirror', () => {
+  it('follows whichever campaign that role is currently in', () => {
+    writeSession(tabA, sess('gm', 'gm-a', 'camp-a'));
+    writeSession(tabA, sess('gm', 'gm-b', 'camp-b'));
+    expect(JSON.parse(local.getItem(`${SESSION_PREFIX}gm`) ?? 'null')?.token).toBe('gm-b');
+
+    activateSession(tabA, 'gm', 'camp-a');
+    expect(JSON.parse(local.getItem(`${SESSION_PREFIX}gm`) ?? 'null')?.token).toBe('gm-a');
+  });
+});
+
+describe('campaign names', () => {
+  it('labels stored sessions once the server has named the campaign', () => {
+    writeSession(tabA, sess('gm', 'gm-a', 'camp-a'));
+    writeSession(tabB, sess('player', 'p-b', 'camp-b'));
+
+    noteCampaignNames(tabA, new Map([['camp-a', 'Static on the Line']]));
+
+    const stored = readSessions(tabA);
+    expect(stored.find((s) => s.campaignId === 'camp-a')?.campaignName).toBe('Static on the Line');
+    expect(stored.find((s) => s.campaignId === 'camp-b')?.campaignName).toBeUndefined();
+    // A label is never allowed to cost a token.
+    expect(tokensOf(stored)).toEqual(['gm-a', 'p-b']);
+  });
+
+  it('is a no-op when there is nothing new to say', () => {
+    writeSession(tabA, sess('gm', 'gm-a', 'camp-a'));
+    const before = local.getItem(ROSTER_KEY);
+    noteCampaignNames(tabA, new Map());
+    noteCampaignNames(tabA, new Map([['camp-zzz', 'Someone else']]));
+    expect(local.getItem(ROSTER_KEY)).toBe(before);
   });
 });
 
@@ -227,9 +434,16 @@ describe('sessionFrom', () => {
 });
 
 describe('tab pin bookkeeping', () => {
-  it('writes the pin under the documented key', () => {
-    writeSession(tabA, sess('display'));
+  it('writes both halves of the pin under the documented keys', () => {
+    writeSession(tabA, sess('display', 'tv', 'camp-a'));
     expect(tabA.tab?.getItem(TAB_ROLE_KEY)).toBe('display');
+    expect(tabA.tab?.getItem(TAB_CAMPAIGN_KEY)).toBe('camp-a');
     expect(local.getItem(ACTIVE_ROLE_KEY)).toBe('display');
+    expect(local.getItem(ACTIVE_CAMPAIGN_KEY)).toBe('camp-a');
+  });
+
+  it('names a session by the pair, so two gm tables never share a key', () => {
+    expect(sessionKey(sess('gm', 'a', 'camp-a'))).not.toBe(sessionKey(sess('gm', 'b', 'camp-b')));
+    expect(sessionKey({ role: 'gm', campaignId: 'camp-a' })).toBe('gm:camp-a');
   });
 });

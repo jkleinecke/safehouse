@@ -27,19 +27,45 @@
  *   display invite routes parse their role through `RoleSchema.exclude(['gm'])`
  *   and the device inherits `invites.role` verbatim.
  *
+ * BOTH of those need a GM already signed in somewhere, which leaves the cold
+ * start: every GM token gone (storage cleared, laptop reimaged, the last device
+ * revoked) on a database that already holds a campaign. Nothing in the app
+ * could recover from that — the bootstrap route 401s once a campaign exists,
+ * a pairing code needs a live GM to mint it, and pasting a token needs a
+ * campaign UUID with no route to look it up. A third route closes it:
+ *
+ *   POST /api/gm/recover               → a GM token with NO secret at all, but
+ *                                        only from the loopback interface.
+ *   GET  /api/gm/recover               → same gate; which campaigns are here.
+ *
+ * The trade is stated plainly because it is the only place in the app where a
+ * token is minted without proving anything: the documented deployment is "the
+ * GM hosts the server on their laptop" (§8/§16), and a browser on that laptop
+ * can already read `data/pglite` off the disk. Loopback is therefore not a
+ * weaker credential than a token — it is a stronger one. Everything hangs on
+ * the gate being airtight, which is why it lives in `assertLoopbackOrigin`
+ * (services/auth.ts) as one pure decision with its own tests: raw socket
+ * address, never `req.ip`; no forwarding header; `trustProxy` off.
+ *
+ * What it deliberately is NOT: it never creates a user and never invents a GM
+ * (`AuthService.mintGmDevice` reads `campaigns.gm_user_id`), so a player device
+ * calling it from the laptop gains nothing an anonymous curl on that same
+ * laptop would not — which is the point, and why the route ignores `req.auth`
+ * entirely rather than pretending to check it.
+ *
  * This file also registers `campaigns-admin.ts` (ownership transfer + sheet
  * claiming) so `src/plugins/index.ts` — owned by server-core — needs no edit.
  */
 import type { FastifyInstance } from 'fastify';
 import QRCode from 'qrcode';
 import { z } from 'zod';
-import { devices, invites } from '@safehouse/db';
+import { devices } from '@safehouse/db';
 import {
   assertCampaign,
+  assertLoopbackOrigin,
   hashToken,
   httpError,
   joinUrl,
-  mintJoinCode,
   mintToken,
   requireRole,
 } from '../services/auth.js';
@@ -55,6 +81,17 @@ const GmDeviceBody = z.object({
 
 const GmPairBody = z.object({
   expiresInMinutes: z.number().int().min(1).max(PAIR_MAX_MINUTES).optional(),
+});
+
+/**
+ * `campaignId` is optional on purpose: the overwhelmingly common case is one
+ * campaign on the laptop, and making the GM paste a UUID they cannot look up is
+ * precisely the dead end this route exists to remove. With several, the caller
+ * has to say which — `GET /api/gm/recover` lists them.
+ */
+const GmRecoverBody = z.object({
+  campaignId: z.string().uuid().optional(),
+  label: z.string().min(1).max(120).optional(),
 });
 
 function parse<T extends z.ZodType>(schema: T, value: unknown): z.output<T> {
@@ -111,28 +148,77 @@ export default async function authPlugin(app: FastifyInstance): Promise<void> {
     const body = parse(GmPairBody, req.body);
     const minutes = body.expiresInMinutes ?? PAIR_DEFAULT_MINUTES;
 
-    const row = (
-      await app.db
-        .insert(invites)
-        .values({
-          campaignId: id,
-          code: mintJoinCode(),
-          role: 'gm',
-          createdBy: auth.userId,
-          maxUses: 1, // one laptop per code, always
-          expiresAt: new Date(Date.now() + minutes * 60_000),
-        })
-        .returning()
-    )[0]!;
+    const invite = await app.authService.createGmPairingCode({
+      campaignId: id,
+      createdBy: auth.userId,
+      expiresInMinutes: minutes,
+    });
 
-    const url = joinUrl(app, row.code);
+    const url = joinUrl(app, invite.code);
     return reply.status(201).send({
-      code: row.code,
+      code: invite.code,
       role: 'gm' as const,
-      expiresAt: row.expiresAt?.toISOString() ?? null,
+      expiresAt: invite.expiresAt,
       expiresInMinutes: minutes,
       url,
       dataUrl: await QRCode.toDataURL(url, { margin: 1, width: 512 }),
+    });
+  });
+
+  /**
+   * "Which campaigns are on this laptop?" — the question the sign-in screen has
+   * to answer before it can offer to recover one, and the reason it is safe to
+   * answer here and nowhere else: the caller has already proven they are on the
+   * host (`assertLoopbackOrigin`). Off-host callers get the same content-free
+   * 403 whether this server holds twelve campaigns or none.
+   */
+  app.get('/api/gm/recover', async (req, reply) => {
+    assertLoopbackOrigin(req);
+    const campaigns = await app.authService.listCampaignsWithOwner();
+    return reply.send({ available: true, campaigns });
+  });
+
+  /**
+   * A GM token, no secret, loopback only (see the file header for the trade).
+   *
+   * `req.auth` is not consulted anywhere in here, deliberately: whatever token
+   * the caller happens to be holding — player, observer, kiosk, none — changes
+   * nothing about the outcome, so there is no escalation to reason about. The
+   * gate is the socket, and the identity comes from `campaigns.gm_user_id`.
+   */
+  app.post('/api/gm/recover', async (req, reply) => {
+    assertLoopbackOrigin(req);
+    const body = parse(GmRecoverBody, req.body);
+
+    let campaignId = body.campaignId;
+    if (campaignId === undefined) {
+      const all = await app.authService.listCampaignsWithOwner();
+      if (all.length === 0) {
+        // Not a lockout: with an empty table `POST /api/campaigns` is open, and
+        // that is the route the sign-in screen already offers.
+        throw httpError(404, 'no_campaigns', 'this server has no campaigns yet');
+      }
+      if (all.length > 1) {
+        throw httpError(
+          409,
+          'campaign_required',
+          'this server hosts more than one campaign — say which',
+          all.map((c) => ({ id: c.id, name: c.name })),
+        );
+      }
+      campaignId = all[0]!.id;
+    }
+
+    const minted = await app.authService.mintGmDevice(campaignId, {
+      label: body.label ?? 'GM device (recovered)',
+    });
+    return reply.status(201).send({
+      campaignId: minted.campaignId,
+      campaignName: minted.campaignName,
+      role: 'gm' as const,
+      token: minted.token,
+      deviceId: minted.deviceId,
+      user: minted.user,
     });
   });
 

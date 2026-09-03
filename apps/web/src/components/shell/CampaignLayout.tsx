@@ -15,6 +15,7 @@ import ConnectionChip from './ConnectionChip.js';
 import GmSidebar from './GmSidebar.js';
 import JoinQrModal from './JoinQrModal.js';
 import SessionMenu from './SessionMenu.js';
+import { useSessionExpiry } from './useSessionExpiry.js';
 
 function NoSession() {
   return (
@@ -41,6 +42,10 @@ export default function CampaignLayout() {
   const { data: campaign } = useCampaign(campaignId);
   const myCharacterId = useMyCharacterId(campaignId);
   const [qr, setQr] = useState<{ open: boolean; role: Role }>({ open: false, role: 'player' });
+  // A token the server has revoked used to render this whole shell in silence
+  // while every call 401'd. Now it retires itself and this tab goes back to
+  // the front door, where the campaign picker still has the sessions that work.
+  useSessionExpiry(session?.token);
 
   if (!session || !campaignId) return <NoSession />;
 
@@ -67,7 +72,11 @@ export default function CampaignLayout() {
           </div>
           <ConnectionChip status={status} />
           {/* Which device this tab is, and how to hop to another (FR1.1/1.3). */}
-          <SessionMenu role={session.role} displayName={session.displayName} />
+          <SessionMenu
+            role={session.role}
+            campaignId={session.campaignId}
+            displayName={session.displayName}
+          />
           {isGm && (
             <button
               className="btn btn-accent px-3 py-1.5"

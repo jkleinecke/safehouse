@@ -2,6 +2,7 @@
  * campaigns domain plugin — the campaign record itself (DESIGN.md §9.2
  * `campaigns`, §12; FR1.1/1.4/1.5, FR5.7).
  *
+ *   GET   /api/campaigns               the caller's campaigns (any role)
  *   GET   /api/campaigns/:id           summary the shell header needs
  *   PATCH /api/campaigns/:id           name / in-game date / settings (GM)
  *   GET   /api/campaigns/:id/devices   joined devices, for revoking (GM, FR1.3)
@@ -9,6 +10,14 @@
  * Creation, invites, the join QR and device revocation live in the core auth
  * routes (src/services/auth.ts) because they mint tokens; this plugin owns the
  * rest of the record.
+ *
+ * The collection read is what makes a campaign resumable across play sessions.
+ * Until it existed, the only way back into a campaign was a session the browser
+ * had already stored: nothing could ask the server "what did I play here
+ * before?", so a cleared localStorage meant the campaign was still on disk and
+ * unreachable through the UI. It is scoped by `memberships` for the
+ * authenticated user — never "every campaign on this box" — so two GMs sharing
+ * a server do not see each other's tables.
  *
  * Secrecy (Principle 4): `settings` can hold the campaign's Discord webhook,
  * so it is filtered out server-side for non-GM devices — never hidden in the
@@ -68,6 +77,28 @@ async function activeSceneId(db: Db, campaignId: string): Promise<string | null>
 }
 
 export default async function campaignsPlugin(app: FastifyInstance): Promise<void> {
+  /**
+   * "Load back into a campaign I already started." Every campaign the CALLING
+   * USER is a member of, newest first, with when it was last played.
+   *
+   * Scoped by user rather than by the device's bound campaign on purpose: one
+   * GM's laptop holds several tables, and a device token is bound to exactly
+   * one of them, so a device-scoped list could only ever return the campaign
+   * the browser is already in — which is the one question nobody needs asked.
+   * The user is the right scope, and `memberships` is the whole filter: there
+   * is no branch here that could return a campaign the caller does not belong
+   * to (Principle 4).
+   *
+   * An object rather than a bare array, unlike the sibling device list: this is
+   * the front door's first call and the one most likely to grow a field the
+   * picker needs (a cursor, a server name), and an array has nowhere to put one
+   * without breaking every caller.
+   */
+  app.get('/api/campaigns', async (req, reply) => {
+    const auth = requireAuth(req);
+    return reply.send({ campaigns: await app.authService.listCampaignsForUser(auth.userId) });
+  });
+
   /**
    * The shell's header query: name, clock, what is live. Players get the same
    * shape minus `settings` — house-rule flags are harmless, the webhook is not,
