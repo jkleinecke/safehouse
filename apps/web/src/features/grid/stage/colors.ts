@@ -50,9 +50,32 @@ export function shade(color: number, f: number): number {
 /**
  * Face shading for the isometric extrusion.
  *
- * A single flat fill on all three faces reads as a hexagon, not a solid — the
- * eye needs the brightness step to resolve it as a box standing on the floor.
- * The top catches the light, the two sides fall away from it, and the two
- * sides differ from each other so a corner where two walls meet is legible.
+ * These are not taste. They fall out of the key light the Shadowrun level
+ * editor ships — direction (-0.50, -1.00, -0.75), 48 degrees above the ground
+ * plane, with ambient and directional both neutral and each carrying about
+ * half. A face therefore lands at `0.502 + 0.502 x lambert` of its own colour:
+ * top 0.875, left 0.782, right 0.688. See `FACE_MULTIPLIER` in
+ * `@safehouse/rules` for the derivation and the source.
+ *
+ * Two things changed when we adopted it. The top face used to be 1.15 — it
+ * LIT the tile, inventing brightness the model does not have, which is what
+ * made every box read as moulded plastic. And the right face used to be 0.52,
+ * a spread far wider than the games use.
+ *
+ * That flatter range gives up legibility, and `FACE_FOOT` is what buys it
+ * back: the games get their form from paint, and the nearest thing a
+ * procedural renderer has is a gradient down each standing face so a solid
+ * sits INTO the floor and rises INTO the light. The horizontal key split is
+ * 0.50 : 0.75 rather than a symmetric 45 degrees, which is why the two visible
+ * sides differ from each other at all and a corner stays legible.
  */
-export const FACE_SHADE = { top: 1.15, left: 0.72, right: 0.52 } as const;
+export const FACE_SHADE = { top: 0.875, left: 0.782, right: 0.688 } as const;
+
+/**
+ * How much darker the FOOT of a standing face is than its crown.
+ *
+ * Sourced as 20-35% for figures and full-height props. Without it the measured
+ * face multipliers are too close together to resolve a box at table zoom; with
+ * it, a wall grows out of the floor instead of being pasted onto it.
+ */
+export const FACE_FOOT = 0.74;

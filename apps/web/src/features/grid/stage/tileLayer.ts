@@ -15,7 +15,7 @@ import type { Point, TileLayer } from '@safehouse/contracts';
 import { WALL_THICKNESS } from '@safehouse/rules';
 import { cellDepth, heightRise, rectCorners, worldFromGrid, type SceneMetrics } from '../geometry.js';
 import { tileDefKey, type TileDrawDef } from '../types.js';
-import { FACE_SHADE, parseColor, shade } from './colors.js';
+import { FACE_FOOT, FACE_SHADE, parseColor, shade } from './colors.js';
 
 // Type-only pixi import: every draw here is a call on a Graphics-shaped object,
 // so the module stays runnable (and testable) without a renderer.
@@ -103,6 +103,46 @@ function poly(g: Graphics, pts: readonly Point[]): Graphics {
  * doing it.
  */
 /**
+ * One standing face, banded from foot to crown.
+ *
+ * The measured face multipliers are close together — 0.688 to 0.875 — because
+ * in the games the form is PAINTED IN rather than shaded in. Flat-filling a
+ * face at those values makes a box dissolve, so each standing face is drawn as
+ * a few horizontal bands running from `FACE_FOOT` of its shade at the bottom to
+ * full at the top. That is the nearest a procedural renderer gets to the
+ * gradient a painter would put there, and it is what makes a wall grow out of
+ * the floor instead of being pasted onto it.
+ *
+ * Four bands: enough that the step is not visible at table zoom, few enough
+ * that a wall costs four polygons instead of forty.
+ */
+const FACE_BANDS = 4;
+
+function drawStandingFace(
+  g: Graphics,
+  a: Point,
+  b: Point,
+  rise: number,
+  base: number,
+  faceShade: number,
+): void {
+  for (let i = 0; i < FACE_BANDS; i += 1) {
+    const lo = (i / FACE_BANDS) * rise;
+    const hi = ((i + 1) / FACE_BANDS) * rise;
+    // Band centres run 1/8, 3/8, 5/8, 7/8 up the face, so neither the foot nor
+    // the crown is drawn at an extreme the model never reaches.
+    const t = (i + 0.5) / FACE_BANDS;
+    const lit = faceShade * (FACE_FOOT + (1 - FACE_FOOT) * t);
+    poly(g, [
+      { x: a.x, y: a.y - lo },
+      { x: b.x, y: b.y - lo },
+      { x: b.x, y: b.y - hi },
+      { x: a.x, y: a.y - hi },
+    ]).fill({ color: shade(base, lit) });
+  }
+}
+
+/**
  * One extruded box, given its footprint in GRID coordinates.
  *
  * A whole cell for an ordinary tile; a third-of-a-cell slab for a piece of
@@ -124,12 +164,8 @@ function drawBox(
     // the north corner ([N, E, S, W]), so those are W→S and S→E; the back pair
     // is hidden by the solid itself and drawing it would show through the
     // translucent bloom on emissive tiles.
-    poly(g, [ground[3]!, ground[2]!, top[2]!, top[3]!]).fill({
-      color: shade(base, FACE_SHADE.left),
-    });
-    poly(g, [ground[2]!, ground[1]!, top[1]!, top[2]!]).fill({
-      color: shade(base, FACE_SHADE.right),
-    });
+    drawStandingFace(g, ground[3]!, ground[2]!, rise, base, FACE_SHADE.left);
+    drawStandingFace(g, ground[2]!, ground[1]!, rise, base, FACE_SHADE.right);
   }
 
   poly(g, top).fill({ color: rise > 0 ? shade(base, FACE_SHADE.top) : base });
@@ -170,13 +206,14 @@ function drawPrism(
       return {
         // Depth of the edge's midpoint in grid space; higher is nearer.
         depth: (p.grid.x + p.grid.y + q.grid.x + q.grid.y) / 2,
-        quad: [p.world, q.world, { x: q.world.x, y: q.world.y - rise }, { x: p.world.x, y: p.world.y - rise }],
+        a: p.world,
+        b: q.world,
         // Two shades so the curve reads as a curve rather than one flat band.
         shade: i % 2 === 0 ? FACE_SHADE.left : FACE_SHADE.right,
       };
     });
     faces.sort((a, b) => a.depth - b.depth);
-    for (const f of faces) poly(g, f.quad).fill({ color: shade(base, f.shade) });
+    for (const f of faces) drawStandingFace(g, f.a, f.b, rise, base, f.shade);
   }
 
   const top = ring.map((p) => ({ x: p.world.x, y: p.world.y - rise }));
@@ -324,15 +361,46 @@ function drawPattern(g: Graphics, def: TileDrawDef, accent: number, at: ReturnTy
   }
 }
 
-/** Light a tile GIVES OFF, laid over a finished face. */
+/**
+ * Light a tile GIVES OFF — an UNLIT layer over a finished face.
+ *
+ * "Unlit" is the load-bearing word and it is the shipped convention: a glowing
+ * element is a separate layer that receives neither ambient nor directional
+ * light and renders at 100% of its painted value. Ours used to be a 20%-alpha
+ * wash over the tile, which is a tile that has been tinted, not a light — and
+ * in a catalogue where only about 1% of the frame is allowed to be bright, a
+ * light that does not read means the scene has no focal point at all.
+ *
+ * So it is drawn as the study describes a practical: a small hot CORE at full
+ * value, then a halo falling off around it. The core is inset because a light
+ * fills less of its cell than the cell — a lamp is a lamp, not a lit square —
+ * and the falloff is what makes the pool look like it is thrown rather than
+ * painted on.
+ */
 function drawGlow(g: Graphics, def: TileDrawDef, accent: number, face: readonly Point[]): void {
   if (def.emissive === undefined) return;
-  // This is the thing that reads across a room, and the reason six sets no
-  // longer look alike: a 1px accent line at 40% alpha is invisible at table
-  // zoom, a pool of neon is not.
   const glow = parseColor(def.emissive, accent);
-  poly(g, face).fill({ color: glow, alpha: 0.2 });
-  poly(g, face).stroke({ width: 2, color: glow, alpha: 0.45 });
+
+  // Centre of the face, to shrink toward.
+  let cx = 0;
+  let cy = 0;
+  for (const p of face) {
+    cx += p.x;
+    cy += p.y;
+  }
+  cx /= face.length;
+  cy /= face.length;
+  const shrunk = (k: number): Point[] =>
+    face.map((p) => ({ x: cx + (p.x - cx) * k, y: cy + (p.y - cy) * k }));
+
+  // Halo first, then the core over it — three rings falling off outward, so
+  // the edge of the pool fades instead of ending in a hard line.
+  poly(g, face).fill({ color: glow, alpha: 0.16 });
+  poly(g, shrunk(0.72)).fill({ color: glow, alpha: 0.3 });
+  poly(g, shrunk(0.46)).fill({ color: glow, alpha: 0.55 });
+  // The core, at full value. This is the only thing in a scene allowed to be
+  // this bright, which is exactly why it carries the composition.
+  poly(g, shrunk(0.24)).fill({ color: glow, alpha: 1 });
 }
 
 /** Which sides of this cell continue the wall run. */
