@@ -100,6 +100,60 @@ export function sceneWorldSize(m: SceneMetrics): { width: number; height: number
 export type Segment = readonly [Point, Point];
 
 /**
+ * A radius measured on the GROUND, projected to screen half-axes.
+ *
+ * A circle drawn on the floor — an aura, a grenade's blast, a spell's area —
+ * is a circle in grid space, and grid space is not the screen. `worldFromGrid`
+ * is linear, so the image of a circle is an ellipse: substituting the
+ * parametric circle into the iso transform gives half-axes of r·cell·√2/2
+ * across and r·cell·√2/4 down, i.e. the same 2:1 as everything else.
+ *
+ * Drawing it as a plain circle of r·cell instead — which is what every one of
+ * these used to do — is wrong in BOTH directions at once: 1.41× too wide and
+ * 2.83× too deep, so a 6 m blast quietly covered cells nobody could have been
+ * standing in and missed ones they were.
+ */
+export function groundRadius(m: SceneMetrics, r: number): { rx: number; ry: number } {
+  const px = r * m.cell;
+  if (m.projection !== 'iso') return { rx: px, ry: px };
+  const k = Math.SQRT2;
+  return { rx: px * ISO_HALF_W * k, ry: px * ISO_HALF_H * k };
+}
+
+/**
+ * Screen radius of a token's marker disc.
+ *
+ * Shared by the code that DRAWS the token and the code that decides whether a
+ * click landed on it, because those two disagreeing is invisible until someone
+ * tries to pick up a runner and the canvas ignores them. The disc is an
+ * upright marker rather than a footprint on the floor — a label that always
+ * faces the reader — so it stays a circle in both projections and is hit-
+ * tested in the same world pixels it is drawn in.
+ */
+export function tokenRadiusPx(m: SceneMetrics, size: number): number {
+  return Math.max(8, (size * m.cell) / 2 - 2);
+}
+
+/**
+ * How far above its anchor a map pin's head is drawn, in world px, and how big
+ * that head is. Shared with the hit test for the same reason as the token
+ * radius: the head is what the GM aims at.
+ */
+export function pinHeadRadius(m: SceneMetrics): number {
+  return Math.max(6, m.cell * 0.16);
+}
+export function pinHeadRise(m: SceneMetrics): number {
+  return pinHeadRadius(m) * 2.4;
+}
+
+/** World-px gap between two GRID points — the distance the eye actually judges. */
+export function worldGap(m: SceneMetrics, a: Point, b: Point): number {
+  const p = worldFromGrid(m, a);
+  const q = worldFromGrid(m, b);
+  return Math.hypot(q.x - p.x, q.y - p.y);
+}
+
+/**
  * The grid overlay's lines and its outer border, in world px.
  *
  * Pure so it can be tested without a canvas, and because the version that was

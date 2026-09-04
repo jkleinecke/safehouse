@@ -8,6 +8,7 @@ import {
   coarseBars,
   parserSafeUrlFor,
   readOnlyStageCallbacks,
+  tvFloor,
   tvStageState,
   TEXTURE_PARSER,
   TV_STAGE_ROLE,
@@ -162,5 +163,33 @@ describe('coarseBars', () => {
   it('clamps a nonsense status count instead of drawing negative pips', () => {
     expect(coarseBars('fresh', -3).effectCount).toBe(0);
     expect(coarseBars('fresh', 2.7).effectCount).toBe(2);
+  });
+
+});
+
+describe('which floor the wall screen shows (FR9.22)', () => {
+  it('follows the acting token upstairs', () => {
+    const ground = { ...token, id: 'g', level: 0 };
+    const up = { ...token, id: 'u', level: 1 };
+    expect(tvFloor([ground, up], 'u')).toBe(1);
+    expect(tvFloor([ground, up], 'g')).toBe(0);
+  });
+
+  it('falls back to the ground with nobody acting', () => {
+    expect(tvFloor([{ ...token, level: 2 }], null)).toBe(0);
+    expect(tvFloor([], undefined)).toBe(0);
+  });
+
+  it('does not trust an acting id that is not on the scene', () => {
+    expect(tvFloor([{ ...token, id: 'a', level: 3 }], 'gone')).toBe(0);
+  });
+
+  it('feeds that floor to the stage state', () => {
+    const up = { ...token, id: 'u', level: 1 };
+    expect(tvStageState({ scene: scene(), tokens: [up], actingTokenId: 'u' }).level).toBe(1);
+    // An explicit level still wins, for a caller that knows better.
+    expect(tvStageState({ scene: scene(), tokens: [up], actingTokenId: 'u', level: 0 }).level).toBe(
+      0,
+    );
   });
 });

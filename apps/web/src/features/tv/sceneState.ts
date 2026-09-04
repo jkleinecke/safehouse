@@ -91,7 +91,11 @@ function asToken(v: unknown): Token | null {
     name: str(raw['name']) ?? 'token',
     size: num(raw['size']) ?? 1,
     rotation: num(raw['rotation']) ?? 0,
-    level: 0,
+    // The floor comes off the wire like everything else. Hard-coding 0 here
+    // silently sent every runner back to the ground the moment a live event
+    // touched them, so a token that took the stairs would walk back down on
+    // the next update — with nothing on screen to say it had.
+    level: num(raw['level']) ?? 0,
     barsVisibility: bars === 'gm' || bars === 'owner' || bars === 'public' ? bars : 'owner',
     hidden: raw['hidden'] === true,
   };

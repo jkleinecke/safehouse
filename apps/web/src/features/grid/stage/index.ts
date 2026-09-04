@@ -372,8 +372,7 @@ class Stage implements StageApi, PointerHost {
         draggable: next.draggableIds.has(token.id),
         bars: next.bars.get(token.id) ?? null,
         ghosted: token.hidden,
-        cell: this.m.cell,
-        unitM: this.m.unitM,
+        metrics: this.m,
       });
       if (fresh) {
         const at = worldFromGrid(this.m, { x: token.x, y: token.y });

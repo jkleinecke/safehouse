@@ -42,6 +42,12 @@ export interface TvStageInput {
   bars?: ReadonlyMap<string, TokenBars> | undefined;
   /** The acting combatant's token gets the pulsing glow (FR9.10). */
   actingTokenId?: string | null | undefined;
+  /**
+   * Which floor to paint (FR9.22). Omitted, it follows the acting token — see
+   * `tvFloor`. Passing 0 unconditionally is what left the wall screen showing
+   * the warehouse while the GM's own canvas was up on the catwalk.
+   */
+  level?: number | undefined;
 }
 
 /**
@@ -86,6 +92,29 @@ export function readOnlyStageCallbacks(): StageCallbacks {
   };
 }
 
+/**
+ * Which floor the wall screen should paint (FR9.22).
+ *
+ * The TV has no controls and no GM sitting at it, so it has to infer this. It
+ * follows whoever is ACTING: during a fight that is exactly the floor the
+ * table is watching, and between fights it falls back to the ground, which is
+ * where a scene with no floors above it lives anyway.
+ *
+ * The alternative — always the ground floor — is what it did before, and it
+ * meant the GM stepped up to the catwalk, their canvas followed, and the
+ * screen beside them carried on showing the warehouse. A split-level fight
+ * still only shows one storey at a time; that is the projection's rule, not
+ * this function's.
+ */
+export function tvFloor(
+  tokens: readonly Token[],
+  actingTokenId?: string | null | undefined,
+): number {
+  if (!actingTokenId) return 0;
+  const acting = tokens.find((t) => t.id === actingTokenId);
+  return acting?.level ?? 0;
+}
+
 /** Project the TV's world into the stage's frame state. Pure. */
 export function tvStageState(input: TvStageInput): StageSceneState {
   return {
@@ -101,6 +130,7 @@ export function tvStageState(input: TvStageInput): StageSceneState {
     aoe: null,
     scatter: null,
     fogDraft: null,
+    level: input.level ?? tvFloor(input.tokens, input.actingTokenId),
   };
 }
 

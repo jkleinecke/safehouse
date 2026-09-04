@@ -18,7 +18,7 @@ import {
 } from '../geometry.js';
 import type { StageCallbacks, StageSceneState } from '../types.js';
 import { Camera, wheelZoomFactor } from './camera.js';
-import { gridTolerance, hitDoor, hitPin, hitToken, isDoubleTap, type TapRecord } from './hit.js';
+import { hitDoor, hitPin, hitToken, isDoubleTap, worldTolerance, type TapRecord } from './hit.js';
 
 type Mode = 'idle' | 'pan' | 'token' | 'ruler' | 'trail' | 'pinch' | 'segment' | 'painting';
 
@@ -259,7 +259,7 @@ export class PointerController {
 
     switch (state.tool) {
       case 'ruler':
-        this.beginRuler(grid, state);
+        this.beginRuler(grid, state, m);
         return;
       case 'aoe':
         this.mode = 'idle';
@@ -327,8 +327,8 @@ export class PointerController {
     this.host.drawSegment?.(kind, this.segmentFrom, this.segmentTo);
   }
 
-  private beginRuler(grid: Point, state: StageSceneState): void {
-    const token = hitToken(state.tokens, grid);
+  private beginRuler(grid: Point, state: StageSceneState, m: SceneMetrics): void {
+    const token = hitToken(m, state.tokens, grid);
     this.rulerTokenId = token?.id ?? null;
     this.rulerFrom = token ? { x: token.x, y: token.y } : grid;
     this.mode = 'ruler';
@@ -340,8 +340,10 @@ export class PointerController {
     // A pin head sits above the tokens it annotates — check it first, and only
     // for the GM (players' payloads only ever contain public pins anyway).
     if (state.role === 'gm' && this.host.callbacks.onPinSelect) {
-      const pinTol = Math.max(0.4, gridTolerance(m, this.host.camera.scale, 14));
-      const pinId = hitPin(state.scene, grid, pinTol);
+      // 14 screen px of slop around the head, floored so a zoomed-out map does
+      // not shrink the target to nothing.
+      const pinTol = Math.max(14, worldTolerance(this.host.camera.scale, 14));
+      const pinId = hitPin(m, state.scene, grid, pinTol);
       if (pinId) {
         this.mode = 'idle';
         this.host.callbacks.onPinSelect(pinId);
@@ -349,7 +351,7 @@ export class PointerController {
       }
     }
 
-    const token = hitToken(state.tokens, grid);
+    const token = hitToken(m, state.tokens, grid);
     if (token) {
       this.host.callbacks.onSelectToken(token.id);
       if (state.draggableIds.has(token.id)) {
@@ -367,8 +369,8 @@ export class PointerController {
 
     // GM: a click near a door's knob toggles it (FR9.2).
     if (state.role === 'gm') {
-      const tol = gridTolerance(m, this.host.camera.scale, 12);
-      const doorId = hitDoor(state.scene, grid, Math.max(0.35, tol));
+      const tol = Math.max(12, worldTolerance(this.host.camera.scale, 12));
+      const doorId = hitDoor(m, state.scene, grid, tol);
       if (doorId) {
         this.mode = 'idle';
         this.host.callbacks.onDoorToggle(doorId);

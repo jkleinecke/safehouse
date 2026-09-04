@@ -6,6 +6,7 @@
 import { Container, Graphics } from 'pixi.js';
 import type { Point } from '@safehouse/contracts';
 import {
+  groundRadius,
   rulerSegments,
   sceneWorldSize,
   worldFromGrid,
@@ -107,9 +108,13 @@ export class FxLayer {
     const g = this.aoe;
     g.clear();
     if (!aoe) return;
-    const radiusPx = (aoe.radiusM / Math.max(0.01, m.unitM)) * m.cell;
+    // A blast radius is measured on the FLOOR, so it projects like the floor:
+    // a circle in plan view, a 2:1 ellipse in isometric. Drawn as a plain
+    // circle it covered cells nobody could be standing in and missed ones they
+    // were — the one overlay whose job is to say who is caught in it.
+    const { rx, ry } = groundRadius(m, aoe.radiusM / Math.max(0.01, m.unitM));
     const at = worldFromGrid(m, aoe.center);
-    g.circle(at.x, at.y, radiusPx)
+    g.ellipse(at.x, at.y, rx, ry)
       .fill({ color: C.magenta, alpha: 0.12 })
       .stroke({ width: 2, color: C.magenta, alpha: 0.85 });
     g.circle(at.x, at.y, 3).fill({ color: C.magenta, alpha: 1 });
@@ -117,7 +122,7 @@ export class FxLayer {
     if (scatter) {
       const land = worldFromGrid(m, scatter.to);
       g.moveTo(at.x, at.y).lineTo(land.x, land.y).stroke({ width: 2, color: C.warn, alpha: 0.9 });
-      g.circle(land.x, land.y, radiusPx)
+      g.ellipse(land.x, land.y, rx, ry)
         .fill({ color: C.danger, alpha: 0.14 })
         .stroke({ width: 2, color: C.danger, alpha: 0.9 });
       const s = 7;

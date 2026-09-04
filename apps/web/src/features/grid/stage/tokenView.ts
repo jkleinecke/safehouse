@@ -8,6 +8,7 @@
 import { Container, Graphics, Sprite, Text, Texture } from 'pixi.js';
 import type { Token } from '@safehouse/contracts';
 import type { TokenBars } from '../types.js';
+import { groundRadius, tokenRadiusPx, type SceneMetrics } from '../geometry.js';
 import { C, parseColor } from './colors.js';
 
 const SOURCE_COLORS: Record<Token['source'], number> = {
@@ -24,8 +25,13 @@ export interface TokenVisual {
   bars: TokenBars | null;
   /** GM view of a hidden token (players never receive them — FR9.7). */
   ghosted: boolean;
-  cell: number;
-  unitM: number;
+  /**
+   * The whole metrics, not a copy of two fields out of it. Carrying only
+   * `cell` and `unitM` is exactly how the aura came to be drawn without the
+   * projection: the one number that would have said "this map is isometric"
+   * was the one that never made it down here.
+   */
+  metrics: SceneMetrics;
 }
 
 function barColor(frac: number): number {
@@ -103,7 +109,9 @@ export class TokenView {
   }
 
   update(token: Token, v: TokenVisual): void {
-    const radius = Math.max(8, (token.size * v.cell) / 2 - 2);
+    // The SAME number the hit test uses (geometry.ts), because a disc drawn
+    // one size and clicked at another is a token that ignores the GM.
+    const radius = tokenRadiusPx(v.metrics, token.size);
     const bars = v.bars;
     const key = [
       token.name,
@@ -149,9 +157,16 @@ export class TokenView {
     // Aura ring (FR9.6): radius in meters → world px.
     this.aura.clear();
     if (token.aura) {
-      const auraPx = (token.aura.radiusM / Math.max(0.01, v.unitM)) * v.cell;
+      // An aura is a radius on the FLOOR — a ring around the runner's feet, not
+      // a halo facing the camera — so it projects like the floor does. Drawn as
+      // a screen circle it reached 1.4x too far across and 2.8x too far into
+      // the scene, which for a 6 m aura is several cells of lie.
+      const { rx, ry } = groundRadius(v.metrics, token.aura.radiusM / Math.max(0.01, v.metrics.unitM));
       const color = parseColor(token.aura.color, C.magenta);
-      this.aura.circle(0, 0, auraPx).fill({ color, alpha: 0.07 }).stroke({ width: 1.5, color, alpha: 0.55 });
+      this.aura
+        .ellipse(0, 0, rx, ry)
+        .fill({ color, alpha: 0.07 })
+        .stroke({ width: 1.5, color, alpha: 0.55 });
     }
 
     // Condition bars: physical on top, stun beneath (FR9.6).

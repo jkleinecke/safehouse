@@ -1,7 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import type { Scene, Token } from '@safehouse/contracts';
-import { metricsFor } from '../geometry.js';
-import { gridTolerance, hitDoor, hitPin, hitToken, hitWall, isDoubleTap } from './hit.js';
+import { gridFromWorld, metricsFor, pinHeadRise, worldFromGrid } from '../geometry.js';
+import { hitDoor, hitPin, hitToken, hitWall, isDoubleTap, worldTolerance } from './hit.js';
+
+/**
+ * Plan view unless a test says otherwise. Everything here used to work in grid
+ * units, which is the same as screen distance ONLY in this projection — see
+ * the isometric block at the bottom for what that cost.
+ */
+const m = metricsFor({
+  unitM: 1,
+  cols: 20,
+  rows: 20,
+  offset: { x: 0, y: 0 },
+  projection: 'topdown' as const,
+});
+const iso = metricsFor({
+  unitM: 1,
+  cols: 20,
+  rows: 20,
+  offset: { x: 0, y: 0 },
+  projection: 'iso' as const,
+});
 
 function token(id: string, x: number, y: number, size = 1): Token {
   return {
@@ -24,23 +44,23 @@ describe('hitToken', () => {
   const tokens = [token('a', 2.5, 2.5), token('b', 10.5, 4.5, 3)];
 
   it('hits inside the token circle and misses outside', () => {
-    expect(hitToken(tokens, { x: 2.6, y: 2.4 })?.id).toBe('a');
-    expect(hitToken(tokens, { x: 5, y: 5 })).toBeNull();
+    expect(hitToken(m, tokens, { x: 2.6, y: 2.4 })?.id).toBe('a');
+    expect(hitToken(m, tokens, { x: 5, y: 5 })).toBeNull();
   });
 
   it('scales the hit radius with token size', () => {
-    expect(hitToken(tokens, { x: 11.8, y: 4.5 })?.id).toBe('b');
-    expect(hitToken(tokens, { x: 12.6, y: 4.5 })).toBeNull();
+    expect(hitToken(m, tokens, { x: 11.8, y: 4.5 })?.id).toBe('b');
+    expect(hitToken(m, tokens, { x: 12.6, y: 4.5 })).toBeNull();
   });
 
   it('respects an id allow-list', () => {
-    expect(hitToken(tokens, { x: 2.5, y: 2.5 }, { onlyIds: new Set(['b']) })).toBeNull();
-    expect(hitToken(tokens, { x: 2.5, y: 2.5 }, { onlyIds: new Set(['a']) })?.id).toBe('a');
+    expect(hitToken(m, tokens, { x: 2.5, y: 2.5 }, { onlyIds: new Set(['b']) })).toBeNull();
+    expect(hitToken(m, tokens, { x: 2.5, y: 2.5 }, { onlyIds: new Set(['a']) })?.id).toBe('a');
   });
 
   it('prefers the last token when circles overlap', () => {
     const stacked = [token('under', 3, 3), token('over', 3, 3)];
-    expect(hitToken(stacked, { x: 3, y: 3 })?.id).toBe('over');
+    expect(hitToken(m, stacked, { x: 3, y: 3 })?.id).toBe('over');
   });
 });
 
@@ -58,12 +78,12 @@ describe('hitDoor', () => {
   } as unknown as Scene;
 
   it('finds a door within tolerance', () => {
-    expect(hitDoor(scene, { x: 2, y: 0.3 })).toBe('d1');
-    expect(hitDoor(scene, { x: 2, y: 8.8 })).toBe('d2');
+    expect(hitDoor(m, scene, { x: 2, y: 0.3 })).toBe('d1');
+    expect(hitDoor(m, scene, { x: 2, y: 8.8 })).toBe('d2');
   });
 
   it('misses when nothing is near', () => {
-    expect(hitDoor(scene, { x: 2, y: 4 })).toBeNull();
+    expect(hitDoor(m, scene, { x: 2, y: 4 })).toBeNull();
   });
 });
 
@@ -85,25 +105,101 @@ describe('hitPin / hitWall (FR9.2/9.3 authoring)', () => {
   } as unknown as Scene;
 
   it('picks the pin under the click, latest on top when they stack', () => {
-    expect(hitPin(scene, { x: 3.1, y: 3.05 })).toBe('p2');
-    expect(hitPin(scene, { x: 8.9, y: 1.1 })).toBe('p3');
-    expect(hitPin(scene, { x: 7, y: 7 })).toBeNull();
+    expect(hitPin(m, scene, { x: 3.1, y: 3.05 })).toBe('p2');
+    expect(hitPin(m, scene, { x: 8.9, y: 1.1 })).toBe('p3');
+    expect(hitPin(m, scene, { x: 7, y: 7 })).toBeNull();
   });
 
   it('finds a wall segment near the click', () => {
-    expect(hitWall(scene, { x: 4, y: 0.2 })).toBe('w1');
-    expect(hitWall(scene, { x: 8.1, y: 3 })).toBe('w2');
-    expect(hitWall(scene, { x: 4, y: 3 })).toBeNull();
+    expect(hitWall(m, scene, { x: 4, y: 0.2 })).toBe('w1');
+    expect(hitWall(m, scene, { x: 8.1, y: 3 })).toBe('w2');
+    expect(hitWall(m, scene, { x: 4, y: 3 })).toBeNull();
   });
 });
 
-describe('gridTolerance', () => {
-  it('shrinks in grid units as the camera zooms in', () => {
-    const m = metricsFor({ unitM: 1, cols: 10, rows: 10, offset: { x: 0, y: 0 }, projection: 'topdown' as const });
-    const wide = gridTolerance(m, 0.5, 10);
-    const close = gridTolerance(m, 2, 10);
+describe('worldTolerance', () => {
+  it('shrinks as the camera zooms in', () => {
+    const wide = worldTolerance(0.5, 10);
+    const close = worldTolerance(2, 10);
     expect(close).toBeLessThan(wide);
-    expect(close).toBeCloseTo(10 / (m.cell * 2), 10);
+    expect(close).toBeCloseTo(10 / 2, 10);
+  });
+
+  it('does not depend on the projection', () => {
+    // The point of moving the hit tests into world px: a click has the same
+    // physical slop whichever way the map is drawn. The old grid-unit version
+    // divided by m.cell and came out 1.4x to 2.8x too tight in isometric,
+    // depending on which direction the GM happened to be aiming.
+    expect(worldTolerance(1, 14)).toBe(14);
+  });
+});
+
+describe('isometric hit-testing', () => {
+  // A grid-space circle is a 2:1 ellipse on an isometric screen. Every test
+  // here fails against the old grid-unit implementation: the GM could see the
+  // thing, click it, and be ignored.
+
+  it('hits the top and bottom of a token, not just its waist', () => {
+    const one = [token('a', 5.5, 5.5)];
+    const centre = worldFromGrid(iso, { x: 5.5, y: 5.5 });
+    // 20 px straight up the screen from the centre — well inside the 30 px
+    // disc that is drawn, and 1.25 GRID units away, which the old test
+    // rejected out of hand.
+    const above = gridFromWorld(iso, { x: centre.x, y: centre.y - 20 });
+    expect(hitToken(iso, one, above)?.id).toBe('a');
+    const below = gridFromWorld(iso, { x: centre.x, y: centre.y + 20 });
+    expect(hitToken(iso, one, below)?.id).toBe('a');
+  });
+
+  it('misses outside the drawn disc, in every direction equally', () => {
+    const one = [token('a', 5.5, 5.5)];
+    const centre = worldFromGrid(iso, { x: 5.5, y: 5.5 });
+    for (const [dx, dy] of [
+      [80, 0],
+      [-80, 0],
+      [0, 80],
+      [0, -80],
+    ] as const) {
+      const out = gridFromWorld(iso, { x: centre.x + dx, y: centre.y + dy });
+      expect(hitToken(iso, one, out)).toBeNull();
+    }
+  });
+
+  it('makes the same click land the same way in both projections', () => {
+    // The invariant the old code broke: a click N screen px from a token's
+    // centre either hits in both projections or misses in both.
+    const flatT = [token('a', 5.5, 5.5)];
+    for (const px of [10, 25, 40, 100]) {
+      const hitFlat = (() => {
+        const c = worldFromGrid(m, { x: 5.5, y: 5.5 });
+        return hitToken(m, flatT, gridFromWorld(m, { x: c.x, y: c.y - px })) !== null;
+      })();
+      const hitIso = (() => {
+        const c = worldFromGrid(iso, { x: 5.5, y: 5.5 });
+        return hitToken(iso, flatT, gridFromWorld(iso, { x: c.x, y: c.y - px })) !== null;
+      })();
+      expect({ px, hitIso }).toEqual({ px, hitIso: hitFlat });
+    }
+  });
+
+  it('selects a pin by its head, which is what the GM is aiming at', () => {
+    const scene = {
+      geometry: {
+        walls: [],
+        doors: [],
+        zones: [],
+        pins: [{ id: 'p1', at: { x: 4, y: 4 }, visibility: 'gm', label: 'Safe' }],
+      },
+    } as unknown as Scene;
+    const foot = worldFromGrid(iso, { x: 4, y: 4 });
+    // The head is drawn a fixed distance up the SCREEN from the anchor. In
+    // isometric that inverts to over a grid unit away, so the old grid-space
+    // test rejected the only part of the pin that looks clickable.
+    const head = gridFromWorld(iso, { x: foot.x, y: foot.y - pinHeadRise(iso) });
+    expect(hitPin(iso, scene, head)).toBe('p1');
+    // And the anchor still works, because the stem is drawn too.
+    expect(hitPin(iso, scene, { x: 4, y: 4 })).toBe('p1');
+    expect(hitPin(iso, scene, { x: 9, y: 9 })).toBeNull();
   });
 });
 
