@@ -27,6 +27,10 @@ export default function TokensTab({
   const remove = useDeleteToken(scene.id);
   const selectedTokenId = useGridStore((s) => s.selectedTokenId);
   const selectToken = useGridStore((s) => s.selectToken);
+  // The floor the GM is LOOKING at. Placing on the catwalk while hardcoding
+  // level 0 dropped the new token into the warehouse below, where — one floor
+  // being drawn at a time — it was invisible.
+  const activeLevel = useGridStore((s) => s.activeLevel);
 
   const [kind, setKind] = useState<PlaceKind>('character');
   const [sourceId, setSourceId] = useState('');
@@ -58,7 +62,7 @@ export default function TokensTab({
         y: center.y,
         size,
         hidden: kind !== 'character',
-        level: 0,
+        level: activeLevel,
         barsVisibility: kind === 'character' ? 'owner' : 'gm',
       },
     });

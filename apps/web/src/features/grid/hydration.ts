@@ -155,7 +155,14 @@ export interface StageComposeInput {
 export function composeStageState(input: StageComposeInput): StageSceneState | null {
   const { scene } = input;
   if (!scene) return null;
-  const tokens = [...input.tokens];
+  // ONE floor's tokens. The canvas draws one storey at a time, so a runner on
+  // the catwalk must not also appear on the warehouse floor beneath it —
+  // two copies of the same token in the same square is worse than none.
+  //
+  // A token with no level is on the ground, which is where every token was
+  // before floors existed.
+  const level = input.level ?? 0;
+  const tokens = input.tokens.filter((t) => (t.level ?? 0) === level);
   const role: Role = input.viewer.role;
   return {
     scene,

@@ -628,6 +628,11 @@ export class ScenesService {
           name: name ?? 'Prop',
           x: input.x ?? 0,
           y: input.y ?? 0,
+          // Which storey it lands on (FR9.22). Dropping this put every token
+          // on the ground floor, so a GM placing a guard while looking at the
+          // catwalk got one who was standing in the warehouse below — and,
+          // since the canvas draws one floor at a time, invisible.
+          level: input.level ?? 0,
           size: input.size ?? 1,
           rotation: input.rotation ?? 0,
           artRef,
@@ -642,7 +647,10 @@ export class ScenesService {
 
   async patchToken(tokenId: string, patch: Partial<TokenCreateInput>): Promise<TokenRow> {
     const set: Record<string, unknown> = {};
-    for (const key of ['name', 'x', 'y', 'size', 'rotation', 'artRef', 'hidden', 'barsVisibility', 'aura'] as const) {
+    // `level` belongs in this list: the route already accepts it, and leaving
+    // it out meant a token sent upstairs was written back unchanged — the
+    // request succeeded, the response looked right, and the runner never moved.
+    for (const key of ['name', 'x', 'y', 'level', 'size', 'rotation', 'artRef', 'hidden', 'barsVisibility', 'aura'] as const) {
       if (patch[key] !== undefined) set[key] = patch[key];
     }
     const row = (

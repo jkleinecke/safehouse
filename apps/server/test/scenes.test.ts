@@ -233,6 +233,40 @@ describe('hidden tokens and fog never reach a player payload (Principle 4)', () 
     expect(notAProperty.statusCode).toBe(403);
   });
 
+  it('moves a token between floors, and places one on the floor asked for (FR9.22)', async () => {
+    // Both halves of taking the stairs. The route already accepted `level`
+    // while the write dropped it, so the request came back 200 with the old
+    // floor in the response — a runner who climbed the stairs and stayed put.
+    const placed = await post(`/api/scenes/${sceneId}/tokens`, boot.gmToken, {
+      source: 'prop',
+      name: 'Crate',
+      x: 3,
+      y: 3,
+      level: 1,
+    });
+    expect(placed.statusCode).toBe(201);
+    const crate = (placed.json() as { token: { id: string; level: number } }).token;
+    expect(crate.level).toBe(1);
+
+    const moved = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/tokens/${crate.id}`,
+      headers: as(boot.gmToken),
+      payload: { level: 0 },
+    });
+    expect(moved.statusCode).toBe(200);
+    expect((moved.json() as { token: { level: number } }).token.level).toBe(0);
+
+    // And it STUCK — a re-read, not just the write's own echo.
+    const back = await t.app.inject({
+      method: 'GET',
+      url: `/api/scenes/${sceneId}`,
+      headers: as(boot.gmToken),
+    });
+    const tokens = (back.json() as { tokens: { id: string; level: number }[] }).tokens;
+    expect(tokens.find((x) => x.id === crate.id)?.level).toBe(0);
+  });
+
   it('stages combatants from scene tokens, GM-hiding the hidden one (FR9.10)', async () => {
     const res = await post(`/api/scenes/${sceneId}/stage-encounter`, boot.gmToken, { name: 'Ambush' });
     expect(res.statusCode).toBe(201);

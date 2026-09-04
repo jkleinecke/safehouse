@@ -17,6 +17,7 @@ import {
   useCharacter,
   useGridLiveSync,
   usePatchGeometry,
+  usePatchToken,
   useRefetchOnReconnect,
   useScene,
   useSceneTokens,
@@ -41,6 +42,7 @@ import {
 } from './projection.js';
 import { autoTileFor } from './autoPlace.js';
 import { useShroud } from './useShroud.js';
+import { useStairOffer } from './useStairs.js';
 import { useGridStore } from './store.js';
 import type { RulerState, StageApi, StageCallbacks, StageSceneState } from './types.js';
 import {
@@ -207,6 +209,29 @@ export default function GridPage() {
     myCharacterId: myCharacterId ?? null,
     enabledForPlayers: store.losForPlayers,
   });
+
+  /**
+   * Taking the stairs. Offered only when the SELECTED token is standing on a
+   * flight that leads somewhere real, so the button never appears for stairs
+   * the GM sketched before building the floor above.
+   */
+  const selectedToken = useMemo(
+    () => tokens.find((t) => t.id === store.selectedTokenId),
+    [tokens, store.selectedTokenId],
+  );
+  const stairOffer = useStairOffer(scene, selectedToken, tilesets);
+  const patchToken = usePatchToken(sceneId);
+
+  const takeStairs = useCallback(() => {
+    if (!stairOffer || selectedToken === undefined) return;
+    // The token and the VIEW move together. One floor is drawn at a time, so
+    // changing the level without following it makes the runner vanish — and
+    // the GM's only clue is a token that stopped existing.
+    patchToken.mutate(
+      { tokenId: selectedToken.id, patch: { level: stairOffer.target } },
+      { onSuccess: () => store.setActiveLevel(stairOffer.target) },
+    );
+  }, [stairOffer, selectedToken, patchToken, store]);
 
   const stageState: StageSceneState | null = useMemo(
     () =>
@@ -427,36 +452,57 @@ export default function GridPage() {
           </div>
         )}
 
-        <Toolbar
-          isGm={isGm}
-          tool={store.tool}
-          snapEnabled={store.snapEnabled}
-          gmPanelOpen={store.gmPanelOpen}
-          onTool={store.setTool}
-          onToggleSnap={store.toggleSnap}
-          onToggleGmPanel={store.toggleGmPanel}
-          onZoom={(f) => api?.zoomBy(f)}
-          onFit={() => api?.fitScene()}
-        />
+        {/*
+          ONE top row, so the tools and the notices cannot overlap. They used to
+          position themselves independently — left-3 and right-3 of the same
+          corner — which worked until the tool row grew enough to reach across
+          and cover the notices. A chip that is visible and unclickable is the
+          worst of both: the GM can read the offer and nothing happens.
+        */}
+        <div className="pointer-events-none absolute inset-x-3 top-3 z-10 flex items-start justify-between gap-2">
+          <Toolbar
+            isGm={isGm}
+            tool={store.tool}
+            snapEnabled={store.snapEnabled}
+            gmPanelOpen={store.gmPanelOpen}
+            onTool={store.setTool}
+            onToggleSnap={store.toggleSnap}
+            onToggleGmPanel={store.toggleGmPanel}
+            onZoom={(f) => api?.zoomBy(f)}
+            onFit={() => api?.fitScene()}
+          />
 
-        <div className="pointer-events-none absolute right-3 top-3 flex flex-col items-end gap-1.5">
-          <span className="chip pointer-events-auto bg-panel/90 text-ink">
-            {scene?.name ?? '…'}
-            {scene && scene.id !== activeSceneId && (
-              <span className="text-warn">staging</span>
+          <div className="flex shrink-0 flex-col items-end gap-1.5">
+            <span className="chip pointer-events-auto bg-panel/90 text-ink">
+              {scene?.name ?? '…'}
+              {scene && scene.id !== activeSceneId && (
+                <span className="text-warn">staging</span>
+              )}
+            </span>
+            {focusNotice && <span className="chip bg-panel/90 text-cyan">{focusNotice}</span>}
+            {isGm && stairOffer && selectedToken && (
+              <button
+                type="button"
+                data-testid="take-stairs"
+                disabled={patchToken.isPending}
+                onClick={takeStairs}
+                className="chip pointer-events-auto bg-panel/90 text-cyan disabled:opacity-50"
+              >
+                {selectedToken.name} takes the stairs {stairOffer.direction} to{' '}
+                {stairOffer.targetName}
+              </button>
             )}
-          </span>
-          {focusNotice && <span className="chip bg-panel/90 text-cyan">{focusNotice}</span>}
-          {tileWipeWarning && (
-            <span data-testid="tile-wipe-warning" className="chip bg-panel/90 text-magenta">
-              {tileWipeWarning}
-            </span>
-          )}
-          {tileNotice && (
-            <span data-testid="tile-notice" className="chip bg-panel/90 text-danger">
-              {tileNotice}
-            </span>
-          )}
+            {tileWipeWarning && (
+              <span data-testid="tile-wipe-warning" className="chip bg-panel/90 text-magenta">
+                {tileWipeWarning}
+              </span>
+            )}
+            {tileNotice && (
+              <span data-testid="tile-notice" className="chip bg-panel/90 text-danger">
+                {tileNotice}
+              </span>
+            )}
+          </div>
         </div>
 
         <MeasurePanel

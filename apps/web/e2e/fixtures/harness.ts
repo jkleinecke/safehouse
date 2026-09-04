@@ -150,7 +150,18 @@ function run(
  * default posture: the app under test has no model and no outbound anything.
  */
 export function childEnv(dataDir: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, DATA_DIR: dataDir, LOG_LEVEL: 'warn' };
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    DATA_DIR: dataDir,
+    LOG_LEVEL: 'warn',
+    // PINNED, not deleted. The server reads `.env` / `infra/.env` on a shell
+    // start and that loader is non-overriding, so DELETING this would let the
+    // developer's own file decide the security posture of the test world — the
+    // gm-signin spec started passing or failing depending on a gitignored file
+    // nobody thought they were editing. An explicit '0' is what closes the
+    // door; a spec that wants the open table can pass '1' through `extra`.
+    SAFEHOUSE_OPEN_TABLE: '0',
+  };
   delete env.DATABASE_URL;
   delete env.LLM_BASE_URL;
   delete env.DISCORD_WEBHOOK_URL;

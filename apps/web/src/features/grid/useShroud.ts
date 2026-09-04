@@ -75,7 +75,10 @@ export function useShroud(inputs: ShroudInputs): ShroudState | null {
     if (!scene || viewer === undefined || vx === undefined || vy === undefined) {
       return null;
     }
-    const model = sightModelFor(scene);
+    // The viewer's OWN floor. A guard on the catwalk sees the catwalk,
+    // whatever storey the GM happens to be editing — and the warehouse walls
+    // below must not block a sightline one floor up.
+    const model = sightModelFor(scene, viewer.level ?? 0);
     // Tokens sit on cell CENTRES (x.5), so flooring is what turns a position
     // into the square it occupies.
     const visible = visibleFrom(
@@ -97,6 +100,7 @@ export function useShroud(inputs: ShroudInputs): ShroudState | null {
     scene?.grid.rows,
     vx,
     vy,
+    viewer?.level ?? 0,
     isGm,
   ]);
 }

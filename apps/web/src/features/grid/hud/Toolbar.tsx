@@ -68,7 +68,11 @@ function Btn({
 export default function Toolbar(props: ToolbarProps) {
   const tools = TOOLS.filter((t) => props.isGm || !t.gmOnly);
   return (
-    <div className="absolute left-3 top-3 z-10 flex max-w-[calc(100%-1.5rem)] flex-wrap items-center gap-1.5 rounded-lg border border-edge bg-panel/92 p-1.5 backdrop-blur">
+    // Positioned by the caller, not by itself. It used to place itself at the
+    // canvas's top-left, and as the tool row grew it silently spread under the
+    // notice stack in the top-right corner and swallowed its clicks — the
+    // take-the-stairs button was on screen, correct, and unpressable.
+    <div className="pointer-events-auto flex min-w-0 flex-wrap items-center gap-1.5 rounded-lg border border-edge bg-panel/92 p-1.5 backdrop-blur">
       {tools.map((t) => (
         <Btn key={t.id} active={props.tool === t.id} title={t.hint} onClick={() => props.onTool(t.id)}>
           <span aria-hidden>{t.glyph}</span>
