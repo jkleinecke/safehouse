@@ -96,6 +96,38 @@ export function sceneWorldSize(m: SceneMetrics): { width: number; height: number
   };
 }
 
+/** One straight line of the grid overlay, in world px. */
+export type Segment = readonly [Point, Point];
+
+/**
+ * The grid overlay's lines and its outer border, in world px.
+ *
+ * Pure so it can be tested without a canvas, and because the version that was
+ * NOT pure got this wrong for a year: `drawGrid` multiplied `col * m.cell`
+ * straight into a moveTo, which is only the projection in plan view. An iso
+ * scene therefore drew a square lattice on top of diamond-shaped tiles — two
+ * grids disagreeing about where the squares are, in the one overlay whose
+ * entire job is to say where the squares are.
+ *
+ * The construction is the same in both projections and that is the point: a
+ * line of constant column runs from (col, 0) to (col, rows), a line of constant
+ * row from (0, row) to (cols, row), and the endpoints go through
+ * `worldFromGrid`. Plan view turns those into a square lattice on its own;
+ * isometric turns them into a diamond one. Neither case is special-cased here.
+ */
+export function gridOverlay(m: SceneMetrics): { lines: Segment[]; border: Point[] } {
+  const at = (x: number, y: number) => worldFromGrid(m, { x, y });
+  const lines: Segment[] = [];
+  for (let col = 0; col <= m.cols; col += 1) lines.push([at(col, 0), at(col, m.rows)]);
+  for (let row = 0; row <= m.rows; row += 1) lines.push([at(0, row), at(m.cols, row)]);
+  // The map's outline: a rectangle in plan view, a diamond in isometric, and
+  // the same four corners in both.
+  return {
+    lines,
+    border: [at(0, 0), at(m.cols, 0), at(m.cols, m.rows), at(0, m.rows)],
+  };
+}
+
 /**
  * The four world-space corners of one cell, clockwise from the "north" corner.
  * A square in plan view, a diamond in isometric — every layer that fills a

@@ -6,6 +6,7 @@ import {
   cellDepth,
   distToSegment,
   gridFromWorld,
+  gridOverlay,
   heightRise,
   metersBetween,
   metricsFor,
@@ -293,5 +294,86 @@ describe('isometric projection', () => {
 
   it('changes the metrics key, so switching projection forces a redraw', () => {
     expect(metricsKey(iso)).not.toBe(metricsKey(flat));
+  });
+
+  describe('gridOverlay', () => {
+    // The overlay's whole job is to say where the squares are. Drawn without
+    // the projection it said something different from the tiles underneath it:
+    // a square lattice over a diamond map, which is not a calibration aid but
+    // a second, contradictory map.
+
+    it('draws one line per gridline, in both projections', () => {
+      // 21 verticals + 15 horizontals for a 20x14 grid, either way.
+      expect(gridOverlay(iso).lines).toHaveLength(iso.cols + 1 + iso.rows + 1);
+      expect(gridOverlay(flat).lines).toHaveLength(flat.cols + 1 + flat.rows + 1);
+    });
+
+    it('puts every line endpoint exactly where that grid coordinate lands', () => {
+      // The real assertion: not "it looks diamond", but "it agrees with
+      // worldFromGrid", which is what every other layer draws through.
+      const { lines } = gridOverlay(iso);
+      const first = lines[0]!;
+      expect(first[0]).toEqual(worldFromGrid(iso, { x: 0, y: 0 }));
+      expect(first[1]).toEqual(worldFromGrid(iso, { x: 0, y: iso.rows }));
+      const lastCol = lines[iso.cols]!;
+      expect(lastCol[0]).toEqual(worldFromGrid(iso, { x: iso.cols, y: 0 }));
+      const firstRow = lines[iso.cols + 1]!;
+      expect(firstRow[0]).toEqual(worldFromGrid(iso, { x: 0, y: 0 }));
+      expect(firstRow[1]).toEqual(worldFromGrid(iso, { x: iso.cols, y: 0 }));
+    });
+
+    it('slopes its lines in isometric and keeps them axis-aligned in plan view', () => {
+      // A column line in plan view is vertical: same x at both ends. In iso
+      // neither coordinate is shared — that difference IS the bug this fixes.
+      const flatCol = gridOverlay(flat).lines[0]!;
+      expect(flatCol[0].x).toBe(flatCol[1].x);
+
+      const isoCol = gridOverlay(iso).lines[0]!;
+      expect(isoCol[0].x).not.toBeCloseTo(isoCol[1].x, 6);
+      expect(isoCol[0].y).not.toBeCloseTo(isoCol[1].y, 6);
+      // 2:1 — a column line runs half as far down as it does across.
+      expect(Math.abs(isoCol[1].y - isoCol[0].y)).toBeCloseTo(
+        Math.abs(isoCol[1].x - isoCol[0].x) / 2,
+        6,
+      );
+    });
+
+    it('borders the map with its four real corners', () => {
+      const { border } = gridOverlay(iso);
+      expect(border).toEqual([
+        worldFromGrid(iso, { x: 0, y: 0 }),
+        worldFromGrid(iso, { x: iso.cols, y: 0 }),
+        worldFromGrid(iso, { x: iso.cols, y: iso.rows }),
+        worldFromGrid(iso, { x: 0, y: iso.rows }),
+      ]);
+      // A diamond: the top corner is the highest point, and the left and right
+      // corners are the widest. A rectangle would have two points at each.
+      const ys = border.map((p) => p.y);
+      expect(ys.filter((y) => y === Math.min(...ys))).toHaveLength(1);
+    });
+
+    it('stays inside the world box the camera frames', () => {
+      // Anything outside sceneWorldSize is off the edge of fit-to-scene.
+      const { width, height } = sceneWorldSize(iso);
+      for (const [a, b] of gridOverlay(iso).lines) {
+        for (const p of [a, b]) {
+          expect(p.x).toBeGreaterThanOrEqual(-1e-9);
+          expect(p.x).toBeLessThanOrEqual(width + 1e-9);
+          expect(p.y).toBeGreaterThanOrEqual(-1e-9);
+          expect(p.y).toBeLessThanOrEqual(height + 1e-9);
+        }
+      }
+    });
+
+    it('follows the grid offset, so calibration moves the overlay too', () => {
+      const shifted = metricsFor({
+        unitM: 1,
+        cols: 6,
+        rows: 6,
+        offset: { x: 2, y: -1 },
+        projection: 'iso' as const,
+      });
+      expect(gridOverlay(shifted).lines[0]![0]).toEqual(worldFromGrid(shifted, { x: 0, y: 0 }));
+    });
   });
 });

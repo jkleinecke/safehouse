@@ -4,26 +4,40 @@
  */
 import { Container, Graphics, Text } from 'pixi.js';
 import type { Point, Scene } from '@safehouse/contracts';
-import { polygonCenter, sceneWorldSize, worldFromGrid, type SceneMetrics } from '../geometry.js';
+import {
+  gridOverlay,
+  polygonCenter,
+  sceneWorldSize,
+  worldFromGrid,
+  type SceneMetrics,
+} from '../geometry.js';
 import { C, parseColor } from './colors.js';
 
-/** Grid overlay per the scene grid config (FR9.1). */
+/**
+ * Grid overlay per the scene grid config (FR9.1).
+ *
+ * Both the lines and the border come from `gridOverlay`, which projects them,
+ * so an isometric scene gets a diamond lattice matching its tiles rather than
+ * the square one this used to draw over the top of them.
+ */
 export function drawGrid(g: Graphics, m: SceneMetrics): void {
   g.clear();
-  const { width, height } = sceneWorldSize(m);
+  const { lines, border } = gridOverlay(m);
+  const outline = () => {
+    g.poly(border.flatMap((p) => [p.x, p.y]), true).stroke({
+      width: 1.5,
+      color: C.edgeBright,
+      alpha: 0.7,
+    });
+  };
   const alpha = m.opacity;
   if (alpha <= 0) {
-    g.rect(0, 0, width, height).stroke({ width: 1.5, color: C.edgeBright, alpha: 0.7 });
+    outline();
     return;
   }
-  for (let col = 0; col <= m.cols; col += 1) {
-    g.moveTo(col * m.cell, 0).lineTo(col * m.cell, height);
-  }
-  for (let row = 0; row <= m.rows; row += 1) {
-    g.moveTo(0, row * m.cell).lineTo(width, row * m.cell);
-  }
+  for (const [a, b] of lines) g.moveTo(a.x, a.y).lineTo(b.x, b.y);
   g.stroke({ width: 1, color: C.edgeBright, alpha, pixelLine: true });
-  g.rect(0, 0, width, height).stroke({ width: 1.5, color: C.edgeBright, alpha: 0.7 });
+  outline();
 }
 
 function flatPoly(m: SceneMetrics, poly: readonly Point[]): number[] {

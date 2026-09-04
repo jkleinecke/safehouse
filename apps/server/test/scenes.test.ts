@@ -233,6 +233,55 @@ describe('hidden tokens and fog never reach a player payload (Principle 4)', () 
     expect(notAProperty.statusCode).toBe(403);
   });
 
+  it('lets only the GM move a token between floors (FR9.5/9.22)', async () => {
+    // Which storey somebody is on is a GM call, not a player one. A player may
+    // walk their own token around a floor; taking the stairs is the GM saying
+    // the run has moved. The rule falls out of `level` being a non-positional
+    // property, and this pins that down so a later widening of the positional
+    // set cannot quietly hand the decision to the table.
+    const nope = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/tokens/${visibleTokenId}`,
+      headers: as(player.token),
+      payload: { level: 1 },
+    });
+    expect(nope.statusCode).toBe(403);
+
+    // Not even alongside a move they ARE allowed to make.
+    const smuggled = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/tokens/${visibleTokenId}`,
+      headers: as(player.token),
+      payload: { x: 4, y: 4, level: 1 },
+    });
+    expect(smuggled.statusCode).toBe(403);
+
+    // And the floor really is untouched, not merely un-echoed.
+    const after = await t.app.inject({
+      method: 'GET',
+      url: `/api/scenes/${sceneId}`,
+      headers: as(boot.gmToken),
+    });
+    const seen = (after.json() as { tokens: { id: string; level: number }[] }).tokens;
+    expect(seen.find((x) => x.id === visibleTokenId)?.level).toBe(0);
+
+    // The GM's own hand moves it.
+    const gmOk = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/tokens/${visibleTokenId}`,
+      headers: as(boot.gmToken),
+      payload: { level: 1 },
+    });
+    expect(gmOk.statusCode).toBe(200);
+    expect((gmOk.json() as { token: { level: number } }).token.level).toBe(1);
+    await t.app.inject({
+      method: 'PATCH',
+      url: `/api/tokens/${visibleTokenId}`,
+      headers: as(boot.gmToken),
+      payload: { level: 0 },
+    });
+  });
+
   it('moves a token between floors, and places one on the floor asked for (FR9.22)', async () => {
     // Both halves of taking the stairs. The route already accepted `level`
     // while the write dropped it, so the request came back 200 with the old
