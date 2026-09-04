@@ -95,7 +95,7 @@ export const SPRAWL_STREET: Tileset = {
     { id: 'walk', name: 'Pavement', kind: 'floor', category: 'ground', pattern: 'tile', colors: ['#5f5346', '#6f6152'] },
     { id: 'grass', name: 'Verge grass', kind: 'floor', category: 'ground', pattern: 'gravel', colors: ['#464b33', '#555b3e'], hint: 'What passes for a park out here.' },
     { id: 'puddle', name: 'Standing water', kind: 'floor', category: 'ground', pattern: 'water', colors: ['#473d35', '#574b40'], hint: 'Reflects the neon. Makes noise.' },
-    { id: 'neon', name: 'Neon spill', kind: 'floor', category: 'ground', pattern: 'solid', colors: ['#775442', '#8a624d'], emissive: '#fa7a25', hint: 'Lit ground, and it colours everyone standing in it.' },
+    { id: 'neon', name: 'Neon spill', kind: 'floor', category: 'ground', pattern: 'solid', colors: ['#775442', '#8a624d'], emissive: '#f531b4', hint: 'Lit ground, and it colours everyone standing in it.' },
 
     { id: 'wall', name: 'Shopfront', kind: 'wall', category: 'building', pattern: 'brick', colors: ['#4f4036', '#5f4d41'], footprint: 'wall', height: FULL },
     { id: 'window', name: 'Shop window', kind: 'wall', category: 'building', pattern: 'panel', colors: ['#425557', '#4e6467'], emissive: '#d6c556', footprint: 'wall', height: FULL, blocksSight: false, placement: CUT },
@@ -107,6 +107,7 @@ export const SPRAWL_STREET: Tileset = {
 
     { id: 'tree', name: 'Street tree', kind: 'feature', category: 'decoration', pattern: 'gravel', colors: ['#555f3f', '#636f49'], footprint: 'canopy', height: FULL, blocksSight: false, placement: { on: ['grass', 'walk'] }, hint: 'Breaks up a sightline without stopping it.' },
     { id: 'planter', name: 'Concrete planter', kind: 'feature', category: 'decoration', pattern: 'gravel', colors: ['#635545', '#736350'], footprint: 'round', height: WAIST, placement: { on: ['walk', 'grass'] } },
+    { id: 'sign', name: 'Neon sign', kind: 'wall', category: 'building', pattern: 'panel', colors: ['#4f3f34', '#5f4c3f'], emissive: '#25d9f5', footprint: 'wall', height: FULL, placement: CUT, hint: 'A tube, a transformer and a landlord who stopped asking.' },
     { id: 'hydrant', name: 'Fire hydrant', kind: 'feature', category: 'decoration', pattern: 'solid', colors: ['#824337', '#924c3d'], footprint: 'post', height: WAIST, placement: { on: ['walk'] } },
     { id: 'drain', name: 'Storm drain', kind: 'feature', category: 'decoration', pattern: 'grating', colors: ['#3f3831', '#4f463e'], placement: { on: ['road'] } },
     { id: 'sewer', name: 'Sewer grating', kind: 'floor', category: 'ground', pattern: 'grating', colors: ['#3b352e', '#4b433b'], hint: 'Somewhere under the street, something is running.' },
@@ -176,6 +177,7 @@ export const CLUB: Tileset = {
     { id: 'hatchwin', name: 'Serving hatch', kind: 'wall', category: 'building', pattern: 'panel', colors: ['#444f57', '#505d67'], emissive: '#c7c35a', footprint: 'wall', height: FULL, blocksSight: false, placement: CUT },
     { id: 'door', name: 'Back-room door', kind: 'door', category: 'building', pattern: 'solid', colors: ['#586167', '#667077'], footprint: 'wall', height: FULL, placement: CUT },
 
+    { id: 'sign', name: 'Neon sign', kind: 'wall', category: 'building', pattern: 'panel', colors: ['#334147', '#3f4f57'], emissive: '#fa25ac', footprint: 'wall', height: FULL, placement: CUT, hint: 'Pink, and the only thing outside that says the place is open.' },
     { id: 'counter', name: 'Bar counter', kind: 'feature', category: 'interior', pattern: 'panel', colors: ['#826449', '#967354'], emissive: '#e6a340', footprint: 'wall', height: WAIST, placement: { againstWall: true } },
     { id: 'booth', name: 'Booth', kind: 'feature', category: 'interior', pattern: 'carpet', colors: ['#2f3c43', '#3a4b53'], height: WAIST, placement: { againstWall: true }, hint: 'Sit here for the quiet conversation.' },
     { id: 'stool', name: 'Bar stool', kind: 'feature', category: 'interior', pattern: 'solid', colors: ['#735742', '#82634c'], footprint: 'post', height: WAIST },

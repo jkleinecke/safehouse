@@ -133,17 +133,47 @@ describe('the findings that made this catalogue', () => {
     expect(bad).toEqual([]);
   });
 
-  it('lets warm light outnumber cool about six to one', () => {
+  it('keeps warm light in the majority', () => {
     const lights = TILESETS.flatMap((s) =>
       s.tiles.map((t) => t.emissive).filter((e): e is string => e !== undefined),
     );
     const fams = lights.map(hueFamily);
     const warm = fams.filter((f) => f === 'amber' || f === 'gold' || f === 'red').length;
     const cool = fams.filter((f) => f === 'cyan' || f === 'blue' || f === 'purple').length;
-    expect(warm).toBeGreaterThan(cool * 2);
-    // Amber leads, as measured (50-55% of the highlight budget).
+    const pink = fams.filter((f) => f === 'magenta').length;
+    expect(warm).toBeGreaterThan(cool + pink);
+    // Amber still leads, as measured.
     const amber = fams.filter((f) => f === 'amber').length;
     expect(amber / lights.length).toBeGreaterThanOrEqual(GLOW_BUDGET.amber.min);
+  });
+
+  it('puts tube neon in the club and the street, and nowhere else', () => {
+    // A pink sign is a location's signature, not a catalogue-wide wash. The
+    // measured 1.4% is a share of pixel AREA, and a sign is one small tile —
+    // so these two can carry it while a warehouse still cannot.
+    const withPink = TILESETS.filter((s) =>
+      s.tiles.some((t) => hueFamily(t.emissive ?? '') === 'magenta'),
+    ).map((s) => s.id);
+    expect(withPink.sort()).toEqual(['club', 'sprawl']);
+    // And both of those carry cyan too, because that is what a neon strip is.
+    for (const id of withPink) {
+      const set = TILESETS.find((s) => s.id === id)!;
+      expect(set.tiles.some((t) => hueFamily(t.emissive ?? '') === 'cyan')).toBe(true);
+    }
+  });
+
+  it('never lets a wall be made of the colour lighting it', () => {
+    // The rule that keeps neon from turning into synthwave: the tube is pink,
+    // the housing it is bolted to is not.
+    for (const set of TILESETS) {
+      for (const t of set.tiles) {
+        if (hueFamily(t.emissive ?? '') !== 'magenta') continue;
+        expect({ id: t.id, base: hueFamily(t.colors[0]) }).not.toEqual({
+          id: t.id,
+          base: 'magenta',
+        });
+      }
+    }
   });
 
   it('keeps a room to the two or three lights it can carry', () => {

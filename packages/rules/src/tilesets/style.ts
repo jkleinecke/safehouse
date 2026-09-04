@@ -215,21 +215,38 @@ export function hueFamily(hex: string): HueFamily | null {
 /**
  * How the catalogue's light sources divide by hue.
  *
- * Measured across every saturated highlight in all 37 frames. Amber and gold
- * together take roughly seven tenths; magenta and purple together take under
- * two hundredths. Enforced over the WHOLE catalogue rather than per set, since
- * one cool room in ten is exactly the distribution the study found.
+ * Measured across every saturated highlight in all 37 frames: amber and gold
+ * together take roughly seven tenths, magenta and purple together under two
+ * hundredths. Enforced over the WHOLE catalogue rather than per set, since one
+ * cool room in five is exactly the distribution the study found.
  *
- * The ceilings matter more than the floors: this is a budget for restraint.
+ * ## Why the magenta ceiling is 18% and not 1.4%
+ *
+ * Because the measurement is a share of PIXEL AREA and this is a count of
+ * TILES, and treating one as the other is a category error. The 1.4% figure
+ * comes from 37 frames of mostly sewers, warehouses, tenements and offices. A
+ * neon sign is a single tile covering a couple of cells — almost no area — so
+ * a club and a neon street can each carry a pink tube and leave the rendered
+ * share of magenta pixels exactly where the study puts it.
+ *
+ * The first cut of this file set the ceiling at 6% of lights, which on a
+ * thirteen-light catalogue rounds to zero: a rule that banned the thing it was
+ * meant to ration. What actually does the rationing is elsewhere and has not
+ * moved — `no-magenta-substrate` keeps the walls out of it, `SET_EMISSIVE_MAX`
+ * keeps a room to four practicals, and the light tiles that carry tube neon
+ * are small-footprint signage rather than floors.
+ *
+ * The ceilings still matter more than the floors: this is a budget for
+ * restraint, not a ban.
  */
 export const GLOW_BUDGET: Readonly<Record<HueFamily, { min: number; max: number }>> = {
-  amber: { min: 0.34, max: 0.62 },
+  amber: { min: 0.22, max: 0.62 },
   gold: { min: 0.1, max: 0.32 },
   red: { min: 0.06, max: 0.22 },
-  cyan: { min: 0.04, max: 0.18 },
+  cyan: { min: 0.04, max: 0.26 },
   green: { min: 0, max: 0.08 },
   blue: { min: 0, max: 0.06 },
-  magenta: { min: 0, max: 0.06 },
+  magenta: { min: 0, max: 0.18 },
   purple: { min: 0, max: 0.03 },
 };
 
@@ -239,16 +256,23 @@ export const GLOW_BUDGET: Readonly<Record<HueFamily, { min: number; max: number 
  * Stated separately from the per-family budget because it is the load-bearing
  * half: a catalogue can satisfy every individual ceiling and still feel cold.
  */
-export const WARM_GLOW_SHARE_MIN = 0.6;
+export const WARM_GLOW_SHARE_MIN = 0.5;
 
 /**
  * The two hues that say "generic cyberpunk" when used together.
  *
- * Either may lead. Both leading at once is the film-poster palette, and it is
- * measurably not what these games do — magenta appears in none of the top-ten
- * bright-saturated hue bins of any of the three.
+ * The sourced finding is about a SCENE: never place cyan and magenta as
+ * co-equal accents in one room. A club with a pink sign over the door and a
+ * cyan rig above the stage is a club, and it is what a table wants from the
+ * one location in the book that is about light. What the finding rules out is
+ * that pairing becoming the catalogue's whole idea, which is what our first
+ * cut did in all six sets at once.
+ *
+ * So the guard is stated where it belongs — across the catalogue, on the two
+ * TOGETHER — rather than as a per-scene ban that would empty out the two
+ * locations neon actually belongs in.
  */
-export const CYAN_MAGENTA_LIMIT = { leadThreshold: 0.2, followerMax: 0.05 } as const;
+export const CYAN_MAGENTA_LIMIT = { pairShareMax: 0.42 } as const;
 
 // ---------------------------------------------------------------------------
 // The lighting model
@@ -341,12 +365,13 @@ export const AFFLUENCE = {
  * The study budgets 2-4 practicals per 8x8-cell room, and a set that offers
  * ten glowing tiles will get a room with ten in it. There is a second, sharper
  * reason: a light belongs on something a GM PLACES, never on a set's dominant
- * floor. The club's dance floor carried its glow for one build, and painting a
+ * floor. Four is the top of the measured range and where the two neon
+ * locations sit; a warehouse wants one. The club's dance floor carried its glow for one build, and painting a
  * room lit every cell — a disco chessboard at roughly forty times the measured
  * emissive budget. Lamp pools and neon spills are the exception that proves
  * the rule, because a GM paints two cells of those rather than two hundred.
  */
-export const SET_EMISSIVE_MAX = 3;
+export const SET_EMISSIVE_MAX = 4;
 
 /** At most this many distinct hue families in one set, so it reads as a place. */
 export const SET_HUE_FAMILY_MAX = 5;
@@ -598,15 +623,13 @@ export function checkGlowBudget(emissives: readonly string[]): StyleViolation[] 
     );
   }
 
-  const cyan = (counts.get('cyan') ?? 0) / total;
-  const magenta = ((counts.get('magenta') ?? 0) + (counts.get('purple') ?? 0)) / total;
-  if (
-    cyan > CYAN_MAGENTA_LIMIT.leadThreshold &&
-    magenta > CYAN_MAGENTA_LIMIT.followerMax
-  ) {
+  const pair =
+    ((counts.get('cyan') ?? 0) + (counts.get('magenta') ?? 0) + (counts.get('purple') ?? 0)) /
+    total;
+  if (pair > CYAN_MAGENTA_LIMIT.pairShareMax) {
     say(
       'no-cyan-magenta-pairing',
-      `cyan ${pct(cyan)} beside magenta/purple ${pct(magenta)} is the film-poster palette, not this one`,
+      `cyan and magenta together are ${pct(pair)} of the catalogue's lights — past ${pct(CYAN_MAGENTA_LIMIT.pairShareMax)} that pairing IS the palette, which is the film poster and not this`,
     );
   }
 

@@ -13,7 +13,14 @@
 import type { Graphics } from 'pixi.js';
 import type { Point, TileLayer } from '@safehouse/contracts';
 import { WALL_THICKNESS } from '@safehouse/rules';
-import { cellDepth, heightRise, rectCorners, worldFromGrid, type SceneMetrics } from '../geometry.js';
+import {
+  cellDepth,
+  groundRadius,
+  heightRise,
+  rectCorners,
+  worldFromGrid,
+  type SceneMetrics,
+} from '../geometry.js';
 import { tileDefKey, type TileDrawDef } from '../types.js';
 import { FACE_FOOT, FACE_SHADE, parseColor, shade } from './colors.js';
 
@@ -362,26 +369,52 @@ function drawPattern(g: Graphics, def: TileDrawDef, accent: number, at: ReturnTy
 }
 
 /**
- * Light a tile GIVES OFF — an UNLIT layer over a finished face.
+ * The lights collected during a pass, drawn after every tile.
+ *
+ * Emissive is an UNLIT LAYER — it receives no ambient and no directional light
+ * and composites over the finished scene. Drawn inline it was neither: a tile
+ * painted later covered the bloom of one painted earlier, so a neon sign lit
+ * only the sliver of wall it was bolted to and nothing around it.
+ *
+ * Module-scoped because `drawTiles` is the only entry point and it is
+ * synchronous; a direct caller with no pass open still draws immediately.
+ */
+let PENDING_LIGHTS: Array<{ face: Point[]; glow: number }> | null = null;
+
+/**
+ * Light a tile GIVES OFF — an unlit layer over the finished scene.
  *
  * "Unlit" is the load-bearing word and it is the shipped convention: a glowing
- * element is a separate layer that receives neither ambient nor directional
- * light and renders at 100% of its painted value. Ours used to be a 20%-alpha
- * wash over the tile, which is a tile that has been tinted, not a light — and
- * in a catalogue where only about 1% of the frame is allowed to be bright, a
- * light that does not read means the scene has no focal point at all.
+ * element receives neither ambient nor directional light and renders at 100% of
+ * its painted value. Ours used to be a 20%-alpha wash over the tile, which is a
+ * tile that has been tinted, not a light — and in a catalogue where only about
+ * 1% of the frame may be bright, a light that does not read means the scene has
+ * no focal point at all.
  *
- * So it is drawn as the study describes a practical: a small hot CORE at full
- * value, then a halo falling off around it. The core is inset because a light
- * fills less of its cell than the cell — a lamp is a lamp, not a lit square —
- * and the falloff is what makes the pool look like it is thrown rather than
- * painted on.
+ * It is drawn the way the study describes a practical: a hot CORE at full
+ * value, a falloff around it, and a BLOOM that spills past the tile's own
+ * footprint. That last part is what makes signage work. A wall slab is a third
+ * of a cell, so a neon tube confined to its own face is a coloured pixel; the
+ * bloom is what throws it onto the floor either side and makes it read across
+ * a room, which is the entire job of a sign.
  */
-function drawGlow(g: Graphics, def: TileDrawDef, accent: number, face: readonly Point[]): void {
+function drawGlow(
+  g: Graphics,
+  m: SceneMetrics,
+  def: TileDrawDef,
+  accent: number,
+  face: readonly Point[],
+): void {
   if (def.emissive === undefined) return;
   const glow = parseColor(def.emissive, accent);
+  if (PENDING_LIGHTS !== null) {
+    PENDING_LIGHTS.push({ face: [...face], glow });
+    return;
+  }
+  paintGlow(g, m, face, glow);
+}
 
-  // Centre of the face, to shrink toward.
+function paintGlow(g: Graphics, m: SceneMetrics, face: readonly Point[], glow: number): void {
   let cx = 0;
   let cy = 0;
   for (const p of face) {
@@ -390,17 +423,34 @@ function drawGlow(g: Graphics, def: TileDrawDef, accent: number, face: readonly 
   }
   cx /= face.length;
   cy /= face.length;
-  const shrunk = (k: number): Point[] =>
+  const scaled = (k: number): Point[] =>
     face.map((p) => ({ x: cx + (p.x - cx) * k, y: cy + (p.y - cy) * k }));
 
-  // Halo first, then the core over it — three rings falling off outward, so
-  // the edge of the pool fades instead of ending in a hard line.
-  poly(g, face).fill({ color: glow, alpha: 0.16 });
-  poly(g, shrunk(0.72)).fill({ color: glow, alpha: 0.3 });
-  poly(g, shrunk(0.46)).fill({ color: glow, alpha: 0.55 });
-  // The core, at full value. This is the only thing in a scene allowed to be
-  // this bright, which is exactly why it carries the composition.
-  poly(g, shrunk(0.24)).fill({ color: glow, alpha: 1 });
+  // THE POOL takes the shape of the FLOOR, not of the fixture.
+  //
+  // Scaling the emitter's own outline was the obvious thing and it was wrong:
+  // a wall slab is a third of a cell, so a neon sign's bloom came out as a
+  // thin sliver of pink and read as a coloured pixel. Light does not take the
+  // shape of the thing emitting it once you are more than a few centimetres
+  // away — it falls on the ground as a pool. `groundRadius` is the same helper
+  // an AoE template uses, so the pool is a circle in plan view and the correct
+  // 2:1 ellipse in isometric.
+  for (const [r, alpha] of [
+    [1.6, 0.05],
+    [1.05, 0.09],
+    [0.62, 0.14],
+  ] as const) {
+    const { rx, ry } = groundRadius(m, r);
+    g.ellipse(cx, cy, rx, ry).fill({ color: glow, alpha });
+  }
+
+  // THE FIXTURE keeps its own shape, brightening to a core at full value —
+  // the only thing in a scene allowed to be this bright, which is exactly why
+  // it carries the composition.
+  poly(g, scaled(1)).fill({ color: glow, alpha: 0.26 });
+  poly(g, scaled(0.72)).fill({ color: glow, alpha: 0.4 });
+  poly(g, scaled(0.46)).fill({ color: glow, alpha: 0.66 });
+  poly(g, scaled(0.24)).fill({ color: glow, alpha: 1 });
 }
 
 /** Which sides of this cell continue the wall run. */
@@ -477,7 +527,7 @@ function drawWallTile(
 
   let lastTop: Point[] = [];
   for (const { r } of boxes) lastTop = drawBox(g, m, r, rise, base);
-  if (lastTop.length > 0) drawGlow(g, def, accent, lastTop);
+  if (lastTop.length > 0) drawGlow(g, m, def, accent, lastTop);
 }
 
 /**
@@ -530,13 +580,13 @@ function drawObjectTile(
     // silhouette, and it is what a box crown could never give.
     const lifted = drawPrism(g, m, centre, 0.42, rise, base, 8);
     drawPattern(g, def, accent, inscribed(lifted));
-    drawGlow(g, def, accent, lifted);
+    drawGlow(g, m, def, accent, lifted);
     return;
   }
 
   const top = drawPrism(g, m, centre, radius, rise, base, shape === 'round' ? 8 : 6);
   drawPattern(g, def, accent, inscribed(top));
-  drawGlow(g, def, accent, top);
+  drawGlow(g, m, def, accent, top);
 }
 
 /**
@@ -586,7 +636,7 @@ function drawStairTile(
     top = drawBox(g, m, [col + 0.12, y0, col + 0.88, y1], rise * step, shade(base, 0.9 + i * 0.06));
   }
   drawPattern(g, def, accent, inscribed(top));
-  drawGlow(g, def, accent, top);
+  drawGlow(g, m, def, accent, top);
 }
 
 /** An ordinary tile: the whole cell, extruded by its height. */
@@ -604,7 +654,7 @@ function drawFillTile(
   const rise = heightRise(m, def.height ?? 0);
   const top = drawBox(g, m, [col, row, col + 1, row + 1], rise, base);
   drawPattern(g, def, accent, inscribed(top));
-  drawGlow(g, def, accent, top);
+  drawGlow(g, m, def, accent, top);
 }
 
 /**
@@ -617,6 +667,7 @@ function drawFillTile(
  */
 export function drawTiles(g: Graphics, m: SceneMetrics, input: TileDrawInput): void {
   g.clear();
+  PENDING_LIGHTS = [];
 
   const drawable: Array<{ col: number; row: number; def: TileDrawDef; layer: number }> = [];
   /** Cells holding a thin-footprint tile, so a run can find its own corners. */
@@ -669,6 +720,13 @@ export function drawTiles(g: Graphics, m: SceneMetrics, input: TileDrawInput): v
       drawFillTile(g, cell.def, m, cell.col, cell.row);
     }
   }
+
+  // The unlit pass. Every light in the scene, over every tile in it — so a
+  // sign's bloom lands on the floor in front of it rather than being painted
+  // over by the next cell in the depth sort.
+  const lights = PENDING_LIGHTS ?? [];
+  PENDING_LIGHTS = null;
+  for (const light of lights) paintGlow(g, m, light.face, light.glow);
 }
 
 /** FNV-1a. Cheap, stable, and it notices a one-character change. */

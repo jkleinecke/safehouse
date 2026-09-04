@@ -64,15 +64,36 @@ Magenta and purple appear in **none** of the top-ten bright-saturated hue bins
 of any of the three games. A surface is never made of them. Checked by
 `no-magenta-substrate`.
 
-### 4. The light budget is warm, about six to one
+### 4. The light budget is warm, and neon is a location's signature
 
-Of the saturated-highlight budget: amber 50–55%, gold/sodium 18–23%, red
-10–13%, cyan 9–13%, and everything else in the noise. Enforced catalogue-wide
-rather than per set, because the measured distribution allows roughly one cool
-room in five — so a single cyan-lit club is right and a cyan-lit catalogue is
-not. Only the whole collection can tell those apart.
+Of the measured highlight budget: amber 50–55%, gold/sodium 18–23%, red 10–13%,
+cyan 9–13%, magenta 1.4%. Enforced catalogue-wide rather than per set, because
+the distribution allows roughly one cool room in five — a single cyan-lit club
+is right and a cyan-lit catalogue is not, and only the whole collection can
+tell those apart.
 
-The Club floor is that one cool set. Nothing else is.
+**Tube neon lives in the Club and the Street, and nowhere else.** Both carry a
+pink sign and a cyan one; the other four sets carry none.
+
+That is not a departure from the 1.4% figure, it is what the figure means. The
+measurement is a share of **pixel area** across 37 frames of mostly sewers,
+warehouses, tenements and offices. A neon sign is a single tile covering a
+couple of cells — almost no area — so the two locations neon belongs in can
+each carry a tube and still leave the rendered share where the study puts it.
+
+The first cut of this file got that wrong: it converted a pixel-area
+measurement into a per-tile count budget and set the magenta ceiling at 6% of
+lights, which on a thirteen-light catalogue rounds to zero. A rule that bans
+the thing it is meant to ration is not a rule.
+
+What actually does the rationing has not moved:
+
+- `no-magenta-substrate` keeps it out of the walls — **the tube is pink, the
+  housing it is bolted to is not**, and a test checks exactly that;
+- `SET_EMISSIVE_MAX` keeps a room to four practicals;
+- the two guard rails are catalogue-wide: warm light stays in the majority,
+  and cyan-plus-magenta together stay under 42% of all lights. Past that the
+  pairing *is* the palette, which is the film poster and not this.
 
 ### 5. One committed temperature per set
 
@@ -82,8 +103,9 @@ cool room then lands hard as a change of key.
 
 ### 6. A light is something you place, not something you fill with
 
-At most **three** tiles per set carry `emissive`, matching the 2–4 practicals
-per 8×8-cell room the study found.
+At most **four** tiles per set carry `emissive` — the top of the 2–4
+practicals per 8×8-cell room the study found. The two neon locations sit at
+four; a warehouse gets one.
 
 There is a sharper reason than the budget. The club's dance floor carried its
 glow for one build, and painting a room lit *every cell of it* — a disco
@@ -91,11 +113,22 @@ chessboard at roughly forty times the measured emissive budget. Lamp pools and
 neon spills are the exception that proves the rule: a GM paints two cells of
 those, not two hundred.
 
-Emissive is drawn as an **unlit layer** — it receives neither ambient nor
-directional light and renders at 100% of its painted value, with a falloff halo
-around a hot core. That is the shipped convention, and in a catalogue where
-about 1% of the frame may be bright, a light that does not read means the scene
-has no focal point at all.
+Emissive is drawn as an **unlit layer** composited after every tile — it
+receives neither ambient nor directional light and renders at 100% of its
+painted value. Drawn inline it was neither: a tile painted later covered the
+bloom of one painted earlier, so a sign lit only the sliver of wall it was
+bolted to.
+
+The pool takes the shape of the **floor**, not of the fixture. Scaling the
+emitter's own outline is the obvious thing and it is wrong — a wall slab is a
+third of a cell, so a neon sign's bloom came out as a thin sliver of pink and
+read as a coloured pixel. Light stops taking the shape of the thing emitting it
+a few centimetres out; it falls on the ground as a pool, which is a circle in
+plan view and a 2:1 ellipse in isometric. The fixture keeps its own shape and
+brightens to a core at full value.
+
+In a catalogue where about 1% of the frame may be bright, a light that does not
+read means the scene has no focal point at all.
 
 ### 7. The environment always loses to the people standing on it
 
@@ -201,8 +234,9 @@ anyone comparing this to a screenshot knows exactly which knob was turned.
 4. Saturation: 0.08–0.62. Rust, painted plastic and cloth may go high; plain
    floors and walls should not.
 5. Accent within 12 value points of the base (tier 2).
-6. Only add `emissive` if the set has fewer than three lights **and** the tile
-   is something a GM places rather than fills a region with.
+6. Only add `emissive` if the set has fewer than four lights **and** the tile
+   is something a GM places rather than fills a region with. Tube neon
+   (magenta) belongs to the Club and the Street only.
 7. Run `pnpm --filter @safehouse/rules test`. The failure will name the rule.
 
 The generator used to build the current catalogue is not checked in — the
