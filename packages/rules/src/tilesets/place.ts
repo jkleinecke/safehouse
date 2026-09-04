@@ -55,6 +55,10 @@ export interface PlacementContext {
   /** The cell itself — the deterministic variety seed. */
   col: number;
   row: number;
+  /** Which floor is being painted, 0 being the ground (FR9.22). */
+  level?: number;
+  /** How many floors the scene has, so stairs know where they can lead. */
+  levelCount?: number;
 }
 
 export interface PlacementResult {
@@ -105,6 +109,38 @@ function pickBuilding(ctx: PlacementContext): PlacementResult | null {
     tileId: next.id,
     layer: 'structure',
     why: at + 1 >= cycle.length ? `back to ${next.name}` : `${next.name} — cut into the wall`,
+  };
+}
+
+/**
+ * Stairs: which way they lead follows from the building, not from a menu.
+ *
+ * On the ground floor of a two-storey scene there is only one direction that
+ * means anything, and making the GM say "up" every time is the same busywork
+ * the four tools exist to remove. A floor above wins over a floor below —
+ * building upward is the common case, and a basement is usually reached by
+ * stairs painted on the floor above it anyway.
+ *
+ * With nowhere to go yet, it still places an up-flight. A GM sketching a
+ * stairwell before adding the storey is doing something reasonable, and
+ * `stairTarget` already reports "leads nowhere" until the floor exists.
+ */
+function pickStairs(ctx: PlacementContext): PlacementResult | null {
+  const all = tilesFor(ctx.tileset, 'stairs');
+  if (all.length === 0) return null;
+
+  const level = ctx.level ?? 0;
+  const count = ctx.levelCount ?? 1;
+  const wanted: 'up' | 'down' = level + 1 < count ? 'up' : level > 0 ? 'down' : 'up';
+
+  const tile = all.find((t) => t.connects === wanted) ?? all[0]!;
+  const leadsSomewhere = wanted === 'up' ? level + 1 < count : level > 0;
+  return {
+    tileId: tile.id,
+    layer: layerOf(tile),
+    why: leadsSomewhere
+      ? `${tile.name} — to ${wanted === 'up' ? 'the floor above' : 'the floor below'}`
+      : `${tile.name} — no floor ${wanted} yet; add one and these will connect`,
   };
 }
 
@@ -160,6 +196,7 @@ export function pickTile(
   }
 
   if (tool === 'building') return pickBuilding(ctx);
+  if (tool === 'stairs') return pickStairs(ctx);
 
   if (tool === 'ground') {
     // Deliberately no cleverness: the GM said "ground", and which ground is

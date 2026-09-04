@@ -314,6 +314,7 @@ export default function GridPage() {
             tileId: st.tileId,
             col,
             row,
+            level: st.activeLevel,
           });
           if (picked === null) return;
           placing = picked.tileId;

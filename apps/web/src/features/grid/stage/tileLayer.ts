@@ -471,6 +471,56 @@ function drawObjectTile(
   drawGlow(g, def, accent, top);
 }
 
+/**
+ * A flight of stairs: treads climbing across the cell.
+ *
+ * Four ascending slabs rather than one ramp, because at table zoom a ramp
+ * reads as a wedge of floor and treads read as stairs. Drawn back to front so
+ * each tread's face covers the one behind it, which is what gives the
+ * staircase its profile.
+ *
+ * The direction is cosmetic here — `connects` is what actually decides which
+ * floor the stairs lead to (`stairTarget`). A down-flight simply descends
+ * across the cell instead of rising, so the two are distinguishable at a
+ * glance without the GM having to read a label.
+ */
+function drawStairTile(
+  g: Graphics,
+  def: TileDrawDef,
+  m: SceneMetrics,
+  col: number,
+  row: number,
+): void {
+  const base = parseColor(def.colors[0], 0x3b3f45);
+  const accent = parseColor(def.colors[1], 0x5a6068);
+  const rise = heightRise(m, def.height ?? 0);
+  const down = def.connects === 'down';
+
+  // Floor underneath: a flight covers only part of its cell.
+  const under = def.underlay;
+  if (under !== undefined) {
+    const floor = drawBox(g, m, [col, row, col + 1, row + 1], 0, parseColor(under.colors[0], base));
+    drawPattern(
+      g,
+      { ...def, pattern: under.pattern },
+      parseColor(under.colors[1], accent),
+      inscribed(floor),
+    );
+  }
+
+  const TREADS = 4;
+  let top: Point[] = [];
+  for (let i = 0; i < TREADS; i += 1) {
+    const y0 = row + (i / TREADS);
+    const y1 = row + ((i + 1) / TREADS);
+    // Rising away from the viewer, or falling into the floor for a descent.
+    const step = ((down ? TREADS - 1 - i : i) + 1) / TREADS;
+    top = drawBox(g, m, [col + 0.12, y0, col + 0.88, y1], rise * step, shade(base, 0.9 + i * 0.06));
+  }
+  drawPattern(g, def, accent, inscribed(top));
+  drawGlow(g, def, accent, top);
+}
+
 /** An ordinary tile: the whole cell, extruded by its height. */
 function drawFillTile(
   g: Graphics,
@@ -534,7 +584,9 @@ export function drawTiles(g: Graphics, m: SceneMetrics, input: TileDrawInput): v
 
   for (const cell of drawable) {
     const shape = cell.def.footprint;
-    if (shape === 'post' || shape === 'canopy' || shape === 'round') {
+    if (shape === 'stair') {
+      drawStairTile(g, cell.def, m, cell.col, cell.row);
+    } else if (shape === 'post' || shape === 'canopy' || shape === 'round') {
       drawObjectTile(g, cell.def, m, cell.col, cell.row);
     } else if (shape === 'wall') {
       // Joins are read from the finished set, not from draw order, so a run

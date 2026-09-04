@@ -130,3 +130,31 @@ export function levelTiles(scene: LevelledScene, level: number): LayeredTiles | 
   const index = Math.min(Math.max(0, Math.floor(level)), all.length - 1);
   return all[index]?.tiles;
 }
+
+/**
+ * Where the stairs in this cell lead, or null if there are none.
+ *
+ * This is what makes a painted stairwell a CONNECTION rather than a drawing of
+ * one. The tile says which way it goes; this checks the floor it points at
+ * actually exists, so a flight of stairs the GM painted before adding the
+ * storey above leads nowhere rather than off the top of the building.
+ */
+export function stairTarget(
+  scene: LevelledScene,
+  level: number,
+  key: string,
+  tileFor: (tilesetId: string, tileId: string) => { connects?: 'up' | 'down' } | null,
+): number | null {
+  const floors = sceneLevels(scene);
+  const here = floors[level]?.tiles;
+  if (here === undefined) return null;
+
+  const tileId = here.structure?.[key] ?? here.cells?.[key];
+  if (tileId === undefined) return null;
+  const tile = tileFor(here.tilesetId, tileId);
+  if (tile?.connects === undefined) return null;
+
+  const target = tile.connects === 'up' ? level + 1 : level - 1;
+  // A storey that does not exist is not somewhere a runner can go.
+  return target >= 0 && target < floors.length ? target : null;
+}

@@ -59,7 +59,7 @@ export type TileKind = (typeof TILE_KINDS)[number];
  * object to the renderer and completely different questions to a GM building
  * a scene.
  */
-export const TILE_CATEGORIES = ['ground', 'building', 'interior', 'decoration'] as const;
+export const TILE_CATEGORIES = ['ground', 'building', 'interior', 'decoration', 'stairs'] as const;
 
 export type TileCategory = (typeof TILE_CATEGORIES)[number];
 
@@ -70,6 +70,10 @@ export const LAYER_FOR_CATEGORY: Readonly<Record<TileCategory, 'ground' | 'struc
     building: 'structure',
     interior: 'object',
     decoration: 'object',
+    // Stairs are building fabric, so they share the structure layer — which
+    // correctly means a square cannot hold both a wall and a stairwell.
+    // Unlike a wall they do not block: the whole point is walking through.
+    stairs: 'structure',
   };
 
 /**
@@ -148,7 +152,7 @@ export type TileHeight = (typeof TILE_HEIGHTS)[keyof typeof TILE_HEIGHTS];
  * refuse pile at table zoom; a silhouette does. They are still DRAWN, not
  * blitted, so the catalogue is still kilobytes and still ours (§14).
  */
-export const TILE_FOOTPRINTS = ['fill', 'wall', 'post', 'canopy', 'round'] as const;
+export const TILE_FOOTPRINTS = ['fill', 'wall', 'post', 'canopy', 'round', 'stair'] as const;
 
 export type TileFootprint = (typeof TILE_FOOTPRINTS)[number];
 
@@ -156,7 +160,13 @@ export type TileFootprint = (typeof TILE_FOOTPRINTS)[number];
  * Footprints that occupy only part of their cell and therefore need floor
  * drawn underneath them — otherwise every one is a hole in the map.
  */
-export const PARTIAL_FOOTPRINTS: readonly TileFootprint[] = ['wall', 'post', 'canopy', 'round'];
+export const PARTIAL_FOOTPRINTS: readonly TileFootprint[] = [
+  'wall',
+  'post',
+  'canopy',
+  'round',
+  'stair',
+];
 
 /**
  * Wall slab thickness, as a fraction of a cell. A third reads as a wall at
@@ -188,6 +198,15 @@ export interface Tile {
   /** Where it belongs, for single-click placement. */
   placement?: TilePlacement;
   /**
+   * Which way this tile leads, for stairs (FR9.22).
+   *
+   * Present ONLY on stairs, and it is what makes a painted stairwell a
+   * connection rather than a picture of one: `stairTarget` reads it to answer
+   * "standing here, which floor can I reach". Absent on everything else,
+   * because most of a map does not go anywhere.
+   */
+  connects?: 'up' | 'down';
+  /**
    * A colour this tile GIVES OFF rather than reflects: sodium lamps, neon,
    * a barrel fire, the glow off a server rack.
    *
@@ -211,11 +230,17 @@ export interface Tile {
 
 /** Does this tile stop a sightline? Height decides unless the tile overrides. */
 export function stopsSight(tile: Tile): boolean {
+  // A stairwell is an opening in the building, not a solid in it.
+  if (tile.connects !== undefined) return false;
   return tile.blocksSight ?? (tile.height ?? 0) >= TILE_HEIGHTS.FULL;
 }
 
 /** Does this tile stop a body? Anything standing proud of the floor does. */
 export function stopsMovement(tile: Tile): boolean {
+  // Checked BEFORE height: stairs live in the structure layer beside walls, so
+  // without this a stairwell drawn with any height at all would be a stair
+  // nobody can walk onto — a picture of a stair.
+  if (tile.connects !== undefined) return false;
   return tile.blocksMovement ?? (tile.height ?? 0) > TILE_HEIGHTS.FLOOR;
 }
 
@@ -273,4 +298,17 @@ export function categoryOf(tile: Tile): TileCategory {
 /** Which layer a tile is painted into. */
 export function layerOf(tile: Tile): 'ground' | 'structure' | 'object' {
   return LAYER_FOR_CATEGORY[categoryOf(tile)];
+}
+
+/**
+ * Stairs must never block, whatever else the tile says.
+ *
+ * They live in the structure layer beside walls and doors — they are building
+ * fabric, and a square holding both a wall and a stairwell is not a thing —
+ * but a stair a runner cannot walk onto is a picture of a stair. This is
+ * checked BEFORE height, so a full-height stairwell tile still lets a body
+ * through.
+ */
+export function isStair(tile: Tile): boolean {
+  return tile.connects !== undefined;
 }

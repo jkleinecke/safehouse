@@ -42,6 +42,8 @@ export const DOCKLANDS: Tileset = {
   name: 'Docklands warehouse',
   blurb: 'Cold steel and poured concrete under sodium light. The default heist floor.',
   tiles: [
+    { id: 'stairup', name: 'Steel stair up', kind: 'feature', category: 'stairs', pattern: 'grating', colors: ['#5f6771', '#8f98a3'], footprint: 'stair', height: WAIST, connects: 'up', hint: 'Up to the catwalk.' },
+    { id: 'stairdown', name: 'Steel stair down', kind: 'feature', category: 'stairs', pattern: 'grating', colors: ['#4a515a', '#767e89'], footprint: 'stair', height: WAIST, connects: 'down' },
     { id: 'floor', name: 'Poured concrete', kind: 'floor', category: 'ground', pattern: 'concrete', colors: ['#6a7078', '#7d848d'] },
     { id: 'stain', name: 'Oil-stained slab', kind: 'floor', category: 'ground', pattern: 'concrete', colors: ['#4a4f57', '#3a3e45'], hint: 'Same footing, worse-looking footing.' },
     { id: 'grate', name: 'Drain grating', kind: 'floor', category: 'ground', pattern: 'grating', colors: ['#495059', '#8b939d'] },
@@ -63,6 +65,8 @@ export const CORP_INTERIOR: Tileset = {
   name: 'Corporate interior',
   blurb: 'Pale carpet, glass and polite lighting. Lobbies, offices, server rooms.',
   tiles: [
+    { id: 'stairup', name: 'Fire stair up', kind: 'feature', category: 'stairs', pattern: 'tile', colors: ['#9aa5b2', '#b9c3ce'], footprint: 'stair', height: WAIST, connects: 'up' },
+    { id: 'stairdown', name: 'Fire stair down', kind: 'feature', category: 'stairs', pattern: 'tile', colors: ['#7f8b98', '#9daab7'], footprint: 'stair', height: WAIST, connects: 'down' },
     { id: 'carpet', name: 'Executive carpet', kind: 'floor', category: 'ground', pattern: 'carpet', colors: ['#8d97a4', '#9fa9b6'] },
     { id: 'lobby', name: 'Polished lobby', kind: 'floor', category: 'ground', pattern: 'tile', colors: ['#b3bcc7', '#c8d0da'], hint: 'Bright, hard, and it echoes.' },
     { id: 'raised', name: 'Raised server floor', kind: 'floor', category: 'ground', pattern: 'hatch', colors: ['#5f7482', '#7fa0b2'], emissive: '#39d7f0', hint: 'Cable runs underneath — a decker will ask.' },
@@ -85,6 +89,8 @@ export const SPRAWL_STREET: Tileset = {
   name: 'Sprawl street',
   blurb: 'Wet asphalt under hot neon. Chases, meets and ambushes.',
   tiles: [
+    { id: 'stairup', name: 'Stoop up', kind: 'feature', category: 'stairs', pattern: 'concrete', colors: ['#7b7472', '#918a87'], footprint: 'stair', height: WAIST, connects: 'up' },
+    { id: 'stairdown', name: 'Basement steps', kind: 'feature', category: 'stairs', pattern: 'concrete', colors: ['#5d5654', '#736c69'], footprint: 'stair', height: WAIST, connects: 'down', hint: 'Down to whatever is under the shop.' },
     { id: 'road', name: 'Cracked asphalt', kind: 'floor', category: 'ground', pattern: 'gravel', colors: ['#3e3a3c', '#4c4749'] },
     { id: 'walk', name: 'Pavement', kind: 'floor', category: 'ground', pattern: 'tile', colors: ['#736c6b', '#877f7d'] },
     { id: 'grass', name: 'Verge grass', kind: 'floor', category: 'ground', pattern: 'gravel', colors: ['#415c37', '#557547'], hint: 'What passes for a park out here.' },
@@ -113,6 +119,8 @@ export const MAINTENANCE: Tileset = {
   name: 'Maintenance & sewers',
   blurb: 'Damp green concrete and access hatches. The way in nobody watches.',
   tiles: [
+    { id: 'stairup', name: 'Access ladder up', kind: 'feature', category: 'stairs', pattern: 'grating', colors: ['#5c6b5d', '#8ba08d'], footprint: 'stair', height: WAIST, connects: 'up' },
+    { id: 'stairdown', name: 'Access ladder down', kind: 'feature', category: 'stairs', pattern: 'grating', colors: ['#47543f', '#6f8168'], footprint: 'stair', height: WAIST, connects: 'down' },
     { id: 'duct', name: 'Duct floor', kind: 'floor', category: 'ground', pattern: 'panel', colors: ['#5b6b5c', '#6d806e'] },
     { id: 'walkway', name: 'Grated walkway', kind: 'floor', category: 'ground', pattern: 'grating', colors: ['#4a5a4d', '#879a89'] },
     { id: 'sludge', name: 'Sludge channel', kind: 'floor', category: 'ground', pattern: 'water', colors: ['#394a32', '#5c7a4a'], hint: 'Difficult going, and it will be on your boots later.' },
@@ -133,6 +141,8 @@ export const BARRENS: Tileset = {
   name: 'Barrens ruins',
   blurb: 'Rust, burnt brick and firelight. Gang ground.',
   tiles: [
+    { id: 'stairup', name: 'Broken stair up', kind: 'feature', category: 'stairs', pattern: 'rubble', colors: ['#7c6a58', '#94806a'], footprint: 'stair', height: WAIST, connects: 'up' },
+    { id: 'stairdown', name: 'Cellar steps', kind: 'feature', category: 'stairs', pattern: 'rubble', colors: ['#5d4f43', '#756455'], footprint: 'stair', height: WAIST, connects: 'down' },
     { id: 'dirt', name: 'Packed dirt', kind: 'floor', category: 'ground', pattern: 'gravel', colors: ['#7a6144', '#8d7150'] },
     { id: 'rubble', name: 'Rubble', kind: 'floor', category: 'ground', pattern: 'rubble', colors: ['#63564a', '#7a6b5c'], hint: 'Rough going, and it crunches.' },
     { id: 'slab', name: 'Broken slab', kind: 'floor', category: 'ground', pattern: 'concrete', colors: ['#6d655d', '#80776e'] },
@@ -154,6 +164,8 @@ export const CLUB: Tileset = {
   name: 'Club & bar',
   blurb: 'Violet dark, sticky floors and a back room. Where the meet actually happens.',
   tiles: [
+    { id: 'stairup', name: 'Mezzanine stair', kind: 'feature', category: 'stairs', pattern: 'carpet', colors: ['#5e4076', '#7a5595'], footprint: 'stair', height: WAIST, connects: 'up' },
+    { id: 'stairdown', name: 'Cellar stair', kind: 'feature', category: 'stairs', pattern: 'carpet', colors: ['#42304f', '#584066'], footprint: 'stair', height: WAIST, connects: 'down' },
     { id: 'floor', name: 'Dance floor', kind: 'floor', category: 'ground', pattern: 'tile', colors: ['#4c3566', '#5f437e'], emissive: '#b34dff', hint: 'Lit from below, and it moves.' },
     { id: 'bar', name: 'Bar decking', kind: 'floor', category: 'ground', pattern: 'planks', colors: ['#5c4033', '#71503f'] },
     { id: 'quiet', name: 'Back-room floor', kind: 'floor', category: 'ground', pattern: 'carpet', colors: ['#3b2f47', '#4a3b59'], hint: 'Out of the noise. This is where the job gets described.' },

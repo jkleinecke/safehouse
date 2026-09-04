@@ -21,7 +21,7 @@ export interface TilesTabProps {
   scene: Scene;
 }
 
-const CATEGORY_ORDER = ['ground', 'building', 'interior', 'decoration'] as const;
+const CATEGORY_ORDER = ['ground', 'building', 'stairs', 'interior', 'decoration'] as const;
 type ToolCategory = (typeof CATEGORY_ORDER)[number];
 
 const CATEGORY_LABEL: Record<ToolCategory, string> = {
@@ -29,6 +29,7 @@ const CATEGORY_LABEL: Record<ToolCategory, string> = {
   building: 'Building',
   interior: 'Interior',
   decoration: 'Decor',
+  stairs: 'Stairs',
 };
 
 /** What each tool does on a single click, in the GM's terms. */
@@ -37,6 +38,8 @@ const CATEGORY_HINT: Record<ToolCategory, string> = {
   building: 'Click empty ground for a wall; click a wall again for a window, then a door.',
   interior: 'Furniture. Against a wall it picks something with a back to it.',
   decoration: 'Props. It reads the ground — trees on grass, drains on the road.',
+  stairs:
+    'Stairs. Which way they lead follows from the floors this scene has — up if there is one above.',
 };
 
 /** Fallback for a set that predates categories; mirrors `categoryOf` in rules. */
@@ -175,7 +178,7 @@ export default function TilesTab({ scene }: TilesTabProps) {
       */}
       <div>
         <div className="mono-label text-dim">Tool</div>
-        <div className="mt-1 grid grid-cols-4 gap-1" role="group" aria-label="Tile tool">
+        <div className="mt-1 grid grid-cols-5 gap-1" role="group" aria-label="Tile tool">
           {CATEGORY_ORDER.map((category) => {
             const active = tileCategory === category;
             return (

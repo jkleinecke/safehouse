@@ -449,7 +449,9 @@ export interface TileDef {
    * and so which layer it lands on. Absent on a set that predates the tools;
    * the palette falls back to `kind`.
    */
-  category?: 'ground' | 'building' | 'interior' | 'decoration';
+  category?: 'ground' | 'building' | 'interior' | 'decoration' | 'stairs';
+  /** Which floor a flight of stairs leads to (FR9.22). */
+  connects?: 'up' | 'down';
   /** Where it belongs, for single-click placement (see `pickTile` in rules). */
   placement?: { againstWall?: boolean; inWall?: boolean; on?: readonly string[] };
   /**

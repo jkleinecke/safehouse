@@ -76,7 +76,7 @@ export interface GridUiState {
    */
   tileId: string | null;
   /** Which of the four palettes is open: Ground, Building, Interior, Decor. */
-  tileCategory: 'ground' | 'building' | 'interior' | 'decoration';
+  tileCategory: 'ground' | 'building' | 'interior' | 'decoration' | 'stairs';
   /**
    * GM only: whose sightline to draw on the canvas, or null for none.
    *
@@ -122,7 +122,7 @@ export interface GridUiState {
   setTool: (tool: GridTool) => void;
   setTilesetId: (tilesetId: string) => void;
   setTileId: (tileId: string | null) => void;
-  setTileCategory: (category: 'ground' | 'building' | 'interior' | 'decoration') => void;
+  setTileCategory: (category: 'ground' | 'building' | 'interior' | 'decoration' | 'stairs') => void;
   setActiveLevel: (level: number) => void;
   setLosTokenId: (tokenId: string | null) => void;
   setLosForPlayers: (on: boolean) => void;

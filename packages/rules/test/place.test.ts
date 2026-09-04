@@ -20,6 +20,9 @@ import {
   categoryOf,
   layerOf,
   migrateTileLayer,
+  stairTarget,
+  stopsMovement,
+  stopsSight,
   pickTile,
   tilesetById,
   type PlacementContext,
@@ -267,5 +270,96 @@ describe('every placement hint refers to something real', () => {
       );
       expect(solid.length, `${set.id} has no solid wall`).toBeGreaterThan(0);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stairs
+// ---------------------------------------------------------------------------
+
+/**
+ * Stairs (FR9.22) are the one tool whose answer depends on the BUILDING rather
+ * than on the square. Which way a flight leads follows from the floors the
+ * scene has, because on the ground floor of a two-storey map there is only one
+ * direction that means anything.
+ */
+describe('the Stairs tool reads the building', () => {
+  it('goes up when there is a floor above', () => {
+    const got = pickTile('stairs', ctx({ level: 0, levelCount: 2 }));
+    const tile = sprawl.tiles.find((t) => t.id === got!.tileId)!;
+    expect(tile.connects).toBe('up');
+    expect(got!.why).toContain('above');
+  });
+
+  it('goes down from the top floor', () => {
+    const got = pickTile('stairs', ctx({ level: 1, levelCount: 2 }));
+    const tile = sprawl.tiles.find((t) => t.id === got!.tileId)!;
+    expect(tile.connects).toBe('down');
+  });
+
+  it('still places a flight on a one-floor scene, and says it leads nowhere yet', () => {
+    // Sketching a stairwell before adding the storey is reasonable; refusing
+    // would make the GM build in an order the tool decided.
+    const got = pickTile('stairs', ctx({ level: 0, levelCount: 1 }));
+    expect(got).not.toBeNull();
+    expect(got!.why).toMatch(/no floor|add one/i);
+  });
+
+  it('lands in the structure layer, beside the walls', () => {
+    // A square holds a wall or a stairwell, never both.
+    expect(pickTile('stairs', ctx({ level: 0, levelCount: 2 }))!.layer).toBe('structure');
+  });
+
+  it('never blocks, whatever height it is drawn at', () => {
+    // Stairs share a layer with walls, so without the override a stairwell
+    // would be a stair nobody can walk onto — a picture of a stair.
+    for (const set of TILESETS) {
+      for (const tile of set.tiles) {
+        if (tile.connects === undefined) continue;
+        expect(stopsMovement(tile), `${set.id}/${tile.id}`).toBe(false);
+        expect(stopsSight(tile), `${set.id}/${tile.id}`).toBe(false);
+      }
+    }
+  });
+
+  it('gives every set a way up and a way down', () => {
+    for (const set of TILESETS) {
+      const stairs = set.tiles.filter((t) => categoryOf(t) === 'stairs');
+      expect(stairs.map((t) => t.connects).sort(), set.id).toEqual(['down', 'up']);
+    }
+  });
+});
+
+describe('stairTarget — a painted flight is a connection, not a picture', () => {
+  const tileFor = (tilesetId: string, tileId: string) =>
+    tilesetById(tilesetId)?.tiles.find((t) => t.id === tileId) ?? null;
+
+  const twoStorey = {
+    tiles: { tilesetId: 'sprawl', structure: { '1,1': 'stairup' } },
+    levels: [{ id: 'up', name: 'Upstairs', tiles: { tilesetId: 'sprawl', structure: { '4,4': 'stairdown' } } }],
+  };
+
+  it('leads up from the ground floor', () => {
+    expect(stairTarget(twoStorey, 0, '1,1', tileFor)).toBe(1);
+  });
+
+  it('leads back down from the floor above', () => {
+    expect(stairTarget(twoStorey, 1, '4,4', tileFor)).toBe(0);
+  });
+
+  it('leads nowhere from a cell with no stairs', () => {
+    expect(stairTarget(twoStorey, 0, '9,9', tileFor)).toBeNull();
+  });
+
+  it('refuses to lead off the top of the building', () => {
+    // Stairs painted before the storey above exists must not walk a token
+    // onto a floor that is not there.
+    const oneStorey = { tiles: { tilesetId: 'sprawl', structure: { '1,1': 'stairup' } } };
+    expect(stairTarget(oneStorey, 0, '1,1', tileFor)).toBeNull();
+  });
+
+  it('is not fooled by an ordinary wall in the same layer', () => {
+    const walled = { tiles: { tilesetId: 'sprawl', structure: { '2,2': 'wall' } }, levels: [{ id: 'u', name: 'U' }] };
+    expect(stairTarget(walled, 0, '2,2', tileFor)).toBeNull();
   });
 });

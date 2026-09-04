@@ -47,7 +47,13 @@ export interface TileDrawDef {
    * orients itself from its neighbours; anything else fills the square.
    * Purely visual — sight and movement always block the whole cell.
    */
-  footprint?: 'fill' | 'wall' | 'post' | 'canopy' | 'round';
+  footprint?: 'fill' | 'wall' | 'post' | 'canopy' | 'round' | 'stair';
+  /**
+   * Which floor a flight of stairs leads to (FR9.22). Cosmetic HERE — it only
+   * decides whether the treads climb or descend across the cell — while
+   * `stairTarget` in the rules decides where they actually go.
+   */
+  connects?: 'up' | 'down';
   /**
    * The floor to draw UNDER a thin tile, from the same set.
    *
@@ -83,7 +89,8 @@ export interface TileSetLike {
     colors: readonly [string, string];
     height?: number;
     emissive?: string;
-    footprint?: 'fill' | 'wall' | 'post' | 'canopy' | 'round';
+    footprint?: 'fill' | 'wall' | 'post' | 'canopy' | 'round' | 'stair';
+    connects?: 'up' | 'down';
   }[];
 }
 
@@ -119,6 +126,7 @@ export function tileDefsFromSets(sets: readonly TileSetLike[]): Record<string, T
         ...(t.height !== undefined ? { height: t.height } : {}),
         ...(t.emissive !== undefined ? { emissive: t.emissive } : {}),
         ...(t.footprint !== undefined ? { footprint: t.footprint } : {}),
+        ...(t.connects !== undefined ? { connects: t.connects } : {}),
         ...(thin && floor !== undefined
           ? { underlay: { pattern: floor.pattern, colors: floor.colors } }
           : {}),
