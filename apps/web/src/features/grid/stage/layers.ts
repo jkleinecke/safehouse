@@ -4,8 +4,10 @@
  */
 import { Container, Graphics, Text } from 'pixi.js';
 import type { Point, Scene } from '@safehouse/contracts';
+import { TILE_HEIGHTS } from '@safehouse/rules';
 import {
   gridOverlay,
+  heightRise,
   polygonCenter,
   sceneWorldSize,
   worldFromGrid,
@@ -50,6 +52,44 @@ function flatPoly(m: SceneMetrics, poly: readonly Point[]): number[] {
 }
 
 /**
+ * Cut a revealed region out of the fog, SWEPT upward by a wall's height.
+ *
+ * A fog region is a polygon on the FLOOR, and in isometric the things standing
+ * on that floor are drawn above it — half a cell of screen height per cell of
+ * wall. Cutting the floor polygon alone therefore decapitates the room it
+ * reveals: the far walls keep their tops and upper faces under the opaque
+ * cover, so a revealed room reads as a room with the roof still on. Worse in
+ * the other direction, a wall standing on an UNREVEALED square two rows nearer
+ * the viewer extrudes up INTO the hole and shows itself to players who have
+ * revealed nothing.
+ *
+ * So the hole is the region swept vertically: the floor polygon, the same
+ * polygon lifted by one wall's rise, and a band joining each edge of one to
+ * the matching edge of the other. Cuts accumulate, so those three together are
+ * the union — the silhouette of the whole volume above the region.
+ *
+ * The sweep uses a FULL-height wall rather than what happens to stand there.
+ * A hole a little taller than the tallest thing in the room shows a sliver of
+ * wall above the boundary; a hole sized to the shortest shows a beheaded one.
+ * Only one of those is a bug a GM would report.
+ */
+function cutSwept(g: Graphics, m: SceneMetrics, poly: readonly Point[]): void {
+  const flat = poly.map((p) => worldFromGrid(m, p));
+  g.poly(flat.flatMap((p) => [p.x, p.y])).cut();
+
+  const rise = heightRise(m, TILE_HEIGHTS.FULL);
+  if (rise <= 0) return; // plan view: the floor polygon IS the whole story
+
+  const lifted = flat.map((p) => ({ x: p.x, y: p.y - rise }));
+  g.poly(lifted.flatMap((p) => [p.x, p.y])).cut();
+  for (let i = 0; i < flat.length; i += 1) {
+    const a = flat[i]!;
+    const b = flat[(i + 1) % flat.length]!;
+    g.poly([a.x, a.y, b.x, b.y, b.x, b.y - rise, a.x, a.y - rise]).cut();
+  }
+}
+
+/**
  * Fog of war (FR9.13/9.14). Players get an OPAQUE cover with revealed areas
  * cut out — the payload is already server-filtered, we render what we get.
  * The GM gets the same shape as a 40% tint plus named-region outlines+labels.
@@ -74,10 +114,10 @@ export function drawFog(
   const revealed = new Set(fog.revealed);
   for (const region of fog.regions) {
     if (!revealed.has(region.id)) continue;
-    g.poly(flatPoly(m, region.polygon)).cut();
+    cutSwept(g, m, region.polygon);
   }
   for (const shape of fog.revealedShapes) {
-    if (shape.length >= 3) g.poly(flatPoly(m, shape)).cut();
+    if (shape.length >= 3) cutSwept(g, m, shape);
   }
 
   // GM extras: outlines + name labels for every named region (FR9.14).

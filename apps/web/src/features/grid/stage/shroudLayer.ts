@@ -23,7 +23,8 @@
  * built on, and costs more than it saves at this scale.
  */
 import type { Graphics } from 'pixi.js';
-import { cellCorners, cellDepth, type SceneMetrics } from '../geometry.js';
+import type { Point } from '@safehouse/contracts';
+import { cellCorners, cellDepth, heightRise, type SceneMetrics } from '../geometry.js';
 import { C } from './colors.js';
 
 /** How dark the scrim is. Enough to read as "not yours", not enough to hide. */
@@ -40,6 +41,26 @@ export interface ShroudInput {
    * of the map, so their scrim is lighter — it informs rather than restricts.
    */
   gm: boolean;
+  /** `"col,row"` → how tall that square stands, in cells. Absent is flat. */
+  heights?: ReadonlyMap<string, number> | undefined;
+}
+
+/**
+ * The screen outline of one square's content, ground plane included.
+ *
+ * A flat square is its diamond. A square with something standing in it is that
+ * diamond swept upward — a hexagon, because the extrusion hides the two back
+ * edges of the bottom and the two front edges of the top. Walking the ground
+ * corners [N, E, S, W] as W-S-E and then the top corners back as E'-N'-W'
+ * traces exactly the silhouette `drawBox` produces, which is the point: the
+ * scrim has to cover what the tile layer drew, not what the grid says is there.
+ */
+function cellSilhouette(m: SceneMetrics, col: number, row: number, height: number): Point[] {
+  const [n, e, s, w] = cellCorners(m, col, row);
+  const rise = heightRise(m, height);
+  if (rise <= 0) return [n, e, s, w];
+  const up = (p: Point): Point => ({ x: p.x, y: p.y - rise });
+  return [w, s, e, up(e), up(n), up(w)];
 }
 
 /**
@@ -68,9 +89,10 @@ export function drawShroud(
   hidden.sort((a, b) => cellDepth(a.col, a.row) - cellDepth(b.col, b.row));
 
   for (const cell of hidden) {
-    const corners = cellCorners(m, cell.col, cell.row);
-    g.moveTo(corners[0].x, corners[0].y);
-    for (let i = 1; i < corners.length; i += 1) g.lineTo(corners[i]!.x, corners[i]!.y);
+    const height = input.heights?.get(`${cell.col},${cell.row}`) ?? 0;
+    const outline = cellSilhouette(m, cell.col, cell.row, height);
+    g.moveTo(outline[0]!.x, outline[0]!.y);
+    for (let i = 1; i < outline.length; i += 1) g.lineTo(outline[i]!.x, outline[i]!.y);
     g.closePath().fill({ color: C.ground, alpha });
   }
 }
@@ -86,6 +108,12 @@ export function drawShroud(
 export function shroudKey(input: ShroudInput | null): string {
   if (input === null || input.visible.size === 0) return 'none';
   let acc = 0;
+  // Heights fold into the same accumulator: repainting a waist-high crate as a
+  // full wall changes the silhouette the scrim has to cover while leaving the
+  // visible set — and so the old key — completely unmoved.
+  for (const [key, h] of input.heights ?? []) {
+    acc = (acc + Math.round(h * 1000) + key.length) >>> 0;
+  }
   for (const key of input.visible) {
     // FNV-1a per key, summed — order-independent, so a re-derived set that
     // iterates differently does not force a pointless redraw.

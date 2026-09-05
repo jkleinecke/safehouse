@@ -25,6 +25,7 @@ import {
   sightModelFor,
   stopsMovement,
   stopsSight,
+  type SightCell,
   type SightModel,
   type Tile,
 } from '../src/index.js';
@@ -33,11 +34,24 @@ const at = (col: number, row: number) => ({ col, row });
 
 /** A model from a sketch: `#` blocks sight, `o` is waist-high cover. */
 function model(rows: string[], segments: SightModel['segments'] = []): SightModel {
-  const cells = new Map<string, { blocksSight: boolean; givesCover: boolean; blocksMovement: boolean }>();
+  const cells = new Map<string, SightCell>();
   rows.forEach((line, row) => {
     [...line].forEach((ch, col) => {
-      if (ch === '#') cells.set(`${col},${row}`, { blocksSight: true, givesCover: false, blocksMovement: true });
-      if (ch === 'o') cells.set(`${col},${row}`, { blocksSight: false, givesCover: true, blocksMovement: true });
+      // `height` is what the RENDERER reads; sight itself goes on the flags.
+      if (ch === '#')
+        cells.set(`${col},${row}`, {
+          blocksSight: true,
+          givesCover: false,
+          blocksMovement: true,
+          height: 1,
+        });
+      if (ch === 'o')
+        cells.set(`${col},${row}`, {
+          blocksSight: false,
+          givesCover: true,
+          blocksMovement: true,
+          height: 0.5,
+        });
     });
   });
   return { cells, segments };
@@ -155,7 +169,11 @@ describe('lineOfSight', () => {
   });
 
   it('sees through glass — full height, no sight blocking', () => {
-    const cells = new Map([['2,0', { blocksSight: false, givesCover: false, blocksMovement: true }]]);
+    // Full height, and still see-through: the two are tracked separately for
+    // exactly this case.
+    const cells = new Map<string, SightCell>([
+      ['2,0', { blocksSight: false, givesCover: false, blocksMovement: true, height: 1 }],
+    ]);
     const los = lineOfSight(at(0, 0), at(4, 0), { cells, segments: [] });
     expect(los.clear).toBe(true);
     expect(los.cover).toBe('none');
@@ -218,10 +236,37 @@ describe('sightModelFor', () => {
     const m = sightModelFor({
       tiles: { tilesetId: 'docklands', cells: { '1,0': 'wall', '2,0': 'crates', '3,0': 'floor' } },
     });
-    expect(m.cells.get('1,0')).toEqual({ blocksSight: true, givesCover: false, blocksMovement: true });
-    expect(m.cells.get('2,0')).toEqual({ blocksSight: false, givesCover: true, blocksMovement: true });
+    // `height` rides along because everything that DRAWS this model needs it —
+    // in isometric a square's content occupies its ground diamond plus a band
+    // above, and a renderer working from the ground plane alone decapitates
+    // every wall it touches.
+    expect(m.cells.get('1,0')).toEqual({
+      blocksSight: true,
+      givesCover: false,
+      blocksMovement: true,
+      height: 1,
+    });
+    expect(m.cells.get('2,0')).toEqual({
+      blocksSight: false,
+      givesCover: true,
+      blocksMovement: true,
+      height: 0.5,
+    });
     // A plain floor earns no entry; the map stays sparse.
     expect(m.cells.has('3,0')).toBe(false);
+  });
+
+  it('takes the tallest thing in a square, so furniture cannot shorten a wall', () => {
+    const m = sightModelFor({
+      tiles: {
+        tilesetId: 'docklands',
+        cells: {},
+        ground: {},
+        structure: { '4,0': 'wall' },
+        object: { '4,0': 'crates' },
+      },
+    });
+    expect(m.cells.get('4,0')?.height).toBe(1);
   });
 
   it('treats a corp glass partition as see-through', () => {

@@ -58,12 +58,16 @@ export function sightModelFor(scene: SightSceneInput, level = 0): SightModel {
           const cover = givesCover(tile);
           const blocksMovement = stopsMovement(tile);
           // An open floor tile is not worth an entry; the map stays sparse.
-          if (!blocksSight && !cover && !blocksMovement) continue;
+          const height = tile.height ?? 0;
+          if (!blocksSight && !cover && !blocksMovement && height <= 0) continue;
           const prev = cells.get(key);
           cells.set(key, {
             blocksSight: blocksSight || (prev?.blocksSight ?? false),
             givesCover: cover || (prev?.givesCover ?? false),
             blocksMovement: blocksMovement || (prev?.blocksMovement ?? false),
+            // Tallest wins, for the same reason blocking does: a chair pushed
+            // against a wall must not shorten the wall.
+            height: Math.max(height, prev?.height ?? 0),
           });
         }
       }

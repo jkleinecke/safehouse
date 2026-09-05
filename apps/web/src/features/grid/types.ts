@@ -207,6 +207,17 @@ export interface ShroudState {
   visible: ReadonlySet<string>;
   /** A GM previewing a viewpoint gets a lighter scrim than a player bound by it. */
   gm: boolean;
+  /**
+   * `"col,row"` → how tall that square stands, in cells. Sparse; absent is flat.
+   *
+   * The scrim is a screen-space wash, and in isometric a square's content is
+   * not its ground diamond: a wall extends upward from it by half a cell per
+   * cell of height. Without this the scrim darkened the FLOOR of a hidden
+   * square and left the wall standing on it at full brightness — bright caps
+   * hovering over darkened ground, with the shroud line cutting each wall
+   * across the middle.
+   */
+  heights?: ReadonlyMap<string, number> | undefined;
 }
 
 /** Everything the pixi stage needs to (re)draw a frame of scene state. */

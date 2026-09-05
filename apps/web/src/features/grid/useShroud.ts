@@ -86,7 +86,13 @@ export function useShroud(inputs: ShroudInputs): ShroudState | null {
       model,
       { range: DEFAULT_SIGHT_RANGE, cols: scene.grid.cols, rows: scene.grid.rows },
     );
-    return { visible: new Set(visible.keys()), gm: isGm };
+    // Heights come off the SAME model the sightline was computed from, so the
+    // scrim can never disagree with the thing it is covering.
+    const heights = new Map<string, number>();
+    for (const [key, cell] of model.cells) {
+      if (cell.height > 0) heights.set(key, cell.height);
+    }
+    return { visible: new Set(visible.keys()), gm: isGm, heights };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     scene?.id,

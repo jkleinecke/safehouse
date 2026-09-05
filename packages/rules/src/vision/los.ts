@@ -60,6 +60,17 @@ export interface SightCell {
   givesCover: boolean;
   /** Stops a token entering. Anything standing proud of the floor does. */
   blocksMovement: boolean;
+  /**
+   * How tall the tallest thing in this square stands, in cells.
+   *
+   * Sight itself does not read this — `blocksSight` already carries that, and
+   * deliberately, since a full-height pane of glass stops a body and not a
+   * look. It is here because everything that DRAWS this model needs it: in
+   * isometric a square's content occupies its ground diamond plus a band
+   * extending upward, and a renderer working from the ground plane alone
+   * decapitates every wall it touches.
+   */
+  height: number;
 }
 
 export interface SightModel {

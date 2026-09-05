@@ -14,7 +14,8 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Graphics } from 'pixi.js';
-import { metricsFor } from '../geometry.js';
+import { TILE_HEIGHTS } from '@safehouse/rules';
+import { cellCorners, heightRise, metricsFor } from '../geometry.js';
 import { drawShroud, shroudKey } from './shroudLayer.js';
 
 const M = metricsFor({
@@ -110,5 +111,121 @@ describe('shroudKey', () => {
 
   it('treats no viewpoint and an empty set as the same nothing', () => {
     expect(shroudKey(null)).toBe(shroudKey({ visible: setOf(), gm: false }));
+  });
+});
+
+describe('the scrim covers what was drawn, not the square it stands on', () => {
+  // The defect this fixes: the scrim darkened a hidden square's FLOOR and left
+  // the wall standing on it at full brightness — bright caps hovering over
+  // darkened ground, with the shroud line cutting each wall across the middle.
+  const iso = metricsFor({
+    unitM: 1,
+    cols: 4,
+    rows: 3,
+    offset: { x: 0, y: 0 },
+    projection: 'iso' as const,
+  });
+
+  /** A fake that keeps the vertices, since the shape is the whole point here. */
+  function tracing(): { g: Graphics; paths: Array<Array<{ x: number; y: number }>> } {
+    const paths: Array<Array<{ x: number; y: number }>> = [];
+    let current: Array<{ x: number; y: number }> = [];
+    const g: Record<string, unknown> = {
+      clear: () => g,
+      moveTo: (x: number, y: number) => {
+        current = [{ x, y }];
+        return g;
+      },
+      lineTo: (x: number, y: number) => {
+        current.push({ x, y });
+        return g;
+      },
+      closePath: () => {
+        paths.push(current);
+        return g;
+      },
+      fill: () => g,
+    };
+    return { g: g as unknown as Graphics, paths };
+  }
+
+  /** Every square hidden except one, so exactly one scrim is drawn. */
+  const onlyHidden = (col: number, row: number) => {
+    const visible = new Set<string>();
+    for (let c = 0; c < iso.cols; c += 1) {
+      for (let r = 0; r < iso.rows; r += 1) {
+        if (c !== col || r !== row) visible.add(`${c},${r}`);
+      }
+    }
+    return visible;
+  };
+
+  it('draws a flat square as its diamond', () => {
+    const f = tracing();
+    drawShroud(f.g, iso, { visible: onlyHidden(1, 1), gm: false });
+    expect(f.paths).toHaveLength(1);
+    expect(f.paths[0]).toHaveLength(4);
+  });
+
+  it('draws a square with something standing in it as a swept hexagon', () => {
+    const f = tracing();
+    drawShroud(f.g, iso, {
+      visible: onlyHidden(1, 1),
+      gm: false,
+      heights: new Map([['1,1', TILE_HEIGHTS.FULL]]),
+    });
+    expect(f.paths).toHaveLength(1);
+    // Four ground corners minus the two the extrusion hides, plus three of the
+    // top — the silhouette `drawBox` actually produces.
+    expect(f.paths[0]).toHaveLength(6);
+  });
+
+  it('reaches exactly as high as the renderer lifts the tile', () => {
+    // The invariant that matters: the scrim's ceiling is the SAME number the
+    // tile layer extrudes by, so it can never fall short of the wall it covers.
+    const f = tracing();
+    drawShroud(f.g, iso, {
+      visible: onlyHidden(2, 1),
+      gm: false,
+      heights: new Map([['2,1', TILE_HEIGHTS.FULL]]),
+    });
+    const top = Math.min(...f.paths[0]!.map((p) => p.y));
+    const ground = Math.min(...cellCorners(iso, 2, 1).map((p) => p.y));
+    expect(top).toBeCloseTo(ground - heightRise(iso, TILE_HEIGHTS.FULL), 6);
+  });
+
+  it('rises further for a full wall than for waist-high cover', () => {
+    const reach = (h: number) => {
+      const f = tracing();
+      drawShroud(f.g, iso, {
+        visible: onlyHidden(2, 1),
+        gm: false,
+        heights: new Map([['2,1', h]]),
+      });
+      return Math.min(...f.paths[0]!.map((p) => p.y));
+    };
+    expect(reach(TILE_HEIGHTS.FULL)).toBeLessThan(reach(TILE_HEIGHTS.WAIST));
+    expect(reach(TILE_HEIGHTS.WAIST)).toBeLessThan(reach(TILE_HEIGHTS.FLOOR));
+  });
+
+  it('ignores height in plan view, where there is no up to draw toward', () => {
+    const f = tracing();
+    drawShroud(f.g, M, {
+      visible: setOf('0,0', '1,0', '2,0'),
+      gm: false,
+      heights: new Map([['0,1', TILE_HEIGHTS.FULL]]),
+    });
+    for (const path of f.paths) expect(path).toHaveLength(4);
+  });
+
+  it('redraws when a crate becomes a wall, though nothing became visible', () => {
+    // The silhouette changed and the visible set did not, so a key hashing
+    // only the set would have frozen the scrim at the old shape.
+    const visible = setOf('0,0');
+    const short = shroudKey({ visible, gm: false, heights: new Map([['1,1', 0.5]]) });
+    const tall = shroudKey({ visible, gm: false, heights: new Map([['1,1', 1]]) });
+    expect(tall).not.toBe(short);
+    // And an unchanged scene still keys identically, so nothing redraws for free.
+    expect(shroudKey({ visible, gm: false, heights: new Map([['1,1', 1]]) })).toBe(tall);
   });
 });
