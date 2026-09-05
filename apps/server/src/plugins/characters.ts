@@ -30,6 +30,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { ModifierOpSchema, SheetV1Schema, type Modifier, type SheetV1 } from '@safehouse/contracts';
 import { characters, type Db } from '@safehouse/db';
+import { ScenesService, serializeToken } from '../services/scenes.js';
 import type { EventTx } from '../hub.js';
 import { assertCampaign, httpError, requireAuth, type AuthContext } from '../services/auth.js';
 import {
@@ -162,6 +163,13 @@ interface CommitOptions {
  * fate. Everything inside goes through `tx.db` — the deadlock rule on
  * `Hub.atomic`.
  */
+/**
+ * What a portrait may be — deliberately narrower than the store's own
+ * allowlist. A PDF or an MP3 has no business being somebody's face, and these
+ * four are exactly the types `saveAttachment` can vouch for by their bytes.
+ */
+const PORTRAIT_MIME = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+
 async function commit(
   app: FastifyInstance,
   rec: CharacterRecord,
@@ -372,6 +380,116 @@ export default async function charactersPlugin(app: FastifyInstance): Promise<vo
       character: characterDto(next, await balancesFor(app.db, id)),
       revision,
     });
+  });
+
+  // --- token portrait (FR9.4) ---------------------------------------------
+
+  /**
+   * The picture that stands for this character on the battle map.
+   *
+   * ## Why this route exists at all
+   *
+   * `POST /api/attachments` is GM-only, and it should stay that way — it takes
+   * maps, handouts and audio for a whole campaign. What a PLAYER needs is much
+   * narrower: one image, for one character they already own, that becomes
+   * their token. So this is a separate, character-scoped door rather than a
+   * relaxation of the general one, and it is guarded by the same
+   * `assertCanEdit` that governs their sheet — owner or GM, which is exactly
+   * "players upload their own, or the GM does it for them".
+   *
+   * ## Three things that are easy to get wrong here
+   *
+   * PUBLIC, not GM. An attachment defaults to `visibility: 'gm'`, and
+   * `canSeeAttachment` gives a non-GM only public ones, so a portrait stored
+   * with the default renders on the GM's screen and 404s on every player's
+   * phone and on the table TV. Worse, the canvas swallows that failure by
+   * design — the token just keeps its silhouette and nothing is logged. A
+   * token portrait is by definition something the whole table looks at.
+   *
+   * NO REVISION. `commit` snapshots the sheet into `character_revisions`
+   * whenever it is given a cause. Changing a picture is not an edit to a
+   * character's build, and burning a revision on it would bury the rollback
+   * history that FR3.8 exists to make readable.
+   *
+   * FAN OUT. Tokens copy `portraitId` into `artRef` once, at placement, so
+   * without `retargetCharacterArt` a portrait uploaded mid-session changes
+   * nothing already on the map — which reads as "the upload didn't work".
+   */
+  async function setPortrait(
+    req: FastifyRequest,
+    id: string,
+    portraitId: string | null,
+  ): Promise<{ portraitId: string | null; tokens: number }> {
+    const auth = requireAuth(req);
+    const rec = await requireCharacter(app.db, id);
+    assertCanEdit(auth, rec);
+
+    const before = rec.sheet.identity.portraitId ?? null;
+    // The sheet merge one level up is SHALLOW, so identity has to be carried
+    // through whole — sending `{ identity: { portraitId } }` would drop the
+    // alias and fail the schema.
+    const sheet = { ...rec.sheet, identity: { ...rec.sheet.identity, portraitId } };
+
+    const moved = await app.hub.atomic(rec.campaignId, async (t) => {
+      await saveCharacter(t.db, rec.id, { sheet, play: rec.play });
+      const changed = await new ScenesService(t.db).retargetCharacterArt(
+        rec.id,
+        before,
+        portraitId,
+      );
+      await t.emit({
+        type: 'sheet.updated',
+        payload: { characterId: rec.id, name: rec.name, cause: 'portrait' },
+      });
+      // One event per token, in the same shape a GM's own art change makes, so
+      // every canvas and the TV pick it up through the path they already have.
+      for (const token of changed) {
+        await t.emit({
+          type: 'token.updated',
+          payload: { token: serializeToken(token) },
+          visibility: token.hidden ? 'gm' : 'public',
+        });
+      }
+      return changed.length;
+    });
+    return { portraitId, tokens: moved };
+  }
+
+  app.post('/api/characters/:id/portrait', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    // Read the character BEFORE consuming the upload, so an unauthorised
+    // caller is refused without a file ever touching the disk.
+    const auth = requireAuth(req);
+    const rec = await requireCharacter(app.db, id);
+    assertCanEdit(auth, rec);
+
+    const part = await req.file();
+    if (!part) throw httpError(400, 'bad_request', 'expected a multipart file part');
+    if (!PORTRAIT_MIME.has(part.mimetype)) {
+      throw httpError(
+        415,
+        'unsupported_media_type',
+        `a portrait must be a PNG, JPEG, WebP or GIF — got '${part.mimetype}'`,
+      );
+    }
+    const row = await new ScenesService(app.db).saveAttachment({
+      campaignId: rec.campaignId,
+      kind: 'portrait',
+      // Everyone at the table has to be able to load it. See the note above.
+      visibility: 'public',
+      mime: part.mimetype,
+      file: part.file,
+    });
+    const result = await setPortrait(req, id, row.id);
+    return reply.status(201).send({
+      ...result,
+      attachment: { id: row.id, mime: row.mime, size: row.size, url: `/files/${row.id}` },
+    });
+  });
+
+  app.delete('/api/characters/:id/portrait', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    return reply.send(await setPortrait(req, id, null));
   });
 
   // --- revisions + rollback (FR3.8) ---------------------------------------

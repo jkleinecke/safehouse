@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { mkdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { and, eq, inArray } from 'drizzle-orm';
 import { migrateTileLayer } from '@safehouse/rules';
@@ -373,6 +374,84 @@ export const ALLOWED_MIME: Record<string, string> = {
   'audio/wav': '.wav',
 };
 
+/**
+ * The first bytes of each format we accept, so a declared mime has to be true.
+ *
+ * The client names the mime and the client can lie, which mattered little when
+ * only the GM could upload and matters more now that a player can. This is not
+ * a sanitiser — it does not make a malformed PNG safe — it only stops a file
+ * being stored and later SERVED under a content type its bytes do not support,
+ * which is the trick that turns a file store into an XSS surface.
+ *
+ * WebP is RIFF: bytes 0-3 `RIFF`, then a four-byte size, then `WEBP` at 8.
+ */
+const MIME_SIGNATURES: Record<string, ReadonlyArray<{ at: number; bytes: readonly number[] }>> = {
+  'image/png': [{ at: 0, bytes: [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a] }],
+  'image/jpeg': [{ at: 0, bytes: [0xff, 0xd8, 0xff] }],
+  'image/gif': [{ at: 0, bytes: [0x47, 0x49, 0x46, 0x38] }],
+  'image/webp': [
+    { at: 0, bytes: [0x52, 0x49, 0x46, 0x46] },
+    { at: 8, bytes: [0x57, 0x45, 0x42, 0x50] },
+  ],
+};
+
+/** How many leading bytes any signature needs. */
+const SNIFF_BYTES = 12;
+
+/** Do these leading bytes match what `mime` claims to be? */
+export function bytesMatchMime(mime: string, head: Buffer): boolean {
+  const sigs = MIME_SIGNATURES[mime];
+  // A type we have no signature for (pdf, audio) is not checked here — those
+  // stay GM-only, and inventing a half-check would read as more safety than
+  // it is.
+  if (!sigs) return true;
+  if (head.length < SNIFF_BYTES) return false;
+  return sigs.every((sig) => sig.bytes.every((b, i) => head[sig.at + i] === b));
+}
+
+/**
+ * A pass-through that fails the stream if the leading bytes contradict `mime`.
+ *
+ * Streaming rather than buffering because the file may be large and we do not
+ * want it in memory; failing the transform aborts `pipeline`, so the partial
+ * file is never completed and the route answers 415 instead of storing it.
+ */
+function sniffMime(mime: string): Transform {
+  let head = Buffer.alloc(0);
+  let decided = false;
+  return new Transform({
+    transform(chunk: Buffer, _enc, done) {
+      if (!decided) {
+        head = Buffer.concat([head, chunk]);
+        if (head.length >= SNIFF_BYTES) {
+          decided = true;
+          if (!bytesMatchMime(mime, head)) {
+            done(
+              httpError(
+                415,
+                'unsupported_media_type',
+                `the file's contents are not ${mime}`,
+              ),
+            );
+            return;
+          }
+        }
+      }
+      done(null, chunk);
+    },
+    flush(done) {
+      // A file shorter than any signature never got checked above. Anything
+      // that small is not an image we can use, so it is rejected rather than
+      // waved through on a technicality.
+      if (!decided && !bytesMatchMime(mime, head)) {
+        done(httpError(415, 'unsupported_media_type', `the file's contents are not ${mime}`));
+        return;
+      }
+      done();
+    },
+  });
+}
+
 export function filesDir(): string {
   return join(process.env.DATA_DIR ?? './data', 'files');
 }
@@ -660,6 +739,43 @@ export class ScenesService {
     return row;
   }
 
+  /**
+   * Repoint every token that stands for this character at a new portrait.
+   *
+   * `createToken` copies a character's `portraitId` into `artRef` ONCE, at
+   * placement. Without this, a player who uploads a portrait mid-session sees
+   * nothing change — not on a refresh, not ever — because the tokens already
+   * on the map carry the old snapshot.
+   *
+   * A token whose art the GM has deliberately overridden is LEFT ALONE. That is
+   * what `from` is for: only tokens still pointing at the previous portrait (or
+   * at nothing) follow the character. A runner the GM disguised with a
+   * different picture keeps the disguise, which is the whole reason per-token
+   * art exists alongside the character's own.
+   *
+   * Returns the rows it changed so the caller can emit one event per token.
+   */
+  async retargetCharacterArt(
+    characterId: string,
+    from: string | null,
+    to: string | null,
+  ): Promise<TokenRow[]> {
+    const mine = await this.db
+      .select()
+      .from(tokens)
+      .where(and(eq(tokens.source, 'character'), eq(tokens.sourceId, characterId)));
+    const changed: TokenRow[] = [];
+    for (const row of mine) {
+      const follows = row.artRef === null || row.artRef === from;
+      if (!follows || row.artRef === to) continue;
+      const written = (
+        await this.db.update(tokens).set({ artRef: to }).where(eq(tokens.id, row.id)).returning()
+      )[0];
+      if (written) changed.push(written);
+    }
+    return changed;
+  }
+
   async deleteToken(tokenId: string): Promise<void> {
     await this.db.delete(tokens).where(eq(tokens.id, tokenId));
   }
@@ -771,11 +887,15 @@ export class ScenesService {
     const fileName = `${randomUUID()}${ext}`;
     const dest = join(dir, fileName);
     // §13 asks for a sharp re-encode + metadata strip. `sharp` is a native
-    // dependency and outside the budget, so the byte stream is stored verbatim
-    // and the mime allowlist above is what stands between the store and a
-    // surprise. Uploads are GM-only on a LAN, which is why that trade is
-    // acceptable here and would not be on the open internet.
-    await pipeline(opts.file, createWriteStream(dest));
+    // dependency and outside the budget, so the byte stream is stored verbatim.
+    //
+    // That trade used to rest on "uploads are GM-only on a LAN", and portraits
+    // took it away: a player uploading their own token art is a second, less
+    // trusted writer into the same store. The allowlist alone is not much of a
+    // gate when the client picks the mime, so the bytes now have to AGREE with
+    // it — see `sniffMime`. A declared PNG whose first eight bytes are not a
+    // PNG signature is rejected and never lands on disk.
+    await pipeline(opts.file, sniffMime(opts.mime), createWriteStream(dest));
     const size = (await stat(dest)).size;
     return (
       await this.db

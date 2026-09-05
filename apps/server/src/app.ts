@@ -78,7 +78,12 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   // --- core fastify plugins -----------------------------------------------
   const secret = process.env.SESSION_SECRET;
   await app.register(fastifyCookie, secret ? { secret } : {});
-  await app.register(fastifyMultipart);
+  // 25 MB a file. The default is Fastify's 1 MiB `bodyLimit`, which silently
+  // rejected any photo off a phone — the exact file a player reaches for when
+  // asked for a portrait, and a limit that presented as "nothing happened".
+  // Generous rather than tight on purpose: this is a GM's own laptop serving
+  // their own table, and a battlemap scan is legitimately large.
+  await app.register(fastifyMultipart, { limits: { fileSize: 25 * 1024 * 1024 } });
   await app.register(fastifyWebsocket);
 
   // --- request auth resolution (Bearer, or ?token= on /ws /files /read) ---

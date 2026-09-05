@@ -84,9 +84,25 @@ export class TokenView {
     this.root.eventMode = 'none';
   }
 
-  /** Attach loaded token art (async — controller resolves the texture). */
+  /**
+   * Attach loaded token art (async — the controller resolves the texture).
+   *
+   * REPLACES what is already there. It used to bail out if a sprite existed,
+   * which was invisible while art was set once at token creation and wrong the
+   * moment a portrait could change: the new texture loaded, arrived here, and
+   * was dropped on the floor, so a player who uploaded a picture mid-session
+   * watched their token keep the old one. Swapping the texture on the existing
+   * sprite also keeps the child order and the mask, which re-adding would
+   * disturb.
+   */
   setTexture(texture: Texture): void {
-    if (this.art) return;
+    if (this.art) {
+      if (this.art.texture !== texture) {
+        this.art.texture = texture;
+        this.fitArt();
+      }
+      return;
+    }
     this.art = new Sprite(texture);
     this.art.anchor.set(0.5);
     this.art.mask = this.artMask;
@@ -96,6 +112,23 @@ export class TokenView {
     this.root.addChildAt(this.art, bodyIndex + 1);
     this.initial.visible = false;
     this.fitArt();
+  }
+
+  /**
+   * Drop the art and go back to the initial-letter circle.
+   *
+   * Needed because clearing a portrait is a real move — a player who removes
+   * their picture, or a GM taking a disguise off a token. Without it the old
+   * sprite stayed on screen until a reload, since the loader simply returns
+   * early when there is no reference to load.
+   */
+  clearTexture(): void {
+    if (!this.art) return;
+    this.root.removeChild(this.art);
+    this.root.removeChild(this.artMask);
+    this.art.destroy();
+    this.art = null;
+    this.initial.visible = true;
   }
 
   private fitArt(): void {

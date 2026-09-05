@@ -165,7 +165,9 @@ const TokenCreateBody = z.object({
   level: z.number().int().min(0).max(MAX_LEVELS - 1).default(0),
   size: z.number().positive().default(1),
   rotation: z.number().default(0),
-  artRef: z.string().nullable().optional(),
+  // A uuid because `tokens.art_ref` is one: a free-form string reached the
+  // database and came back a 500 where the caller deserves a 400.
+  artRef: z.string().uuid().nullable().optional(),
   hidden: z.boolean().default(false),
   barsVisibility: z.enum(['gm', 'owner', 'public']).default('owner'),
   aura: TokenAuraSchema.nullable().optional(),
@@ -179,7 +181,9 @@ const TokenPatchBody = z.object({
   level: z.number().int().min(0).max(MAX_LEVELS - 1).optional(),
   size: z.number().positive().optional(),
   rotation: z.number().optional(),
-  artRef: z.string().nullable().optional(),
+  // A uuid because `tokens.art_ref` is one: a free-form string reached the
+  // database and came back a 500 where the caller deserves a 400.
+  artRef: z.string().uuid().nullable().optional(),
   hidden: z.boolean().optional(),
   barsVisibility: z.enum(['gm', 'owner', 'public']).optional(),
   aura: TokenAuraSchema.nullable().optional(),
@@ -868,6 +872,11 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     return reply
       .header('content-length', String(info.size))
       .header('cache-control', 'private, max-age=300')
+      // The store now takes uploads from players, not just the GM. `nosniff`
+      // stops a browser second-guessing the content type we send and deciding
+      // for itself that a file is markup — the cheap half of the defence whose
+      // expensive half (a re-encode) we do not have.
+      .header('x-content-type-options', 'nosniff')
       .type(row.mime)
       .send(createReadStream(path));
   });

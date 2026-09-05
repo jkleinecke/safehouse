@@ -14,7 +14,7 @@ import type {
 } from '@safehouse/contracts';
 import { SheetV1Schema } from '@safehouse/contracts';
 import { deriveCharacter, environment } from '@safehouse/rules';
-import { apiGet, apiPatch, apiPost } from '../../api/client.js';
+import { api, apiDelete, apiGet, apiPatch, apiPost } from '../../api/client.js';
 import { useLiveStore } from '../../live/store.js';
 import { useCampaign } from '../../api/campaigns.js';
 import { getSession } from '../../api/session.js';
@@ -223,6 +223,77 @@ export function useSheetMutation(characterId: string) {
       void qc.invalidateQueries({ queryKey: characterKey(characterId) });
     },
   });
+}
+
+/**
+ * The picture that stands for this character on the battle map (FR9.4).
+ *
+ * Its own route rather than a sheet PATCH, for three reasons that all live on
+ * the server and are worth knowing here: the attachment has to be stored
+ * PUBLIC or every player and the TV get a 404 they cannot see; tokens already
+ * on the map have to be repointed, since they snapshot the portrait when they
+ * were placed; and a change of picture must not burn a sheet revision, which
+ * is the rollback history for a character's build.
+ *
+ * Guarded by the same owner-or-GM rule as the sheet itself, so a player
+ * dresses their own runner and the GM can do it for anybody.
+ */
+export interface PortraitResult {
+  portraitId: string | null;
+  /** How many tokens already on a map followed the change. */
+  tokens: number;
+}
+
+export function useUploadPortrait(characterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (file: File) => {
+      const form = new FormData();
+      form.append('file', file);
+      return api<PortraitResult>(`/api/characters/${characterId}/portrait`, {
+        method: 'POST',
+        body: form,
+      });
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: characterKey(characterId) });
+    },
+  });
+}
+
+export function useClearPortrait(characterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiDelete<PortraitResult>(`/api/characters/${characterId}/portrait`),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: characterKey(characterId) });
+    },
+  });
+}
+
+/**
+ * May this device change that character's picture?
+ *
+ * Mirrors the server's `assertCanEdit` — owner or GM — so we do not offer a
+ * control that would 403. The server is still the one that decides; this is a
+ * courtesy, not a boundary, and it is written to fail in the courteous
+ * direction.
+ *
+ * UNKNOWN COUNTS AS MAYBE. `Session.userId` is optional: a device that signed
+ * in by pasting a token has a role and a campaign and no user id at all, which
+ * is a supported way in. Treating that as "not the owner" hid the control from
+ * the person it belongs to and said nothing about why — a silent, inexplicable
+ * absence. Showing it costs at worst one 403 with a sentence attached, which
+ * is a failure somebody can actually read.
+ */
+export function canEditCharacter(character: { ownerUserId?: string | undefined }): boolean {
+  const session = getSession();
+  if (!session) return false;
+  if (session.role === 'gm') return true;
+  if (session.role !== 'player') return false;
+  // No user id on this device: we cannot tell, so let the server answer.
+  if (session.userId === undefined) return true;
+  return character.ownerUserId === session.userId;
 }
 
 /**

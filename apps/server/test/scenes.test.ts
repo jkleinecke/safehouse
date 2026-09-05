@@ -356,6 +356,17 @@ describe('map uploads and /files/:id visibility (FR9.2, §13)', () => {
     return Buffer.concat(parts);
   }
 
+  /**
+   * A real PNG signature followed by whatever the caller wants to say.
+   *
+   * The store checks that an upload's BYTES agree with its declared mime, so
+   * these fixtures have to be honest about being PNGs. That check is the
+   * reason a player may upload at all: the client picks the content type and
+   * the client can lie.
+   */
+  const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const png = (body: string) => Buffer.concat([PNG_MAGIC, Buffer.from(body)]);
+
   async function upload(visibility: string, body: string) {
     return t.app.inject({
       method: 'POST',
@@ -363,7 +374,7 @@ describe('map uploads and /files/:id visibility (FR9.2, §13)', () => {
       headers: gm({ 'content-type': `multipart/form-data; boundary=${BOUNDARY}` }),
       payload: multipart(
         { kind: 'map', visibility, campaign: boot.campaignId },
-        Buffer.from(body),
+        png(body),
         'image/png',
       ),
     });
@@ -387,7 +398,7 @@ describe('map uploads and /files/:id visibility (FR9.2, §13)', () => {
 
     const asGm = await t.app.inject({ method: 'GET', url: attachment.url, headers: gm() });
     expect(asGm.statusCode).toBe(200);
-    expect(asGm.body).toBe('gm-only-map-bytes');
+    expect(asGm.body).toContain('gm-only-map-bytes');
 
     const asPlayer = await t.app.inject({ method: 'GET', url: attachment.url, headers: as(player.token) });
     expect(asPlayer.statusCode).toBe(404);
@@ -410,7 +421,7 @@ describe('map uploads and /files/:id visibility (FR9.2, §13)', () => {
       url: `/files/${attachment.id}?token=${player.token}`,
     });
     expect(viaQuery.statusCode).toBe(200);
-    expect(viaQuery.body).toBe('shared-map-bytes');
+    expect(viaQuery.body).toContain('shared-map-bytes');
   });
 });
 

@@ -391,7 +391,13 @@ class Stage implements StageApi, PointerHost {
 
   private loadArt(token: Token, view: TokenView): void {
     const ref = token.artRef;
-    if (!ref) return;
+    if (!ref) {
+      // Clearing a portrait is a real move — a player removing their picture,
+      // or a GM taking a disguise off a token. Returning early here left the
+      // old sprite on screen until a reload.
+      view.clearTexture();
+      return;
+    }
     const key = `${token.id}:${ref}`;
     if (this.artRequested.has(key)) return;
     this.artRequested.add(key);

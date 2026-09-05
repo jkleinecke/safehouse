@@ -33,6 +33,7 @@ import { useSheetLive } from './useSheetLive.js';
 import { useLiveStore } from '../../live/store.js';
 import CloseCallOfferCard from './components/CloseCallOffer.js';
 import IdentityStrip from './components/IdentityStrip.js';
+import PortraitControl from './components/PortraitControl.js';
 import type { OverrideApi } from './components/Provenance.js';
 import RollDialog from './components/RollDialog.js';
 import { withPendingRangeChip, type RollConfig } from './rollDialogState.js';
@@ -202,6 +203,7 @@ export default function SheetPage() {
     <div className="pb-8">
       <div className="sticky top-0 z-30 border-b border-edge bg-deck/95 backdrop-blur">
         <IdentityStrip
+          portrait={<PortraitControl character={character} />}
           character={character}
           derived={derived}
           overrideFor={overrideFor}

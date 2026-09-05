@@ -3,6 +3,7 @@
  * monitors with the wound-modifier badge, current Edge with spend/burn.
  * Sticky under the campaign header on the phone.
  */
+import type { ReactNode } from 'react';
 import type { DerivedCharacter } from '@safehouse/contracts';
 import { woundModifierFor } from '@safehouse/rules';
 import { clampFill, signed, type ConditionState, type EdgeOp } from '../lib.js';
@@ -20,6 +21,14 @@ export interface IdentityStripProps {
   busy?: boolean;
   /** Seize the Initiative / Blitz, offered only while in a live encounter. */
   edgeActions?: EdgeActionsApi;
+  /**
+   * The token-image control, passed in rather than built here.
+   *
+   * This component is presentational and its tests render it with no query
+   * client; a control that fetches belongs to the page that owns the data, not
+   * to the strip that lays it out.
+   */
+  portrait?: ReactNode;
 }
 
 export default function IdentityStrip({
@@ -30,6 +39,7 @@ export default function IdentityStrip({
   overrideFor,
   busy,
   edgeActions,
+  portrait,
 }: IdentityStripProps) {
   const { sheet, condition } = character;
   const physMax = Math.max(0, derived.monitors.physical.value);
@@ -45,6 +55,7 @@ export default function IdentityStrip({
 
   return (
     <div className="px-4 py-3">
+      {portrait !== undefined && <div className="mb-2">{portrait}</div>}
       <div className="flex items-baseline gap-2">
         <h2 className="min-w-0 flex-1 truncate text-base font-semibold text-ink">
           {sheet.identity.alias || character.name}
