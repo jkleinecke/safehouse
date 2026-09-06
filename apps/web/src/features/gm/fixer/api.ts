@@ -3,8 +3,9 @@
  * ephemerals), drafts inbox over `ai_generations` (FR12.15), and the
  * 503 `ai_disabled` detection (NG7: no LLM_BASE_URL → features hide).
  */
-import { useMutation, useQuery } from '@tanstack/react-query';
-import { ApiError, apiGet, apiPost, queryClient } from '../../../api/client.js';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { AiSettingsView, AiSettingsWrite } from '@safehouse/contracts';
+import { ApiError, apiGet, apiPost, apiPut, queryClient } from '../../../api/client.js';
 
 /** True when the server said AI is off (503 ai_disabled). */
 export function isAiDisabled(err: unknown): boolean {
@@ -172,4 +173,37 @@ export function draftOutputText(gen: AiGeneration): string {
     return JSON.stringify(out, null, 2);
   }
   return '';
+}
+
+// ---------------------------------------------------------------------------
+// Which AI (FR12.13) — chosen at runtime, GM only
+// ---------------------------------------------------------------------------
+
+/**
+ * The saved configuration. Never carries the API key: the server reports only
+ * whether one is on file, because a secret that round-trips through a settings
+ * GET ends up in this very query cache.
+ */
+export function useAiSettings(campaignId: string) {
+  return useQuery({
+    queryKey: ['ai', campaignId],
+    queryFn: async () =>
+      (await apiGet<{ ai: AiSettingsView }>(`/api/campaigns/${campaignId}/ai`)).ai,
+    staleTime: 30_000,
+  });
+}
+
+export function useSaveAiSettings(campaignId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: AiSettingsWrite) =>
+      (await apiPut<{ ai: AiSettingsView }>(`/api/campaigns/${campaignId}/ai`, body)).ai,
+    onSuccess: (ai) => {
+      qc.setQueryData(['ai', campaignId], ai);
+      // The status route reads the same configuration, and a stale "disabled"
+      // chip after switching a provider on is the most confusing possible
+      // outcome of a successful save.
+      void qc.invalidateQueries({ queryKey: ['fixer', 'status'] });
+    },
+  });
 }

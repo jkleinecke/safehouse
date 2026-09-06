@@ -6,6 +6,7 @@
  */
 import { useParams } from 'react-router-dom';
 import { useCampaign } from '../../api/campaigns.js';
+import AiSettings from './fixer/AiSettings.js';
 import DraftsInbox from './fixer/DraftsInbox.js';
 import FixerChat from './fixer/FixerChat.js';
 import { GmGuard, SectionTitle } from './ui.js';
@@ -20,7 +21,7 @@ export default function FixerPage() {
     <GmGuard>
       <div className="p-6">
         <div className="flex flex-wrap items-center gap-2">
-          <SectionTitle hint="local models, GM-only, drafts before anything reaches the table">
+          <SectionTitle hint="GM-only, drafts before anything reaches the table">
             The Fixer
           </SectionTitle>
           {sessionLive && (
@@ -28,6 +29,10 @@ export default function FixerPage() {
               session live
             </span>
           )}
+        </div>
+
+        <div className="mt-4">
+          <AiSettings campaignId={campaignId} />
         </div>
 
         <div className="mt-4 grid grid-cols-1 items-start gap-4 xl:grid-cols-2">

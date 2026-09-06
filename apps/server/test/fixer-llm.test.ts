@@ -45,6 +45,9 @@ describe('configuration', () => {
       baseUrl: 'http://box.lan:8080',
       primary: 'big-instruct',
       fast: 'big-instruct',
+      // The env path is the OpenAI-compatible one it has always been; naming
+      // the dialect is what lets a runtime-chosen provider be a different one.
+      dialect: 'openai',
     });
     const client = new LlmClient(config!);
     expect(client.model('primary')).toBe('big-instruct');

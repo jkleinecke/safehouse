@@ -14,10 +14,16 @@
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { aiGenerations, type Db } from '@safehouse/db';
+import { aiGenerations, campaigns, type Db } from '@safehouse/db';
 import { and, eq } from 'drizzle-orm';
 import { assertCampaign, httpError, requireRole } from '../services/auth.js';
-import { LlmClient, llmConfigFromEnv } from '../fixer/llm.js';
+import { AiSettingsWriteSchema } from '@safehouse/contracts';
+import { LlmClient } from '../fixer/llm.js';
+import {
+  applyAiSettings,
+  readAiSettings,
+  resolveLlmConfig,
+} from '../fixer/providers.js';
 import { runFixerChat, runNpcConverse } from '../fixer/agent.js';
 import { listConversations, loadConversation } from '../fixer/conversations.js';
 import { acceptDraft, listDrafts, rejectDraft } from '../fixer/drafts.js';
@@ -56,9 +62,27 @@ function parseBody<T extends z.ZodType>(schema: T, body: unknown): z.output<T> {
   return parsed.data;
 }
 
-/** Configured client, or null when no inference box is configured (NG7). */
-function llmOrNull(): LlmClient | null {
-  const config = llmConfigFromEnv();
+/** This campaign's settings blob, or `{}` when the row has none. */
+async function settingsOf(db: Db, campaignId: string): Promise<Record<string, unknown>> {
+  const rows = await db
+    .select({ settings: campaigns.settings })
+    .from(campaigns)
+    .where(eq(campaigns.id, campaignId))
+    .limit(1);
+  const raw = rows[0]?.settings;
+  return typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
+}
+
+/**
+ * Configured client, or null when there is nothing to call (NG7).
+ *
+ * Per campaign rather than per process, because the provider is now a runtime
+ * choice a GM makes on their own screen. That costs one indexed row read per
+ * turn — next to a model round trip, nothing — and buys a switch that takes
+ * effect on the next message instead of on the next restart.
+ */
+async function llmOrNull(db: Db, campaignId: string): Promise<LlmClient | null> {
+  const config = resolveLlmConfig(await settingsOf(db, campaignId));
   return config ? new LlmClient(config) : null;
 }
 
@@ -168,9 +192,40 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
    * the tool catalog and the UI agree about what is on offer.
    * `?probe=refresh` re-asks after a model swap.
    */
+  // --- FR12.13: which AI, chosen at runtime ---------------------------------
+
+  /**
+   * The current configuration.
+   *
+   * GM only — `gmFor` sees to that — and it never contains the API key. A
+   * secret that round-trips through a settings GET ends up in a query cache, a
+   * log line and a screenshot; `hasKey` is all a form needs to render.
+   */
+  app.get('/api/campaigns/:id/ai', async (req) => {
+    const campaignId = gmFor(req, (req.params as { id: string }).id);
+    return { ai: readAiSettings(await settingsOf(app.db, campaignId)) };
+  });
+
+  /**
+   * Change it. Takes effect on the next message, not the next restart.
+   *
+   * An omitted `apiKey` leaves the stored one alone, so a GM can change models
+   * without re-typing a secret they cannot see; an empty one clears it. And
+   * changing provider drops the key on the floor, because credentials are not
+   * portable between vendors and a stale one only produces a 401 nobody can
+   * explain.
+   */
+  app.put('/api/campaigns/:id/ai', async (req) => {
+    const campaignId = gmFor(req, (req.params as { id: string }).id);
+    const body = parseBody(AiSettingsWriteSchema, req.body);
+    const next = applyAiSettings(await settingsOf(app.db, campaignId), body);
+    await app.db.update(campaigns).set({ settings: next }).where(eq(campaigns.id, campaignId));
+    return { ai: readAiSettings(next) };
+  });
+
   app.get('/api/fixer/status', async (req) => {
-    requireRole(req, 'gm');
-    const config = llmConfigFromEnv();
+    const campaignId = gmFor(req, (req.query as { campaignId?: string } | undefined)?.campaignId);
+    const config = resolveLlmConfig(await settingsOf(app.db, campaignId));
     const refresh = (req.query as { probe?: string } | undefined)?.probe === 'refresh';
     const vision = await visionCapability(config, refresh ? { force: true } : {});
     return {
@@ -191,7 +246,7 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
   app.post('/api/fixer/chat', async (req, reply) => {
     const body = parseBody(ChatBody, req.body);
     const campaignId = gmFor(req, body.campaignId);
-    const llm = llmOrNull();
+    const llm = await llmOrNull(app.db, campaignId);
     if (!llm) return disabled(reply);
     let result: Awaited<ReturnType<typeof runFixerChat>>;
     try {
@@ -237,7 +292,7 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
     const body = parseBody(ConverseBody, req.body);
     const campaignId = gmFor(req, body.campaignId);
     const { id } = req.params as { id: string };
-    const llm = llmOrNull();
+    const llm = await llmOrNull(app.db, campaignId);
     if (!llm) return disabled(reply);
     let result: Awaited<ReturnType<typeof runNpcConverse>>;
     try {

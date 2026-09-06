@@ -14,3 +14,4 @@ export * from './token.js';
 export * from './encounter.js';
 export * from './generator.js';
 export * from './campaign.js';
+export * from './ai.js';

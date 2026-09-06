@@ -11,6 +11,8 @@
  * base URL. With `LLM_BASE_URL` unset, `llmConfigFromEnv()` returns null and
  * every AI entry point disables cleanly (NG7 / Principle 5).
  */
+import type { AiDialect, AiProvider } from '@safehouse/contracts';
+import { anthropicChat } from './anthropic.js';
 import { httpError } from '../services/auth.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -22,12 +24,21 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 export type ModelSlot = 'primary' | 'fast';
 
 export interface LlmConfig {
-  /** Base URL of the OpenAI-compatible server, no trailing slash. */
+  /** Base URL of the server, no trailing slash. */
   baseUrl: string;
   /** Big instruct model: conversations, fiction, rules synthesis. */
   primary: string;
   /** Small model: mechanical tasks, live-session work (FR12.16). */
   fast: string;
+  /**
+   * Which wire shape to speak. Absent means `openai`, which is what every
+   * caller meant before there was a choice — so an old config keeps working.
+   */
+  dialect?: AiDialect;
+  /** Which provider a GM picked, for diagnostics and for the panel to name. */
+  provider?: AiProvider;
+  /** Bearer/x-api-key credential. Absent for a box on the LAN. */
+  apiKey?: string;
 }
 
 /** `null` when `LLM_BASE_URL` is unset/blank — the whole Fixer disables (NG7). */
@@ -39,7 +50,11 @@ export function llmConfigFromEnv(
   const baseUrl = raw.replace(/\/+$/, '');
   const primary = (env['LLM_MODEL_PRIMARY'] ?? '').trim() || 'local-primary';
   const fast = (env['LLM_MODEL_FAST'] ?? '').trim() || primary;
-  return { baseUrl, primary, fast };
+  // `LLM_API_KEY` is optional and always has been implicitly: a box on the LAN
+  // takes no credential, and that is still the default posture.
+  const apiKey = (env['LLM_API_KEY'] ?? '').trim();
+  const dialect: AiDialect = (env['LLM_DIALECT'] ?? '').trim() === 'anthropic' ? 'anthropic' : 'openai';
+  return { baseUrl, primary, fast, dialect, ...(apiKey ? { apiKey } : {}) };
 }
 
 export function isAiEnabled(env: Record<string, string | undefined> = process.env): boolean {
@@ -298,8 +313,29 @@ export class LlmClient {
     return slot === 'fast' ? this.config.fast : this.config.primary;
   }
 
-  /** One streamed chat completion. Throws an envelope error when unreachable. */
+  /**
+   * One streamed chat completion. Throws an envelope error when unreachable.
+   *
+   * Dispatches on the DIALECT, not the provider: OpenAI, xAI and every local
+   * server share this path and differ only in host, key and model name, while
+   * Anthropic's Messages API is a genuinely different wire format. Callers
+   * never learn which one answered — an agent loop, a tool and a usage meter
+   * all read the same `ChatTurn` either way, which is the entire point of
+   * doing the translation here rather than in twenty places.
+   */
   async chat(req: ChatRequest, opts: ChatOptions = {}): Promise<ChatTurn> {
+    if (this.config.dialect === 'anthropic') {
+      return anthropicChat(
+        { apiKey: this.config.apiKey ?? '', baseUrl: this.config.baseUrl },
+        req,
+        opts,
+      );
+    }
+    return this.chatOpenAi(req, opts);
+  }
+
+  /** The Chat Completions path — OpenAI, xAI, and anything self-hosted. */
+  private async chatOpenAi(req: ChatRequest, opts: ChatOptions = {}): Promise<ChatTurn> {
     const startedAt = Date.now();
     const signals: AbortSignal[] = [AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS)];
     if (opts.signal) signals.push(opts.signal);
@@ -309,7 +345,14 @@ export class LlmClient {
     try {
       res = await fetch(chatCompletionsUrl(this.config.baseUrl), {
         method: 'POST',
-        headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
+        headers: {
+          'content-type': 'application/json',
+          accept: 'text/event-stream',
+          // A hosted provider needs a bearer; a box on the LAN takes none, and
+          // sending an empty one is worse than sending nothing — some servers
+          // reject the header rather than ignore it.
+          ...(this.config.apiKey ? { authorization: `Bearer ${this.config.apiKey}` } : {}),
+        },
         body,
         signal: AbortSignal.any(signals),
       });
