@@ -12,6 +12,7 @@
  * Hydrates from REST on mount (LIVE-1) — never from live events alone.
  */
 import { Link } from 'react-router-dom';
+import { PortraitAvatar } from '../../sheet/components/PortraitControl.js';
 import { EmptyState, ErrorNote, SectionTitle, Spinner } from '../ui.js';
 import AddCharacter from './AddCharacter.js';
 import { useAssignOwner, useDevices, useRoster, type RosterCharacter } from './api.js';
@@ -67,6 +68,12 @@ function Row({
   const metatype = character.sheet?.identity?.metatype;
   return (
     <li className="flex flex-wrap items-center gap-x-3 gap-y-2 py-2.5" data-character={character.id}>
+      <PortraitAvatar
+        portraitId={character.sheet?.identity?.portraitId ?? null}
+        label={rosterLabel(character)}
+        size="h-8 w-8"
+        text="text-xs"
+      />
       <Link
         to={`/c/${campaignId}/sheet/${character.id}`}
         className="min-w-0 flex-1 truncate text-sm text-ink hover:text-cyan"

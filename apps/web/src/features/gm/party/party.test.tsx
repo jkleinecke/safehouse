@@ -408,3 +408,35 @@ describe('PartyRoster', () => {
     expect(html).not.toContain('data-testid="party-empty"');
   });
 });
+
+describe('token portraits on the roster (FR9.4)', () => {
+  it('offers the GM a token image for every runner, right where they are looking', () => {
+    // The GM's answer to "your token is a letter in a circle" should not be
+    // "open their sheet" — the roster is where they are already standing.
+    const html = renderRoster(ROSTER_BODY);
+    expect(html).toContain('data-testid="portrait-set"');
+    expect(html).toContain('accept="image/png,image/jpeg,image/webp,image/gif"');
+  });
+
+  it('shows the picture once a runner has one', () => {
+    const withFace = ROSTER_BODY.map((c, i) =>
+      i === 0
+        ? {
+            ...c,
+            sheet: { ...(c.sheet as object), identity: { ...(c.sheet as { identity: object }).identity, portraitId: 'att-7' } },
+          }
+        : c,
+    );
+    const html = renderRoster(withFace);
+    expect(html).toContain('/files/att-7');
+    // Every row carries the SAME single control whether or not it has a face,
+    // so the names stay in a column.
+    expect((html.match(/data-testid="portrait-set"/g) ?? []).length).toBe(ROSTER_BODY.length);
+  });
+
+  it('keeps the row renderable with no portrait control at all', () => {
+    // `portrait` is optional on purpose: the row is presentational and every
+    // other test in this file renders it with no query client.
+    expect(row()).toContain('data-testid="party-row"');
+  });
+});

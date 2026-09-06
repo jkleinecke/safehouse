@@ -203,7 +203,17 @@ export default function SheetPage() {
     <div className="pb-8">
       <div className="sticky top-0 z-30 border-b border-edge bg-deck/95 backdrop-blur">
         <IdentityStrip
-          portrait={<PortraitControl character={character} />}
+          portrait={
+            <PortraitControl
+              subject={{
+                id: character.id,
+                name: character.name,
+                alias: character.sheet.identity.alias,
+                ownerUserId: character.ownerUserId,
+                portraitId: character.sheet.identity.portraitId ?? null,
+              }}
+            />
+          }
           character={character}
           derived={derived}
           overrideFor={overrideFor}

@@ -10,7 +10,7 @@
  * and a control two screens away from the moment it is needed does not exist
  * as far as the table is concerned.
  */
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import type { OwnerOption } from '../home/PartyPanel.js';
 import { EstBadge } from '../ui.js';
@@ -102,6 +102,15 @@ export interface PartyRowProps {
   onAward: (member: PartyMember, req: AwardRequest) => void;
   onJumpToToken: (token: RosterToken) => void;
   onAssignOwner?: (member: PartyMember, ownerUserId: string | null) => void;
+  /**
+   * The token-image control, passed in rather than built here.
+   *
+   * OPTIONAL, like `onAssignOwner`, and for the same reason: this row is
+   * purely presentational and `party.test.tsx` renders it from nothing but two
+   * REST bodies, with no query client. A control that fetches belongs to the
+   * page that owns the data.
+   */
+  portrait?: ReactNode;
   busy?: boolean;
 }
 
@@ -117,6 +126,7 @@ export default function PartyRow({
   onAward,
   onJumpToToken,
   onAssignOwner,
+  portrait,
   busy = false,
 }: PartyRowProps) {
   const [monitor, setMonitor] = useState<MonitorKey>('physical');
@@ -145,6 +155,7 @@ export default function PartyRow({
   return (
     <li className="py-3" data-testid="party-row" data-character-id={member.id}>
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        {portrait !== undefined && <span className="self-center">{portrait}</span>}
         <Link to={sheetHref} className="text-base font-semibold text-ink hover:text-cyan">
           {member.alias}
         </Link>

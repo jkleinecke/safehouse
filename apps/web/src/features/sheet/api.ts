@@ -286,7 +286,9 @@ export function useClearPortrait(characterId: string) {
  * absence. Showing it costs at worst one 403 with a sentence attached, which
  * is a failure somebody can actually read.
  */
-export function canEditCharacter(character: { ownerUserId?: string | undefined }): boolean {
+export function canEditCharacter(character: {
+  ownerUserId?: string | null | undefined;
+}): boolean {
   const session = getSession();
   if (!session) return false;
   if (session.role === 'gm') return true;

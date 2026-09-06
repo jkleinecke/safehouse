@@ -20,7 +20,10 @@ export interface RosterCharacter {
   /** `characters.ownerUserId` — the ONLY link between a phone and a sheet. */
   ownerUserId?: string | null;
   sheet?: {
-    identity?: { alias?: string; metatype?: string };
+    // `portraitId` was always on the wire — the whole sheet is — and simply
+    // was not modelled here, so the console roster could not show a face while
+    // the party page could.
+    identity?: { alias?: string; metatype?: string; portraitId?: string | null };
     attributes?: Record<string, unknown>;
   };
   /** FR3.6: ledger sums, never free-floating sheet numbers. */

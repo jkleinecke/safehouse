@@ -10,8 +10,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { CharacterRecord } from './api.js';
-import PortraitControl from './components/PortraitControl.js';
+import PortraitControl, { type PortraitSubject } from './components/PortraitControl.js';
 
 const session = vi.hoisted(() => ({
   current: null as { userId: string; role: string } | null,
@@ -25,27 +24,23 @@ vi.mock('../grid/api.js', () => ({
   fileUrl: (id: string) => `/files/${id}?token=t`,
 }));
 
-function character(over: Partial<CharacterRecord> = {}): CharacterRecord {
+function character(over: Partial<PortraitSubject> = {}): PortraitSubject {
   return {
     id: 'c1',
-    campaignId: 'camp',
     name: 'Torque',
+    alias: 'Torque',
     ownerUserId: 'player-1',
-    sheet: {
-      v: 1,
-      identity: { alias: 'Torque', metatype: 'human', portraitId: null },
-    },
-    condition: { physical: 0, stun: 0 },
+    portraitId: null,
     ...over,
-  } as unknown as CharacterRecord;
+  };
 }
 
 /** Markup, the way every other component test here works — no DOM library. */
-function show(rec: CharacterRecord): string {
+function show(subject: PortraitSubject): string {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return renderToStaticMarkup(
     <QueryClientProvider client={qc}>
-      <PortraitControl character={rec} />
+      <PortraitControl subject={subject} />
     </QueryClientProvider>,
   );
 }
@@ -96,7 +91,7 @@ describe('PortraitControl', () => {
     // `ownerUserId` is nullable — a character the GM made and never assigned.
     // A player must not be able to dress it just because it has no owner.
     session.current = { userId: 'player-1', role: 'player' };
-    expect(buttons(show(character({ ownerUserId: undefined })))).toBe(0);
+    expect(buttons(show(character({ ownerUserId: null })))).toBe(0);
   });
 
   it('stands in with the initial letter until there is a picture', () => {
@@ -108,14 +103,7 @@ describe('PortraitControl', () => {
 
   it('shows the portrait, and offers replace and remove, once there is one', () => {
     session.current = { userId: 'player-1', role: 'player' };
-    const html = show(
-      character({
-        sheet: {
-          v: 1,
-          identity: { alias: 'Torque', metatype: 'human', portraitId: 'att-9' },
-        },
-      } as unknown as Partial<CharacterRecord>),
-    );
+    const html = show(character({ portraitId: 'att-9' }));
     expect(html).toContain('/files/att-9');
     expect(html).toContain('replace');
     expect(html).toContain('remove');

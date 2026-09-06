@@ -25,6 +25,7 @@ import AddCharacter from '../home/AddCharacter.js';
 import { ownerOptions } from '../home/PartyPanel.js';
 import { useAssignOwner, useDevices } from '../home/api.js';
 import { ErrorNote, SectionTitle, Spinner } from '../ui.js';
+import PortraitControl from '../../sheet/components/PortraitControl.js';
 import PartyRow from './PartyRow.js';
 import {
   useApplyDamage,
@@ -161,6 +162,18 @@ export default function PartyRoster({ campaignId }: PartyRosterProps) {
               sceneName={scene.sceneName}
               owners={owners}
               busy={busy}
+              portrait={
+                <PortraitControl
+                  compact
+                  subject={{
+                    id: member.id,
+                    name: member.name,
+                    alias: member.alias,
+                    ownerUserId: member.ownerUserId,
+                    portraitId: member.sheet?.identity.portraitId ?? null,
+                  }}
+                />
+              }
               onDamage={(m, req) => damage.mutate({ characterId: m.id, req })}
               onAward={(m, req) => award.mutate({ characterId: m.id, req })}
               onJumpToToken={jumpToToken}
