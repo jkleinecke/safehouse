@@ -31,6 +31,17 @@ const PORT = Number(process.env.SAFEHOUSE_E2E_PORT ?? 8791);
 
 export default defineConfig({
   testDir: './e2e',
+  /**
+   * Browser suites are `*.spec.ts` — and ONLY those.
+   *
+   * Playwright's default `testMatch` also takes `*.test.ts`, which is what the
+   * rest of the repo names its vitest files. The moment a unit test for the
+   * harness itself landed in `e2e/fixtures`, Playwright picked it up, loaded
+   * vitest inside a Playwright worker, and the whole run died on "Vitest
+   * failed to access its internal state" — a message that says nothing about
+   * the actual mistake.
+   */
+  testMatch: '**/*.spec.ts',
   globalSetup: './e2e/fixtures/global-setup.ts',
   // One server, one campaign, one worker: the specs share a live table, and a
   // fight advancing under a parallel spec is a flake, not a finding.

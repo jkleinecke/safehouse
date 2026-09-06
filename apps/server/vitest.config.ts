@@ -13,21 +13,27 @@ export default defineConfig({
     hookTimeout: 120_000,
     testTimeout: 60_000,
     teardownTimeout: 30_000,
-    pool: 'forks',
     /**
-     * `minForks` matches `maxForks` on purpose.
+     * THREADS, not forks — and this is the second attempt at the same bug.
      *
-     * With a floor of 1, tinypool tears down idle workers WHILE the run is
-     * still going — and the slowest suite here takes half a minute, so there
-     * is a long tail during which most workers are idle and being destroyed.
-     * A message queued to a fork that is on its way out rejects with
-     * ERR_IPC_CHANNEL_CLOSED, which vitest reports as an unhandled rejection
-     * and turns into exit 1 with every single test green above it. A suite
-     * that passes and reports failure is worse than one that fails honestly.
+     * The suite kept exiting 1 with every test green above it, on an unhandled
+     * `ERR_IPC_CHANNEL_CLOSED` out of tinypool's `ProcessWorker.send`: the pool
+     * writing to a forked child whose IPC channel had already gone. A suite
+     * that passes and reports failure is worse than one that fails honestly,
+     * because it teaches you to ignore the exit code.
      *
-     * Keeping the pool at full size for the whole run costs idle memory and
-     * removes the race.
+     * The first fix pinned the fork pool at full size, reasoning that tinypool
+     * was retiring idle workers during the long tail of the slowest suite. It
+     * ran clean three times and then failed again, so that was a coincidence
+     * rather than a cause.
+     *
+     * Worker threads remove the mechanism instead of dodging it: they
+     * communicate over a MessagePort, so there is no child IPC channel to
+     * close and that error cannot be raised at all. Every suite still boots
+     * its own throwaway PGlite against its own temp DATA_DIR, which is what
+     * made forks look necessary; nothing here shares process state.
      */
-    poolOptions: { forks: { maxForks: 8, minForks: 8 } },
+    pool: 'threads',
+    poolOptions: { threads: { maxThreads: 8, minThreads: 1 } },
   },
 });

@@ -17,6 +17,7 @@
  * PGlite is single-writer, so the order is not a preference.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
+import { createConnection } from 'node:net';
 import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -133,7 +134,11 @@ function run(
     child.stdout.on('data', (d: Buffer) => (out += d.toString()));
     child.stderr.on('data', (d: Buffer) => (err += d.toString()));
     child.on('error', reject);
-    child.on('exit', (code) =>
+    // `close`, not `exit`: exit fires when the process is gone but its stdio
+    // may still be draining, and the very next thing we do is open the same
+    // PGlite directory the child just held. PGlite is single-writer, so the
+    // handoff has to be complete rather than merely imminent.
+    child.on('close', (code) =>
       code === 0
         ? resolvePromise(out)
         : reject(new Error(`${cmd} ${args.join(' ')} exited ${code}\n${out}\n${err}`)),
@@ -244,6 +249,64 @@ async function seedBook(
   return { code: 'SR5', pages: opts.pages, bytes: pdf.byteLength };
 }
 
+/**
+ * Is something listening on this port right now?
+ *
+ * A connect attempt, not a bind attempt. Binding to test would race with the
+ * server we are about to start: we would have to release the port again, and
+ * the gap between releasing it and the real bind is exactly the window this is
+ * meant to close.
+ */
+export function portInUse(port: number, host = '127.0.0.1'): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = createConnection({ host, port });
+    let settled = false;
+    const done = (answer: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(answer);
+    };
+    socket.once('connect', () => done(true));
+    // ECONNREFUSED — nobody home, which is what we are waiting for.
+    socket.once('error', () => done(false));
+    // A port that neither accepts nor refuses is filtered, not served.
+    socket.setTimeout(1_000, () => done(false));
+  });
+}
+
+/**
+ * Wait until nothing holds `port`, and say so clearly if something will not
+ * let go.
+ *
+ * The whole e2e stack binds ONE fixed port, so two runs in quick succession
+ * overlap: the previous Playwright process has returned, but its server child
+ * is still shutting down — PGlite takes a moment to close its directory — and
+ * the new run spawns straight into it. On Windows that surfaced as a bare
+ * `0xC0000409` with no message anywhere, which is the least diagnosable
+ * failure a harness can produce.
+ *
+ * Returns how long it waited, so the caller can stay quiet in the normal case
+ * and speak up when it was not.
+ */
+export async function waitForFreePort(port: number, timeoutMs = 20_000): Promise<number> {
+  const started = Date.now();
+  for (;;) {
+    if (!(await portInUse(port))) return Date.now() - started;
+    if (Date.now() - started >= timeoutMs) {
+      throw new Error(
+        [
+          `e2e: :${port} is still held after ${Math.round(timeoutMs / 1000)}s.`,
+          '     Something is already listening there — most likely a server from a',
+          '     previous run that has not exited yet. Close it, or point this run at',
+          '     another port with SAFEHOUSE_E2E_PORT.',
+        ].join('\n'),
+      );
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+}
+
 export async function startServer(
   dataDir: string,
   port: number,
@@ -298,6 +361,11 @@ export async function boot(port: number, log: (s: string) => void): Promise<Boot
   // single-writer and each seeder closes cleanly on the way out (LIVE-4).
   log('e2e: seeding one manufactured book into the library');
   const book = await seedBook(dataDir, { pages: BOOK_PAGES });
+
+  // Nothing may be on that port before we spawn onto it. Quiet unless it
+  // actually had to wait, which is the case worth knowing about.
+  const waited = await waitForFreePort(port);
+  if (waited > 250) log(`e2e: waited ${(waited / 1000).toFixed(1)}s for :${port} to clear`);
 
   log(`e2e: booting the built server on :${port}`);
   const server = await startServer(dataDir, port, serverLog);
