@@ -17,6 +17,9 @@ import { httpError } from '../services/auth.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 
+/** Blank line between folded system parts, so they read as separate notes. */
+const SYSTEM_JOIN = '\n\n';
+
 // ---------------------------------------------------------------------------
 // Config (env is read per call so tests can flip the switch at runtime)
 // ---------------------------------------------------------------------------
@@ -344,6 +347,38 @@ export function openAiEffort(config: LlmConfig): Record<string, unknown> {
   return { reasoning_effort: effort, chat_template_kwargs: { enable_thinking: true } };
 }
 
+/**
+ * Exactly one system message, at the front.
+ *
+ * The agent builds its instructions in pieces — the standing prompt, then the
+ * campaign snapshot when there is one — and sends each as its own system
+ * message. That is legal OpenAI, and every hosted provider takes it.
+ *
+ * A local server may not. The request is rendered through the model's own
+ * Jinja chat template, and Qwen's raises "System message must be at the
+ * beginning" on the SECOND one: "the beginning" there means index 0 and
+ * nothing else. What the GM sees is a 500 with a Jinja stack trace in it.
+ *
+ * So the pieces are joined here into the single leading message every template
+ * agrees on. Blank ones are dropped. One arriving later in the history — there
+ * should be none — is hoisted rather than discarded, because silently losing
+ * an instruction is worse than moving it.
+ */
+export function foldSystemMessages(messages: ChatMessage[]): ChatMessage[] {
+  const system: string[] = [];
+  const rest: ChatMessage[] = [];
+  for (const message of messages) {
+    if (message.role !== 'system') {
+      rest.push(message);
+      continue;
+    }
+    const text = (message.content ?? '').trim();
+    if (text.length > 0) system.push(text);
+  }
+  if (system.length === 0) return rest;
+  return [{ role: 'system', content: system.join(SYSTEM_JOIN) }, ...rest];
+}
+
 // ---------------------------------------------------------------------------
 
 export class LlmClient {
@@ -391,6 +426,7 @@ export class LlmClient {
     if (opts.signal) signals.push(opts.signal);
     const body = JSON.stringify({
       ...req,
+      messages: foldSystemMessages(req.messages),
       ...openAiEffort(this.config),
       stream: true,
       stream_options: { include_usage: true },

@@ -212,8 +212,11 @@ describe('situation snapshot (FR12.18)', () => {
     expect((res.json() as { snapshotApplied: boolean }).snapshotApplied).toBe(true);
 
     const systems = server.requests[0]!.messages.filter((m) => m.role === 'system');
-    expect(systems).toHaveLength(2);
-    const snapshot = systems[1]?.content ?? '';
+    // One on the wire, always: the prompt and the snapshot are folded together
+    // because some local chat templates accept exactly one. What matters is
+    // that the snapshot REACHED the model, not which envelope carried it.
+    expect(systems).toHaveLength(1);
+    const snapshot = systems[0]?.content ?? '';
     expect(snapshot).toContain('SITUATION SNAPSHOT');
     expect(snapshot).toContain('Rooftop, Redmond');
     expect(snapshot).toContain('turn 2, pass 1');
@@ -232,7 +235,7 @@ describe('situation snapshot (FR12.18)', () => {
     const server = await mock({ turns: [{ content: 'Between fights.' }] });
     const res = await gm({ message: 'where are we?' });
     expect((res.json() as { snapshotApplied: boolean }).snapshotApplied).toBe(true);
-    const snapshot = server.requests[0]!.messages.filter((m) => m.role === 'system')[1]?.content ?? '';
+    const snapshot = server.requests[0]!.messages.filter((m) => m.role === 'system')[0]?.content ?? '';
     expect(snapshot).toContain('Encounter: none running.');
     expect(snapshot).toContain('Party: Static');
 
@@ -245,7 +248,9 @@ describe('situation snapshot (FR12.18)', () => {
     const server = await mock({ turns: [{ content: 'Prep mode.' }] });
     const res = await gm({ message: 'anything running?' });
     expect((res.json() as { snapshotApplied: boolean }).snapshotApplied).toBe(false);
-    expect(server.requests[0]!.messages.filter((m) => m.role === 'system')).toHaveLength(1);
+    const systems = server.requests[0]!.messages.filter((m) => m.role === 'system');
+    expect(systems).toHaveLength(1);
+    expect(systems[0]?.content ?? '').not.toContain('SITUATION SNAPSHOT');
     await t.db.update(encounters).set({ state: 'live' }).where(eq(encounters.id, fx.encounterId));
   });
 });

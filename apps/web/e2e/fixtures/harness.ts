@@ -31,6 +31,7 @@ import type { World } from './world';
 export const REPO_ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)), '../../../..');
 const WEB_ROOT = join(REPO_ROOT, 'apps', 'web');
 const WEB_DIST = join(WEB_ROOT, 'dist');
+const SERVER_ROOT = join(REPO_ROOT, 'apps', 'server');
 export const SERVER_DIST = join(REPO_ROOT, 'apps', 'server', 'dist', 'index.js');
 const SEED_DEMO = join(REPO_ROOT, 'apps', 'server', 'seed', 'demo.ts');
 const SEED_BOOKS = join(REPO_ROOT, 'apps', 'server', 'scripts', 'seed-books.ts');
@@ -82,13 +83,59 @@ async function newestMtime(dir: string): Promise<number> {
   return newest;
 }
 
-/** Rebuild the SPA when `src` is newer than `dist` (skippable in CI). */
-export async function ensureWebBuild(log: (s: string) => void): Promise<void> {
-  if (!existsSync(SERVER_DIST)) {
+/** Where `tsc` actually is, on the same rules as `viteBin`. */
+export function tscBin(): string {
+  const candidates = [
+    join(SERVER_ROOT, 'node_modules', 'typescript', 'bin', 'tsc'),
+    join(REPO_ROOT, 'node_modules', 'typescript', 'bin', 'tsc'),
+  ];
+  const found = candidates.find((c) => existsSync(c));
+  if (!found) {
     throw new Error(
-      `e2e: ${SERVER_DIST} is missing — run \`pnpm build\` first (the specs drive the built server).`,
+      `e2e: cannot find tsc to rebuild the server (looked in ${candidates.join(', ')}). ` +
+        'Run pnpm build first, or set SAFEHOUSE_E2E_NO_BUILD=1.',
     );
   }
+  return found;
+}
+
+/**
+ * Compile the server before the specs drive it.
+ *
+ * This used to check only that `apps/server/dist` EXISTED. So a change under
+ * `apps/server/src` ran against whatever was last compiled, and the specs
+ * reported on code that was no longer in the tree — worse than a plain
+ * failure, because a fix that landed looks like it did nothing and a
+ * regression that landed looks like it is not there. It cost a full debugging
+ * round against a bug that was already fixed.
+ *
+ * Run unconditionally, with no staleness check of our own. `tsc -b` already
+ * has one, and a better one: it compares CONTENT, where a comparison of file
+ * times can be fooled in both directions — a touched file rebuilds for
+ * nothing, and a restored file skips a rebuild it needed. Up to date, it
+ * costs about a fifth of a second, which is not worth being clever about. The
+ * SPA below still needs the mtime check, because vite has no such thing.
+ */
+async function ensureServerBuild(log: (s: string) => void): Promise<void> {
+  if (process.env.SAFEHOUSE_E2E_NO_BUILD === '1') {
+    if (!existsSync(SERVER_DIST)) {
+      throw new Error(
+        `e2e: ${SERVER_DIST} is missing and SAFEHOUSE_E2E_NO_BUILD=1 forbids building it.`,
+      );
+    }
+    return;
+  }
+
+  log('e2e: checking the server build…');
+  await run(process.execPath, [tscBin(), '-b'], { cwd: SERVER_ROOT });
+  if (!existsSync(SERVER_DIST)) {
+    throw new Error(`e2e: the server build produced no ${SERVER_DIST}.`);
+  }
+}
+
+/** Everything the specs need compiled: the server, then the SPA. */
+export async function ensureBuilds(log: (s: string) => void): Promise<void> {
+  await ensureServerBuild(log);
   if (process.env.SAFEHOUSE_E2E_NO_BUILD === '1') {
     if (!existsSync(join(WEB_DIST, 'index.html'))) {
       throw new Error('e2e: apps/web/dist is missing and SAFEHOUSE_E2E_NO_BUILD=1 forbids building it.');
@@ -350,7 +397,7 @@ export async function startServer(
 // ---------------------------------------------------------------------------
 
 export async function boot(port: number, log: (s: string) => void): Promise<Booted> {
-  await ensureWebBuild(log);
+  await ensureBuilds(log);
 
   const dataDir = mkdtempSync(join(tmpdir(), 'safehouse-e2e-'));
   const serverLog = join(dataDir, 'server.log');

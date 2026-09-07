@@ -9,6 +9,7 @@ import {
   LlmClient,
   chatCompletionsUrl,
   explain404,
+  foldSystemMessages,
   isAiEnabled,
   listServedModels,
   llmConfigFromEnv,
@@ -242,5 +243,75 @@ describe('explain404', () => {
     // Port 1 is reserved and refuses instantly; a dead box must not surface as
     // a crash inside an error handler.
     await expect(listServedModels('http://127.0.0.1:1/v1', 1_000)).resolves.toEqual([]);
+  });
+});
+
+/**
+ * A local server renders the request through the model's own Jinja chat
+ * template, and some templates allow exactly one system message. The agent
+ * builds its instructions in two pieces, so what is legal OpenAI arrived as a
+ * 500 with a Jinja stack trace in it — from a healthy box, with a correct
+ * request. Measured against Qwen3.8: one system message answers, two raise
+ * "System message must be at the beginning".
+ */
+describe('one system message, at the front', () => {
+  it('joins the pieces the agent sends separately', () => {
+    const folded = foldSystemMessages([
+      { role: 'system', content: 'standing orders' },
+      { role: 'system', content: 'the snapshot' },
+      { role: 'user', content: 'hello' },
+    ]);
+    expect(folded).toHaveLength(2);
+    expect(folded[0]?.role).toBe('system');
+    const text = folded[0]?.content ?? '';
+    expect(text).toContain('standing orders');
+    expect(text).toContain('the snapshot');
+    // Joined in the order written, not whichever way a Set or a map felt like.
+    expect(text.indexOf('standing orders')).toBeLessThan(text.indexOf('the snapshot'));
+    expect(folded[1]).toEqual({ role: 'user', content: 'hello' });
+  });
+
+  it('drops blank pieces instead of sending an empty instruction', () => {
+    const folded = foldSystemMessages([
+      { role: 'system', content: '   ' },
+      { role: 'system', content: null },
+      { role: 'user', content: 'hi' },
+    ]);
+    expect(folded.some((m) => m.role === 'system')).toBe(false);
+  });
+
+  it('hoists a stray system message rather than losing it', () => {
+    // There should never be one mid-history — but moving an instruction is a
+    // much smaller lie than quietly deleting it.
+    const folded = foldSystemMessages([
+      { role: 'user', content: 'hi' },
+      { role: 'system', content: 'and be brief' },
+    ]);
+    expect(folded[0]?.content).toBe('and be brief');
+    expect(folded).toHaveLength(2);
+  });
+
+  it('leaves a request that already has one alone', () => {
+    const messages: Parameters<typeof foldSystemMessages>[0] = [
+      { role: 'system', content: 'orders' },
+      { role: 'user', content: 'hi' },
+    ];
+    expect(foldSystemMessages(messages)).toEqual(messages);
+  });
+
+  it('never puts a second one on the wire', async () => {
+    const server = await mock({ turns: [{ content: 'ok' }] });
+    const client = new LlmClient({ baseUrl: server.baseUrl, primary: 'm', fast: 'm' });
+    await client.chat({
+      model: 'm',
+      messages: [
+        { role: 'system', content: 'orders' },
+        { role: 'system', content: 'snapshot' },
+        { role: 'user', content: 'hello' },
+      ],
+    });
+    const sent = server.lastRequest()?.messages ?? [];
+    expect(sent.filter((m) => m.role === 'system')).toHaveLength(1);
+    expect(sent[0]?.role).toBe('system');
   });
 });
