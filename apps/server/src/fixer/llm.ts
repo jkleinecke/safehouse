@@ -103,6 +103,18 @@ export async function listServedModels(baseUrl: string, timeoutMs = 5_000): Prom
 }
 
 /**
+ * Does this 4xx mean "no such model" rather than "bad request"?
+ *
+ * Only consulted for a 400, and only on the body, because a 400 is otherwise
+ * a genuinely different problem — a malformed request — and answering it with
+ * a list of model names would send the GM somewhere useless.
+ */
+export function looksLikeUnknownModel(status: number, body: string): boolean {
+  if (status !== 400) return false;
+  return /model .*not (found|exist)|unknown model|no such model/i.test(body);
+}
+
+/**
  * Turn a 404 into the sentence that ends the investigation.
  *
  * A wrong model name is the likeliest thing to break when the box behind
@@ -366,9 +378,13 @@ export class LlmClient {
     }
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      if (res.status === 404) {
-        // The one status with a specific, checkable cause worth spending a
-        // round-trip on: ask the box what it serves and say so (explain404).
+      // A wrong model name is the likeliest misconfiguration, and servers do
+      // not agree on how to say so: llama.cpp's router answers 400 with
+      // "model 'x' not found" in the body where vLLM answers 404. Matching on
+      // the status alone sent a GM the raw JSON of the one error we know how
+      // to explain, so the body is consulted too.
+      if (res.status === 404 || looksLikeUnknownModel(res.status, text)) {
+        // Worth a round-trip: ask the box what it DOES serve and say so.
         throw httpError(
           502,
           'ai_error',

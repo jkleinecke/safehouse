@@ -164,8 +164,20 @@ export type AiSettingsView = z.infer<typeof AiSettingsViewSchema>;
  * A write. The key is optional on every save: omitting it leaves whatever is
  * on file alone, so a GM can change models without re-typing a secret. An
  * empty string is the explicit "forget it".
+ *
+ * Built field by field rather than as `AiSettingsSchema.partial()`, because
+ * `.partial()` does NOT remove a field's `.default()` — parsing `{provider}`
+ * against it yields `{provider, baseUrl: '', primaryModel: '', fastModel: ''}`,
+ * and those manufactured blanks are indistinguishable from a GM deliberately
+ * clearing the fields. A save that changed only the provider therefore wiped
+ * the model names, which is the sort of data loss that looks like a UI bug
+ * for weeks. Every field here is genuinely absent when it is absent.
  */
-export const AiSettingsWriteSchema = AiSettingsSchema.partial().extend({
+export const AiSettingsWriteSchema = z.object({
+  provider: AiProviderSchema.optional(),
+  baseUrl: z.string().max(500).optional(),
+  primaryModel: z.string().max(200).optional(),
+  fastModel: z.string().max(200).optional(),
   apiKey: z.string().max(400).optional(),
 });
 export type AiSettingsWrite = z.infer<typeof AiSettingsWriteSchema>;

@@ -80,7 +80,16 @@ function capability(
 }
 
 const UNCONFIGURED = (): VisionCapability =>
-  capability(false, 'unconfigured', null, 'no inference box is configured (LLM_BASE_URL)');
+  capability(
+    false,
+    'unconfigured',
+    null,
+    // Deliberately does NOT name an env var any more. Since the provider
+    // became a runtime choice, the commonest reason to be here is a GM who
+    // picked a hosted provider and has not given it a key — and sending them
+    // to look at LLM_BASE_URL for that is a wild goose chase.
+    'no AI is configured — pick one under Which AI on the Fixer page',
+  );
 
 /**
  * The answer we already have, with **no network at all**.

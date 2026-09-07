@@ -20,7 +20,12 @@
  * silent wrong answer if it is got wrong, not a crash.
  */
 import { describe, expect, it } from 'vitest';
-import { AI_PROVIDERS, AiProviderSchema, aiProviderInfo } from '@safehouse/contracts';
+import {
+  AI_PROVIDERS,
+  AiProviderSchema,
+  AiSettingsWriteSchema,
+  aiProviderInfo,
+} from '@safehouse/contracts';
 import {
   applyAiSettings,
   readAiSettings,
@@ -31,6 +36,7 @@ import {
   toAnthropicMessages,
   toAnthropicToolChoice,
 } from '../src/fixer/anthropic.js';
+import { looksLikeUnknownModel } from '../src/fixer/llm.js';
 import type { ChatMessage } from '../src/fixer/llm.js';
 
 /** No environment at all, for the cases that must not consult one. */
@@ -89,6 +95,25 @@ describe('the API key never leaves the server', () => {
     const first = applyAiSettings({}, { provider: 'anthropic', apiKey: 'sk-drop' });
     const second = applyAiSettings(first, { apiKey: '' });
     expect(readAiSettings(second).hasKey).toBe(false);
+  });
+
+  it('keeps the models when a save changes only the provider', () => {
+    // Found live, against a real box. `AiSettingsSchema.partial()` does NOT
+    // drop a field's `.default()`, so parsing `{provider}` produced blanks for
+    // every other field and the save wiped the model names — silent data loss
+    // that looks like a UI bug for weeks. The write schema is now built field
+    // by field so an absent field is genuinely absent.
+    const first = applyAiSettings({}, {
+      provider: 'openai-compatible',
+      baseUrl: 'http://box.lan:8080/v1',
+      primaryModel: 'big',
+      fastModel: 'small',
+    });
+    const parsed = AiSettingsWriteSchema.parse({ provider: 'openai-compatible' });
+    expect(parsed).toEqual({ provider: 'openai-compatible' });
+    const second = applyAiSettings(first, parsed);
+    expect(readAiSettings(second).primaryModel).toBe('big');
+    expect(readAiSettings(second).fastModel).toBe('small');
   });
 
   it('drops it when the provider changes', () => {
@@ -272,5 +297,25 @@ describe('translating back', () => {
       stop_reason: 'end_turn',
     } as unknown as Parameters<typeof fromAnthropicMessage>[0]);
     expect(turn.content).toBe('Kowloon Sam.');
+  });
+});
+
+describe('saying what went wrong', () => {
+  it('recognises a model-not-found dressed as a 400', () => {
+    // llama.cpp's router answers 400 with "model 'x' not found" where vLLM
+    // answers 404. Matching on the status alone sent the GM raw JSON for the
+    // one error we know how to explain.
+    expect(
+      looksLikeUnknownModel(400, `{"error":{"message":"model 'no-such' not found"}}`),
+    ).toBe(true);
+    expect(looksLikeUnknownModel(400, 'unknown model: foo')).toBe(true);
+    expect(looksLikeUnknownModel(404, 'anything')).toBe(false);
+  });
+
+  it('leaves an ordinary bad request alone', () => {
+    // A malformed body is a different problem, and answering it with a list of
+    // model names would send somebody somewhere useless.
+    expect(looksLikeUnknownModel(400, '{"error":"messages must not be empty"}')).toBe(false);
+    expect(looksLikeUnknownModel(500, "model 'x' not found")).toBe(false);
   });
 });
