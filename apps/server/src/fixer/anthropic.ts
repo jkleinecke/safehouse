@@ -181,6 +181,36 @@ export function fromAnthropicMessage(msg: Anthropic.Message): {
 }
 
 /**
+ * The reasoning controls for one Messages request.
+ *
+ * Two things here are deliberate and neither is obvious.
+ *
+ * NO TOKEN BUDGET. `budget_tokens` was removed on the current Claude models —
+ * sending one is a 400, not a deprecation warning. Effort replaced it.
+ *
+ * "OFF" DOES NOT DISABLE THINKING. It asks for LOW effort with thinking still
+ * on. Anthropic's own guidance is explicit that a disabled mind has two
+ * failure modes, and the first one is fatal here: the model occasionally
+ * writes a tool call into its VISIBLE TEXT instead of emitting a tool_use
+ * block. The turn succeeds, the call never runs, nothing raises, and in an
+ * agent loop that text pollutes every later turn. The Fixer is a tool-calling
+ * agent, so that is not a risk worth taking to save tokens — and low effort
+ * saves them anyway.
+ */
+export function anthropicEffort(effort: string | undefined): Record<string, unknown> {
+  if (effort === undefined || effort === 'default') {
+    return {};
+  }
+  // `off` maps to the cheapest setting that still leaves the model able to
+  // call a tool properly.
+  const level = effort === 'off' ? 'low' : effort;
+  return {
+    thinking: { type: 'adaptive' },
+    output_config: { effort: level },
+  };
+}
+
+/**
  * One streamed turn against the Messages API.
  *
  * Throws the same envelope errors the OpenAI transport does, so callers do not
@@ -188,7 +218,7 @@ export function fromAnthropicMessage(msg: Anthropic.Message): {
  * unreachable llama.cpp box are the same problem to a GM mid-session.
  */
 export async function anthropicChat(
-  opts: { apiKey: string; baseUrl?: string | undefined },
+  opts: { apiKey: string; baseUrl?: string | undefined; effort?: string | undefined },
   req: ChatRequest,
   chatOpts: ChatOptions = {},
 ): Promise<ChatTurn> {
@@ -213,6 +243,7 @@ export async function anthropicChat(
       ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
       ...(tools ? { tools } : {}),
       ...(toolChoice ? { tool_choice: toolChoice } : {}),
+      ...anthropicEffort(opts.effort),
       messages,
       ...(chatOpts.signal ? { signal: chatOpts.signal } : {}),
     });

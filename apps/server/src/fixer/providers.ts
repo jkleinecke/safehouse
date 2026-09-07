@@ -111,6 +111,7 @@ export function resolveLlmConfig(
     fast,
     dialect: info.dialect,
     provider: ai.provider,
+    effort: ai.reasoningEffort,
     ...(apiKey.length > 0 ? { apiKey } : {}),
   };
 }

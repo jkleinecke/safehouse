@@ -23,9 +23,11 @@
  */
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { eq } from 'drizzle-orm';
+import { campaigns, type Db } from '@safehouse/db';
 import { assertCampaign, httpError, requireRole } from '../services/auth.js';
 import { layoutJsonSchema, LayoutDoorSchema, LayoutRoomSchema } from './geometry.js';
-import { llmConfigFromEnv } from './llm.js';
+import { resolveLlmConfig } from './providers.js';
 import { emitFogProximity, fogProximityState } from './proximity.js';
 import { identifyTokensState } from './token-id.js';
 import { FIXER_TOOLS, TOOLS_BY_NAME, toolParameters } from './tools.js';
@@ -172,6 +174,17 @@ export default async function fixerToolRoutes(app: FastifyInstance): Promise<voi
     return reply.status(201).send(result);
   });
 
+  /** This campaign's settings blob — the AI config lives in it. */
+  async function campaignSettings(db: Db, id: string): Promise<Record<string, unknown>> {
+    const rows = await db
+      .select({ settings: campaigns.settings })
+      .from(campaigns)
+      .where(eq(campaigns.id, id))
+      .limit(1);
+    const raw = rows[0]?.settings;
+    return typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
+  }
+
   // --- FR12.11 lane 2: read the map image ----------------------------------
   /**
    * Unlike its neighbours this one DOES need the box — it is the only route
@@ -184,7 +197,13 @@ export default async function fixerToolRoutes(app: FastifyInstance): Promise<voi
   app.post('/api/fixer/read-map', async (req, reply) => {
     const body = parse(ReadMapBody, req.body);
     const campaignId = gmFor(req, body.campaignId);
-    const result = await proposeGeometryFromMap(app.db, llmConfigFromEnv(), {
+    // The campaign's OWN configuration, like every other AI route. Reading the
+    // environment here meant the one lane that actually sends an image to a
+    // model ignored the provider the GM had chosen — so a GM who pointed the
+    // Fixer at a vision model on their own screen still got whatever
+    // LLM_BASE_URL happened to say, or nothing at all.
+    const config = resolveLlmConfig(await campaignSettings(app.db, campaignId));
+    const result = await proposeGeometryFromMap(app.db, config, {
       campaignId,
       mode: body.mode,
       prompt: 'GM asked the Fixer to read the scene map image',

@@ -19,7 +19,13 @@
  * a failed call in the middle of a session.
  */
 import { useEffect, useState } from 'react';
-import { AI_PROVIDERS, aiProviderInfo, type AiProvider } from '@safehouse/contracts';
+import {
+  AI_PROVIDERS,
+  aiProviderInfo,
+  effortSupport,
+  type AiEffort,
+  type AiProvider,
+} from '@safehouse/contracts';
 import { useAiSettings, useSaveAiSettings } from './api.js';
 
 const inputCls =
@@ -36,6 +42,7 @@ export default function AiSettings({ campaignId }: { campaignId: string }) {
   const [primaryModel, setPrimary] = useState('');
   const [fastModel, setFast] = useState('');
   const [apiKey, setApiKey] = useState('');
+  const [effort, setEffort] = useState<AiEffort>('default');
   const [touched, setTouched] = useState(false);
 
   // Adopt the server's answer once, and again whenever a save returns — but
@@ -47,10 +54,12 @@ export default function AiSettings({ campaignId }: { campaignId: string }) {
     setBaseUrl(saved.baseUrl);
     setPrimary(saved.primaryModel);
     setFast(saved.fastModel);
+    setEffort(saved.reasoningEffort);
   }, [saved, touched]);
 
   const info = aiProviderInfo(provider);
   const isLocal = provider === 'openai-compatible';
+  const support = effortSupport(provider);
   const changedProvider = saved !== undefined && provider !== saved.provider;
   // Changing provider drops the stored key server-side, so the form should not
   // claim one is still on file.
@@ -63,6 +72,7 @@ export default function AiSettings({ campaignId }: { campaignId: string }) {
         baseUrl: isLocal ? baseUrl.trim() : '',
         primaryModel: primaryModel.trim() || info.defaults.primary,
         fastModel: fastModel.trim(),
+        reasoningEffort: effort,
         // Omitted, not blank: an omitted key leaves the stored one alone, a
         // blank one clears it, and those must not be the same request.
         ...(apiKey.length > 0 ? { apiKey } : {}),
@@ -158,6 +168,29 @@ export default function AiSettings({ campaignId }: { campaignId: string }) {
               </span>
             </label>
           )}
+
+          <label className="mt-3 block">
+            <span className="mono-label">Thinking</span>
+            <select
+              className={inputCls}
+              value={effort}
+              data-testid="ai-effort"
+              onChange={(e) => edit(setEffort)(e.target.value as AiEffort)}
+            >
+              <option value="default">Whatever the model does</option>
+              <option value="off">Off — answer directly</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+            <span className="mt-1 block text-[0.7rem] text-dim">
+              {support === 'on-off'
+                ? 'A local server only understands on or off — the three levels all mean on.'
+                : support === 'levels'
+                  ? 'Reasoning models spend tokens before answering. Less thinking is faster and cheaper.'
+                  : ''}
+            </span>
+          </label>
 
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <label className="block">

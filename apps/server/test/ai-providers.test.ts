@@ -25,6 +25,7 @@ import {
   AiProviderSchema,
   AiSettingsWriteSchema,
   aiProviderInfo,
+  effortSupport,
 } from '@safehouse/contracts';
 import {
   applyAiSettings,
@@ -32,11 +33,12 @@ import {
   resolveLlmConfig,
 } from '../src/fixer/providers.js';
 import {
+  anthropicEffort,
   fromAnthropicMessage,
   toAnthropicMessages,
   toAnthropicToolChoice,
 } from '../src/fixer/anthropic.js';
-import { looksLikeUnknownModel } from '../src/fixer/llm.js';
+import { looksLikeUnknownModel, openAiEffort } from '../src/fixer/llm.js';
 import type { ChatMessage } from '../src/fixer/llm.js';
 
 /** No environment at all, for the cases that must not consult one. */
@@ -317,5 +319,82 @@ describe('saying what went wrong', () => {
     // model names would send somebody somewhere useless.
     expect(looksLikeUnknownModel(400, '{"error":"messages must not be empty"}')).toBe(false);
     expect(looksLikeUnknownModel(500, "model 'x' not found")).toBe(false);
+  });
+});
+
+describe('the reasoning cap', () => {
+  it('sends nothing at all on the default, so existing setups do not change', () => {
+    expect(openAiEffort({ baseUrl: '', primary: '', fast: '' })).toEqual({});
+    expect(openAiEffort({ baseUrl: '', primary: '', fast: '', effort: 'default' })).toEqual({});
+    expect(anthropicEffort(undefined)).toEqual({});
+    expect(anthropicEffort('default')).toEqual({});
+  });
+
+  it('sends BOTH knobs to a Chat Completions server, because they disagree', () => {
+    // Measured against a real llama.cpp router: it accepts `reasoning_effort`,
+    // returns 200, and ignores it completely — identical reasoning length with
+    // and without. The only control that moves the number there is the chat
+    // template's `enable_thinking`. OpenAI and xAI read the other one. A
+    // server ignores the field it does not know, so one setting works on all
+    // three without the GM having to know which is which.
+    const off = openAiEffort({ baseUrl: '', primary: '', fast: '', effort: 'off' });
+    expect(off).toEqual({
+      reasoning_effort: 'minimal',
+      chat_template_kwargs: { enable_thinking: false },
+    });
+
+    const low = openAiEffort({ baseUrl: '', primary: '', fast: '', effort: 'low' });
+    expect(low).toEqual({
+      reasoning_effort: 'low',
+      chat_template_kwargs: { enable_thinking: true },
+    });
+  });
+
+  it('never disables thinking on Claude, even when asked for off', () => {
+    // The load-bearing decision in this whole feature. Anthropic's own
+    // guidance: with thinking disabled the model occasionally writes a tool
+    // call into its VISIBLE TEXT instead of emitting a tool_use block — the
+    // turn succeeds, the call never runs, nothing raises. The Fixer is a
+    // tool-calling agent, so that is not a trade worth making to save tokens,
+    // and low effort saves them anyway.
+    const off = anthropicEffort('off');
+    expect(off['thinking']).toEqual({ type: 'adaptive' });
+    expect(off['output_config']).toEqual({ effort: 'low' });
+    expect(JSON.stringify(off)).not.toContain('disabled');
+  });
+
+  it('never sends a token budget to Claude', () => {
+    // `budget_tokens` was REMOVED on the current models — sending one is a
+    // 400, not a deprecation warning. Effort replaced it.
+    for (const level of ['off', 'low', 'medium', 'high'] as const) {
+      expect(JSON.stringify(anthropicEffort(level))).not.toContain('budget_tokens');
+    }
+  });
+
+  it('passes a level straight through to Claude’s effort', () => {
+    expect(anthropicEffort('high')).toEqual({
+      thinking: { type: 'adaptive' },
+      output_config: { effort: 'high' },
+    });
+  });
+
+  it('is honest about what a provider can honour', () => {
+    // A local box gets on or off and nothing in between; the screen says so
+    // rather than offering three levels that all do the same thing silently.
+    expect(effortSupport('anthropic')).toBe('levels');
+    expect(effortSupport('openai')).toBe('levels');
+    expect(effortSupport('xai')).toBe('levels');
+    expect(effortSupport('openai-compatible')).toBe('on-off');
+    expect(effortSupport('off')).toBe('none');
+  });
+
+  it('carries the GM’s choice into the resolved config', () => {
+    const saved = applyAiSettings({}, {
+      provider: 'openai-compatible',
+      baseUrl: 'http://box.lan:8080/v1',
+      primaryModel: 'big',
+      reasoningEffort: 'off',
+    });
+    expect(resolveLlmConfig(saved, NO_ENV)?.effort).toBe('off');
   });
 });

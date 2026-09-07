@@ -130,6 +130,43 @@ export function aiProviderInfo(id: AiProvider): AiProviderInfo {
   return found ?? AI_PROVIDERS[0]!;
 }
 
+
+/**
+ * How hard the model should think before answering.
+ *
+ * ## Why an effort level and not a token budget
+ *
+ * Because a token budget is not a thing every provider still has. Anthropic
+ * REMOVED `budget_tokens` on its current models — sending one is a 400 — and
+ * replaced it with an effort level. OpenAI and xAI expose `reasoning_effort`,
+ * also a level. So the only knob that exists everywhere is a level, and
+ * inventing a token count here would mean translating it into a level for
+ * three providers out of four anyway.
+ *
+ * ## What each provider actually does with it
+ *
+ * Measured, not assumed — a local llama.cpp router accepts `reasoning_effort`
+ * and `reasoning_budget` and SILENTLY IGNORES BOTH; the only control that
+ * moves the number is the chat template's own `enable_thinking`, which is a
+ * boolean. So a local box gets on or off and nothing in between, and this
+ * enum promises no more than that.
+ *
+ * `default` sends nothing at all and lets the model do whatever it does today
+ * — the setting has to start somewhere, and changing how everybody's existing
+ * Fixer behaves is not the way to introduce a knob.
+ */
+export const AiEffortSchema = z.enum(['default', 'off', 'low', 'medium', 'high']);
+export type AiEffort = z.infer<typeof AiEffortSchema>;
+
+/** What a given provider can actually honour, for the GM's screen to say. */
+export function effortSupport(provider: AiProvider): 'levels' | 'on-off' | 'none' {
+  const dialect = aiProviderInfo(provider).dialect;
+  if (dialect === 'anthropic') return 'levels';
+  if (provider === 'openai' || provider === 'xai') return 'levels';
+  if (provider === 'openai-compatible') return 'on-off';
+  return 'none';
+}
+
 /**
  * The GM's AI configuration, as stored and as read back.
  *
@@ -145,6 +182,8 @@ export const AiSettingsSchema = z.object({
   primaryModel: z.string().max(200).default(''),
   /** Small model: mechanical tasks and live-session work (FR12.16). */
   fastModel: z.string().max(200).default(''),
+  /** How hard to think. See `AiEffortSchema` for what each provider honours. */
+  reasoningEffort: AiEffortSchema.default('default'),
 });
 export type AiSettings = z.infer<typeof AiSettingsSchema>;
 
@@ -178,6 +217,7 @@ export const AiSettingsWriteSchema = z.object({
   baseUrl: z.string().max(500).optional(),
   primaryModel: z.string().max(200).optional(),
   fastModel: z.string().max(200).optional(),
+  reasoningEffort: AiEffortSchema.optional(),
   apiKey: z.string().max(400).optional(),
 });
 export type AiSettingsWrite = z.infer<typeof AiSettingsWriteSchema>;

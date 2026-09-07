@@ -100,9 +100,33 @@ test.describe('a live model, configured at runtime', () => {
     expect(wrong.error.message).toContain('no-such-model-here');
     expect(wrong.error.message).toContain('it serves');
 
-    // 5. And a save that changes ONE field leaves the others alone. This is
+    // 5. The reasoning cap, measured. On a reasoning model this is the
+    // difference between a Fixer that answers and one that thinks out loud for
+    // ten seconds first — measured at 3.4s / 112 completion tokens on the
+    // default against 0.24s / 3 tokens with thinking off.
+    await configure({ primaryModel: MODEL, fastModel: MODEL, reasoningEffort: 'default' });
+    const loud = await api.request<{ usage: { completionTokens: number } }>(
+      'POST',
+      '/api/fixer/chat',
+      {
+        token: gm,
+        body: { campaignId: c, message: 'Name one Shadowrun archetype. Two words maximum.', maxRounds: 1 },
+      },
+    );
+    await configure({ reasoningEffort: 'off' });
+    const quiet = await api.request<{ usage: { completionTokens: number } }>(
+      'POST',
+      '/api/fixer/chat',
+      {
+        token: gm,
+        body: { campaignId: c, message: 'Name one Shadowrun archetype. Two words maximum.', maxRounds: 1 },
+      },
+    );
+    // Thinking off must actually cost fewer tokens, or the knob is decorative.
+    expect(quiet.usage.completionTokens).toBeLessThan(loud.usage.completionTokens);
+
+    // 6. And a save that changes ONE field leaves the others alone. This is
     // the silent data loss the first live run found.
-    await configure({ primaryModel: MODEL, fastModel: MODEL });
     const before = await api.get<{ ai: Record<string, unknown> }>(`/api/campaigns/${c}/ai`, gm);
     await configure({ provider: 'openai-compatible' });
     const after = await api.get<{ ai: Record<string, unknown> }>(`/api/campaigns/${c}/ai`, gm);

@@ -11,7 +11,7 @@
  * base URL. With `LLM_BASE_URL` unset, `llmConfigFromEnv()` returns null and
  * every AI entry point disables cleanly (NG7 / Principle 5).
  */
-import type { AiDialect, AiProvider } from '@safehouse/contracts';
+import type { AiDialect, AiEffort, AiProvider } from '@safehouse/contracts';
 import { anthropicChat } from './anthropic.js';
 import { httpError } from '../services/auth.js';
 
@@ -39,6 +39,11 @@ export interface LlmConfig {
   provider?: AiProvider;
   /** Bearer/x-api-key credential. Absent for a box on the LAN. */
   apiKey?: string;
+  /**
+   * How hard to think. `default` (or absent) sends nothing and lets the
+   * model behave as it always has.
+   */
+  effort?: AiEffort;
 }
 
 /** `null` when `LLM_BASE_URL` is unset/blank — the whole Fixer disables (NG7). */
@@ -310,6 +315,35 @@ export class ChatAccumulator {
 
 // ---------------------------------------------------------------------------
 // Client
+/**
+ * The reasoning knob, for a Chat Completions server.
+ *
+ * TWO knobs, because the hosted providers and a local box do not share one.
+ * OpenAI and xAI read `reasoning_effort`. A llama.cpp router accepts that
+ * field, returns 200, and ignores it completely — measured: identical
+ * reasoning length with and without. What actually moves the number there is
+ * the chat template's own `enable_thinking`, which is a boolean, so a local
+ * model gets thinking on or off and nothing in between.
+ *
+ * Both are sent. A server that does not know a field ignores it, which is the
+ * behaviour we are relying on either way, and sending the pair means one
+ * setting works on all three without the GM having to know which is which.
+ */
+export function openAiEffort(config: LlmConfig): Record<string, unknown> {
+  const effort = config.effort ?? 'default';
+  if (effort === 'default') return {};
+  if (effort === 'off') {
+    // `minimal` is OpenAI's floor; `enable_thinking: false` is what a Qwen
+    // template on llama.cpp reads. Neither upsets a server that has no idea
+    // what it is.
+    return {
+      reasoning_effort: 'minimal',
+      chat_template_kwargs: { enable_thinking: false },
+    };
+  }
+  return { reasoning_effort: effort, chat_template_kwargs: { enable_thinking: true } };
+}
+
 // ---------------------------------------------------------------------------
 
 export class LlmClient {
@@ -338,7 +372,11 @@ export class LlmClient {
   async chat(req: ChatRequest, opts: ChatOptions = {}): Promise<ChatTurn> {
     if (this.config.dialect === 'anthropic') {
       return anthropicChat(
-        { apiKey: this.config.apiKey ?? '', baseUrl: this.config.baseUrl },
+        {
+          apiKey: this.config.apiKey ?? '',
+          baseUrl: this.config.baseUrl,
+          effort: this.config.effort,
+        },
         req,
         opts,
       );
@@ -351,7 +389,12 @@ export class LlmClient {
     const startedAt = Date.now();
     const signals: AbortSignal[] = [AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS)];
     if (opts.signal) signals.push(opts.signal);
-    const body = JSON.stringify({ ...req, stream: true, stream_options: { include_usage: true } });
+    const body = JSON.stringify({
+      ...req,
+      ...openAiEffort(this.config),
+      stream: true,
+      stream_options: { include_usage: true },
+    });
 
     let res: Response;
     try {

@@ -40,7 +40,25 @@ export const PROBE_IMAGE_DATA_URI =
  * `/props` in milliseconds and a dead one refuses the connection immediately;
  * this ceiling only bites on a box that is hung, which is worth knowing fast.
  */
-const PROBE_TIMEOUT_MS = 10_000;
+/**
+ * `/props` is a plain GET that touches no model — if it is going to answer, it
+ * answers at once.
+ */
+const PROPS_TIMEOUT_MS = 10_000;
+
+/**
+ * The image probe, however, makes the box RUN something.
+ *
+ * Ten seconds was not close to enough. A llama.cpp router loads models on
+ * demand and serves one at a time, so asking it about a vision model right
+ * after a text one makes it unload 35B of weights and load 27B more —
+ * measured at 14 to 24 seconds on a real machine. The probe timed out every
+ * time and reported "could not reach", about a server that was reachable,
+ * healthy, and busy doing exactly what was asked of it.
+ *
+ * A minute is generous for a request that runs once per model and is cached.
+ */
+const PROBE_TIMEOUT_MS = 60_000;
 
 export type VisionVia = 'env' | 'props' | 'probe' | 'unconfigured' | 'unknown';
 
@@ -156,7 +174,7 @@ export function readPropsVision(raw: unknown): boolean | null {
 async function askProps(baseUrl: string): Promise<boolean | null> {
   try {
     const res = await fetch(`${serverRootUrl(baseUrl)}/props`, {
-      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      signal: AbortSignal.timeout(PROPS_TIMEOUT_MS),
     });
     if (!res.ok) return null;
     return readPropsVision(await res.json());
@@ -165,8 +183,17 @@ async function askProps(baseUrl: string): Promise<boolean | null> {
   }
 }
 
-/** `true` accepted, `false` refused, `null` never reached the box. */
-async function askImageProbe(config: LlmConfig, model: string): Promise<boolean | null> {
+/**
+ * `true` accepted, `false` refused, `null` no answer.
+ *
+ * `timedOut` is reported separately because the two failures need different
+ * sentences: a box that never answers is a wrong address, and a box that
+ * answers late is almost always loading the model you just picked.
+ */
+async function askImageProbe(
+  config: LlmConfig,
+  model: string,
+): Promise<{ ok: boolean | null; timedOut: boolean }> {
   try {
     const res = await fetch(chatCompletionsUrl(config.baseUrl), {
       method: 'POST',
@@ -189,9 +216,11 @@ async function askImageProbe(config: LlmConfig, model: string): Promise<boolean 
       signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
     // A text-only server rejects the image part outright; that is the answer.
-    return res.ok;
-  } catch {
-    return null;
+    return { ok: res.ok, timedOut: false };
+  } catch (err) {
+    // `AbortSignal.timeout` aborts with a TimeoutError.
+    const timedOut = err instanceof Error && err.name === 'TimeoutError';
+    return { ok: null, timedOut };
   }
 }
 
@@ -242,22 +271,27 @@ export async function visionCapability(
   }
 
   const probe = await askImageProbe(config, model);
-  if (probe === null) {
-    // Unreachable is not an answer about the model — do not cache it.
+  if (probe.ok === null) {
+    // No answer is not an answer ABOUT THE MODEL — do not cache it either way.
+    // The two ways of getting no answer need different sentences: a box that
+    // never replies is a wrong address, and one that replies too late is
+    // almost always loading the model that was just picked.
     return capability(
       false,
       'unknown',
       model,
-      `could not reach ${config.baseUrl} to ask whether it reads images`,
+      probe.timedOut
+        ? `${config.baseUrl} did not answer in time — if it loads models on demand, give it a moment and ask again`
+        : `could not reach ${config.baseUrl} to ask whether it reads images`,
     );
   }
   return remember(
     key,
     capability(
-      probe,
+      probe.ok,
       'probe',
       model,
-      probe
+      probe.ok
         ? 'the model accepted an image content part'
         : 'the model refused an image content part — map vision stays hidden',
     ),
