@@ -3,7 +3,7 @@
  * so the main bundle stays lean; the stage subtree is loaded lazily.
  */
 import type { Point, Role, Scene, Token } from '@safehouse/contracts';
-import type { TileCut, TilePattern } from '@safehouse/rules';
+import type { TileCut, TilePattern, TileProp } from '@safehouse/rules';
 
 /** Active pointer tool on the canvas. */
 export type GridTool =
@@ -88,6 +88,12 @@ export interface TileDrawDef {
    */
   cut?: TileCut;
   /**
+   * The design of a piece of furniture or a prop — a desk with its monitor, a
+   * car with its cabin and wheels — drawn by `stage/props.ts`. Absent, an
+   * object draws as the plain solid its `footprint` describes.
+   */
+  prop?: TileProp;
+  /**
    * What the tile IS: a door or a wall. With no `cut` named, a door gets the
    * plain leaf and a see-through wall the plain glazing.
    */
@@ -139,6 +145,7 @@ export interface TileSetLike {
     footprint?: 'fill' | 'wall' | 'post' | 'canopy' | 'round' | 'stair';
     connects?: 'up' | 'down';
     cut?: TileCut;
+    prop?: TileProp;
   }[];
 }
 
@@ -178,6 +185,7 @@ export function tileDefsFromSets(sets: readonly TileSetLike[]): Record<string, T
         ...(t.footprint !== undefined ? { footprint: t.footprint } : {}),
         ...(t.connects !== undefined ? { connects: t.connects } : {}),
         ...(t.cut !== undefined ? { cut: t.cut } : {}),
+        ...(t.prop !== undefined ? { prop: t.prop } : {}),
         kind: t.kind,
         ...(thin && floor !== undefined
           ? { underlay: { pattern: floor.pattern, colors: floor.colors } }

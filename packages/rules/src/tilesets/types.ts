@@ -213,6 +213,129 @@ export const TILE_CUTS = [
 export type TileCut = (typeof TILE_CUTS)[number];
 
 /**
+ * What a piece of furniture or a prop LOOKS like — the silhouette the canvas
+ * builds for it, in isometric and as the floor-plan symbol in plan.
+ *
+ * Before this every object was one of four blobs: a box, a post, a squat
+ * cylinder or a post with a crown. A desk, a car and a pallet stack were the
+ * same box in three browns, and the GM said so. Naming the design here, as
+ * data, is what lets a desk have pedestals and a monitor, a car a cabin and
+ * wheels, a street lamp a pole with a head that throws its pool on the
+ * pavement — without the renderer knowing one set from another. Palettes
+ * stay the tile's own; the design only says what shape they are painted on.
+ *
+ * A VALUE, not just a type, for the same reason as `TILE_CUTS`: the renderer
+ * keeps one drawing per member in a record typed by this list, so a design
+ * added here without a drawing is a compile error rather than a blob. Sets
+ * reuse designs freely — barrens crates and warehouse crates are one design
+ * in two palettes — which is how forty-odd drawings dress six worlds.
+ */
+export const TILE_PROPS = [
+  // --- furniture ---------------------------------------------------------
+  /** A slab on two pedestals with a monitor on it. */
+  'desk',
+  /** A seat with a backrest and four legs. */
+  'chair',
+  /** A long seat with arms and a back; a cushion line down the middle. */
+  'sofa',
+  /** A rectangular top on four legs. */
+  'table',
+  /** A round top on a stem. */
+  'cocktail',
+  /** Two bench seats facing each other across a table. */
+  'booth',
+  /** A round seat on a leg with a footrest ring. */
+  'stool',
+  /** A pedestal with an angled console and a lit screen. */
+  'terminal',
+  /** A tall cabinet with a column of status lights and vents. */
+  'server',
+  /** A tall cabinet of doors with vent slits and handles. */
+  'locker',
+  /** A machine with a lit front window and a dispenser slot. */
+  'vending',
+  /** A bottle upside-down on a stand. */
+  'cooler',
+  /** A cylinder with a lid. */
+  'bin',
+  /** A basin with water and a column in the middle. */
+  'fountain',
+  /** A pot with leaves lumped over it. */
+  'plant',
+  /** A desk with two turntables and a mixer. */
+  'decks',
+  /** Two cabinets stacked, cones on the front. */
+  'speakers',
+  // --- freight and machinery ---------------------------------------------
+  /** Three boxes, one on top of two. */
+  'crates',
+  /** A flat pallet: boards with gaps. */
+  'pallet',
+  /** A drum with ribs and a lid. */
+  'barrel',
+  /** A truck with a mast, forks and an overhead guard. */
+  'forklift',
+  /** A corrugated box with doors on one end. */
+  'container',
+  /** A drum on its end with flanges — cable, hose. */
+  'spool',
+  /** A lamp head on a tripod, throwing its pool on the ground. */
+  'worklight',
+  /** A block with an engine cover, an exhaust and a panel. */
+  'generator',
+  /** A wide cylinder with a domed top and bands. */
+  'tank',
+  /** Three standpipes with handwheels, joined by a cross pipe. */
+  'valves',
+  /** A housing with a motor beside it and a pipe out of the top. */
+  'pump',
+  /** A box with a round grille and spokes. */
+  'fan',
+  // --- street ------------------------------------------------------------
+  /** A low body with a glazed cabin and wheels. */
+  'car',
+  /** A cargo box with a cab in front. */
+  'van',
+  /** A trunk with a jittered crown. */
+  'tree',
+  /** Low lumps of foliage. */
+  'bush',
+  /** A square planter with something growing in it. */
+  'planter',
+  /** A short post with a cap and two side nozzles. */
+  'hydrant',
+  /** A post with a cap and a reflective band. */
+  'bollard',
+  /** A tall pole with an arm and a lamp head. */
+  'lamppost',
+  /** A skip with a lid and small wheels. */
+  'dumpster',
+  /** A traffic cone with a reflective band. */
+  'cone',
+  /** Lumpy bags. */
+  'trash',
+  // --- the barrens -------------------------------------------------------
+  /** A drum with flames coming out of it. */
+  'fire',
+  /** A burnt-out car, crushed and missing a wheel. */
+  'wreck',
+  /** A stack of tyres. */
+  'tyres',
+  /** A tarp over a ridge pole, open at one end. */
+  'tent',
+  /** A mound of rubble. */
+  'heap',
+  /** A flat mattress with a pillow. */
+  'mattress',
+  /** An oil lamp standing on a crate. */
+  'lantern',
+  /** A wire basket on wheels with a handle. */
+  'cart',
+] as const;
+
+export type TileProp = (typeof TILE_PROPS)[number];
+
+/**
  * Footprints that occupy only part of their cell and therefore need floor
  * drawn underneath them — otherwise every one is a hole in the map.
  */
@@ -268,6 +391,12 @@ export interface Tile {
    * slab, which is exactly the look this exists to replace.
    */
   cut?: TileCut;
+  /**
+   * The design of a piece of furniture or a prop — see `TILE_PROPS`. Only
+   * meaningful on an object-layer tile (interior or decoration); a prop
+   * without one draws as the plain solid its `footprint` describes.
+   */
+  prop?: TileProp;
   /**
    * A colour this tile GIVES OFF rather than reflects: sodium lamps, neon,
    * a barrel fire, the glow off a server rack.

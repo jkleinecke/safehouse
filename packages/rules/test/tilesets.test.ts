@@ -20,7 +20,9 @@ import {
   TILE_HEIGHTS,
   TILE_KINDS,
   TILE_PATTERNS,
+  TILE_PROPS,
   cellKey,
+  layerOf,
   parseCellKey,
   stopsMovement,
   stopsSight,
@@ -251,8 +253,8 @@ describe('lookups', () => {
   });
 
   it('returns null for a tile that exists in a DIFFERENT set', () => {
-    // `crates` is docklands-only; asking club for it must not fall back.
-    expect(tileById('club', 'crates')).toBeNull();
+    // `forklift` is docklands-only; asking club for it must not fall back.
+    expect(tileById('club', 'forklift')).toBeNull();
     expect(tileById('docklands', 'booth')).toBeNull();
   });
 
@@ -287,5 +289,36 @@ describe('cell keys', () => {
 
   it('treats -0 as 0 so one cell has one key', () => {
     expect(cellKey(-0, 0)).toBe('0,0');
+  });
+});
+
+describe('props are designs the renderer draws', () => {
+  it('lists each design once, so a consumer can key a record by the array', () => {
+    expect(new Set(TILE_PROPS).size).toBe(TILE_PROPS.length);
+  });
+
+  it('uses only designs from TILE_PROPS, and only on the object layer', () => {
+    // A design on a wall or a floor would be drawn by nothing: the object
+    // renderer is the only thing that reads `prop`.
+    const known = new Set<string>(TILE_PROPS);
+    for (const { setId, tile } of ALL_TILES) {
+      if (tile.prop === undefined) continue;
+      expect(known.has(tile.prop), `${setId}/${tile.id} names unknown design ${tile.prop}`).toBe(true);
+      expect(layerOf(tile), `${setId}/${tile.id} has a design but is not an object`).toBe('object');
+    }
+  });
+
+  it('gives every design at least one tile, so none is dead weight in the renderer', () => {
+    const used = new Set(ALL_TILES.map(({ tile }) => tile.prop).filter((p) => p !== undefined));
+    for (const design of TILE_PROPS) expect(used.has(design), `no tile uses ${design}`).toBe(true);
+  });
+
+  it('dresses every set with designed furniture and props — not four blobs in six browns', () => {
+    for (const set of TILESETS) {
+      const designed = set.tiles.filter((t) => t.prop !== undefined);
+      expect(designed.length, `${set.id} has ${designed.length} designed props`).toBeGreaterThanOrEqual(8);
+      // …and a set is a world, so its designs must not all be one thing.
+      expect(new Set(designed.map((t) => t.prop)).size, set.id).toBeGreaterThanOrEqual(6);
+    }
   });
 });

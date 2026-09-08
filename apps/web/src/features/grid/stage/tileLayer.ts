@@ -25,6 +25,7 @@ import { tileDefKey, type TileDrawDef } from '../types.js';
 import type { TileCut, TilePattern } from '@safehouse/rules';
 import { C, FACE_FOOT, FACE_SHADE, parseColor, shade } from './colors.js';
 import { drawCut, type CutRun } from './cuts.js';
+import { drawProp, propFootprint } from './props.js';
 
 // Type-only pixi import: every draw here is a call on a Graphics-shaped object,
 // so the module stays runnable (and testable) without a renderer.
@@ -1247,8 +1248,40 @@ function objectRect(
   col: number,
   row: number,
 ): [number, number, number, number] {
+  if (def.prop !== undefined) return propFootprint(def.prop, col, row);
   const r = def.footprint === 'canopy' ? 0.42 : def.footprint === 'round' ? 0.34 : 0.15;
   return [col + 0.5 - r, row + 0.5 - r, col + 0.5 + r, row + 0.5 + r];
+}
+
+/**
+ * A designed prop — a desk, a car, a lamp post — built by `stage/props.ts`
+ * in the tile's own tones. Any light it gives off is handed to the light
+ * pass from the face the design says is the fixture.
+ */
+function drawPropTile(
+  g: Graphics,
+  def: TileDrawDef,
+  m: SceneMetrics,
+  col: number,
+  row: number,
+): void {
+  if (def.prop === undefined) return;
+  const base = parseColor(def.colors[0], 0x3b3f45);
+  const accent = parseColor(def.colors[1], 0x5a6068);
+  const glow = def.emissive === undefined ? null : parseColor(def.emissive, accent);
+  const face = drawProp(
+    g,
+    m,
+    def.prop,
+    col,
+    row,
+    def.height ?? 0,
+    heightRise(m, 1),
+    tonesOf(base, accent),
+    cellSeed(col, row),
+    glow,
+  );
+  if (face !== null) drawGlow(g, m, def, accent, face);
 }
 
 /**
@@ -1607,6 +1640,14 @@ export function drawFloorCell(
   if (cell.def.footprint !== undefined && cell.def.footprint !== 'fill' && !plan.grounded.has(key)) {
     drawUnderlay(g, cell.def, m, cell.col, cell.row);
   }
+  if (cell.def.prop !== undefined) {
+    // A flat designed prop — a pallet, a mattress — lies on the floor rather
+    // than being the floor, so it wants ground under it like a thin tile.
+    if (!plan.grounded.has(key)) drawUnderlay(g, cell.def, m, cell.col, cell.row);
+    drawPropTile(g, cell.def, m, cell.col, cell.row);
+    if (cell.layer === 0 || !plan.grounded.has(key)) drawFloorEdge(g, m, cell, plan.occupied);
+    return;
+  }
   drawFillTile(g, cell.def, m, cell.col, cell.row);
   // The edge is drawn by whichever flat thing sits lowest in the square: the
   // ground when there is one, otherwise the flat prop standing in for it.
@@ -1622,7 +1663,12 @@ export function drawAmbientFor(
 ): void {
   if ((cell.def.height ?? 0) < 1) return;
   const shape = cell.def.footprint;
-  if (shape === 'wall') {
+  if (cell.def.prop !== undefined) {
+    // A designed thing takes light from the floor around its own footprint,
+    // and only when it is solid enough to: a lamp post and a tree are full
+    // height but a sightline passes them, and so does the light.
+    if (cell.def.blocksSight !== false) drawAmbientRing(g, m, objectRect(cell.def, cell.col, cell.row));
+  } else if (shape === 'wall') {
     for (const r of wallRects(cell.col, cell.row, joinsOf(plan.walls, cell.col, cell.row))) {
       drawAmbientRing(g, m, r);
     }
@@ -1640,7 +1686,11 @@ export function drawShadowFor(
 ): void {
   const h = cell.def.height ?? (cell.def.footprint === 'stair' ? 0.5 : 0);
   const shape = cell.def.footprint;
-  if (shape === 'wall') {
+  if (cell.def.prop !== undefined) {
+    // A flat designed prop lies on the floor and casts nothing; a standing
+    // one casts from the footprint its design declares.
+    if (h > 0) drawGroundShadow(g, m, objectRect(cell.def, cell.col, cell.row), h);
+  } else if (shape === 'wall') {
     for (const r of wallRects(cell.col, cell.row, joinsOf(plan.walls, cell.col, cell.row))) {
       drawGroundShadow(g, m, r, h);
     }
@@ -1664,7 +1714,11 @@ export function drawStandingCell(
   plan: Pick<TilePlan, 'walls' | 'structure'>,
 ): void {
   const shape = cell.def.footprint;
-  if (shape === 'stair') {
+  if (cell.def.prop !== undefined) {
+    // A design beats a footprint: the footprint still says where the shadow
+    // falls, but the thing itself is built by its design.
+    drawPropTile(g, cell.def, m, cell.col, cell.row);
+  } else if (shape === 'stair') {
     drawStairTile(g, cell.def, m, cell.col, cell.row);
   } else if (shape === 'post' || shape === 'canopy' || shape === 'round') {
     drawObjectTile(g, cell.def, m, cell.col, cell.row);

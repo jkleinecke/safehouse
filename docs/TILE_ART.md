@@ -244,7 +244,10 @@ anyone comparing this to a screenshot knows exactly which knob was turned.
 6. Only add `emissive` if the set has fewer than four lights **and** the tile
    is something a GM places rather than fills a region with. Tube neon
    (magenta) belongs to the Club and the Street only.
-7. Run `pnpm --filter @safehouse/rules test`. The failure will name the rule.
+7. A piece of furniture or a prop names a `prop` design from `TILE_PROPS`
+   — reuse one before adding one; a new design needs a drawing in
+   `stage/props.ts`, and the record type will not compile without it.
+8. Run `pnpm --filter @safehouse/rules test`. The failure will name the rule.
 
 The generator used to build the current catalogue is not checked in — the
 catalogue is the source of truth, and the hexes in it are the authored values.
@@ -366,6 +369,51 @@ A change to any cell of a run redraws the whole run (`expandCutRuns`).
 In plan view the symbols are the architect's: swing arcs for hinged leaves,
 glazing lines for glass, ticks for slats, a circle for a hatch, a dashed gap
 for a hole.
+
+## Props are drawn as what they are
+
+An object used to be one of four blobs — a box, a post, a squat cylinder,
+a post with a crown — and a desk, a car and a pallet stack were the same
+box in three browns. Every object tile now names a **prop** design
+(`TILE_PROPS`, forty-eight of them) and `stage/props.ts` builds it from
+small solids placed in cell space: a slab on two pedestals with a monitor;
+a seat with a back and four legs; a low body with a glazed cabin, headlights
+and wheels; a cargo box with a cab; a trunk under a jittered crown; a pole
+with an arm and a lamp head; a drum with ribs and a lid; a tripod work light;
+a cabinet with a column of status lights; a vending machine with its lit
+window; a tarp over a ridge pole; flames out of a barrel; a shopping cart
+with its wire sides.
+
+**One drawing serves both projections.** The kit projects every solid
+through the scene's own projection, so in isometric a box gets its two lit
+faces (the same `FACE_SHADE` multipliers as a wall) and its top, and in plan
+the same call draws only the top — which is the floor-plan symbol for free.
+A chair from above is a seat and a back; a car is a body and a cabin with a
+windscreen line; a tree is a crown with a trunk dot. There is no second
+drawing per design, so the two views cannot disagree.
+
+**Order is occlusion.** There is no depth buffer: a part drawn later covers
+one drawn earlier, so every design draws back to front and bottom to top —
+the pedestals before the desktop, the trunk before the crown. Faces standing
+on a vertical plane (wheels, speaker cones, a fan grille, a lit screen) are
+drawn as polygons on that face and vanish in plan, where a vertical face has
+no area.
+
+**Designs are shared; palettes are not.** Barrens crates and warehouse
+crates are one drawing in two palettes; the corp filing cabinet is the
+locker design at waist height; the street kiosk is the vending machine
+unlit. A set's character comes from which designs it offers and what it
+paints them, which is what makes a new set cheap to author. Each design
+declares its own footprint, and that is what the contact shadow falls from
+and the ambient ring surrounds — so a lamp post's shadow is a post's, not a
+cell's, and a tree and a lamp post take no light from the floor (a sightline
+passes them, and so does the light).
+
+**Lights are fixtures.** A design used by a light tile hands the light pass
+a face: the lamp head's pool on the ground, the screen of a terminal, the
+rim of a fire drum. The pool and bloom are then drawn by the same unlit pass
+as every other light, so a street lamp lights the pavement the way a neon
+sign lights a wall.
 
 ## What it costs, and how the stage pays for it
 
