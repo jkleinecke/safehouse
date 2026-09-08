@@ -36,6 +36,15 @@ RUN pnpm install --frozen-lockfile
 
 COPY packages/ packages/
 COPY apps/     apps/
+# The build stamp — the short commit (`-dirty` if the tree was) and the time —
+# passed by `pnpm docker:up` through compose, and by CI from the commit.
+# Declared this late on purpose: a new commit invalidates the build below and
+# never the dependency layer above. Vite bakes both into the SPA here, and the
+# `runtime` stage puts the same two values in the server's environment, so
+# /healthz, the boot log and the page footer all name one build.
+ARG SAFEHOUSE_VERSION=dev
+ARG SAFEHOUSE_BUILT_AT=
+ENV SAFEHOUSE_VERSION=$SAFEHOUSE_VERSION SAFEHOUSE_BUILT_AT=$SAFEHOUSE_BUILT_AT
 RUN pnpm -r --workspace-concurrency=1 build
 
 # ----------------------------------------------------------------- seed stage
@@ -128,5 +137,14 @@ EXPOSE 8787
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||8787)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+# The same stamp the build stage baked into the SPA (see there), now in the
+# server's environment: `/healthz` reports it, and `docker inspect` can read
+# it off the image without starting a container.
+ARG SAFEHOUSE_VERSION=dev
+ARG SAFEHOUSE_BUILT_AT=
+ENV SAFEHOUSE_VERSION=$SAFEHOUSE_VERSION SAFEHOUSE_BUILT_AT=$SAFEHOUSE_BUILT_AT
+LABEL org.opencontainers.image.revision=$SAFEHOUSE_VERSION \
+      org.opencontainers.image.created=$SAFEHOUSE_BUILT_AT
 
 CMD ["node", "apps/server/dist/index.js"]

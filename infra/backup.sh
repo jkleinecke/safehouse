@@ -11,7 +11,7 @@
 #      BACKUP_RETAIN_DAYS.
 #
 # RESTORING — the drill §15 asks for and nobody ever runs:
-#   database    docker compose -f infra/docker-compose.yml exec -T postgres \
+#   database    docker compose exec -T postgres \
 #                 pg_restore --clean --no-owner -U safehouse -d safehouse \
 #                 < backups/db-<stamp>.dump
 #   file store  tar -xzf backups/files-<stamp>.tar.gz  (into the app's /data)

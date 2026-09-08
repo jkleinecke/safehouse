@@ -16,7 +16,14 @@
     "seed:books": "pnpm --filter @safehouse/server seed:books",
     "seed:demo": "pnpm --filter @safehouse/server seed:demo",
     "gm:token": "pnpm --filter @safehouse/server gm:token",
-    "playthrough": "pnpm --filter @safehouse/server playthrough"
+    "playthrough": "pnpm --filter @safehouse/server playthrough",
+    "docker:up": "node scripts/docker.mjs up",
+    "docker:status": "node scripts/docker.mjs status",
+    "docker:logs": "docker compose logs -f app",
+    "docker:down": "docker compose down",
+    "docker:seed": "docker compose run --rm --build seed",
+    "docker:demo": "docker compose run --rm --build --entrypoint \"pnpm --filter @safehouse/server seed:demo\" seed",
+    "docker:token": "docker compose run --rm --build --entrypoint \"pnpm --filter @safehouse/server gm:token\" seed"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

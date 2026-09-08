@@ -206,7 +206,7 @@ export function childEnv(dataDir: string, extra: NodeJS.ProcessEnv = {}): NodeJS
     ...process.env,
     DATA_DIR: dataDir,
     LOG_LEVEL: 'warn',
-    // PINNED, not deleted. The server reads `.env` / `infra/.env` on a shell
+    // PINNED, not deleted. The server reads the repo-root `.env` on a shell
     // start and that loader is non-overriding, so DELETING this would let the
     // developer's own file decide the security posture of the test world — the
     // gm-signin spec started passing or failing depending on a gitignored file

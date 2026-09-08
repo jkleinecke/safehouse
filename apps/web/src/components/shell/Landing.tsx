@@ -41,6 +41,7 @@ import {
   type CampaignCard,
 } from '../../api/my-campaigns.js';
 import { getSession, listSessions, type Session } from '../../api/session.js';
+import BuildBadge from './BuildBadge.js';
 import CampaignPicker from './CampaignPicker.js';
 import { useBootstrapCampaign, useAdoptPastedSession, useRedeemCode } from './signin-api.js';
 import { destinationFor, normalizePairCode, parsePastedSession } from './signin.js';
@@ -255,7 +256,7 @@ export default function Landing() {
   };
 
   return (
-    <main className="flex min-h-dvh items-center justify-center bg-ground p-6 text-ink">
+    <main className="flex min-h-dvh flex-col items-center justify-center bg-ground p-6 text-ink">
       <div className="panel w-full max-w-md p-8">
         <div className="text-center">
           <div className="font-label text-xl tracking-[0.35em] text-cyan">SAFEHOUSE</div>
@@ -432,6 +433,8 @@ export default function Landing() {
           </form>
         )}
       </div>
+      {/* Which build this server is — before anyone signs in, so "is this the latest?" needs no token. */}
+      <BuildBadge className="mt-4 text-center" />
     </main>
   );
 }

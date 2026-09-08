@@ -436,7 +436,8 @@ safehouse/
 │  ├─ rules/      # pure SR5 engine incl. generator + environment math
 │  ├─ contracts/  # Zod schemas: API DTOs, WS commands/events, sheet & scene schemas
 │  └─ db/         # Drizzle schema + migrations
-├─ infra/         # docker-compose.yml, Caddyfile, backup scripts
+├─ compose.yaml   # the stack, at the root so it reads the one .env
+├─ infra/         # Dockerfile, backup scripts
 └─ docs/          # this document, ADRs, screenshots
 ```
 
@@ -732,7 +733,7 @@ Shadowrun 5e is owned by Catalyst Game Labs (under license from Topps); there is
 
 ## 16. Deployment and operations
 
-- **`infra/docker-compose.yml`:** `app` (server + built SPA) · `postgres:16` (volume) · `backup` (cron: nightly dump + uploads sync to cloud/external drive). One command before the session: `docker compose up -d`. No reverse proxy — plain HTTP on the LAN (§8).
+- **`compose.yaml`:** `app` (server + built SPA) · `postgres:16` (volume) · `backup` (cron: nightly dump + uploads sync to cloud/external drive). One command before the session: `pnpm docker:up` — rebuilds from the checkout, stamps the image with its commit, and prints which build is running (the same stamp sits in the page footer and on `/healthz`). No reverse proxy — plain HTTP on the LAN (§8).
 - **Multi-arch by construction:** images built with `docker buildx` for **linux/amd64 + linux/arm64**; every base image and native dependency in the stack (Node, Postgres, sharp/libvips) ships both, and CI builds both platforms — the stack runs whether the host laptop is ARM or AMD64. Choosing a dependency with an x86-only native binary is a build failure, not a surprise.
 - **Join QR:** the GM screen shows a QR encoding the laptop's current LAN URL + invite code (FR1.1) — nobody ever types an IP address, and a new venue's Wi-Fi just means a fresh QR.
 - **Config via env:** DB URL, session secret, Discord webhook URL, `LLM_BASE_URL` + `LLM_MODEL_PRIMARY` / `LLM_MODEL_FAST` (optional — unset disables all AI cleanly), file-store path, base URL.

@@ -1,16 +1,35 @@
-# Safehouse production stack (DESIGN.md §16) — one command before the session:
+# Safehouse production stack (DESIGN.md §16) — the latest checkout, running:
 #
-#   docker compose -f infra/docker-compose.yml --env-file .env up -d
+#   pnpm docker:up
+#
+# That builds the image from this checkout, stamps it with the commit it came
+# from, starts everything, waits for /healthz and prints which build is
+# running. `pnpm docker:status` answers the same question later; the page
+# footer and the server's first log line say it too. Plain `docker compose
+# up -d --build` from the repo root does the same minus the stamp and the
+# report, and without the first-run help below.
+#
+# THIS FILE SITS AT THE REPO ROOT so Compose reads the one `.env` beside it —
+# by itself, no flags. It used to live in `infra/`, which made
+# Compose read `infra/.env` and never the root one, and the two copies drifted
+# until nobody could say which value was live. There is one `.env` now.
+# `pnpm docker:up` creates it from `.env.example` on first run and generates
+# the two secrets the stack refuses to start without.
 #
 # Services: `app` (server + built SPA) · `postgres:16` (named volume) ·
 # `backup` (nightly pg_dump + file-store sync). No reverse proxy: plain HTTP on
 # the LAN (§8), €0/mo, runs on the GM's laptop.
 #
-# The optional `llm` profile is the AWAY-GAME FALLBACK only. Normally
-# LLM_BASE_URL points at the dedicated inference box on the LAN (decided 0.8)
-# and this profile stays down:
+#   pnpm docker:logs      # follow the app
+#   pnpm docker:down      # stop it (volumes — the campaign, the books — survive)
 #
-#   docker compose -f infra/docker-compose.yml --profile llm up -d
+# WHICH AI. Chosen in the app, not here: GM console ▸ Fixer ▸ Which AI, and it
+# takes effect on the next message. The `LLM_*` lines in .env only decide what
+# a campaign uses until a GM has picked one there. The optional `llm` profile
+# is the AWAY-GAME FALLBACK only — normally the inference box on the LAN is
+# what the GM points at (decided 0.8) and this profile stays down:
+#
+#   pnpm docker:up --profile llm
 #
 # Multi-arch (§16) — build and push both platforms from the repo root:
 #   docker buildx build -f infra/Dockerfile \
@@ -20,16 +39,14 @@
 # THE BOOK LIBRARY, IN ONE COMMAND (FR11.7)
 #
 # Put your PDFs in one folder on the host and name it once in .env, as
-# `BOOKS_DIR`. Relative paths resolve against THIS file's directory, so the
-# default `..` is the repo root and `BOOKS_DIR=../books` is the folder beside
-# it (which is where the shipped .env points); an absolute path — `D:/books`,
-# `/srv/books` — sidesteps the question. Then:
+# `BOOKS_DIR`. Relative paths resolve against THIS file's directory — the repo
+# root — so the default `./books` is the `books/` folder in the checkout; an
+# absolute path (`D:/books`, `/srv/books`) works too. Then:
 #
-#   docker compose -f infra/docker-compose.yml --env-file .env \
-#     run --rm --build seed
+#   pnpm docker:seed                      # = docker compose run --rm --build seed
 #
 # That is the whole procedure. The `seed` service builds from the Dockerfile's
-# `build` stage (source + tsx, none of which is in the app image), starts
+# `seed` stage (source + tsx, none of which is in the app image), starts
 # `postgres` if it is down, mounts your folder READ-ONLY at /books and the
 # app's own `files` volume at /data, and runs
 # `seed:books --dir /books --calibrate` — codes, measured page offsets, and
@@ -46,23 +63,26 @@
 # Everything after `seed` goes to the seeder, so its flags work as documented
 # in docs/BOOKS.md (--dir is already supplied):
 #
-#   … run --rm seed --list                     # the plan; writes nothing
-#   … run --rm seed --only SR5 --calibrate     # one book
+#   pnpm docker:seed --list                    # the plan; writes nothing
+#   pnpm docker:seed --only SR5 --calibrate    # one book
 #
 # Same service, the demo campaign instead of books (a fresh stack usually wants
 # both) — only the script changes:
 #
-#   … run --rm --entrypoint \
-#       "pnpm --filter @safehouse/server seed:demo" seed
+#   pnpm docker:demo
+#   # = docker compose run --rm --build \
+#   #     --entrypoint "pnpm --filter @safehouse/server seed:demo" seed
+#
+# …and the GM token CLI the same way (`pnpm docker:token --origin http://…`).
 #
 # `seed` sits behind the `seed` profile so `up -d` never starts it; `run`
 # enables that profile by itself. The container exits when the seeding does.
 #
 # THE HOST-SIDE PATH STILL WORKS, if you keep a checkout with Node in it and
 # prefer it: `pnpm seed:books --calibrate` against the published loopback port,
-# then `docker compose -f infra/docker-compose.yml cp ./data/files/. app:/data/files`.
-# It needs Node, the repo, and host→container networking; the service above
-# needs none of the three.
+# then `docker compose cp ./data/files/. app:/data/files`. It needs Node, the
+# repo, and host→container networking; the service above needs none of the
+# three.
 #
 # STILL A ONE-SHOT FROM THE REPO: moving a campaign that started on the
 # laptop's embedded database into this stack. Its source is a PGlite directory
@@ -70,7 +90,7 @@
 # preserved, which is exactly what a hand-rolled row copy gets wrong (see the
 # script's header):
 #
-#   docker compose -f infra/docker-compose.yml up -d postgres
+#   docker compose up -d postgres
 #   pnpm --filter @safehouse/server exec tsx scripts/migrate-to-postgres.ts \
 #     --data-dir ./data --dry-run
 #   pnpm --filter @safehouse/server exec tsx scripts/migrate-to-postgres.ts \
@@ -81,10 +101,13 @@
 # the seeded book PDFs live on disk under DATA_DIR/files and are referenced by
 # `attachments.path`, so they go into the app's volume separately:
 #
-#   docker compose -f infra/docker-compose.yml cp ./data/files/. app:/data/files
+#   docker compose cp ./data/files/. app:/data/files
 
-# Project name comes from the directory (or -p safehouse) rather than a
-# top-level `name:`, which older Compose rejects.
+# Pinned, so the volumes are `safehouse_pgdata` / `safehouse_files` whatever
+# the checkout folder is called. (When the file lived in infra/ the project
+# was named `infra` after its directory; `pnpm docker:up` adopts those volumes
+# the first time it runs, so nothing that was seeded is lost.)
+name: safehouse
 
 services:
   app:
@@ -93,11 +116,17 @@ services:
     # in the header — `build.platforms` is deliberately not used, so this file
     # still parses on the older Compose that ships with Docker Desktop.
     build:
-      context: ..
+      context: .
       dockerfile: infra/Dockerfile
       # Explicit because the file has more than one final stage now: `seed`
       # sits above this one and must never be what `app` runs.
       target: runtime
+      # The build stamp: `pnpm docker:up` sets both from git. A bare
+      # `docker compose build` leaves them at `dev` / unset, which the page
+      # then says — honestly, if unhelpfully.
+      args:
+        SAFEHOUSE_VERSION: ${SAFEHOUSE_VERSION:-dev}
+        SAFEHOUSE_BUILT_AT: ${SAFEHOUSE_BUILT_AT:-}
     image: ${APP_IMAGE:-safehouse/app:latest}
     restart: unless-stopped
     depends_on:
@@ -107,9 +136,10 @@ services:
     # here is the CONTAINER, not the host — so an inference server running on
     # the laptop (llama.cpp, vllm) is unreachable at 127.0.0.1 no matter what
     # port it is on, and the failure looks like a dead endpoint rather than a
-    # config mistake. Set LLM_BASE_URL=http://host.docker.internal:<port>/v1.
-    # Docker Desktop and Rancher provide this name already; the mapping is
-    # what makes it work on plain Linux too.
+    # config mistake. Use http://host.docker.internal:<port>/v1 as the base
+    # URL, in the console or in LLM_BASE_URL. Docker Desktop and Rancher
+    # provide this name already; the mapping is what makes it work on plain
+    # Linux too.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
@@ -118,16 +148,19 @@ services:
       # Drizzle migrations run on container start against this (§16).
       DATABASE_URL: postgres://${POSTGRES_USER:-safehouse}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-safehouse}
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
-      # Every AI env var is optional — unset disables the Fixer cleanly (NG7).
+      # The AI's STARTING point only. A GM's choice in the console (Fixer ▸
+      # Which AI) is saved in the database and wins over these from then on;
+      # unset, the AI stays off until one is made (NG7).
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_MODEL_PRIMARY: ${LLM_MODEL_PRIMARY:-}
       LLM_MODEL_FAST: ${LLM_MODEL_FAST:-}
+      LLM_VISION: ${LLM_VISION:-}
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       # Open table: any device that can reach this server may list every
       # campaign and claim its GM. Unset (the default) keeps GM recovery
       # gated on the loopback interface, which in a bridge network means
-      # nobody — use `gm:token` instead. Set it only on a home network.
+      # nobody — use `pnpm docker:token` instead. Set it only on a home network.
       SAFEHOUSE_OPEN_TABLE: ${SAFEHOUSE_OPEN_TABLE:-}
       # Origin the join QR encodes. Empty is correct here — this container
       # serves the SPA itself, so the server's own LAN address is the one a
@@ -191,12 +224,15 @@ services:
   seed:
     profiles: ["seed"]
     build:
-      context: ..
+      context: .
       dockerfile: infra/Dockerfile
       # The build stage plus a node-owned /data — source, dev deps and tsx,
       # none of which the production image carries. That is the whole reason
       # this service exists instead of `docker compose exec app`.
       target: seed
+      args:
+        SAFEHOUSE_VERSION: ${SAFEHOUSE_VERSION:-dev}
+        SAFEHOUSE_BUILT_AT: ${SAFEHOUSE_BUILT_AT:-}
     # Its own tag: `app` and `seed` are different images from one Dockerfile,
     # and sharing APP_IMAGE would have each overwrite the other.
     image: ${SEED_IMAGE:-safehouse/seed:latest}
@@ -220,9 +256,9 @@ services:
       - files:/data
       # The GM's own library, READ-ONLY (§14). The seeder only ever reads these
       # files, and the owner's shelf must not be writable by a container. The
-      # default is this file's parent — the repo root, where the PDFs already
-      # live; set BOOKS_DIR in .env to point anywhere else.
-      - ${BOOKS_DIR:-..}:/books:ro
+      # default is the checkout's `books/` folder; set BOOKS_DIR in .env to
+      # point anywhere else.
+      - ${BOOKS_DIR:-./books}:/books:ro
     # Fixed prefix + overridable tail: `run --rm seed` seeds the library with
     # calibration, `run --rm seed --list` or `--only SR5` passes the GM's own
     # flags through, and `run --entrypoint …` swaps in `seed:demo`.
@@ -254,11 +290,11 @@ services:
     volumes:
       - files:/data:ro
       - ${BACKUP_DIR:-./backups}:/backups
-      - ./backup.sh:/usr/local/bin/backup.sh:ro
+      - ./infra/backup.sh:/usr/local/bin/backup.sh:ro
     entrypoint: ["/bin/sh", "/usr/local/bin/backup.sh"]
 
   # Away-game fallback ONLY (profile `llm`): llama.cpp's OpenAI-compatible
-  # server over a gitignored models/ folder. At home, LLM_BASE_URL points at
+  # server over a gitignored models/ folder. At home, the GM points the app at
   # the dedicated inference box instead and this never starts.
   llm:
     profiles: ["llm"]
@@ -279,10 +315,11 @@ services:
       - "2"
     volumes:
       # Models are large and licensed — gitignored, never baked into an image.
-      - ../models:/models:ro
+      - ./models:/models:ro
     ports:
       - "${LLM_PORT:-8080}:8080"
-    # With this profile up, set LLM_BASE_URL=http://llm:8080/v1 in .env.
+    # With this profile up, point the app at http://llm:8080/v1 — in the
+    # console, or as LLM_BASE_URL in .env for a fresh campaign.
 
 volumes:
   pgdata:

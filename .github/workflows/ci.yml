@@ -263,5 +263,11 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: false
           tags: safehouse/app:ci
+          # The build stamp /healthz and the page footer report (see
+          # infra/Dockerfile): the commit, and when. `pnpm docker:up` passes
+          # the same two from the laptop's checkout.
+          build-args: |
+            SAFEHOUSE_VERSION=${{ github.sha }}
+            SAFEHOUSE_BUILT_AT=${{ github.event.head_commit.timestamp || '' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

@@ -525,7 +525,7 @@ describe('a PGlite campaign moved into a fresh database', () => {
     resetDbSingleton();
   });
 
-  it('takes the flags infra/docker-compose.yml tells the operator to type', () => {
+  it('takes the flags compose.yaml tells the operator to type', () => {
     expect(
       parseArgs(['--data-dir', './data', '--database-url', 'postgres://x/y', '--dry-run']),
     ).toMatchObject({ dataDir: './data', databaseUrl: 'postgres://x/y', dryRun: true });

@@ -196,6 +196,13 @@ export const AiSettingsViewSchema = AiSettingsSchema.extend({
    * saying out loud rather than leaving the GM to discover it mid-session.
    */
   ready: z.boolean(),
+  /**
+   * What the server is using INSTEAD while nothing has been chosen here: the
+   * environment's `LLM_BASE_URL`, when set. Null once any choice is saved (an
+   * explicit Off included), so the panel can say "running on .env until you
+   * pick one" rather than showing Off for an AI that is in fact answering.
+   */
+  fallback: z.object({ baseUrl: z.string(), primaryModel: z.string() }).nullable().optional(),
 });
 export type AiSettingsView = z.infer<typeof AiSettingsViewSchema>;
 

@@ -13,7 +13,8 @@ apps/web         @safehouse/web       React SPA (Vite), PixiJS Grid, TV kiosk
 packages/contracts @safehouse/contracts  Zod schemas + inferred types (the boundary language)
 packages/rules   @safehouse/rules     Pure SR5 engine (no I/O, no DOM, no db)
 packages/db      @safehouse/db        Drizzle schema, migrations, db client, FTS helpers
-infra/           docker-compose.yml (prod), Caddy nothing (plain HTTP on LAN)
+compose.yaml     the production stack, at the root so it reads the one .env (`pnpm docker:up`)
+infra/           Dockerfile, backup.sh — no Caddy (plain HTTP on LAN)
 docs/            DESIGN.md lives at root; build docs here
 seed/            demo campaign fixtures
 scripts/         playthrough + utilities (run via tsx)

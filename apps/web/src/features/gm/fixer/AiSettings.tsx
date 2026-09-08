@@ -92,7 +92,7 @@ export default function AiSettings({ campaignId }: { campaignId: string }) {
   };
 
   return (
-    <section className="rounded-lg border border-edge bg-panel p-4" data-testid="ai-settings">
+    <section className="rounded-lg border border-edge bg-panel p-4" data-testid="ai-settings" id="which-ai">
       <div className="flex flex-wrap items-baseline gap-2">
         <h3 className="text-sm font-semibold text-ink">Which AI</h3>
         {saved && (
@@ -100,13 +100,33 @@ export default function AiSettings({ campaignId }: { campaignId: string }) {
             className={`chip ${saved.ready ? 'border-ok/50 text-ok' : 'text-warn'}`}
             data-testid="ai-ready"
           >
-            {saved.ready ? 'ready' : saved.provider === 'off' ? 'off' : 'not usable yet'}
+            {saved.ready
+              ? saved.fallback
+                ? 'ready · from .env'
+                : 'ready'
+              : saved.provider === 'off'
+                ? 'off'
+                : 'not usable yet'}
           </span>
         )}
         <span className="ml-auto text-[0.7rem] text-faint">
           Takes effect on the next message — no restart.
         </span>
       </div>
+      <p className="mt-1.5 text-[0.7rem] leading-snug text-dim">
+        Saved on this server, for this campaign, and it wins: the <code>LLM_*</code> lines in{' '}
+        <code>.env</code> only decide what a campaign uses until something is chosen here.
+      </p>
+      {saved?.fallback && (
+        <p
+          className="mt-2 rounded-md border border-warn/40 bg-warn/5 px-2.5 py-1.5 text-[0.7rem] leading-snug text-warn"
+          data-testid="ai-fallback"
+        >
+          Nothing chosen here yet, so the AI is running on the server's environment:{' '}
+          <code>{saved.fallback.baseUrl}</code> · {saved.fallback.primaryModel}. Pick a provider to
+          take over, or Off to switch it off.
+        </p>
+      )}
 
       <label className="mt-3 block">
         <span className="mono-label">Provider</span>

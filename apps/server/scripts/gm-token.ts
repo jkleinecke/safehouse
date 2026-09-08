@@ -53,12 +53,12 @@
  *
  * UNDER DOCKER. The `app` image is production-only — no source, no tsx — so it
  * cannot run this file; the one-shot image that can is the `seed` service, the
- * same way `seed:demo` is run (see infra/docker-compose.yml's header). It
- * builds from the `build` stage and talks to the `postgres` service directly:
+ * same way `seed:demo` is run (see compose.yaml's header). It builds from the
+ * `build` stage and talks to the `postgres` service directly:
  *
- *   docker compose -f infra/docker-compose.yml --env-file .env run --rm \
- *     --entrypoint "pnpm --filter @safehouse/server gm:token" seed \
- *     --origin http://192.168.1.20:8787
+ *   pnpm docker:token --origin http://192.168.1.20:8787
+ *   # = docker compose run --rm --build \
+ *   #     --entrypoint "pnpm --filter @safehouse/server gm:token" seed --origin …
  *
  * `--origin` matters there: inside the container `lanAddress()` sees a bridge
  * address, so the default URL would point somewhere no browser can reach.
@@ -68,7 +68,7 @@
  * 127.0.0.1 really is loopback there and `assertLoopbackOrigin` is satisfied
  * honestly (a browser on the host is NOT, which is the case that route refuses):
  *
- *   docker compose -f infra/docker-compose.yml exec app node -e \
+ *   docker compose exec app node -e \
  *     "fetch('http://127.0.0.1:8787/api/gm/recover',{method:'POST',headers:{'content-type':'application/json'},body:'{}'}).then(r=>r.json()).then(o=>console.log(JSON.stringify(o,null,2)))"
  *
  * That prints `{ campaignId, token, … }` for the paste-a-token tab (and, with

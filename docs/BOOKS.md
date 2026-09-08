@@ -170,8 +170,8 @@ flag list for your checkout.
 
 ## 3. Loading the library into the Docker stack
 
-If you launch with `docker compose -f infra/docker-compose.yml … up -d`, this
-section is your answer to "where do the PDFs go and what do I run". It replaces
+If you launch with `pnpm docker:up` (the compose stack), this section is your
+answer to "where do the PDFs go and what do I run". It replaces
 §2's commands and nothing else in this file.
 
 The stack changes exactly two things about seeding:
@@ -198,38 +198,35 @@ the gitignored `models/` folder the `llm` profile mounts.
 
 ### The one command
 
-**Put the PDFs in a folder on the host.** If that folder is the repo root — the
-one `DESIGN.md` sits in, where §1 already puts them — you are done setting up.
-It is never written to, and it is not part of the stack's state; the file
-store's copy is (§6, backups).
+**Put the PDFs in `books/` at the repo root** — the default `BOOKS_DIR`, next
+to `DESIGN.md`. The folder is never written to, and it is not part of the
+stack's state; the file store's copy is (§6, backups).
 
-Keeping them somewhere else? Name that folder once in your env file. `BOOKS_DIR`
-defaults to `..`, this compose file's own parent, so this is the only line you
-touch:
+Keeping them somewhere else? Name that folder once in `.env`. `BOOKS_DIR`
+defaults to `./books`, taken from the repo root (where `compose.yaml` lives),
+so this is the only line you touch:
 
 ```
 BOOKS_DIR=D:/books
 ```
 
-> **If you copied `.env.example`, check this line before your first run.** The
-> example ships `BOOKS_DIR=../books` — a `books/` folder next to `DESIGN.md`,
-> which the repo does not create for you. Either make that folder and move the
-> PDFs into it, or point the line at wherever they actually are. Left as-is with
-> no such folder, the seeder mounts an empty directory and reports no PDFs
-> found.
+> **Check this line before your first run.** `.env.example` ships
+> `BOOKS_DIR=./books`, a folder the repo does not create for you. Either make
+> it and move the PDFs into it, or point the line at wherever they actually
+> are. Left as-is with no such folder, the seeder mounts an empty directory and
+> reports no PDFs found.
 
 **Then seed:**
 
 ```bash
-docker compose -f infra/docker-compose.yml --env-file .env \
-  run --rm --build seed
+pnpm docker:seed
 ```
 
-That is the whole procedure. `run` enables the `seed` profile by itself; the
-service builds (`--build` is worth it on the first run and after a `git pull`,
-and skippable after), waits for `postgres` to come up healthy, mounts your
-folder read-only at `/books` and the app's `files` volume at `/data`, applies
-migrations, and runs the `seed:books` §2 describes — same guesses, same
+That is the whole procedure — it is `docker compose run --rm --build seed`.
+`run` enables the `seed` profile by itself; the service builds (`--build` keeps
+the seeder at this checkout), waits for `postgres` to come up healthy, mounts
+your folder read-only at `/books` and the app's `files` volume at `/data`,
+applies migrations, and runs the `seed:books` §2 describes — same guesses, same
 calibration, same report. Budget the minute or so §2 measured for the seventeen
 production books. The container exits when the seeding does.
 
@@ -254,11 +251,10 @@ here as written, with two adjustments:
 
 ```bash
 # the plan — filenames → code/offset guesses; writes nothing
-docker compose -f infra/docker-compose.yml --env-file .env run --rm seed --list
+pnpm docker:seed --list
 
 # one book, calibrated
-docker compose -f infra/docker-compose.yml --env-file .env \
-  run --rm seed --only SR5 --calibrate
+pnpm docker:seed --only SR5 --calibrate
 ```
 
 Forgetting `--calibrate` on a targeted run is the easy mistake: it leaves that
@@ -285,29 +281,13 @@ already have a `data/files` from a native run and want to lift it in, but you
 no longer need Node, a repo checkout, or host→container networking to load
 books.
 
-### Where the env file lives — this one bites
+### Where the env file lives
 
-Compose takes its **project directory from the directory of the first `-f`
-file**, not from where you are standing. So:
-
-```bash
-docker compose -f infra/docker-compose.yml up -d                   # reads infra/.env
-docker compose -f infra/docker-compose.yml --env-file .env up -d   # reads ./.env
-```
-
-A `.env` in the repo root is **silently ignored** by the first form. `BOOKS_DIR`
-comes out empty, the mount fails or lands somewhere you did not mean, and the
-seeder reports no PDFs found.
-
-Pick one and hold it:
-
-- **keep the file at `infra/.env`** and drop the flag from every command, or
-- **keep it at the repo root** and pass `--env-file .env` on *every* command —
-  `up`, `run`, `exec`, all of them. Mixing the two is how you end up with the
-  seeder writing to one database and the app reading another.
-
-The commands in this section use the second form, because that is what the
-README and the compose header print.
+One place: `.env` at the repo root, beside `compose.yaml`. Compose reads it by
+itself — no `--env-file`, no `-f` — and the shell start reads the same file.
+(The compose file used to live in `infra/`, which made Compose read
+`infra/.env` and silently ignore the root one; that layout is gone, and a
+leftover `infra/.env` is named in the server's boot log until you delete it.)
 
 The same rule governs `BOOKS_DIR`, which is why its default is `..` and not `.`:
 relative paths resolve against `infra/`, so `..` is the repo root and
@@ -324,19 +304,17 @@ From the host, without a browser:
 
 ```bash
 # the PDFs, in the volume the app serves from
-docker compose -f infra/docker-compose.yml --env-file .env \
-  exec app ls /data/files/books
+docker compose exec app ls /data/files/books
 
 # the registry rows and the offsets the seeder measured
-docker compose -f infra/docker-compose.yml --env-file .env \
-  exec postgres psql -U safehouse -d safehouse \
+docker compose exec postgres psql -U safehouse -d safehouse \
   -c 'select code, page_offset from books order by code'
 ```
 
 Seventeen `<CODE>.pdf` files and seventeen rows, `SR5` at `+5`. (Swap
 `safehouse` for your `POSTGRES_USER` / `POSTGRES_DB` if you changed them.) Files
 present but the shelf empty means the seeder wrote to a different database than
-the app reads — which is the env-file trap above.
+the app reads — `docker compose config` prints what each service resolved.
 
 ### Adding a book later, under Docker
 
@@ -344,7 +322,7 @@ Drop the new PDF into the folder the others are in and run the same command
 again:
 
 ```bash
-docker compose -f infra/docker-compose.yml --env-file .env run --rm seed
+pnpm docker:seed
 ```
 
 **The seeder is re-runnable** (§6): for a code that already exists it refreshes
@@ -357,11 +335,10 @@ Narrow it if you prefer, remembering that a flag replaces the default
 `--calibrate`:
 
 ```bash
-docker compose -f infra/docker-compose.yml --env-file .env \
-  run --rm seed --only SS --calibrate
+pnpm docker:seed --only SS --calibrate
 ```
 
-Not sure the mount points where you think? `run --rm seed --list` prints the
+Not sure the mount points where you think? `pnpm docker:seed --list` prints the
 filename → code/offset guesses for everything it can see and writes nothing.
 Run that first.
 
@@ -640,28 +617,25 @@ Docker stack, real Postgres takes the second client without complaint.
 
 ### Docker stack
 
-**"no PDFs found", or it seeds the wrong folder.** Two causes, in order of
-likelihood. **One:** you copied `.env.example`, which ships
-`BOOKS_DIR=../books`, and there is no `books/` folder — put the PDFs there or
-repoint the line (§3). **Two:** `BOOKS_DIR` never reached Compose at all and it
-fell back to its default `..`, the repo root; that is the env file,
-`-f infra/docker-compose.yml` auto-reads `infra/.env` and not the repo root's
-(§3). Ask Compose what it actually resolved rather than guessing:
+**"no PDFs found", or it seeds the wrong folder.** Almost always: `.env.example`
+ships `BOOKS_DIR=./books`, and there is no `books/` folder — put the PDFs there
+or repoint the line (§3). Ask Compose what it actually resolved rather than
+guessing:
 
 ```bash
-docker compose -f infra/docker-compose.yml --env-file .env --profile seed config
+docker compose --profile seed config
 ```
 
 The `seed` service's `/books` volume line prints the host path it will mount. A
-path you did not expect there is the whole bug — and remember a relative one is
-read from `infra/`, not the repo root.
+path you did not expect there is the whole bug — a relative one is read from the
+repo root, where `compose.yaml` lives.
 
-**`no such service: seed`.** Either you are pointing `-f` at a compose file that
-predates the seeding service, or at an older copy of the repo. This lists what
-your file really defines:
+**`no such service: seed`.** You are in an older copy of the repo, or standing
+somewhere other than its root (Compose looks for `compose.yaml` in the current
+directory). This lists what the file really defines:
 
 ```bash
-docker compose -f infra/docker-compose.yml --profile seed config --services
+docker compose --profile seed config --services
 ```
 
 **It seeded, but the shelf says "not calibrated".** You passed a flag, and a
@@ -680,7 +654,7 @@ for lifting a `data/files` produced by a *native* run into the stack.
 
 Spec: DESIGN.md §6 M11 (FR11.1–11.7), §14.8–14.9 (content and licensing),
 §15 (media caps, durability), §16 (deployment; the PDFs stay out of git).
-Code: `infra/docker-compose.yml` (the stack and its seeding service, §3),
+Code: `compose.yaml` (the stack and its seeding service, §3),
 `apps/server/scripts/seed-books.ts` (the CLI and its report),
 `apps/server/src/services/books.ts` (guessing, registering, extracting),
 `apps/server/src/services/book-offsets.ts` (the measurement itself),

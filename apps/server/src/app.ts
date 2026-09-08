@@ -18,6 +18,7 @@ import { ensureMigrations, getDb, type Db } from '@safehouse/db';
 import { Hub } from './hub.js';
 import { AuthService, registerAuthRoutes, type AuthContext } from './services/auth.js';
 import { registerPlugins } from './plugins/index.js';
+import { buildInfo } from './version.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -129,7 +130,9 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   });
 
   // --- health -------------------------------------------------------------
-  app.get('/healthz', async () => ({ ok: true, ts: new Date().toISOString() }));
+  // Unauthenticated, and carries the build: it is how `pnpm docker:status`,
+  // the compose healthcheck and the page footer all answer "which version".
+  app.get('/healthz', async () => ({ ok: true, ts: new Date().toISOString(), ...buildInfo() }));
 
   // --- core auth routes (bootstrap, invites, join, QR, revoke) ------------
   registerAuthRoutes(app, authService);

@@ -2,11 +2,13 @@
  * Load the repo-root `.env` into `process.env` for anything started from the
  * shell (`pnpm dev:server`, the seeders, the playthrough).
  *
- * Compose passes its own `--env-file`, so containers already have real
- * environment variables. Nothing outside a container did: `.env` was read by
- * `docker compose` alone, so a GM who set `LLM_BASE_URL` in the documented
- * place and ran `pnpm dev:server` got a Fixer that still reported itself
- * switched off, with no hint as to why.
+ * There is ONE env file and it lives at the repo root. Compose reads the same
+ * file on its own, because `compose.yaml` sits beside it. That is what retired
+ * `infra/.env`: while the compose file lived in `infra/`, Compose took its
+ * project directory from there and read `infra/.env` — never the root one —
+ * and the two copies drifted until nobody could say which value was live. The
+ * loader reads only the root file now, and warns by name if the old one is
+ * still lying around (see `retiredEnvFiles`).
  *
  * Deliberately tiny and dependency-free, and deliberately NON-OVERRIDING: a
  * variable already present in the environment always wins, so compose, CI and
@@ -15,17 +17,15 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+/** The one env file: `<repo>/.env`. */
+export const ENV_FILE = fileURLToPath(new URL('../../../.env', import.meta.url));
+
 /**
- * Both places an env file legitimately lives, in priority order.
- *
- * `infra/.env` is second because Compose treats the compose file's directory
- * as the project directory: with `-f infra/docker-compose.yml` it auto-reads
- * `infra/.env` and never the repo root, so a GM who followed that path has
- * their settings there. Shell starts should honour either without being told
- * which one they picked.
+ * Where an env file used to be read from and no longer is. Anything found
+ * here is worth a loud line at boot: a value edited there changes nothing,
+ * and that is indistinguishable from "the .env file isn't working".
  */
-const ENV_FILES = [
-  fileURLToPath(new URL('../../../.env', import.meta.url)),
+export const RETIRED_ENV_FILES: readonly string[] = [
   fileURLToPath(new URL('../../../infra/.env', import.meta.url)),
 ];
 
@@ -50,62 +50,19 @@ export function parseEnvFile(text: string): Record<string, string> {
   return out;
 }
 
-/**
- * Which file each key would come from, and where two files disagree.
- *
- * The trap this exists for: there are two legitimate `.env` locations and the
- * loader is non-overriding, so the repo root silently beats `infra/.env` for
- * every key both define. Edit the wrong one and nothing happens — no error, no
- * warning, and the app keeps using a value you can no longer see anywhere on
- * screen. That is indistinguishable from "the .env file isn't working", and it
- * cost a real debugging session.
- *
- * Key names only, never values: these files hold SESSION_SECRET and the
- * database password, and a diagnostic that leaks them into the log is worse
- * than the confusion it solves.
- */
-export interface EnvConflict {
-  key: string;
-  /** The file that wins, then the one shadowed by it. */
-  winner: string;
-  shadowed: string;
+/** The retired locations that still have a file in them. */
+export function retiredEnvFiles(files: readonly string[] = RETIRED_ENV_FILES): string[] {
+  return files.filter((f) => existsSync(f));
 }
 
-export function envFileConflicts(files: readonly string[] = ENV_FILES): EnvConflict[] {
-  const seen = new Map<string, { file: string; value: string }>();
-  const out: EnvConflict[] = [];
-  for (const file of files) {
-    if (!existsSync(file)) continue;
-    let parsed: Record<string, string>;
-    try {
-      parsed = parseEnvFile(readFileSync(file, 'utf8'));
-    } catch {
-      continue;
-    }
-    for (const [key, value] of Object.entries(parsed)) {
-      const first = seen.get(key);
-      if (first === undefined) {
-        seen.set(key, { file, value });
-      } else if (first.value !== value) {
-        // Same key, different value, two files. Exactly the silent-shadow case.
-        out.push({ key, winner: first.file, shadowed: file });
-      }
-    }
+/** The env file, if it defines `key`. Null means the process environment did. */
+export function envFileFor(key: string, file: string = ENV_FILE): string | null {
+  if (!existsSync(file)) return null;
+  try {
+    return key in parseEnvFile(readFileSync(file, 'utf8')) ? file : null;
+  } catch {
+    return null;
   }
-  return out;
-}
-
-/** Which of the env files defines `key`, in win order. Null if none does. */
-export function envFileFor(key: string, files: readonly string[] = ENV_FILES): string | null {
-  for (const file of files) {
-    if (!existsSync(file)) continue;
-    try {
-      if (key in parseEnvFile(readFileSync(file, 'utf8'))) return file;
-    } catch {
-      continue;
-    }
-  }
-  return null;
 }
 
 /**
@@ -118,10 +75,9 @@ export function redactUrl(url: string): string {
 
 /**
  * Fill in anything the environment does not already define. Returns the keys
- * it actually set, so a caller can log them; missing file is not an error.
+ * it actually set, so a caller can log them; a missing file is not an error.
  */
-export function loadEnvFile(file?: string): string[] {
-  if (file === undefined) return ENV_FILES.flatMap((f) => loadEnvFile(f));
+export function loadEnvFile(file: string = ENV_FILE): string[] {
   if (!existsSync(file)) return [];
   let parsed: Record<string, string>;
   try {

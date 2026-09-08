@@ -964,8 +964,7 @@ overrides the 4× default.
 ### Production
 
 ```bash
-cp .env.example .env        # set SESSION_SECRET and POSTGRES_PASSWORD
-docker compose -f infra/docker-compose.yml --env-file .env up -d
+pnpm docker:up              # creates .env, rebuilds from this checkout, prints the running build
 ```
 
 `app` (server + built SPA on 8787) · `postgres:16` · `backup`. Plain HTTP on the

@@ -11,13 +11,14 @@
  */
 // Before anything reads process.env: fills in the repo-root .env for shell
 // starts (compose supplies its own, and already-set variables always win).
-import { envFileConflicts, envFileFor, loadEnvFile, redactUrl } from './dotenv.js';
+import { envFileFor, loadEnvFile, redactUrl, retiredEnvFiles } from './dotenv.js';
 
 loadEnvFile();
 
 import { buildApp } from './app.js';
 import { installSignalHandlers } from './shutdown.js';
 import { lanAddress, openTableMode } from './services/auth.js';
+import { buildInfo } from './version.js';
 
 const port = Number(process.env.PORT ?? 8787);
 
@@ -31,25 +32,38 @@ installSignalHandlers(app);
 
 try {
   await app.listen({ port, host: '0.0.0.0' });
-  app.log.info(`safehouse serving the table at http://${lanAddress()}:${port}`);
+  // The build is the first thing in the log, because "is this the latest?"
+  // is the first thing anyone testing a change asks. `/healthz` says the same.
+  const build = buildInfo();
+  const built =
+    build.builtAt !== null
+      ? ` (built ${build.builtAt})`
+      : build.source === 'checkout'
+        ? ' (running from the checkout)'
+        : '';
+  app.log.info(`safehouse ${build.version}${built} serving the table at http://${lanAddress()}:${port}`);
 
-  // Where the AI config actually came from. Silence here is how "I changed
-  // .env and nothing happened" becomes an hour of guessing: the loader reads
-  // two files, prefers the repo root, and never says which one won.
+  // Where the AI's STARTING config came from. The GM's saved choice in the
+  // console (Fixer ▸ Which AI) beats this whenever one has been made — the
+  // env var only decides what a campaign uses until then.
   const llm = process.env['LLM_BASE_URL'];
   if (llm === undefined || llm.trim() === '') {
-    app.log.info('LLM_BASE_URL is unset — the Fixer and every AI entry point stay off (NG7)');
+    app.log.info(
+      'LLM_BASE_URL is unset — the AI stays off until a GM picks one in the console (Fixer ▸ Which AI)',
+    );
   } else {
     const from = envFileFor('LLM_BASE_URL');
     app.log.info(
-      `LLM_BASE_URL=${redactUrl(llm.trim())} (from ${from ?? 'the process environment — compose, CI or the shell'})`,
+      `LLM_BASE_URL=${redactUrl(llm.trim())} (from ${from ?? 'the process environment — compose, CI or the shell'}) — ` +
+        'the default until a GM picks an AI in the console',
     );
   }
-  for (const c of envFileConflicts()) {
-    // Key names only — these files hold the session secret and the db password.
+  for (const stale of retiredEnvFiles()) {
+    // Loud on purpose: a value edited there changes nothing, and that is
+    // indistinguishable from "the .env file isn't working".
     app.log.warn(
-      `${c.key} is set in BOTH ${c.winner} and ${c.shadowed} with different values; ` +
-        `${c.winner} wins and the other is ignored. Edit the winner, or delete the duplicate.`,
+      `${stale} is not read any more — the repo-root .env is the only configuration file ` +
+        '(compose reads the same one). Move anything you still need into it, then delete the old file.',
     );
   }
   if (openTableMode()) {

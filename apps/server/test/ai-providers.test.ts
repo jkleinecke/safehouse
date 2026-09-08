@@ -398,3 +398,29 @@ describe('the reasoning cap', () => {
     expect(resolveLlmConfig(saved, NO_ENV)?.effort).toBe('off');
   });
 });
+
+describe('the view says when the environment is what is answering', () => {
+  const ENV = { LLM_BASE_URL: 'http://box.lan:8080/v1', LLM_MODEL_PRIMARY: 'big' };
+
+  it('reports the env fallback while nothing has been chosen', () => {
+    // The Fixer works, the form reads "Off": without this line the GM has no
+    // way to tell where the answers are coming from.
+    const view = readAiSettings({}, ENV);
+    expect(view.provider).toBe('off');
+    expect(view.ready).toBe(true);
+    expect(view.fallback).toEqual({ baseUrl: 'http://box.lan:8080/v1', primaryModel: 'big' });
+  });
+
+  it('drops it the moment a choice is saved — an explicit Off included', () => {
+    const off = applyAiSettings({}, { provider: 'off' });
+    expect(readAiSettings(off, ENV).fallback).toBeNull();
+    expect(readAiSettings(off, ENV).ready).toBe(false);
+    const local = applyAiSettings({}, { provider: 'openai-compatible', baseUrl: 'http://x/v1' });
+    expect(readAiSettings(local, ENV).fallback).toBeNull();
+  });
+
+  it('is null with no environment either', () => {
+    expect(readAiSettings({}, NO_ENV).fallback).toBeNull();
+    expect(readAiSettings({}, NO_ENV).ready).toBe(false);
+  });
+});

@@ -10,6 +10,7 @@
  * invite. It now says so, and hands over the QR that fixes it.
  */
 import { NavLink } from 'react-router-dom';
+import BuildBadge from './BuildBadge.js';
 import { GM_NAV, GM_NAV_SECTIONS, gmHref } from './gmNav.js';
 
 export interface GmSidebarProps {
@@ -87,6 +88,8 @@ export default function GmSidebar({ campaignId, onShowQr, onShowDisplayQr }: GmS
         <button className="btn btn-accent w-full" onClick={onShowQr}>
           Show join QR
         </button>
+        {/* Which build is running — the answer to "is my change in here?". */}
+        <BuildBadge className="mt-2.5 px-1" />
       </div>
     </aside>
   );

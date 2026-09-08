@@ -7,10 +7,30 @@
  * the control that fixes it rather than a sentence about one.
  */
 import { Link } from 'react-router-dom';
+import { aiProviderInfo, type AiSettingsView } from '@safehouse/contracts';
 import { useScenes } from '../../grid/api.js';
 import { useBooks } from '../books/api.js';
+import { useAiSettings } from '../fixer/api.js';
 import { useNpcTemplates } from '../generator/api.js';
 import { useDevices, useRoster } from './api.js';
+
+/** The part of the AI settings the checklist row needs. */
+export type AiStatus = Pick<AiSettingsView, 'provider' | 'ready' | 'primaryModel' | 'fallback'>;
+
+/**
+ * One line on the AI. The feature is optional (NG7), so "off" is a state and
+ * not a gap — but a GM who never found where the choice lives had no way to
+ * know that either, which is what the row is for.
+ */
+export function aiDetail(ai: AiStatus | undefined): string {
+  if (!ai || ai.provider === 'off') {
+    if (ai?.fallback) return `running on the server's .env — ${ai.fallback.baseUrl}`;
+    return 'optional — off, every AI feature keeps its manual path';
+  }
+  const info = aiProviderInfo(ai.provider);
+  if (ai.ready) return `${info.label} · ${ai.primaryModel || info.defaults.primary}`;
+  return `${info.label} chosen, but not usable yet — a key is missing`;
+}
 
 export interface ChecklistRow {
   key: string;
@@ -34,6 +54,8 @@ export function checklistRows(input: {
   books: number | undefined;
   /** NPC templates — the Opposition Kit's cold start. */
   archetypes: number | undefined;
+  /** Which AI, as the server reports it; undefined while loading. */
+  ai?: AiStatus | undefined;
 }): ChecklistRow[] {
   const c = `/c/${input.campaignId}`;
   return [
@@ -116,6 +138,21 @@ export function checklistRows(input: {
       to: `${c}/books`,
       cta: (input.books ?? 0) > 0 ? 'library' : 'how to seed',
     },
+    {
+      /**
+       * The runtime AI choice lives on the Fixer page, and nothing else on the
+       * console pointed at it — so a GM who had set `LLM_BASE_URL` in `.env`
+       * and then could not see where to change it was looking in the right
+       * place for the wrong thing. This row names it.
+       */
+      key: 'ai',
+      label: 'Which AI',
+      count: undefined,
+      done: input.ai?.ready === true,
+      detail: aiDetail(input.ai),
+      to: `${c}/gm/fixer`,
+      cta: input.ai?.ready ? 'change' : 'choose',
+    },
   ];
 }
 
@@ -131,6 +168,7 @@ export default function SetupChecklist({
   const scenes = useScenes(campaignId);
   const books = useBooks(campaignId);
   const archetypes = useNpcTemplates(campaignId);
+  const ai = useAiSettings(campaignId);
 
   const rows = checklistRows({
     campaignId,
@@ -140,6 +178,7 @@ export default function SetupChecklist({
     scenes: scenes.data?.length,
     books: books.data?.length,
     archetypes: archetypes.data?.length,
+    ai: ai.data,
   });
 
   return (

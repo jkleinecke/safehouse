@@ -65,10 +65,19 @@ export function storedApiKey(settings: Settings | null | undefined): string {
  * key is a half-finished setup, and the difference between that and a working
  * one is worth stating before a session rather than discovering during one.
  */
-export function readAiSettings(settings: Settings | null | undefined): AiSettingsView {
+export function readAiSettings(
+  settings: Settings | null | undefined,
+  env: Record<string, string | undefined> = process.env,
+): AiSettingsView {
   const ai = parseAiSettings(settings);
   const hasKey = storedApiKey(settings).length > 0;
-  return { ...ai, hasKey, ready: aiSettingsReady(ai, hasKey) };
+  // What `resolveLlmConfig` falls back to — the environment, but only while
+  // no choice has ever been saved. The panel says so, because an AI that
+  // answers while the form reads "Off" is otherwise a mystery.
+  const chosen = (settings ?? {})[AI_SETTINGS_KEY] !== undefined;
+  const fromEnv = !chosen && ai.provider === 'off' ? llmConfigFromEnv(env) : null;
+  const fallback = fromEnv === null ? null : { baseUrl: fromEnv.baseUrl, primaryModel: fromEnv.primary };
+  return { ...ai, hasKey, ready: aiSettingsReady(ai, hasKey) || fallback !== null, fallback };
 }
 
 /**

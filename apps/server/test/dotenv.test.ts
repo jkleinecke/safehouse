@@ -1,21 +1,24 @@
 /**
- * The repo-root/infra `.env` loader.
+ * The repo-root `.env` loader.
  *
  * The bug it exists for: `.env` was read by `docker compose` alone, so a GM
  * who set `LLM_BASE_URL` in the documented place and ran `pnpm dev:server`
  * got a Fixer that still reported itself switched off, with nothing to
- * explain why.
+ * explain why. And the bug it grew out of: for a while there were two env
+ * files, and the one a GM edited was not always the one anything read.
  */
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  envFileConflicts,
+  ENV_FILE,
+  RETIRED_ENV_FILES,
   envFileFor,
   loadEnvFile,
   parseEnvFile,
   redactUrl,
+  retiredEnvFiles,
 } from '../src/dotenv.js';
 
 const touched: string[] = [];
@@ -86,60 +89,35 @@ describe('loadEnvFile', () => {
   });
 });
 
-describe('envFileConflicts', () => {
-  it('is quiet when two files agree', () => {
-    const a = envFile('LLM_BASE_URL=http://127.0.0.1:18020/v1\n');
-    const b = envFile('LLM_BASE_URL=http://127.0.0.1:18020/v1\n');
-    expect(envFileConflicts([a, b])).toEqual([]);
+describe('one env file', () => {
+  it('is the repo root .env, the same file compose reads on its own', () => {
+    expect(ENV_FILE.replace(/\\/g, '/')).toMatch(/\/\.env$/);
+    expect(ENV_FILE).not.toMatch(/infra/);
   });
 
-  it('names the key when two files disagree, and says which one wins', () => {
-    // The exact trap: the loader is non-overriding and reads the repo root
-    // first, so editing the second file changes nothing and says nothing.
-    const root = envFile('LLM_BASE_URL=http://127.0.0.1:8080/v1\n');
-    const infra = envFile('LLM_BASE_URL=http://127.0.0.1:18020/v1\n');
-    expect(envFileConflicts([root, infra])).toEqual([
-      { key: 'LLM_BASE_URL', winner: root, shadowed: infra },
+  it('knows where the old second copy lived, so it can be named at boot', () => {
+    expect(RETIRED_ENV_FILES.map((f) => f.replace(/\\/g, '/'))).toEqual([
+      expect.stringMatching(/\/infra\/\.env$/),
     ]);
   });
 
-  it('never reports a value, only a key name', () => {
-    const root = envFile('SESSION_SECRET=hunter2\n');
-    const infra = envFile('SESSION_SECRET=correct-horse\n');
-    const json = JSON.stringify(envFileConflicts([root, infra]));
-    // These files hold the session secret and the database password; a
-    // diagnostic that leaks them is worse than the confusion it solves.
-    expect(json).not.toContain('hunter2');
-    expect(json).not.toContain('correct-horse');
-    expect(json).toContain('SESSION_SECRET');
-  });
-
-  it('ignores a key only one file defines', () => {
-    const a = envFile('ONLY_HERE=1\n');
-    const b = envFile('SOMETHING_ELSE=2\n');
-    expect(envFileConflicts([a, b])).toEqual([]);
-  });
-
-  it('skips files that do not exist', () => {
-    expect(envFileConflicts([join(tmpdir(), 'safehouse-absent', '.env')])).toEqual([]);
+  it('reports only the retired files that are actually there', () => {
+    const present = envFile('A=1\n');
+    const absent = join(tmpdir(), 'safehouse-absent', '.env');
+    expect(retiredEnvFiles([absent, present])).toEqual([present]);
+    expect(retiredEnvFiles([absent])).toEqual([]);
   });
 });
 
 describe('envFileFor', () => {
-  it('names the first file defining the key', () => {
-    const root = envFile('LLM_BASE_URL=http://a\n');
-    const infra = envFile('LLM_BASE_URL=http://b\n');
-    expect(envFileFor('LLM_BASE_URL', [root, infra])).toBe(root);
+  it('names the file when it defines the key', () => {
+    const file = envFile('LLM_BASE_URL=http://a\n');
+    expect(envFileFor('LLM_BASE_URL', file)).toBe(file);
   });
 
-  it('falls through to the file that actually has it', () => {
-    const root = envFile('OTHER=1\n');
-    const infra = envFile('LLM_BASE_URL=http://b\n');
-    expect(envFileFor('LLM_BASE_URL', [root, infra])).toBe(infra);
-  });
-
-  it('is null when nothing defines it — meaning it came from the environment', () => {
-    expect(envFileFor('LLM_BASE_URL', [envFile('OTHER=1\n')])).toBeNull();
+  it('is null when it does not — meaning the value came from the environment', () => {
+    expect(envFileFor('LLM_BASE_URL', envFile('OTHER=1\n'))).toBeNull();
+    expect(envFileFor('LLM_BASE_URL', join(tmpdir(), 'safehouse-absent', '.env'))).toBeNull();
   });
 });
 

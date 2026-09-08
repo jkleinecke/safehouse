@@ -114,12 +114,19 @@ describe('no dead links', () => {
     }
   });
 
-  it('the sidebar offers every entry, in the order a GM works', () => {
-    const html = renderToStaticMarkup(
-      <MemoryRouter initialEntries={[`/c/${CAMPAIGN}/gm`]}>
-        <GmSidebar campaignId={CAMPAIGN} onShowQr={() => undefined} />
-      </MemoryRouter>,
+  // The sidebar asks /healthz for the build stamp now, so it needs a query
+  // client like every other data-bearing shell piece.
+  const sidebar = () =>
+    renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter initialEntries={[`/c/${CAMPAIGN}/gm`]}>
+          <GmSidebar campaignId={CAMPAIGN} onShowQr={() => undefined} />
+        </MemoryRouter>
+      </QueryClientProvider>,
     );
+
+  it('the sidebar offers every entry, in the order a GM works', () => {
+    const html = sidebar();
     const order = navOrder(html).filter((k) => GM_NAV.some((e) => e.key === k));
     expect(order).toEqual([
       'overview',
@@ -140,11 +147,7 @@ describe('no dead links', () => {
   });
 
   it('names the display invite instead of only linking the kiosk', () => {
-    const html = renderToStaticMarkup(
-      <MemoryRouter initialEntries={[`/c/${CAMPAIGN}/gm`]}>
-        <GmSidebar campaignId={CAMPAIGN} onShowQr={() => undefined} />
-      </MemoryRouter>,
-    );
+    const html = sidebar();
     expect(html).toContain('data-nav="display-qr"');
     expect(html).toMatch(/its own display invite/i);
   });
