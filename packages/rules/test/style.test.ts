@@ -41,6 +41,7 @@ function subjectsOf(setId: string): StyleSubject[] {
     id: `${setId}/${t.id}`,
     colors: t.colors,
     emissive: t.emissive,
+    sheen: t.sheen,
     polished: POLISHED.has(setId),
   }));
 }

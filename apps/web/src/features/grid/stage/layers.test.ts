@@ -192,3 +192,74 @@ describe('drawFog', () => {
     expect(f.cuts).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// A scene with no fog is a scene the table can see
+// ---------------------------------------------------------------------------
+
+describe('drawFog with nothing defined', () => {
+  /** Records the cover rectangle as well as the cuts. */
+  function tracingCover(): { g: Graphics; rects: number; cuts: number } {
+    const out = { rects: 0, cuts: 0 };
+    const g: Record<string, unknown> = {
+      clear: () => g,
+      rect: () => {
+        out.rects += 1;
+        return g;
+      },
+      circle: () => g,
+      moveTo: () => g,
+      lineTo: () => g,
+      closePath: () => g,
+      fill: () => g,
+      stroke: () => g,
+      poly: () => g,
+      cut: () => {
+        out.cuts += 1;
+        return g;
+      },
+    };
+    return {
+      g: g as unknown as Graphics,
+      get rects() {
+        return out.rects;
+      },
+      get cuts() {
+        return out.cuts;
+      },
+    };
+  }
+
+  const unfogged = (): Scene => {
+    const s = scene();
+    return { ...s, fog: { regions: [], revealed: [], revealedShapes: [] } } as Scene;
+  };
+
+  it('draws no cover at all for a player', () => {
+    // The defect: the opaque cover went down regardless and was cut only
+    // where a region was revealed, so a scene with no regions yet — every
+    // freshly built one — reached the phones and the TV as a black screen.
+    const f = tracingCover();
+    const { layer, pool } = noLabels();
+    drawFog(f.g, layer, pool, unfogged(), flat, false);
+    expect(f.rects).toBe(0);
+    expect(f.cuts).toBe(0);
+  });
+
+  it('draws no tint for the GM either, so the two screens agree', () => {
+    const f = tracingCover();
+    const { layer, pool } = noLabels();
+    drawFog(f.g, layer, pool, unfogged(), iso, true);
+    expect(f.rects).toBe(0);
+  });
+
+  it('still covers once a single region exists, revealed or not', () => {
+    const f = tracingCover();
+    const { layer, pool } = noLabels();
+    const s = scene();
+    const hidden = { ...s, fog: { ...s.fog, revealed: [] } } as Scene;
+    drawFog(f.g, layer, pool, hidden, flat, false);
+    expect(f.rects).toBe(1);
+    expect(f.cuts).toBe(0);
+  });
+});

@@ -24,6 +24,7 @@ import {
   type StageOptions,
   type StageSceneState,
   type TileDrawDef,
+  type TileRectMode,
 } from '../types.js';
 import { parserSafeUrlFor, type AssetRegistry } from './assetUrl.js';
 import { Camera } from './camera.js';
@@ -33,7 +34,7 @@ import { drawFog, drawGeometry, drawGrid, drawPins } from './layers.js';
 import { drawShroud, shroudKey } from './shroudLayer.js';
 import { drawTiles, tileDrawInput, tileLayerKey } from './tileLayer.js';
 import { MapLayer } from './mapLayer.js';
-import { PointerController, type PointerHost } from './pointer.js';
+import { PointerController, type Cell, type PointerHost } from './pointer.js';
 import { TokenView } from './tokenView.js';
 
 /** How long an un-terminated remote drag ghost keeps overriding a position. */
@@ -251,6 +252,14 @@ class Stage implements StageApi, PointerHost {
     this.fx.clearSegmentDraft();
   }
 
+  drawRect(mode: TileRectMode, from: Cell, to: Cell): void {
+    this.fx.setRectDraft(this.m, mode, from, to);
+  }
+
+  clearRect(): void {
+    this.fx.clearRectDraft();
+  }
+
   // -- StageApi --------------------------------------------------------------
 
   /** Served palette wins; the shipped catalogue fills anything it omits. */
@@ -457,22 +466,35 @@ class Stage implements StageApi, PointerHost {
   }
 
   centerOn(x: number, y: number): void {
+    if (this.disposed) return;
     const at = worldFromGrid(this.m, { x, y });
     this.camera.centerOn(at.x, at.y, this.viewport());
   }
 
   zoomBy(factor: number): void {
+    if (this.disposed) return;
     const v = this.viewport();
     this.camera.zoomAt(v.width / 2, v.height / 2, factor);
   }
 
   fitScene(): void {
+    if (this.disposed) return;
     const { width, height } = sceneWorldSize(this.m);
     this.camera.fit(width, height, this.viewport());
   }
 
+  /**
+   * The canvas size, or the host's when the renderer is not there to ask.
+   *
+   * `app.screen` reaches through `app.renderer`, which is null once the app
+   * is destroyed — and a stage handle outlives its app for as long as React
+   * takes to notice a scene switch. A camera call in that window used to be a
+   * TypeError that unmounted the whole page; now it is a no-op, because the
+   * public methods above check `disposed` first and this falls back if
+   * anything else gets here.
+   */
   private viewport(): { width: number; height: number } {
-    const screen = this.app.screen;
+    const screen = this.disposed ? null : this.app.renderer ? this.app.screen : null;
     if (screen && screen.width > 0) return { width: screen.width, height: screen.height };
     const rect = this.opts.host.getBoundingClientRect();
     return { width: rect.width || 800, height: rect.height || 600 };

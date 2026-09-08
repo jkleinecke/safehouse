@@ -123,7 +123,7 @@ export function warmth(hex: string): number {
  * Say it out loud rather than quietly picking brighter colours: someone
  * comparing this to a screenshot should know exactly which knob was turned.
  */
-export const TABLE_EXPOSURE = 1.55;
+export const TABLE_EXPOSURE = 2.0;
 
 /** The corporate tier starts pale, so it needs far less of a lift. */
 export const TABLE_EXPOSURE_POLISHED = 1.12;
@@ -395,9 +395,21 @@ export interface StyleSubject {
   id: string;
   colors: readonly [string, string];
   emissive?: string | undefined;
+  /** Reflected light on the surface — see `Tile.sheen`. */
+  sheen?: string | undefined;
   /** Polished tier opts out of the worn defaults. */
   polished?: boolean;
 }
+
+/**
+ * How strong a sheen wash is drawn, as an alpha over the tile's own face.
+ *
+ * The study's figure is 8–20% of the surface mirroring the nearest light.
+ * Twenty is the top of that range and where a dance floor sits; a wet
+ * pavement would be nearer the bottom, and the renderer scales by the sheen
+ * colour's own value so a dim reflection is a faint one.
+ */
+export const SHEEN_ALPHA_MAX = 0.2;
 
 /**
  * Check one tile's colours.
@@ -485,6 +497,22 @@ export function checkTile(tile: StyleSubject): StyleViolation[] {
       // A light dimmer than this is a surface pretending, and it will not read
       // at table distance — which is the entire job of the emissive channel.
       say('emissive-is-a-light', `emissive value ${pct(glow.v)} is below 70%`);
+    }
+  }
+
+  if (tile.sheen !== undefined) {
+    const reflected = hsvOf(tile.sheen);
+    if (reflected === null) {
+      say('parse', `sheen ${tile.sheen} is not a hex colour`);
+    } else if (reflected.v < 0.5 || reflected.s < 0.3) {
+      // A sheen is a light seen in a surface. Dim or grey, it is just a
+      // second base colour, and the tile already has one of those.
+      say('sheen-is-reflected-light', `sheen value ${pct(reflected.v)} / saturation ${pct(reflected.s)} would not read as a reflection`);
+    }
+    if (tile.emissive !== undefined) {
+      // Not both: a thing that gives off light does not also need to mirror
+      // it, and doubling up is how a floor ends up brighter than a token.
+      say('sheen-or-emissive', 'a tile is a light or reflects one, never both');
     }
   }
 

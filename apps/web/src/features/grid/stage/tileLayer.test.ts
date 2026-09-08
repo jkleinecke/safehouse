@@ -273,7 +273,16 @@ describe('every pattern the catalogue uses actually draws something', () => {
     };
     drawTiles(g, M, { tilesetId: 't', cells: { '0,0': 'x' }, defs });
     const fill = calls.find((c) => c.op === 'fill')?.args[0] as { color: number };
-    expect(fill.color).toBe(0x3b3f45); // the documented fallback, not `NaN`
+    // The documented fallback, not `NaN` — within the per-cell grain, which
+    // moves a floor's value by a few percent so a painted room does not read
+    // as vinyl. Every channel of 0x3b3f45 is under 0x50, so a grained fallback
+    // still sits in the same dark grey.
+    expect(Number.isFinite(fill.color)).toBe(true);
+    for (const shift of [16, 8, 0]) {
+      const channel = (fill.color >> shift) & 0xff;
+      const expected = (0x3b3f45 >> shift) & 0xff;
+      expect(Math.abs(channel - expected)).toBeLessThanOrEqual(Math.ceil(expected * 0.05));
+    }
   });
 });
 
@@ -557,7 +566,13 @@ describe('tileDrawInput forwards every layer to the renderer', () => {
       const hex = TILESETS.find((s) => s.id === 'sprawl')!.tiles.find((t) => t.id === id)!.colors[0];
       return Number.parseInt(hex.slice(1), 16);
     };
-    expect(fills.indexOf(colourOf('grass'))).toBeGreaterThanOrEqual(0);
-    expect(fills.indexOf(colourOf('grass'))).toBeLessThan(fills.lastIndexOf(colourOf('tree')));
+    // The floor carries per-cell grain, so it is matched within that grain
+    // rather than exactly; the tree is one object and keeps its own colour.
+    const near = (a: number | undefined, b: number): boolean =>
+      a !== undefined &&
+      [16, 8, 0].every((s) => Math.abs(((a >> s) & 0xff) - ((b >> s) & 0xff)) <= 6);
+    const grassAt = fills.findIndex((c) => near(c, colourOf('grass')));
+    expect(grassAt).toBeGreaterThanOrEqual(0);
+    expect(grassAt).toBeLessThan(fills.lastIndexOf(colourOf('tree')));
   });
 });

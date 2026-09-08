@@ -12,11 +12,13 @@ import {
 } from '../../live/rollHandoff.js';
 import {
   GEOMETRY_TOOLS,
+  TILE_TOOLS,
   type AoeTemplate,
   type FogDraft,
   type GridTool,
   type RulerState,
   type ScatterResult,
+  type ViewProjection,
 } from './types.js';
 
 /**
@@ -89,6 +91,12 @@ export interface GridUiState {
    * scene and costs nothing.
    */
   activeLevel: number;
+  /**
+   * GM only: plan or isometric on THIS screen, regardless of what the scene
+   * is saved as. `scene` means "whatever the table sees". Never persisted —
+   * it is how the GM likes to build, not a fact about the map.
+   */
+  viewProjection: ViewProjection;
   losTokenId: string | null;
   /**
    * Whether PLAYERS see their own character's sightline shroud.
@@ -124,6 +132,7 @@ export interface GridUiState {
   setTileId: (tileId: string | null) => void;
   setTileCategory: (category: 'ground' | 'building' | 'interior' | 'decoration' | 'stairs') => void;
   setActiveLevel: (level: number) => void;
+  setViewProjection: (view: ViewProjection) => void;
   setLosTokenId: (tokenId: string | null) => void;
   setLosForPlayers: (on: boolean) => void;
   setCoverOverride: (cover: 'none' | 'partial' | 'full' | null) => void;
@@ -178,6 +187,7 @@ export const useGridStore = create<GridUiState>()((set) => ({
   tileId: null,
   tileCategory: 'ground',
   activeLevel: 0,
+  viewProjection: 'scene',
   losTokenId: null,
   losForPlayers: false,
   coverOverride: null,
@@ -210,8 +220,14 @@ export const useGridStore = create<GridUiState>()((set) => ({
   // is cleared (switching set, switching tool) must stay erasing rather than
   // be silently handed a paintbrush. The "Auto" button arms the brush itself,
   // where the intent to paint is explicit.
+  // …and it keeps whichever tile tool is in hand. A GM who picked the room
+  // tool and then chose a nicer floor for it has not asked for the brush.
   setTileId: (tileId) =>
-    set((s) => (tileId === null ? { tileId } : { tileId, ...toolPatch(s, 'tile') })),
+    set((s) =>
+      tileId === null
+        ? { tileId }
+        : { tileId, ...toolPatch(s, TILE_TOOLS.includes(s.tool) ? s.tool : 'tile') },
+    ),
   // Switching tool drops the pinned tile back to Auto: an id from the Ground
   // palette means nothing under Decor, and carrying it would silently paint
   // the wrong thing on the first click.
@@ -221,11 +237,25 @@ export const useGridStore = create<GridUiState>()((set) => ({
   // on any storey, but the SELECTION is part of "what am I doing right now",
   // and arriving on a new floor mid-brush is how a GM paints the wrong one.
   setActiveLevel: (activeLevel) => set({ activeLevel: Math.max(0, Math.floor(activeLevel)) }),
+  setViewProjection: (viewProjection) => set({ viewProjection }),
   setLosTokenId: (losTokenId) => set({ losTokenId, coverOverride: null }),
   setLosForPlayers: (losForPlayers) => set({ losForPlayers }),
   setCoverOverride: (coverOverride) => set({ coverOverride }),
   setTileCategory: (tileCategory) =>
-    set((s) => ({ tileCategory, tileId: null, ...toolPatch(s, 'tile') })),
+    set((s) => ({
+      tileCategory,
+      tileId: null,
+      // A rectangle is a GROUND shape: an area of floor, or a room with its
+      // walls. Leaving the ground tool while one is armed drops back to the
+      // brush, because "a rectangle of chairs" is nothing a GM ever meant
+      // and a click on a wall with the room tool would build a one-cell hut.
+      ...toolPatch(
+        s,
+        (s.tool === 'tile-area' || s.tool === 'tile-room') && tileCategory === 'ground'
+          ? s.tool
+          : 'tile',
+      ),
+    })),
   setTool: (tool) => set((s) => toolPatch(s, tool)),
   selectToken: (selectedTokenId) =>
     set({ selectedTokenId, selectedWeapon: null, coverOverride: null }),

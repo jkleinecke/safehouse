@@ -215,6 +215,18 @@ export interface Tile {
    * reads at table distance where a 1px accent line at 40% alpha never did.
    */
   emissive?: string;
+  /**
+   * A colour this surface REFLECTS — wet asphalt under a sign, a dance floor
+   * lit from beneath, polished stone under a lobby's downlights.
+   *
+   * The study describes this as wet-ground reflectance: 8–20% of a surface
+   * mirroring the nearest light. It is drawn as a translucent wash over the
+   * tile's own top face and nothing more — no pool, no bloom, no light thrown
+   * onto the neighbours — which is what keeps it a SURFACE property that a GM
+   * may paint a whole floor with. That is the difference from `emissive`,
+   * which is a light and is rationed like one (`SET_EMISSIVE_MAX`).
+   */
+  sheen?: string;
   /** A wall stops a token; a floor does not. Doors block until opened. */
   blocksMovement?: boolean;
   /**

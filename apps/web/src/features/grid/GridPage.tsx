@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import type { Scene, Token } from '@safehouse/contracts';
-import { deriveCharacter } from '@safehouse/rules';
+import { GROUND_LEVEL_NAME, deriveCharacter } from '@safehouse/rules';
 import { useMyCharacterId } from '../../api/campaigns.js';
 import { getSession } from '../../api/session.js';
 import { getLiveSocket } from '../../live/socket.js';
@@ -41,10 +41,17 @@ import {
   type Viewer,
 } from './projection.js';
 import { autoTileFor } from './autoPlace.js';
+import { roomPlan, roomTileIds } from './roomFill.js';
 import { useShroud } from './useShroud.js';
 import { useStairOffer } from './useStairs.js';
 import { useGridStore } from './store.js';
-import type { RulerState, StageApi, StageCallbacks, StageSceneState } from './types.js';
+import {
+  TILE_TOOLS,
+  type RulerState,
+  type StageApi,
+  type StageCallbacks,
+  type StageSceneState,
+} from './types.js';
 import {
   useActiveSceneId,
   useFocusStream,
@@ -146,7 +153,7 @@ export default function GridPage() {
    * screen exactly when the next stroke is the destructive one.
    */
   const tileWipeWarning = useMemo(() => {
-    if (!isGm || (store.tool !== 'tile' && store.tool !== 'tile-erase')) return null;
+    if (!isGm || (!TILE_TOOLS.includes(store.tool) && store.tool !== 'tile-erase')) return null;
     const painted = scene?.tiles;
     if (!painted || painted.tilesetId === store.tilesetId) return null;
     const count = Object.keys(painted.cells).length;
@@ -233,10 +240,38 @@ export default function GridPage() {
     );
   }, [stairOffer, selectedToken, patchToken, store]);
 
+  /**
+   * The scene as THIS screen draws it.
+   *
+   * The GM's plan/iso choice is a view, not an edit: it overrides the grid's
+   * projection on the way to the canvas and nowhere else, so the table keeps
+   * seeing the scene the way it is saved while the GM lays rooms out in plan.
+   */
+  const viewScene = useMemo(() => {
+    if (!scene || !isGm || store.viewProjection === 'scene') return scene;
+    if (scene.grid.projection === store.viewProjection) return scene;
+    return { ...scene, grid: { ...scene.grid, projection: store.viewProjection } };
+  }, [scene, isGm, store.viewProjection]);
+
+  /**
+   * Which floor this screen shows.
+   *
+   * The GM picks. A PLAYER follows their own runner: which storey to draw is
+   * the GM's decision, and the GM makes it by moving the token — so when
+   * Torque takes the stairs, Torque's phone goes up with him, and there is no
+   * floor control on it to get lost with. A device with no runner on this
+   * scene sees the ground.
+   */
+  const viewLevel = useMemo(() => {
+    if (isGm) return store.activeLevel;
+    const mine = tokens.find((t) => t.source === 'character' && t.sourceId === myCharacterId);
+    return mine?.level ?? 0;
+  }, [isGm, store.activeLevel, tokens, myCharacterId]);
+
   const stageState: StageSceneState | null = useMemo(
     () =>
       composeStageState({
-        scene,
+        scene: viewScene,
         tokens,
         viewer,
         encounter,
@@ -248,10 +283,10 @@ export default function GridPage() {
         fogDraft: store.fogDraft,
         selectedPinId: store.selectedPinId,
         shroud,
-        level: store.activeLevel,
+        level: viewLevel,
       }),
     [
-      scene,
+      viewScene,
       tokens,
       viewer,
       encounter,
@@ -263,7 +298,7 @@ export default function GridPage() {
       store.fogDraft,
       store.selectedPinId,
       shroud,
-      store.activeLevel,
+      viewLevel,
     ],
   );
 
@@ -349,6 +384,47 @@ export default function GridPage() {
         strokeRef.current?.add(scene.id, st.tilesetId, `${col},${row}`, placing, st.activeLevel);
       },
       onTileStrokeEnd: () => strokeRef.current?.flush(),
+      // -- room / area rectangles (FR9.2) -----------------------------------
+      // Two requests, floor then walls, because a cell holds one tile per
+      // request and a room's edge cells need both: floor in the ground layer
+      // so the room is not a ring around a hole, and a wall standing on it.
+      // Awaited in order — each is a read-modify-write of the layer, and two
+      // in flight would lose each other's cells.
+      onTileRect: (c0, r0, c1, r1, mode) => {
+        if (!scene || !isGm) return;
+        const st = useGridStore.getState();
+        const set = (tilesets ?? []).find((t) => t.id === st.tilesetId);
+        if (!set) return;
+        const { floorId, wallId } = roomTileIds(set.tiles, st.tileId);
+        if (floorId === null) {
+          setTileNotice('this set has no ground tile to fill with');
+          return;
+        }
+        const plan = roomPlan(c0, r0, c1, r1, mode);
+        // Anything the brush still holds lands first, so a stroke and a room
+        // drawn in quick succession arrive in the order they were made.
+        strokeRef.current?.flush();
+        const sceneId = scene.id;
+        const level = st.activeLevel;
+        const send = (keys: readonly string[], tileId: string) =>
+          paintRef.current({
+            sceneId,
+            tilesetId: st.tilesetId,
+            level,
+            paint: Object.fromEntries(keys.map((k) => [k, tileId])),
+            erase: [],
+            clear: false,
+          });
+        setTileNotice(null);
+        void (async () => {
+          try {
+            await send(plan.floor, floorId);
+            if (plan.walls.length > 0 && wallId !== null) await send(plan.walls, wallId);
+          } catch {
+            setTileNotice('that room did not save — draw it again');
+          }
+        })();
+      },
       onPinSelect: (pinId) => {
         const s = useGridStore.getState();
         s.selectPin(pinId);
@@ -390,6 +466,24 @@ export default function GridPage() {
   useEffect(() => {
     if (store.tool !== 'ruler') api?.clearRuler();
   }, [api, store.tool]);
+
+  // Flipping between plan and isometric moves every world coordinate — the
+  // same room lands somewhere else on screen — so the camera refits rather
+  // than leaving the GM staring at the empty corner the old view was over.
+  //
+  // Only on a FLIP, though: keyed on the projection alone, this also fired
+  // when a scene switch changed it, against a stage that was already torn
+  // down for the new scene — and `fitScene` on a disposed renderer is a
+  // crash that takes the whole page with it.
+  const viewKey = `${viewScene?.id ?? ''}|${viewScene?.grid.projection ?? 'topdown'}`;
+  const lastViewKey = useRef(viewKey);
+  useEffect(() => {
+    const prev = lastViewKey.current;
+    lastViewKey.current = viewKey;
+    const [prevScene, prevProjection] = prev.split('|');
+    const [nextScene, nextProjection] = viewKey.split('|');
+    if (prevScene === nextScene && prevProjection !== nextProjection) api?.fitScene();
+  }, [api, viewKey]);
 
   // Remote ephemeral marks: flash, trail, or recentre once (FR9.15).
   useMarkStream(sceneId, (kind, x, y) => {
@@ -465,6 +559,9 @@ export default function GridPage() {
             tool={store.tool}
             snapEnabled={store.snapEnabled}
             gmPanelOpen={store.gmPanelOpen}
+            viewProjection={store.viewProjection}
+            sceneProjection={scene?.grid.projection ?? 'topdown'}
+            onView={store.setViewProjection}
             onTool={store.setTool}
             onToggleSnap={store.toggleSnap}
             onToggleGmPanel={store.toggleGmPanel}
@@ -479,6 +576,37 @@ export default function GridPage() {
                 <span className="text-warn">staging</span>
               )}
             </span>
+            {/*
+              Which floor is on screen, right on the canvas. The Map tab has the
+              full list, but a GM two tabs away from it had no way to tell the
+              catwalk from the warehouse below except by what was painted on
+              it — and an empty new floor is painted with nothing.
+            */}
+            {isGm && scene && (scene.levels ?? []).length > 0 && (
+              <div
+                className="pointer-events-auto flex flex-wrap justify-end gap-1"
+                role="group"
+                aria-label="Floor on screen"
+                data-testid="floor-chips"
+              >
+                {[GROUND_LEVEL_NAME, ...(scene.levels ?? []).map((l) => l.name)].map(
+                  (name, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      aria-pressed={i === store.activeLevel}
+                      onClick={() => store.setActiveLevel(i)}
+                      className={
+                        'chip bg-panel/90 ' +
+                        (i === store.activeLevel ? 'border-cyan text-cyan' : 'text-dim')
+                      }
+                    >
+                      {name}
+                    </button>
+                  ),
+                )}
+              </div>
+            )}
             {focusNotice && <span className="chip bg-panel/90 text-cyan">{focusNotice}</span>}
             {isGm && stairOffer && selectedToken && (
               <button

@@ -16,11 +16,20 @@ import {
   worldFromGrid,
   type SceneMetrics,
 } from '../geometry.js';
-import type { StageCallbacks, StageSceneState } from '../types.js';
+import type { StageCallbacks, StageSceneState, TileRectMode } from '../types.js';
 import { Camera, wheelZoomFactor } from './camera.js';
 import { hitDoor, hitPin, hitToken, isDoubleTap, worldTolerance, type TapRecord } from './hit.js';
 
-type Mode = 'idle' | 'pan' | 'token' | 'ruler' | 'trail' | 'pinch' | 'segment' | 'painting';
+type Mode =
+  | 'idle'
+  | 'pan'
+  | 'token'
+  | 'ruler'
+  | 'trail'
+  | 'pinch'
+  | 'segment'
+  | 'painting'
+  | 'rect';
 
 /** React-facing ruler updates are rate-limited; the pixi line is not. */
 const RULER_REPORT_MS = 50;
@@ -40,6 +49,9 @@ export interface PointerHost {
   /** Rubber band while drawing a wall/door (optional — the TV never draws). */
   drawSegment?(kind: 'wall' | 'door', from: Point, to: Point): void;
   clearSegment?(): void;
+  /** The cell rectangle a room/area drag is about to fill (FR9.2). */
+  drawRect?(mode: TileRectMode, from: Cell, to: Cell): void;
+  clearRect?(): void;
 }
 
 interface ActivePointer {
@@ -116,6 +128,13 @@ export class PointerController {
   private segmentKind: 'wall' | 'door' = 'wall';
   private segmentFrom: Point = { x: 0, y: 0 };
   private segmentTo: Point = { x: 0, y: 0 };
+
+  // room/area rectangle (FR9.2) — in CELLS, not grid units: a rectangle of
+  // tiles is a set of whole squares, and snapping happens at the corner the
+  // GM pressed rather than wherever the pointer ends up inside the last one.
+  private rectMode: TileRectMode = 'area';
+  private rectFrom: Cell = { col: 0, row: 0 };
+  private rectTo: Cell = { col: 0, row: 0 };
 
   // pinch
   private pinchDist = 0;
@@ -291,6 +310,18 @@ export class PointerController {
         this.mode = 'idle';
         this.host.callbacks.onPinPlace?.(grid.x, grid.y);
         return;
+      case 'tile-area':
+      case 'tile-room': {
+        // A rectangle, not a stroke: the drag picks two corners and the fill
+        // happens on release. Nothing is sent until then, so a GM who changes
+        // their mind mid-drag has changed nothing.
+        this.mode = 'rect';
+        this.rectMode = state.tool === 'tile-room' ? 'room' : 'area';
+        this.rectFrom = { col: Math.floor(grid.x), row: Math.floor(grid.y) };
+        this.rectTo = this.rectFrom;
+        this.host.drawRect?.(this.rectMode, this.rectFrom, this.rectTo);
+        return;
+      }
       case 'tile':
       case 'tile-erase':
         // Painting continues while the button is held: a floor is a drag, not
@@ -423,9 +454,27 @@ export class PointerController {
         this.host.drawSegment?.(this.segmentKind, this.segmentFrom, this.segmentTo);
         return;
       }
+      case 'rect': {
+        const grid = this.toGrid(screen);
+        this.rectTo = { col: Math.floor(grid.x), row: Math.floor(grid.y) };
+        this.host.drawRect?.(this.rectMode, this.rectFrom, this.rectTo);
+        return;
+      }
       default:
         return;
     }
+  }
+
+  /** The dragged rectangle with its corners put in order, clamped to the grid. */
+  private rectBounds(): { c0: number; r0: number; c1: number; r1: number } | null {
+    const m = this.host.metrics();
+    const c0 = Math.max(0, Math.min(this.rectFrom.col, this.rectTo.col));
+    const c1 = Math.min(m.cols - 1, Math.max(this.rectFrom.col, this.rectTo.col));
+    const r0 = Math.max(0, Math.min(this.rectFrom.row, this.rectTo.row));
+    const r1 = Math.min(m.rows - 1, Math.max(this.rectFrom.row, this.rectTo.row));
+    // A drag that started and ended off the map has nothing to fill.
+    if (c0 > c1 || r0 > r1) return null;
+    return { c0, r0, c1, r1 };
   }
 
   private updateTokenDrag(grid: Point, raw: boolean): void {
@@ -486,6 +535,12 @@ export class PointerController {
       // pointerup, pointercancel and pointerleave all land here, so a stroke
       // that ends off-canvas still flushes and still returns to 'idle'.
       this.endStroke();
+    } else if (this.mode === 'rect') {
+      this.host.clearRect?.();
+      const b = this.rectBounds();
+      // A single cell is still a fill — a click with the area tool paints
+      // one square, which is what a click with any brush does.
+      if (b) this.host.callbacks.onTileRect?.(b.c0, b.r0, b.c1, b.r1, this.rectMode);
     } else if (this.mode === 'pan' && !this.moved) {
       this.host.callbacks.onSelectToken(null);
     }
@@ -505,6 +560,9 @@ export class PointerController {
     }
     if (this.mode === 'ruler') this.host.clearRuler();
     if (this.mode === 'segment') this.host.clearSegment?.();
+    // A rectangle is abandoned, not filled: unlike a stroke it has laid
+    // nothing down yet, so a pinch simply takes it away.
+    if (this.mode === 'rect') this.host.clearRect?.();
     // A second finger ends the stroke rather than abandoning its cells: the
     // GM painted them, and pinching to zoom mid-floor is a normal thing to do.
     if (this.mode === 'painting') this.endStroke();

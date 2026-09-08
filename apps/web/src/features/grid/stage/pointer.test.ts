@@ -54,6 +54,10 @@ function fakeElement(): FakeEl {
 function harness(tool: StageSceneState['tool']) {
   const onTilePaint = vi.fn<(col: number, row: number, erase: boolean) => void>();
   const onTileStrokeEnd = vi.fn<() => void>();
+  const onTileRect =
+    vi.fn<(c0: number, r0: number, c1: number, r1: number, mode: 'area' | 'room') => void>();
+  const drawRect = vi.fn();
+  const clearRect = vi.fn();
   const noop = (): void => {};
   const cb: StageCallbacks = {
     onTokenMove: noop,
@@ -71,6 +75,7 @@ function harness(tool: StageSceneState['tool']) {
     onPinSelect: noop,
     onTilePaint,
     onTileStrokeEnd,
+    onTileRect,
   };
   const state = {
     scene: { id: 's1', geometry: { walls: [], doors: [], zones: [], pins: [] } } as unknown as Scene,
@@ -97,6 +102,8 @@ function harness(tool: StageSceneState['tool']) {
     echoTrail: () => {},
     drawRuler: () => {},
     clearRuler: () => {},
+    drawRect,
+    clearRect,
   };
 
   const dom = fakeElement();
@@ -126,8 +133,56 @@ function harness(tool: StageSceneState['tool']) {
 
   const cells = (): Array<[number, number, boolean]> => onTilePaint.mock.calls.map((c) => [...c]);
 
-  return { onTilePaint, onTileStrokeEnd, controller, send, cells };
+  return { onTilePaint, onTileStrokeEnd, onTileRect, drawRect, clearRect, controller, send, cells };
 }
+
+// ---------------------------------------------------------------------------
+
+describe('a room or area drag', () => {
+  it('fills nothing until the button comes up, then once, corners in order', () => {
+    const h = harness('tile-room');
+    h.send('pointerdown', 6, 5);
+    h.send('pointermove', 3, 2);
+    h.send('pointermove', 2, 3);
+    // The rubber band followed the drag; the fill did not.
+    expect(h.drawRect).toHaveBeenCalled();
+    expect(h.onTileRect).not.toHaveBeenCalled();
+    h.send('pointerup', 2, 3);
+    // Dragged up and to the left: the callback still gets min→max.
+    expect(h.onTileRect).toHaveBeenCalledWith(2, 3, 6, 5, 'room');
+    expect(h.onTileRect).toHaveBeenCalledTimes(1);
+    expect(h.clearRect).toHaveBeenCalled();
+    // …and the brush's per-cell path was never involved.
+    expect(h.onTilePaint).not.toHaveBeenCalled();
+  });
+
+  it('paints one square for a click, like any brush would', () => {
+    const h = harness('tile-area');
+    h.send('pointerdown', 4, 4);
+    h.send('pointerup', 4, 4);
+    expect(h.onTileRect).toHaveBeenCalledWith(4, 4, 4, 4, 'area');
+  });
+
+  it('is abandoned, not filled, by a second finger', () => {
+    const h = harness('tile-room');
+    h.send('pointerdown', 1, 1, 1);
+    h.send('pointermove', 5, 5, 1);
+    h.send('pointerdown', 8, 8, 2);
+    h.send('pointerup', 5, 5, 1);
+    h.send('pointerup', 8, 8, 2);
+    expect(h.onTileRect).not.toHaveBeenCalled();
+    expect(h.clearRect).toHaveBeenCalled();
+  });
+
+  it('clamps a drag that runs off the map to the cells that exist', () => {
+    const h = harness('tile-area');
+    h.send('pointerdown', 18, 18);
+    h.send('pointermove', 25, 25);
+    h.send('pointerup', 25, 25);
+    // The metrics are 20×20, so the far corner is 19,19.
+    expect(h.onTileRect).toHaveBeenCalledWith(18, 18, 19, 19, 'area');
+  });
+});
 
 // ---------------------------------------------------------------------------
 

@@ -104,6 +104,22 @@ export function drawFog(
 ): void {
   g.clear();
   const fog = scene.fog;
+
+  // NO REGIONS MEANS NO FOG. A scene the GM has not fogged is a scene the
+  // table can see, the same way an uploaded map always could be. The cover
+  // used to go down regardless and be cut only where a region was revealed —
+  // so a freshly built scene, pushed live with nothing defined yet, arrived on
+  // every phone and the TV as a solid black screen, while the GM saw a 40%
+  // tint they could easily read straight through. Fog is something a GM adds
+  // to a map, not something a map starts under.
+  if (fog.regions.length === 0 && fog.revealedShapes.length === 0) {
+    for (const [id, label] of labelPool) {
+      label.destroy();
+      labelPool.delete(id);
+    }
+    return;
+  }
+
   const { width, height } = sceneWorldSize(m);
   const pad = m.cell * 2; // cover a margin so pan never peeks past the edge
   g.rect(-pad, -pad, width + pad * 2, height + pad * 2).fill({

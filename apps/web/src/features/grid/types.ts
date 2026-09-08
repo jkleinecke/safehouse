@@ -18,10 +18,37 @@ export type GridTool =
   | 'zone' // GM: click vertices to draw a named zone (FR9.2)
   | 'pin' // GM: click to drop a map pin (FR9.3)
   | 'tile' // GM: paint tiles from a tileset (FR9.2 "assemble")
+  | 'tile-area' // GM: drag a rectangle, fill it with the chosen ground
+  | 'tile-room' // GM: drag a rectangle, floor inside and walls around it
   | 'tile-erase'; // GM: clear painted cells
 
 /** GM drawing tools that author scene geometry rather than play with it. */
 export const GEOMETRY_TOOLS: readonly GridTool[] = ['wall', 'door', 'zone', 'pin'];
+
+/**
+ * The tools that lay tiles down. Kept as one list because the palette's
+ * "which tile" choice must survive switching between them: picking a floor and
+ * then picking the room tool is one intention, not two.
+ */
+export const TILE_TOOLS: readonly GridTool[] = ['tile', 'tile-area', 'tile-room'];
+
+/**
+ * How a rectangle drag lays tiles. `area` fills the ground; `room` fills the
+ * ground AND stands a wall on every edge cell, which is the single most common
+ * thing a GM does when building — draw a room — and used to take a hundred
+ * clicks with the brush.
+ */
+export type TileRectMode = 'area' | 'room';
+
+/**
+ * The GM's OWN view of the map, independent of what the table is shown.
+ *
+ * `scene` follows the scene's saved projection. The other two override it on
+ * this device only: a GM lays out rooms in plan, where a rectangle is a
+ * rectangle, and flips to isometric to see what the table sees — without the
+ * table flipping with them mid-session.
+ */
+export type ViewProjection = 'scene' | 'topdown' | 'iso';
 
 /**
  * One tile as the canvas draws it (FR9.2).
@@ -54,6 +81,18 @@ export interface TileDrawDef {
    * `stairTarget` in the rules decides where they actually go.
    */
   connects?: 'up' | 'down';
+  /**
+   * What the tile IS, for the plan-view treatment: a door gets a bar across
+   * its slab, a wall does not. Absent means "draw it as its footprint says".
+   */
+  kind?: string;
+  /**
+   * `false` marks glass, grilles and empty frames — things a sightline passes
+   * through — so the renderer can draw them lighter than the wall they sit in.
+   */
+  blocksSight?: boolean;
+  /** Reflected light washed over the top face — see `Tile.sheen`. */
+  sheen?: string;
   /**
    * The floor to draw UNDER a thin tile, from the same set.
    *
@@ -89,6 +128,8 @@ export interface TileSetLike {
     colors: readonly [string, string];
     height?: number;
     emissive?: string;
+    sheen?: string;
+    blocksSight?: boolean;
     footprint?: 'fill' | 'wall' | 'post' | 'canopy' | 'round' | 'stair';
     connects?: 'up' | 'down';
   }[];
@@ -125,8 +166,11 @@ export function tileDefsFromSets(sets: readonly TileSetLike[]): Record<string, T
         // become an explicit `undefined` the renderer has to special-case.
         ...(t.height !== undefined ? { height: t.height } : {}),
         ...(t.emissive !== undefined ? { emissive: t.emissive } : {}),
+        ...(t.sheen !== undefined ? { sheen: t.sheen } : {}),
+        ...(t.blocksSight !== undefined ? { blocksSight: t.blocksSight } : {}),
         ...(t.footprint !== undefined ? { footprint: t.footprint } : {}),
         ...(t.connects !== undefined ? { connects: t.connects } : {}),
+        kind: t.kind,
         ...(thin && floor !== undefined
           ? { underlay: { pattern: floor.pattern, colors: floor.colors } }
           : {}),
@@ -283,6 +327,12 @@ export interface StageCallbacks {
   onPinPlace?(x: number, y: number): void;
   /** One cell of a tile paint stroke (FR9.2); `erase` clears instead. */
   onTilePaint?(col: number, row: number, erase: boolean): void;
+  /**
+   * A rectangle drag finished (FR9.2). Cell bounds, inclusive, already
+   * normalised so `c0 <= c1` and `r0 <= r1`; the mode says whether the GM
+   * wanted a floor or a room.
+   */
+  onTileRect?(c0: number, r0: number, c1: number, r1: number, mode: TileRectMode): void;
   /**
    * The paint stroke ended (button up, gesture abandoned). Without this the
    * coalescer was a trailing debounce over painting ACTIVITY, not a per-stroke

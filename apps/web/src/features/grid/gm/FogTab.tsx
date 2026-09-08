@@ -38,7 +38,9 @@ export default function FogTab({ scene, commands }: { scene: Scene; commands: Gr
   return (
     <>
       <PanelSection title="Regions" hint={`${scene.fog.regions.length}`}>
-        {scene.fog.regions.length === 0 && <Empty>no named regions yet</Empty>}
+        {scene.fog.regions.length === 0 && (
+          <Empty>no regions yet — players see the whole map until you define one</Empty>
+        )}
         <ul className="space-y-1">
           {scene.fog.regions.map((r) => {
             const open = revealed.has(r.id);

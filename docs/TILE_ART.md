@@ -204,12 +204,19 @@ there.
 
 Everything above is measured. This is not.
 
-The catalogue is authored at the measured intent **× 1.55** (× 1.12 for the
+The catalogue is authored at the measured intent **× 2.0** (× 1.12 for the
 polished corporate tier). The measured frames carry things a virtual tabletop
 does not — a bloom pass, 3D character lighting, a colour-correction lift, a
 vignette — every one of which raises the apparent brightness of a dark floor.
 Authoring straight to a 15–20% median produced a map that was faithful and
 unusable: a GM squinting at a near-black floor on a laptop in a lit room.
+
+The first exposure was 1.55, and it was still not enough: a GM building a
+club saw charcoal boxes on black, and said so. The lift to 2.0 was applied as
+one transform over every worn surface — value × 1.3, hue and saturation
+untouched, accents held inside the tier-2 budget, everything capped at the
+surface ceiling — so the findings survive it exactly as they survived the
+first one. The worn-tier median base value is now 0.49.
 
 A single multiplier moves every surface together, which is what lets the
 findings survive it. Saturation is still flat across the range, warmth still
@@ -260,7 +267,49 @@ pattern name, a footprint and a height — rather than as an image (§14).
   silhouette separation comes from a prop's albedo differing from the floor
   behind it, plus the foot-to-crown gradient. The tier-1 figure is not
   currently enforced for that reason.
-- Wet-ground reflectance variants (8–20% of a tile mirroring the nearest
-  emissive) are described by the study and not yet implemented.
 - Rain, steam and vent plumes belong to a scene-level overlay, not to tile
   texture. Not implemented.
+
+---
+
+## Sheen — reflected light is a surface, not a light
+
+The study's wet-ground reflectance (8–20% of a surface mirroring the nearest
+light) is the `sheen` channel. A tile with `sheen` gets a translucent wash of
+that colour over its top face, weighted by the colour's own brightness, plus a
+lighter streak toward the key light. **No pool, no bloom, nothing thrown onto
+the neighbours.** That is what keeps it a property of the surface, which is
+what lets a GM paint a whole dance floor with it — the thing `emissive`, being
+a light, is rationed against.
+
+Rules, checked by `checkTile`:
+
+- a sheen colour reads as a reflection: value ≥ 50%, saturation ≥ 30%;
+- a tile is a light or reflects one, never both.
+
+It lives on three tiles: the club's dance floor (lit from below), the street's
+standing water (reflecting the neon), and the lobby's polished stone (under its
+own downlights).
+
+---
+
+## What the renderer adds that the palette cannot
+
+The face multipliers are deliberately flat, so the form has to come from
+somewhere else — the games paint it in. A procedural renderer gets it from
+four things, all in `stage/tileLayer.ts`:
+
+- **Per-cell grain.** Every floor cell's value is nudged by a hash of its
+  position, ±4.5% — inside the tier-3 budget. A floor painted from one tile
+  reads as poured rather than printed, and is identical every time it draws.
+- **Contact shadows.** Every standing thing casts a dark offset onto the floor
+  at its foot, leaning the way the key light leans. Drawn in their own pass
+  between the floors and the standing tiles, so they land on the floor beside
+  a wall and under the wall itself. In plan view — where there is no
+  extrusion — this and the crown are the whole of what says "not floor".
+- **Crown edges.** One pixel, a third brighter than the top face, along the
+  top of every standing thing. It is the edge the key light catches first.
+- **Plan-view cuts.** A door gets a bar across its slab in its accent; glass
+  and grilles get a light line down the middle, the way glazing is drawn on a
+  floor plan. Without them a room's door was a wall painted a slightly
+  different brown.

@@ -12,7 +12,7 @@
  */
 import type { Graphics } from 'pixi.js';
 import type { Point, TileLayer } from '@safehouse/contracts';
-import { WALL_THICKNESS } from '@safehouse/rules';
+import { SHEEN_ALPHA_MAX, WALL_THICKNESS } from '@safehouse/rules';
 import {
   cellDepth,
   groundRadius,
@@ -22,7 +22,7 @@ import {
   type SceneMetrics,
 } from '../geometry.js';
 import { tileDefKey, type TileDrawDef } from '../types.js';
-import { FACE_FOOT, FACE_SHADE, parseColor, shade } from './colors.js';
+import { C, FACE_FOOT, FACE_SHADE, parseColor, shade } from './colors.js';
 
 // Type-only pixi import: every draw here is a call on a Graphics-shaped object,
 // so the module stays runnable (and testable) without a renderer.
@@ -83,6 +83,148 @@ function poly(g: Graphics, pts: readonly Point[]): Graphics {
   g.moveTo(pts[0]!.x, pts[0]!.y);
   for (let i = 1; i < pts.length; i += 1) g.lineTo(pts[i]!.x, pts[i]!.y);
   return g.closePath();
+}
+
+// ---------------------------------------------------------------------------
+// Legibility: the things a painted floor does that a flat fill does not
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-cell grain, ±4.5% of value.
+ *
+ * A floor painted from one tile used to be one flat colour across forty
+ * cells, which reads as vinyl rather than concrete — and, worse, made the grid
+ * lines the only thing giving the eye a scale. This is the study's tier-3
+ * budget (6 value points) spent on the cheapest possible material: each cell
+ * is hashed to a fixed offset, so a floor looks poured rather than printed and
+ * looks the same every time it is drawn.
+ */
+const GRAIN = 0.045;
+
+function cellSeed(col: number, row: number): number {
+  return hash32(`${col},${row}`);
+}
+
+function grained(base: number, col: number, row: number): number {
+  const t = ((cellSeed(col, row) % 1000) / 1000) * 2 - 1;
+  return shade(base, 1 + t * GRAIN);
+}
+
+/** Does this tile stand proud of the floor — does it have a silhouette? */
+export function isStanding(def: TileDrawDef): boolean {
+  return (def.height ?? 0) > 0 || def.footprint === 'stair';
+}
+
+/**
+ * How far a standing thing's shadow reaches across the floor, in cells per
+ * cell of height. Matches the key light's own lean (0.50 : 0.75 — see
+ * `KEY_LIGHT`) closely enough that the shadow falls to the same side as the
+ * darker face, which is what makes a box sit down instead of hover.
+ */
+const SHADOW_REACH = 0.14;
+const SHADOW_ALPHA = 0.34;
+
+/**
+ * The contact shadow under a standing tile, on the floor.
+ *
+ * This is where most of plan view's legibility comes from, and half of
+ * isometric's. The measured face multipliers are deliberately close together
+ * (the games paint their form in), so a box lit by them alone barely separates
+ * from the floor at table zoom. A dark offset under its foot does what the
+ * painter's contact shadow does: it says "this is ON the floor, and this
+ * tall". In plan view — where there is no extrusion at all — it is the only
+ * thing that says so.
+ *
+ * Drawn in its own pass, after every floor and before every standing thing,
+ * so it lands ON the neighbouring floor and UNDER the box it belongs to.
+ */
+function drawGroundShadow(
+  g: Graphics,
+  m: SceneMetrics,
+  rect: readonly [number, number, number, number],
+  height: number,
+): void {
+  const d = SHADOW_REACH * Math.max(0.5, height);
+  const [x0, y0, x1, y1] = rect;
+  poly(g, rectCorners(m, x0 + d, y0 + d, x1 + d, y1 + d)).fill({
+    color: C.ground,
+    alpha: SHADOW_ALPHA,
+  });
+}
+
+/**
+ * The lit edge along the top of a standing thing.
+ *
+ * One pixel, a third brighter than the top face. The crown is the edge the
+ * key light catches first, and in the games it is the brightest line on any
+ * prop — it is what separates a box from the box behind it when both are the
+ * same colour.
+ */
+function drawCrown(g: Graphics, top: readonly Point[], base: number): void {
+  poly(g, top).stroke({ width: 1, color: shade(base, 1.35), alpha: 0.42, pixelLine: true });
+}
+
+/**
+ * Reflected light on a top face — see `Tile.sheen`.
+ *
+ * A wash, weighted by the reflected colour's own brightness so a faint light
+ * gives a faint reflection, plus a lighter streak across the upper half where
+ * the reflection would catch the key light. No pool and no bloom: this is a
+ * property of the SURFACE, which is why a GM may paint a whole floor with it
+ * without the room turning into a disco.
+ */
+function drawSheen(g: Graphics, def: TileDrawDef, top: readonly Point[]): void {
+  if (def.sheen === undefined) return;
+  const tint = parseColor(def.sheen, C.cyan);
+  const v = Math.max((tint >> 16) & 0xff, (tint >> 8) & 0xff, tint & 0xff) / 255;
+  poly(g, top).fill({ color: tint, alpha: SHEEN_ALPHA_MAX * v });
+  // The streak: the top face shrunk toward its upper-left, where the light
+  // comes from.
+  let cx = 0;
+  let cy = 0;
+  for (const p of top) {
+    cx += p.x;
+    cy += p.y;
+  }
+  cx /= top.length;
+  cy /= top.length;
+  const streak = top.map((p) => ({
+    x: cx + (p.x - cx) * 0.55 - (p.x - cx) * 0.1,
+    y: cy + (p.y - cy) * 0.45 - Math.abs(p.y - cy) * 0.15,
+  }));
+  poly(g, streak).fill({ color: tint, alpha: SHEEN_ALPHA_MAX * v * 0.55 });
+}
+
+/**
+ * What marks a door as a door, and a window as a window, on the slab.
+ *
+ * Both are walls to the footprint code — a slab in a run — and in plan view a
+ * slab is all there is, so without this a room's door was a wall painted a
+ * slightly different brown. A door gets a bar across its slab in its accent;
+ * anything a sightline passes through (glass, a grille, an empty frame) gets
+ * a light line down its middle, the way glazing is drawn on a floor plan.
+ */
+function drawCut(g: Graphics, def: TileDrawDef, top: readonly Point[], accent: number): void {
+  if (top.length < 4) return;
+  const mid = (a: Point, b: Point): Point => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  // The slab's long axis runs between the midpoints of its two short ends,
+  // whichever way the run goes; the two candidates are compared by length.
+  const [p0, p1, p2, p3] = top as [Point, Point, Point, Point];
+  const a1 = mid(p0, p1);
+  const b1 = mid(p2, p3);
+  const a2 = mid(p1, p2);
+  const b2 = mid(p3, p0);
+  const long1 = Math.hypot(b1.x - a1.x, b1.y - a1.y) >= Math.hypot(b2.x - a2.x, b2.y - a2.y);
+  const [a, b] = long1 ? [a1, b1] : [a2, b2];
+  if (def.kind === 'door') {
+    g.moveTo(a.x, a.y)
+      .lineTo(b.x, b.y)
+      .stroke({ width: 3, color: shade(accent, 1.2), alpha: 0.9 });
+  } else if (def.blocksSight === false) {
+    g.moveTo(a.x, a.y)
+      .lineTo(b.x, b.y)
+      .stroke({ width: 1, color: shade(accent, 1.7), alpha: 0.7, pixelLine: true });
+  }
 }
 
 /**
@@ -161,6 +303,7 @@ function drawBox(
   rect: readonly [number, number, number, number],
   rise: number,
   base: number,
+  standing = false,
 ): Point[] {
   const [x0, y0, x1, y1] = rect;
   const ground = rectCorners(m, x0, y0, x1, y1);
@@ -176,6 +319,9 @@ function drawBox(
   }
 
   poly(g, top).fill({ color: rise > 0 ? shade(base, FACE_SHADE.top) : base });
+  // A thing that stands gets its lit edge in both projections. In plan view
+  // it is, with the contact shadow, the whole of what says "this is not floor".
+  if (rise > 0 || standing) drawCrown(g, top, base);
   return top;
 }
 
@@ -435,10 +581,13 @@ function paintGlow(g: Graphics, m: SceneMetrics, face: readonly Point[], glow: n
   // away — it falls on the ground as a pool. `groundRadius` is the same helper
   // an AoE template uses, so the pool is a circle in plan view and the correct
   // 2:1 ellipse in isometric.
+  // Alphas measured up from the first cut, which read as a tinted fixture on
+  // a dark floor rather than a light in a room: at table zoom the outer pool
+  // was below the grid overlay's own opacity and vanished under it.
   for (const [r, alpha] of [
-    [1.6, 0.05],
-    [1.05, 0.09],
-    [0.62, 0.14],
+    [1.7, 0.07],
+    [1.1, 0.13],
+    [0.64, 0.2],
   ] as const) {
     const { rx, ry } = groundRadius(m, r);
     g.ellipse(cx, cy, rx, ry).fill({ color: glow, alpha });
@@ -490,6 +639,59 @@ export function wallBoxes(joins: WallJoins): Array<[number, number, number, numb
  * drawn here is the set's own default, so a warehouse wall stands on warehouse
  * concrete.
  */
+/**
+ * The floor under a thin or standing tile, from the set's own default.
+ *
+ * Drawn only when the cell has no ground of its own: the room tool paints
+ * ground under every wall it stands, and a set's default concrete drawn over
+ * the bar decking the GM chose would be the wrong floor in the right place.
+ */
+function drawUnderlay(
+  g: Graphics,
+  def: TileDrawDef,
+  m: SceneMetrics,
+  col: number,
+  row: number,
+): void {
+  const under = def.underlay;
+  if (under === undefined) return;
+  const base = grained(parseColor(under.colors[0], 0x3b3f45), col, row);
+  const floor = drawBox(g, m, [col, row, col + 1, row + 1], 0, base);
+  drawPattern(
+    g,
+    { ...def, pattern: under.pattern },
+    parseColor(under.colors[1], 0x5a6068),
+    inscribed(floor),
+  );
+}
+
+/** The slabs a wall cell is made of, in scene cells, nearest last. */
+function wallRects(col: number, row: number, joins: WallJoins): Array<[number, number, number, number]> {
+  // `wallBoxes` works in CELL-LOCAL fractions (0..1) so the join rule can be
+  // stated and tested without coordinates; translating to the cell is this
+  // function's job. Forgetting it drew every wall on the map stacked at the
+  // grid origin — one lonely pillar and no rooms at all.
+  return wallBoxes(joins)
+    .map(([x0, y0, x1, y1]): [number, number, number, number] => [
+      col + x0,
+      row + y0,
+      col + x1,
+      row + y1,
+    ])
+    // Back to front within the cell too: the north stub is furthest from the
+    // viewer and the south stub nearest, so a corner joins cleanly instead of
+    // showing the seam where two slabs overlap.
+    .map((r) => ({ r, depth: r[0] + r[1] + r[2] + r[3] }))
+    .sort((a, b) => a.depth - b.depth)
+    .map(({ r }) => r);
+}
+
+/**
+ * A wall cell: a thin slab standing on whatever floor is there.
+ *
+ * The slab is a third of a cell (`WALL_THICKNESS`) and orients itself from
+ * its neighbours, so the GM paints cells and gets architecture.
+ */
 function drawWallTile(
   g: Graphics,
   def: TileDrawDef,
@@ -502,32 +704,12 @@ function drawWallTile(
   const accent = parseColor(def.colors[1], 0x5a6068);
   const rise = heightRise(m, def.height ?? 0);
 
-  const under = def.underlay;
-  if (under !== undefined) {
-    const floor = drawBox(g, m, [col, row, col + 1, row + 1], 0, parseColor(under.colors[0], base));
-    drawPattern(g, { ...def, pattern: under.pattern }, parseColor(under.colors[1], accent), inscribed(floor));
-  }
-
-  // `wallBoxes` works in CELL-LOCAL fractions (0..1) so the join rule can be
-  // stated and tested without coordinates; translating to the cell is this
-  // function's job. Forgetting it drew every wall on the map stacked at the
-  // grid origin — one lonely pillar and no rooms at all.
-  const boxes = wallBoxes(joins)
-    .map(([x0, y0, x1, y1]): [number, number, number, number] => [
-      col + x0,
-      row + y0,
-      col + x1,
-      row + y1,
-    ])
-    // Back to front within the cell too: the north stub is furthest from the
-    // viewer and the south stub nearest, so a corner joins cleanly instead of
-    // showing the seam where two slabs overlap.
-    .map((r) => ({ r, depth: r[0] + r[1] + r[2] + r[3] }))
-    .sort((a, b) => a.depth - b.depth);
-
   let lastTop: Point[] = [];
-  for (const { r } of boxes) lastTop = drawBox(g, m, r, rise, base);
-  if (lastTop.length > 0) drawGlow(g, m, def, accent, lastTop);
+  for (const r of wallRects(col, row, joins)) lastTop = drawBox(g, m, r, rise, base, true);
+  if (lastTop.length > 0) {
+    drawCut(g, def, lastTop, accent);
+    drawGlow(g, m, def, accent, lastTop);
+  }
 }
 
 /**
@@ -555,19 +737,6 @@ function drawObjectTile(
   const rise = heightRise(m, def.height ?? 0);
   const shape = def.footprint;
 
-  // Floor first: these cover a fraction of their cell, and without it every
-  // prop would be a hole in the map with the grid showing through.
-  const under = def.underlay;
-  if (under !== undefined) {
-    const floor = drawBox(g, m, [col, row, col + 1, row + 1], 0, parseColor(under.colors[0], base));
-    drawPattern(
-      g,
-      { ...def, pattern: under.pattern },
-      parseColor(under.colors[1], accent),
-      inscribed(floor),
-    );
-  }
-
   const centre = { x: col + 0.5, y: row + 0.5 };
   // A `round` prop is squat and wide; a post and a trunk are narrow.
   const radius = shape === 'round' ? 0.34 : 0.15;
@@ -586,7 +755,18 @@ function drawObjectTile(
 
   const top = drawPrism(g, m, centre, radius, rise, base, shape === 'round' ? 8 : 6);
   drawPattern(g, def, accent, inscribed(top));
+  drawCrown(g, top, base);
   drawGlow(g, m, def, accent, top);
+}
+
+/** The square a prop's shadow falls from — its own footprint, not its cell. */
+function objectRect(
+  def: TileDrawDef,
+  col: number,
+  row: number,
+): [number, number, number, number] {
+  const r = def.footprint === 'canopy' ? 0.42 : def.footprint === 'round' ? 0.34 : 0.15;
+  return [col + 0.5 - r, row + 0.5 - r, col + 0.5 + r, row + 0.5 + r];
 }
 
 /**
@@ -614,18 +794,6 @@ function drawStairTile(
   const rise = heightRise(m, def.height ?? 0);
   const down = def.connects === 'down';
 
-  // Floor underneath: a flight covers only part of its cell.
-  const under = def.underlay;
-  if (under !== undefined) {
-    const floor = drawBox(g, m, [col, row, col + 1, row + 1], 0, parseColor(under.colors[0], base));
-    drawPattern(
-      g,
-      { ...def, pattern: under.pattern },
-      parseColor(under.colors[1], accent),
-      inscribed(floor),
-    );
-  }
-
   const TREADS = 4;
   let top: Point[] = [];
   for (let i = 0; i < TREADS; i += 1) {
@@ -633,7 +801,16 @@ function drawStairTile(
     const y1 = row + ((i + 1) / TREADS);
     // Rising away from the viewer, or falling into the floor for a descent.
     const step = ((down ? TREADS - 1 - i : i) + 1) / TREADS;
-    top = drawBox(g, m, [col + 0.12, y0, col + 0.88, y1], rise * step, shade(base, 0.9 + i * 0.06));
+    // In plan view the treads are bands of stepped brightness — the same
+    // ladder of shades, read as a flight the way a floor plan draws one.
+    top = drawBox(
+      g,
+      m,
+      [col + 0.12, y0, col + 0.88, y1],
+      rise * step,
+      shade(base, 0.9 + i * 0.06),
+      true,
+    );
   }
   drawPattern(g, def, accent, inscribed(top));
   drawGlow(g, m, def, accent, top);
@@ -649,11 +826,17 @@ function drawFillTile(
 ): void {
   // Fallbacks keep a malformed palette visible rather than invisible: a tile
   // that fails to parse should look wrong, not vanish from the floor.
-  const base = parseColor(def.colors[0], 0x3b3f45);
+  const standing = isStanding(def);
+  // Grain on the floor only. A crate is one object and should be one colour;
+  // forty cells of concrete should not be.
+  const base = standing
+    ? parseColor(def.colors[0], 0x3b3f45)
+    : grained(parseColor(def.colors[0], 0x3b3f45), col, row);
   const accent = parseColor(def.colors[1], 0x5a6068);
   const rise = heightRise(m, def.height ?? 0);
-  const top = drawBox(g, m, [col, row, col + 1, row + 1], rise, base);
+  const top = drawBox(g, m, [col, row, col + 1, row + 1], rise, base, standing);
   drawPattern(g, def, accent, inscribed(top));
+  drawSheen(g, def, top);
   drawGlow(g, m, def, accent, top);
 }
 
@@ -701,7 +884,73 @@ export function drawTiles(g: Graphics, m: SceneMetrics, input: TileDrawInput): v
       a.col - b.col,
   );
 
+  /**
+   * Cells with a floor of their own, so no default is drawn under them.
+   *
+   * Judged by what is DRAWN there, not by which map the key came from: the
+   * legacy `cells` map held walls and props as well as floors, so "a key in
+   * `cells`" is not "a floor in this cell".
+   */
+  const grounded = new Set<string>();
+  for (const c of drawable) {
+    if (c.layer === 0 && !isStanding(c.def) && (c.def.footprint ?? 'fill') === 'fill') {
+      grounded.add(`${c.col},${c.row}`);
+    }
+  }
+
+  const joinsOf = (col: number, row: number): WallJoins => ({
+    n: walls.has(`${col},${row - 1}`),
+    s: walls.has(`${col},${row + 1}`),
+    w: walls.has(`${col - 1},${row}`),
+    e: walls.has(`${col + 1},${row}`),
+  });
+
+  // THREE PASSES, because a contact shadow has to land on the floor next to
+  // a thing and under the thing itself, and one depth-sorted pass cannot put
+  // it there: the floor in front of a wall is nearer than the wall, so it is
+  // drawn later, over anything the wall's turn painted onto it.
+  //
+  //   1. Everything flat — floors, stains, drains, and the default floor under
+  //      a standing tile whose cell has no ground of its own.
+  //   2. Every standing tile's shadow, on that finished floor.
+  //   3. Every standing tile, nearest last.
+  //
+  // Pass 1 never occludes pass 3: a flat cell sits at ground level, and a
+  // standing thing behind it rises AWAY from it on screen. So the split costs
+  // nothing in correctness and buys the shadows a floor to fall on.
+  const standing = drawable.filter((c) => isStanding(c.def) || c.def.footprint === 'wall');
+
   for (const cell of drawable) {
+    const key = `${cell.col},${cell.row}`;
+    if (isStanding(cell.def) || cell.def.footprint === 'wall') {
+      if (!grounded.has(key)) drawUnderlay(g, cell.def, m, cell.col, cell.row);
+      continue;
+    }
+    // Flat props with a partial footprint — a storm drain, an oil stain —
+    // still want the default floor beneath them when nothing was painted.
+    if (cell.def.footprint !== undefined && cell.def.footprint !== 'fill' && !grounded.has(key)) {
+      drawUnderlay(g, cell.def, m, cell.col, cell.row);
+    }
+    drawFillTile(g, cell.def, m, cell.col, cell.row);
+  }
+
+  for (const cell of standing) {
+    const h = cell.def.height ?? (cell.def.footprint === 'stair' ? 0.5 : 0);
+    const shape = cell.def.footprint;
+    if (shape === 'wall') {
+      for (const r of wallRects(cell.col, cell.row, joinsOf(cell.col, cell.row))) {
+        drawGroundShadow(g, m, r, h);
+      }
+    } else if (shape === 'post' || shape === 'canopy' || shape === 'round') {
+      drawGroundShadow(g, m, objectRect(cell.def, cell.col, cell.row), h);
+    } else if (shape === 'stair') {
+      drawGroundShadow(g, m, [cell.col + 0.12, cell.row, cell.col + 0.88, cell.row + 1], h);
+    } else {
+      drawGroundShadow(g, m, [cell.col, cell.row, cell.col + 1, cell.row + 1], h);
+    }
+  }
+
+  for (const cell of standing) {
     const shape = cell.def.footprint;
     if (shape === 'stair') {
       drawStairTile(g, cell.def, m, cell.col, cell.row);
@@ -710,12 +959,7 @@ export function drawTiles(g: Graphics, m: SceneMetrics, input: TileDrawInput): v
     } else if (shape === 'wall') {
       // Joins are read from the finished set, not from draw order, so a run
       // looks the same whichever end the GM painted from.
-      drawWallTile(g, cell.def, m, cell.col, cell.row, {
-        n: walls.has(`${cell.col},${cell.row - 1}`),
-        s: walls.has(`${cell.col},${cell.row + 1}`),
-        w: walls.has(`${cell.col - 1},${cell.row}`),
-        e: walls.has(`${cell.col + 1},${cell.row}`),
-      });
+      drawWallTile(g, cell.def, m, cell.col, cell.row, joinsOf(cell.col, cell.row));
     } else {
       drawFillTile(g, cell.def, m, cell.col, cell.row);
     }

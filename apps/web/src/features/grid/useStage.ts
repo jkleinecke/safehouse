@@ -79,6 +79,7 @@ export function useStage(params: UseStageParams): UseStageResult {
       onPinSelect: (id) => cbRef.current.onPinSelect?.(id),
       onTilePaint: (col, row, erase) => cbRef.current.onTilePaint?.(col, row, erase),
       onTileStrokeEnd: () => cbRef.current.onTileStrokeEnd?.(),
+      onTileRect: (c0, r0, c1, r1, mode) => cbRef.current.onTileRect?.(c0, r0, c1, r1, mode),
     };
 
     void import('./stage/index.js')

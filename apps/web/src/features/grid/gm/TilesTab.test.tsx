@@ -22,7 +22,7 @@ import type { Scene } from '@safehouse/contracts';
 import { TILESETS } from '@safehouse/rules';
 import type { TilesetDef } from '../api.js';
 import { DEFAULT_TILESET_ID } from '../store.js';
-import TilesTab, { paintedTilesetToAdopt, resolveTileset } from './TilesTab.js';
+import TilesTab, { paintedTilesetToAdopt, resolveTileset, stairAdvice } from './TilesTab.js';
 
 const SERVED = TILESETS as unknown as TilesetDef[];
 
@@ -169,13 +169,46 @@ describe('clearing the floor', () => {
 // ---------------------------------------------------------------------------
 
 describe('the footer describes what a painted wall actually does', () => {
-  it('does not promise blocking that nothing in the repo implements', () => {
+  it('promises sight blocking, which the rules implement, and not movement, which they do not', () => {
     const html = render(scene({ tilesetId: DEFAULT_TILESET_ID, cells: {}, ground: cells(3), structure: {}, object: {} }));
-    // The old copy: "walls and doors you paint block movement the same way
-    // drawn geometry does." Nothing reads `blocksMovement`/`blocksSight`, and
-    // drawn geometry does not block either.
-    expect(html).not.toMatch(/block movement/i);
-    expect(html).toContain('nothing blocks movement or sight yet');
+    // `sightModelFor` reads every full-height tile, so a painted wall really
+    // does stop a sightline — the footer said the opposite for a whole
+    // release and a GM believed it. Movement is still the GM's call.
+    expect(html).toContain('walls block sight');
+    expect(html).toContain('Movement is not enforced');
+    expect(html).not.toContain('nothing blocks movement or sight yet');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The Stairs tool says where a flight can go
+// ---------------------------------------------------------------------------
+
+describe('stairAdvice', () => {
+  const flat = () =>
+    ({
+      ...scene(undefined),
+      levels: [],
+    }) as unknown as Scene;
+  const storeyed = () =>
+    ({
+      ...scene(undefined),
+      levels: [{ id: 'l1', name: 'Catwalk' }],
+    }) as unknown as Scene;
+
+  it('tells a one-floor scene that a stair needs a floor to reach', () => {
+    const a = stairAdvice(flat(), 0);
+    expect(a.up).toBe(false);
+    expect(a.down).toBe(false);
+    expect(a.text).toContain('Add a floor first');
+  });
+
+  it('names the floor above from the ground, and the one below from the top', () => {
+    expect(stairAdvice(storeyed(), 0).text).toContain('up to Catwalk');
+    const top = stairAdvice(storeyed(), 1);
+    expect(top.up).toBe(false);
+    expect(top.down).toBe(true);
+    expect(top.text).toContain('down to Ground');
   });
 });
 

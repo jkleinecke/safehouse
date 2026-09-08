@@ -2,7 +2,8 @@
  * Floating canvas toolbar: tool picker, snap toggle, zoom controls.
  * Phone-first — players get select/ruler/pointer only; authoring tools are GM.
  */
-import type { GridTool } from '../types.js';
+import type { GridProjection } from '@safehouse/contracts';
+import type { GridTool, ViewProjection } from '../types.js';
 
 interface ToolDef {
   id: GridTool;
@@ -30,6 +31,11 @@ export interface ToolbarProps {
   tool: GridTool;
   snapEnabled: boolean;
   gmPanelOpen: boolean;
+  /** The GM's own view of the map — see `ViewProjection`. */
+  viewProjection?: ViewProjection;
+  /** What the scene is saved as, i.e. what the table sees. */
+  sceneProjection?: GridProjection;
+  onView?: (view: ViewProjection) => void;
   onTool: (tool: GridTool) => void;
   onToggleSnap: () => void;
   onToggleGmPanel: () => void;
@@ -103,6 +109,20 @@ export default function Toolbar(props: ToolbarProps) {
       {props.isGm && (
         <>
           <span className="mx-0.5 h-5 w-px bg-edge" aria-hidden />
+          {/*
+            The map builder's two views, one click apart. Plan is where rooms
+            are laid out — a rectangle is a rectangle — and isometric is what
+            the table is shown. This is the GM's OWN view: flipping it never
+            touches the scene, so the table does not flip mid-session. What
+            the table sees is set in Map ▸ View.
+          */}
+          {props.onView && (
+            <ViewToggle
+              view={props.viewProjection ?? 'scene'}
+              sceneProjection={props.sceneProjection ?? 'topdown'}
+              onView={props.onView}
+            />
+          )}
           <Btn
             active={props.gmPanelOpen}
             title="GM authoring panel"
@@ -113,6 +133,53 @@ export default function Toolbar(props: ToolbarProps) {
           </Btn>
         </>
       )}
+    </div>
+  );
+}
+
+/** Plan / Iso, showing which one the table is on. */
+function ViewToggle({
+  view,
+  sceneProjection,
+  onView,
+}: {
+  view: ViewProjection;
+  sceneProjection: GridProjection;
+  onView: (view: ViewProjection) => void;
+}) {
+  const effective: GridProjection = view === 'scene' ? sceneProjection : view;
+  const choices: Array<{ id: GridProjection; label: string }> = [
+    { id: 'topdown', label: 'Plan' },
+    { id: 'iso', label: 'Iso' },
+  ];
+  return (
+    <div
+      role="group"
+      aria-label="Your view of the map"
+      className="flex items-center gap-1"
+      data-testid="view-toggle"
+    >
+      {choices.map((c) => {
+        const tableSees = c.id === sceneProjection;
+        return (
+          <Btn
+            key={c.id}
+            active={effective === c.id}
+            title={
+              tableSees
+                ? `${c.label} view — what the table sees`
+                : `${c.label} view on this screen only; the table stays on ${sceneProjection === 'iso' ? 'iso' : 'plan'}`
+            }
+            // Picking the scene's own projection drops the override rather
+            // than pinning it, so a later change in Map ▸ View is followed.
+            onClick={() => onView(c.id === sceneProjection ? 'scene' : c.id)}
+          >
+            <span aria-hidden>{c.id === 'iso' ? '◈' : '▦'}</span>
+            <span className="hidden sm:inline">{c.label}</span>
+            {tableSees && <span className="sr-only">(table)</span>}
+          </Btn>
+        );
+      })}
     </div>
   );
 }

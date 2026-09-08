@@ -7,12 +7,20 @@ import { Container, Graphics } from 'pixi.js';
 import type { Point } from '@safehouse/contracts';
 import {
   groundRadius,
+  rectCorners,
+  rectPolygon,
   rulerSegments,
   sceneWorldSize,
   worldFromGrid,
   type SceneMetrics,
 } from '../geometry.js';
-import type { AoeTemplate, FogDraft, MovementThresholds, ScatterResult } from '../types.js';
+import type {
+  AoeTemplate,
+  FogDraft,
+  MovementThresholds,
+  ScatterResult,
+  TileRectMode,
+} from '../types.js';
 import { C, PACE_COLORS } from './colors.js';
 
 const PING_LIFE_MS = 950;
@@ -61,12 +69,13 @@ export class FxLayer {
   private readonly aoe = new Graphics();
   private readonly fogDraft = new Graphics();
   private readonly segment = new Graphics();
+  private readonly rectDraft = new Graphics();
   private readonly pings: PoolItem[];
   private readonly trail: PoolItem[];
 
   constructor() {
     this.root.eventMode = 'none';
-    this.root.addChild(this.aoe, this.fogDraft, this.segment, this.ruler);
+    this.root.addChild(this.aoe, this.fogDraft, this.segment, this.rectDraft, this.ruler);
     this.trail = makePool(this.root, TRAIL_POOL, (g) => g.circle(0, 0, 4).fill({ color: C.cyan, alpha: 0.9 }));
     this.pings = makePool(this.root, PING_POOL, (g) =>
       g.circle(0, 0, 26).stroke({ width: 4, color: C.magenta, alpha: 1 }),
@@ -134,7 +143,16 @@ export class FxLayer {
     }
   }
 
-  /** GM fog-region draft polygon while clicking vertices (FR9.14). */
+  /**
+   * GM fog-region draft polygon while clicking vertices (FR9.14).
+   *
+   * Two points preview the RECTANGLE they will save as, projected through the
+   * grid. Drawing the bare line between them was honest in plan view and a
+   * trap in isometric: "opposite corners" are opposite in grid space, and two
+   * clicks that look like a wide diagonal on screen can be nearly collinear on
+   * the grid — the GM saw a big box and saved a sliver. Showing the region
+   * itself is what lets them see the sliver before it is saved.
+   */
   setFogDraft(m: SceneMetrics, draft: FogDraft | null): void {
     const g = this.fogDraft;
     g.clear();
@@ -142,6 +160,13 @@ export class FxLayer {
     const pts = draft.points.map((p) => worldFromGrid(m, p));
     const first = pts[0];
     if (!first) return;
+    if (pts.length === 2) {
+      const [a, b] = draft.points as [Point, Point];
+      const box = rectPolygon(a, b).map((p) => worldFromGrid(m, p));
+      g.poly(box.flatMap((p) => [p.x, p.y]))
+        .fill({ color: C.cyan, alpha: 0.08 })
+        .stroke({ width: 1.5, color: C.cyan, alpha: 0.6 });
+    }
     if (pts.length >= 3) {
       const flat: number[] = [];
       for (const p of pts) flat.push(p.x, p.y);
@@ -173,6 +198,41 @@ export class FxLayer {
 
   clearSegmentDraft(): void {
     this.segment.clear();
+  }
+
+  /**
+   * The cells a room or area drag will fill (FR9.2), in the projection the GM
+   * is looking at — a rectangle in plan, a diamond in isometric — with the
+   * wall ring drawn heavier for a room so the two tools read apart mid-drag.
+   */
+  setRectDraft(
+    m: SceneMetrics,
+    mode: TileRectMode,
+    from: { col: number; row: number },
+    to: { col: number; row: number },
+  ): void {
+    const g = this.rectDraft;
+    g.clear();
+    const c0 = Math.min(from.col, to.col);
+    const c1 = Math.max(from.col, to.col) + 1;
+    const r0 = Math.min(from.row, to.row);
+    const r1 = Math.max(from.row, to.row) + 1;
+    const outer = rectCorners(m, c0, r0, c1, r1);
+    g.poly(outer.flatMap((p) => [p.x, p.y])).fill({ color: C.cyan, alpha: 0.1 });
+    if (mode === 'room' && c1 - c0 > 2 && r1 - r0 > 2) {
+      // The inside of the wall ring, so the GM sees the floor they get.
+      const inner = rectCorners(m, c0 + 1, r0 + 1, c1 - 1, r1 - 1);
+      g.poly(inner.flatMap((p) => [p.x, p.y])).fill({ color: C.cyan, alpha: 0.08 });
+    }
+    g.poly(outer.flatMap((p) => [p.x, p.y])).stroke({
+      width: mode === 'room' ? 4 : 2,
+      color: C.cyan,
+      alpha: 0.9,
+    });
+  }
+
+  clearRectDraft(): void {
+    this.rectDraft.clear();
   }
 
   /** Double-tap flash (FR9.15) — world px. */

@@ -14,8 +14,55 @@
  */
 import { useEffect, useMemo } from 'react';
 import type { Scene } from '@safehouse/contracts';
+import { sceneLevels } from '@safehouse/rules';
 import { useTilesets, usePaintTiles, type TilesetDef } from '../api.js';
 import { useGridStore } from '../store.js';
+import type { GridTool } from '../types.js';
+
+/**
+ * How the chosen tile goes down. Brush is one cell per sample of a drag; the
+ * two rectangles are the building tools — an area of floor, or a room with
+ * walls around it — and exist because a room is what a GM draws most and the
+ * brush made it the slowest thing on the map.
+ */
+const SHAPES: ReadonlyArray<{ tool: GridTool; label: string; hint: string }> = [
+  { tool: 'tile', label: 'Brush', hint: 'Drag to paint one cell at a time.' },
+  { tool: 'tile-area', label: 'Area', hint: 'Drag a rectangle; it fills with the chosen floor.' },
+  {
+    tool: 'tile-room',
+    label: 'Room',
+    hint: 'Drag a rectangle; floor inside, this set’s wall on every edge.',
+  },
+];
+
+/**
+ * Where a stair painted on `level` could lead, in words the panel can show.
+ *
+ * Exported for its test. The Stairs tool used to read the building silently:
+ * with one floor, Auto had nowhere to send a flight and painted nothing, and
+ * a GM clicking a dead tool had no way to learn that the missing piece was a
+ * floor and not a click.
+ */
+export function stairAdvice(
+  scene: Scene,
+  level: number,
+): { up: boolean; down: boolean; text: string } {
+  const floors = sceneLevels(scene);
+  const up = level < floors.length - 1;
+  const down = level > 0;
+  const here = floors[level]?.name ?? 'this floor';
+  let text: string;
+  if (!up && !down) {
+    text = `${here} is the only floor, so a stair here has nowhere to go. Add a floor first — Map ▸ Floors — then paint the flight that leads to it.`;
+  } else if (up && down) {
+    text = `From ${here} a stair can lead up to ${floors[level + 1]?.name ?? 'the floor above'} or down to ${floors[level - 1]?.name ?? 'the floor below'}. Auto picks up.`;
+  } else if (up) {
+    text = `From ${here} a stair leads up to ${floors[level + 1]?.name ?? 'the floor above'}.`;
+  } else {
+    text = `${here} is the top floor, so a stair here leads down to ${floors[level - 1]?.name ?? 'the floor below'}.`;
+  }
+  return { up, down, text };
+}
 
 export interface TilesTabProps {
   scene: Scene;
@@ -114,6 +161,8 @@ export default function TilesTab({ scene }: TilesTabProps) {
   const setTileId = useGridStore((s) => s.setTileId);
   const tileCategory = useGridStore((s) => s.tileCategory);
   const setTileCategory = useGridStore((s) => s.setTileCategory);
+  const activeLevel = useGridStore((s) => s.activeLevel);
+  const setGmTab = useGridStore((s) => s.setGmTab);
 
   const { tileset, adopt } = useMemo(
     () => resolveTileset(tilesets, tilesetId),
@@ -203,6 +252,41 @@ export default function TilesTab({ scene }: TilesTabProps) {
           {CATEGORY_HINT[tileCategory]}
         </p>
       </div>
+
+      {tileCategory === 'ground' && (
+        <div>
+          <div className="mono-label text-dim">Shape</div>
+          <div className="mt-1 grid grid-cols-3 gap-1" role="group" aria-label="Paint shape">
+            {SHAPES.map((s) => {
+              const active = tool === s.tool;
+              return (
+                <button
+                  key={s.tool}
+                  type="button"
+                  data-paint-shape={s.tool}
+                  aria-pressed={active}
+                  title={s.hint}
+                  onClick={() => setTool(s.tool)}
+                  className={
+                    'mono-label rounded border px-1 py-1 text-center text-[10px] ' +
+                    (active ? 'border-cyan text-cyan' : 'border-edge text-dim hover:border-dim')
+                  }
+                >
+                  {s.label}
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-1 text-xs text-faint" data-testid="tile-shape-hint">
+            {SHAPES.find((s) => s.tool === tool)?.hint ??
+              'Pick Brush, Area or Room to start laying tiles.'}
+          </p>
+        </div>
+      )}
+
+      {tileCategory === 'stairs' && (
+        <StairAdvice scene={scene} level={activeLevel} onAddFloor={() => setGmTab('map')} />
+      )}
 
       {[tileCategory].map((category) => {
         const tiles = tileset.tiles.filter((t) => (t.category ?? kindCategory(t.kind)) === category);
@@ -309,17 +393,52 @@ export default function TilesTab({ scene }: TilesTabProps) {
       </div>
 
       {/*
-        What a painted wall actually does, which is: look like a wall. Nothing
-        in the app reads a tile's `blocksMovement`/`blocksSight` — there is no
-        movement or sight blocking anywhere yet, drawn geometry included — and
-        the footer used to promise the opposite. A GM planning cover from that
-        sentence was planning on a lie.
+        What a painted wall actually does. Sight is real: `sightModelFor` reads
+        every full-height tile and every drawn wall, so the LOS lens, the
+        players' shroud and the cover suggestion all see painted walls. This
+        sentence used to say the opposite — it was written before any of that
+        existed and never updated — and a GM reading it believed line of sight
+        was not a thing the app did. Movement is still not enforced, and that
+        is said plainly rather than implied.
       */}
       <p className="text-xs text-faint" data-testid="tile-summary">
         {paintedCount === 0
           ? 'Pick a tile, then drag on the canvas to lay it down.'
-          : `${paintedCount} cells painted. Players see the floor. Painted walls and doors are scenery — nothing blocks movement or sight yet, drawn walls included — so cover and line of sight are still yours to call.`}
+          : `${paintedCount} cells painted. Players see the floor. Full-height walls block sight and give the cover suggestion its answer; windows let sight through, doors when open. Movement is not enforced — the map suggests, you rule.`}
       </p>
+    </div>
+  );
+}
+
+function StairAdvice({
+  scene,
+  level,
+  onAddFloor,
+}: {
+  scene: Scene;
+  level: number;
+  onAddFloor: () => void;
+}) {
+  const advice = stairAdvice(scene, level);
+  const dead = !advice.up && !advice.down;
+  return (
+    <div
+      data-testid="stair-advice"
+      className={
+        'rounded border px-2 py-1.5 text-xs ' +
+        (dead ? 'border-warn/50 text-warn' : 'border-edge text-dim')
+      }
+    >
+      <p>{advice.text}</p>
+      {dead && (
+        <button
+          type="button"
+          className="mono-label mt-1 rounded border border-warn/60 px-2 py-0.5 text-warn"
+          onClick={onAddFloor}
+        >
+          go to floors
+        </button>
+      )}
     </div>
   );
 }

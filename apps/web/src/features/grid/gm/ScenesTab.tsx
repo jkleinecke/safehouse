@@ -8,6 +8,24 @@ import { useActivateScene, useCreateScene, useScenes } from '../api.js';
 import { useGridStore } from '../store.js';
 import { Empty, inputCls, PanelSection } from './ui.js';
 
+/**
+ * One sentence on what players and the TV get from this scene's fog.
+ *
+ * Exported for its test: the three states are the whole point, and the
+ * middle one — regions defined, none revealed — is the black screen.
+ */
+export function tableVisibility(scene: Scene): string {
+  const { regions, revealed, revealedShapes } = scene.fog;
+  if (regions.length === 0 && revealedShapes.length === 0) {
+    return 'No fog on this scene — players and the TV see the whole map.';
+  }
+  const open = regions.filter((r) => revealed.includes(r.id)).length;
+  if (open === 0 && revealedShapes.length === 0) {
+    return 'Every fog region is hidden — players and the TV would see a black screen. Reveal one on the Fog tab before this goes live.';
+  }
+  return `Players see ${open} of ${regions.length} regions${revealedShapes.length > 0 ? ' plus what you have brushed open' : ''}; the rest is black to them.`;
+}
+
 export default function ScenesTab({
   campaignId,
   scene,
@@ -69,6 +87,15 @@ export default function ScenesTab({
             follow the live scene
           </button>
         )}
+        {/*
+          What the table would see if this scene went live right now. The one
+          answer a GM cannot get from their own screen: their fog is a tint,
+          the players' is a wall, and a scene with every region still hidden
+          goes out as a black screen with no way to tell from here.
+        */}
+        <p className="text-xs text-faint" data-testid="scene-visibility">
+          {tableVisibility(scene)}
+        </p>
       </PanelSection>
 
       <PanelSection title="New scene">

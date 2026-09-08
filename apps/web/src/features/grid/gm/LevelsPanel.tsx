@@ -33,6 +33,7 @@ export default function LevelsPanel({ scene }: LevelsPanelProps) {
   const setActiveLevel = useGridStore((s) => s.setActiveLevel);
   const save = useSetSceneLevels();
   const [busy, setBusy] = useState(false);
+  const [draft, setDraft] = useState('');
 
   const upper = scene.levels ?? [];
   // The ground floor is implicit; the list the GM edits is everything above it.
@@ -91,20 +92,42 @@ export default function LevelsPanel({ scene }: LevelsPanelProps) {
         })}
       </div>
 
-      <button
-        type="button"
-        data-testid="add-level"
-        disabled={busy}
-        onClick={() => {
-          const name = window.prompt('Name this floor', `Level ${names.length}`);
-          if (name === null || name.trim() === '') return;
-          const next = [...upper.map((l) => ({ id: l.id, name: l.name })), { id: newLevelId(), name: name.trim() }];
+      {/*
+        The name is typed here, not in a browser prompt. `window.prompt` was
+        the one native dialog in a panel where everything else is inline, and
+        in an embedded or automated browser it returns null without ever
+        appearing — "add a floor" then did nothing and said nothing.
+      */}
+      <form
+        className="mt-1 flex gap-1"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const name = draft.trim() || `Level ${names.length}`;
+          const next = [
+            ...upper.map((l) => ({ id: l.id, name: l.name })),
+            { id: newLevelId(), name },
+          ];
+          setDraft('');
           void write(next).then(() => setActiveLevel(next.length));
         }}
-        className="mono-label mt-1 w-full rounded border border-edge px-2 py-1 text-dim disabled:opacity-40"
       >
-        add a floor
-      </button>
+        <input
+          className="min-w-0 flex-1 rounded border border-edge bg-deck px-2 py-1 text-xs text-ink placeholder:text-faint"
+          placeholder={`Level ${names.length} — catwalk, mezzanine, cellar…`}
+          aria-label="Name for the new floor"
+          value={draft}
+          disabled={busy}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+        <button
+          type="submit"
+          data-testid="add-level"
+          disabled={busy}
+          className="mono-label rounded border border-edge px-2 py-1 text-dim disabled:opacity-40"
+        >
+          add a floor
+        </button>
+      </form>
       <p className="mt-1 text-xs text-faint">
         Painting, sight and cover all apply to the floor you have selected. Tokens carry their own
         floor, so half the party can be upstairs.
