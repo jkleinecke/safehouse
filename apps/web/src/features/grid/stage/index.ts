@@ -32,7 +32,8 @@ import { C } from './colors.js';
 import { FxLayer } from './fx.js';
 import { drawFog, drawGeometry, drawGrid, drawPins } from './layers.js';
 import { drawShroud, shroudKey } from './shroudLayer.js';
-import { drawTiles, tileDrawInput, tileLayerKey } from './tileLayer.js';
+import { ChunkedTileLayer } from './tileChunks.js';
+import { tileDrawInput, tileLayerKey } from './tileLayer.js';
 import { MapLayer } from './mapLayer.js';
 import { PointerController, type Cell, type PointerHost } from './pointer.js';
 import { TokenView } from './tokenView.js';
@@ -99,8 +100,11 @@ class Stage implements StageApi, PointerHost {
   private readonly app = new Application();
   private readonly world = new Container();
   /** Painted floor (FR9.2) — under the grid, above the map image. */
-  private readonly tileG = new Graphics();
+  private readonly tiles = new ChunkedTileLayer();
   private lastTileKey = '';
+  // Seeded with the shipped catalogue: the served palette is the same data
+  // from the same build, so its arrival must not cost a second full draw.
+  private lastDefsSignature = JSON.stringify(CATALOGUE_DEFS);
   /** Cells outside the viewer's sightline (FR9.16). */
   private readonly shroudG = new Graphics();
   private lastShroudKey = '';
@@ -174,7 +178,7 @@ class Stage implements StageApi, PointerHost {
     // server-side, but the GM's own view has to occlude too).
     this.world.addChild(
       this.map.root,
-      this.tileG,
+      this.tiles.root,
       this.shroudG,
       this.gridG,
       this.geoG,
@@ -264,8 +268,18 @@ class Stage implements StageApi, PointerHost {
 
   /** Served palette wins; the shipped catalogue fills anything it omits. */
   setTileDefs(defs: Record<string, TileDrawDef>): void {
+    // By CONTENT, not identity. The served palette is re-fetched after every
+    // paint, and a fresh array of the same catalogue arrived here as "a new
+    // palette" — which threw the whole tile layer away and redrew every chunk
+    // on every brush stroke, the exact cost the chunking exists to avoid.
+    const signature = JSON.stringify(defs);
+    if (signature === this.lastDefsSignature) return;
+    this.lastDefsSignature = signature;
     this.tileDefs = { ...CATALOGUE_DEFS, ...defs };
     this.lastTileKey = ''; // force a redraw with the new palette
+    // A new palette changes what every cell looks like without changing any
+    // cell's id, which is the one edit the chunk diff cannot see.
+    this.tiles.invalidate();
   }
 
   update(next: StageSceneState): void {
@@ -294,9 +308,11 @@ class Stage implements StageApi, PointerHost {
     if (tileKey !== this.lastTileKey) {
       this.lastTileKey = tileKey;
       if (tiles) {
-        drawTiles(this.tileG, m, tileDrawInput(tiles, this.tileDefs));
+        // Only the chunks a stroke touched are redrawn — see `ChunkedTileLayer`
+        // for the measurement that made that necessary.
+        this.tiles.update(m, tileDrawInput(tiles, this.tileDefs), next.scene.id, level);
       } else {
-        this.tileG.clear();
+        this.tiles.clear();
       }
     }
 

@@ -41,6 +41,10 @@ export const TILE_PATTERNS = [
   'panel',
   'rubble',
   'hatch',
+  /** Tufts and mottling — turf, weeds, a crown of leaves. */
+  'grass',
+  /** Packed earth: mottled, cracked, a few stones. */
+  'dirt',
 ] as const;
 
 export type TilePattern = (typeof TILE_PATTERNS)[number];
@@ -157,6 +161,58 @@ export const TILE_FOOTPRINTS = ['fill', 'wall', 'post', 'canopy', 'round', 'stai
 export type TileFootprint = (typeof TILE_FOOTPRINTS)[number];
 
 /**
+ * What an opening in a wall LOOKS like — the design the canvas draws on the
+ * wall's face, and the symbol it draws in plan.
+ *
+ * A door used to be a slab in a different colour. Naming the design here,
+ * as data, is what lets a roller door be a roller door and a wheel-hatch a
+ * wheel-hatch without the renderer knowing one set from another; and it is
+ * what lets the GM read a floor plan the way a floor plan reads, with swing
+ * arcs and glazing lines. Adjacent cells of one cut tile draw as one wide
+ * opening — a double door, a run of shopfront glass with a mullion per cell.
+ *
+ * A VALUE, not just a type, for the same reason as `TILE_PATTERNS`: the
+ * renderer switches on it with a `never` default, so a design added here
+ * without a drawing is a compile error rather than a plain slab.
+ */
+export const TILE_CUTS = [
+  /** A hinged leaf with panels and a handle; two cells make a double door. */
+  'door',
+  /** A flush corporate leaf with a card reader beside the frame. */
+  'maglock',
+  /** A heavy leaf with a round window in it. */
+  'porthole',
+  /** Glass leaf with a push bar. */
+  'glassdoor',
+  /** A glazed partition, floor to ceiling. */
+  'glass',
+  /** Glass with a wire mesh in it, on a sill. */
+  'wireglass',
+  /** A shopfront: a low panel, then a big lit pane. */
+  'shopwindow',
+  /** Horizontal slats with a housing at the top. */
+  'roller',
+  /** Slats that reach the ground, closed. */
+  'shutter',
+  /** A louvred grille. */
+  'louvre',
+  /** A round hatch with a wheel and dogs. */
+  'hatch',
+  /** No door at all — a hole with ragged edges. */
+  'gap',
+  /** A window frame with the shards still in it. */
+  'blown',
+  /** A counter opening with a shelf and a light behind it. */
+  'serving',
+  /** A sign box with a neon tube on it. */
+  'sign',
+  /** Chain-link: diamond mesh you can see through. */
+  'mesh',
+] as const;
+
+export type TileCut = (typeof TILE_CUTS)[number];
+
+/**
  * Footprints that occupy only part of their cell and therefore need floor
  * drawn underneath them — otherwise every one is a hole in the map.
  */
@@ -206,6 +262,12 @@ export interface Tile {
    * because most of a map does not go anywhere.
    */
   connects?: 'up' | 'down';
+  /**
+   * The design of an opening in a wall — see `TILE_CUTS`. Only meaningful on
+   * a `wall`-footprint tile; a door or a window without one draws as a plain
+   * slab, which is exactly the look this exists to replace.
+   */
+  cut?: TileCut;
   /**
    * A colour this tile GIVES OFF rather than reflects: sodium lamps, neon,
    * a barrel fire, the glow off a server rack.

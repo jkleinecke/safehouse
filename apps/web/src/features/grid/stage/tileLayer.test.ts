@@ -36,6 +36,15 @@ const M = metricsFor({ unitM: 1, cols: 10, rows: 8, offset: { x: 0, y: 0 }, proj
  */
 const BASE_FACE = ['moveTo', 'lineTo', 'lineTo', 'lineTo', 'closePath', 'fill'];
 
+/**
+ * What a floor cell with nothing on any side draws after its face: the map's
+ * edge. An ink line on the two far sides, and a shadow band plus an ink line
+ * on the two near ones — see `drawFloorEdge`.
+ */
+const EDGE_LINE = ['moveTo', 'lineTo', 'stroke'];
+const EDGE_DROP = ['moveTo', 'lineTo', 'lineTo', 'lineTo', 'closePath', 'fill'];
+const LONE_EDGE = [...EDGE_LINE, ...EDGE_LINE, ...EDGE_DROP, ...EDGE_LINE, ...EDGE_DROP, ...EDGE_LINE];
+
 interface Call {
   op: string;
   args: unknown[];
@@ -53,6 +62,7 @@ function fakeGraphics(): { g: Graphics; calls: Call[]; ops: () => string[] } {
     'lineTo',
     'stroke',
     'circle',
+    'ellipse',
     'quadraticCurveTo',
     'closePath',
   ]) {
@@ -200,6 +210,8 @@ const PATTERNS = [
   'brick',
   'carpet',
   'concrete',
+  'dirt',
+  'grass',
   'grating',
   'gravel',
   'hatch',
@@ -212,26 +224,31 @@ const PATTERNS = [
 ] as const;
 
 describe('every pattern the catalogue uses actually draws something', () => {
-  it('the catalogue uses exactly the twelve patterns this renderer handles', () => {
+  it('the catalogue uses exactly the fourteen patterns this renderer handles', () => {
     const used = [...new Set(TILESETS.flatMap((s) => s.tiles.map((t) => t.pattern)))].sort();
     expect(used).toEqual([...PATTERNS]);
   });
 
   it('each pattern produces its own distinctive calls, not a bare rectangle', () => {
     // What each pattern must contribute BEYOND the base fill every cell gets.
+    // Materials are drawn in grid space now — courses, boards and chunks are
+    // projected polygons, dots are ground ellipses — so the marks are what
+    // each one adds on top of the base face, not a particular primitive.
     const marks: Record<(typeof PATTERNS)[number], string[]> = {
       brick: ['moveTo', 'lineTo', 'stroke'],
       carpet: ['moveTo', 'lineTo', 'stroke'],
-      concrete: ['moveTo', 'lineTo', 'stroke'],
+      concrete: ['moveTo', 'lineTo', 'stroke', 'ellipse'],
       grating: ['moveTo', 'lineTo', 'stroke'],
-      gravel: ['circle'],
+      gravel: ['ellipse'],
       hatch: ['moveTo', 'lineTo', 'stroke'],
-      panel: ['rect', 'stroke'],
+      panel: ['moveTo', 'lineTo', 'stroke', 'ellipse'],
       planks: ['moveTo', 'lineTo', 'stroke'],
-      rubble: ['rect'],
+      rubble: ['moveTo', 'lineTo', 'fill'],
       solid: [],
       tile: ['moveTo', 'lineTo', 'stroke'],
-      water: ['quadraticCurveTo', 'stroke'],
+      water: ['moveTo', 'lineTo', 'stroke'],
+      grass: ['moveTo', 'lineTo', 'stroke'],
+      dirt: ['moveTo', 'lineTo', 'stroke', 'ellipse'],
     };
 
     for (const pattern of PATTERNS) {
@@ -242,6 +259,13 @@ describe('every pattern the catalogue uses actually draws something', () => {
       // Base fill first: a cell is never transparent, whatever the pattern.
       expect(ops().slice(1, 1 + BASE_FACE.length), pattern).toEqual(BASE_FACE);
       for (const mark of marks[pattern]) expect(ops(), `${pattern} → ${mark}`).toContain(mark);
+      // …and every material but `solid` draws SOMETHING beyond that face. A
+      // material that costs nothing to draw is a colour, not a material.
+      if (pattern !== 'solid') {
+        expect(ops().length, `${pattern} draws only its base face`).toBeGreaterThan(
+          1 + BASE_FACE.length + 2,
+        );
+      }
     }
   });
 
@@ -249,7 +273,8 @@ describe('every pattern the catalogue uses actually draws something', () => {
     const { g, ops } = fakeGraphics();
     const defs = { [tileDefKey('t', 'x')]: { pattern: 'solid' as const, colors: ['#111', '#222'] as const } };
     drawTiles(g, M, { tilesetId: 't', cells: { '0,0': 'x' }, defs });
-    expect(ops()).toEqual(['clear', ...BASE_FACE]);
+    // A lone cell is all edge, so the base face is followed by exactly that.
+    expect(ops()).toEqual(['clear', ...BASE_FACE, ...LONE_EDGE]);
   });
 
   it('an unrecognised pattern degrades to flat colour rather than throwing', () => {
@@ -263,7 +288,8 @@ describe('every pattern the catalogue uses actually draws something', () => {
       },
     };
     expect(() => drawTiles(g, M, { tilesetId: 't', cells: { '0,0': 'x' }, defs })).not.toThrow();
-    expect(ops()).toEqual(['clear', ...BASE_FACE]);
+    // A lone cell is all edge, so the base face is followed by exactly that.
+    expect(ops()).toEqual(['clear', ...BASE_FACE, ...LONE_EDGE]);
   });
 
   it('a malformed palette draws the cell wrong rather than not at all', () => {
@@ -479,9 +505,11 @@ describe('a wall is drawn in the cell it belongs to', () => {
     expect(pts.length).toBeGreaterThan(0);
     for (const [x, y] of pts) {
       expect(x).toBeGreaterThanOrEqual(5 * M.cell);
-      expect(x).toBeLessThanOrEqual(6 * M.cell);
+      // The map's edge shadow falls 0.16 of a cell off the near sides of a
+      // lone square; the wall itself stays inside.
+      expect(x).toBeLessThanOrEqual(6 * M.cell + 0.16 * M.cell + 0.001);
       expect(y).toBeGreaterThanOrEqual(4 * M.cell);
-      expect(y).toBeLessThanOrEqual(5 * M.cell);
+      expect(y).toBeLessThanOrEqual(5 * M.cell + 0.16 * M.cell + 0.001);
     }
   });
 

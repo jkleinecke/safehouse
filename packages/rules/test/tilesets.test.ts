@@ -123,7 +123,7 @@ describe('every tile is drawable', () => {
 
   it('lists each pattern once, so a consumer can switch on the array', () => {
     expect(new Set(TILE_PATTERNS).size).toBe(TILE_PATTERNS.length);
-    expect(TILE_PATTERNS.length).toBe(12);
+    expect(TILE_PATTERNS.length).toBe(14);
   });
 
   it('pins the pattern list the web painter must handle', () => {
@@ -133,6 +133,8 @@ describe('every tile is drawable', () => {
       'brick',
       'carpet',
       'concrete',
+      'dirt',
+      'grass',
       'grating',
       'gravel',
       'hatch',

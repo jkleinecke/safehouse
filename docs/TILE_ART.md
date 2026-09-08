@@ -313,3 +313,68 @@ four things, all in `stage/tileLayer.ts`:
   and grilles get a light line down the middle, the way glazing is drawn on a
   floor plan. Without them a room's door was a wall painted a slightly
   different brown.
+- **Materials in grid space.** Every pattern is drawn across the whole face in
+  cell-local coordinates and projected point by point, so brick courses,
+  deck boards and grout run with the diamond, foreshortened, edge to edge.
+  The first renderer laid a 1px line into the largest square inside the
+  face — the middle third of a diamond — and every floor read as vinyl. Each
+  material draws from a small derived palette (base, accent, a lit edge, a
+  gap, one ink for cracks and joints); the bulk of a texture stays inside the
+  tier-2 budget and only hairlines get the ink. Per-cell seeds vary boards,
+  chunks and cracks so forty cells of one tile do not tile.
+- **Fourteen patterns.** `grass` (tufts over mottling) and `dirt` (mottling,
+  a crack, a few stones) joined the original twelve, because gravel dots
+  under turf and under packed earth both read as a spotted floor.
+- **Ink line and ambient ring.** A pixel-wide outline in the tile's own ink
+  around every standing thing — the line every hand-painted isometric game
+  draws, because two props of one colour have no other way to be two things.
+  Full-height walls and blocks also take light from the floor on every side:
+  a faint, wide ring under the contact shadow, which is what makes a room
+  read as enclosed rather than as a floor with a fence on it.
+- **Made things have lips.** Standing blocks get a bevel on the top face,
+  drums and planters a rim, posts a cap wider than the post, and a canopy's
+  crown is jittered per vertex with a lit lump on its key-light side.
+- **Walls sit a notch above the floor.** Every full-height structure tile is
+  authored at value × 1.18 over its floor, so architecture reads as the
+  lighter thing in the room in both projections.
+- **The map has an edge.** Where a painted square meets nothing, an ink line
+  runs along the drop and a shadow falls off the two near sides, so a floor
+  reads as a slab with a thickness and the void around it as space rather
+  than an unfinished job.
+
+## Openings are drawn as what they are
+
+A door used to be a wall slab in a different brown with a bar across it.
+Every door and window in the catalogue now names a **cut** — `roller`,
+`wireglass`, `hatch`, `blown`, `serving`, `sign`… (`TILE_CUTS`) — and
+`stage/cuts.ts` draws that design onto the wall's visible face in isometric
+and as the floor-plan symbol in plan: a leaf with its frame, panels and
+handle; roller slats with a housing; wire mesh in glass on a sill; a
+shopfront with its lit interior; louvres; a wheel-hatch with its dogs; a
+ragged hole; a frame with the shards still in it; a serving hatch with its
+shelf; a porthole door; a neon tube on a sign box; chain-link mesh. Each set
+gets the openings its world would have, and a design added to the list
+without a drawing is a compile error, not a slab.
+
+**Adjacent cells of one cut tile are one opening.** Two street doors are a
+double door that meets in the middle; two cells of roller door are one wide
+roller; a run of shopfront glass is one window with a mullion per cell. The
+run is found from the wall's own joins and drawn once, from its last cell —
+the nearest, the one drawn last — so no slab of the run is painted over it.
+A change to any cell of a run redraws the whole run (`expandCutRuns`).
+
+In plan view the symbols are the architect's: swing arcs for hinged leaves,
+glazing lines for glass, ticks for slats, a circle for a hatch, a dashed gap
+for a hole.
+
+## What it costs, and how the stage pays for it
+
+Drawn this way a 40×30 scene is about 170,000 draw calls. A full-layer
+redraw on every brush stroke measured at 106–147ms on a real machine — lag
+under the one tool a GM uses most while building. So the stage cuts the layer
+into 8×8-cell chunks, each its own graphics, and a stroke redraws only the
+chunks it touched plus their neighbours (a wall run turns its corners from
+the cells next door). Shadows and lights are redrawn whole; both cross chunk
+borders freely and both are cheap. The same stroke now costs 15–30ms. See
+`stage/tileChunks.ts`; the one-shot `drawTiles` still exists for tests and
+draws the identical passes.

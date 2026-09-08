@@ -3,7 +3,7 @@
  * so the main bundle stays lean; the stage subtree is loaded lazily.
  */
 import type { Point, Role, Scene, Token } from '@safehouse/contracts';
-import type { TilePattern } from '@safehouse/rules';
+import type { TileCut, TilePattern } from '@safehouse/rules';
 
 /** Active pointer tool on the canvas. */
 export type GridTool =
@@ -82,8 +82,14 @@ export interface TileDrawDef {
    */
   connects?: 'up' | 'down';
   /**
-   * What the tile IS, for the plan-view treatment: a door gets a bar across
-   * its slab, a wall does not. Absent means "draw it as its footprint says".
+   * The design of an opening in a wall — a roller door, wire-glass, a
+   * wheel-hatch — drawn on the slab's face (see `stage/cuts.ts`). Absent on a
+   * door or a see-through wall falls back to a plain leaf or plain glazing.
+   */
+  cut?: TileCut;
+  /**
+   * What the tile IS: a door or a wall. With no `cut` named, a door gets the
+   * plain leaf and a see-through wall the plain glazing.
    */
   kind?: string;
   /**
@@ -132,6 +138,7 @@ export interface TileSetLike {
     blocksSight?: boolean;
     footprint?: 'fill' | 'wall' | 'post' | 'canopy' | 'round' | 'stair';
     connects?: 'up' | 'down';
+    cut?: TileCut;
   }[];
 }
 
@@ -170,6 +177,7 @@ export function tileDefsFromSets(sets: readonly TileSetLike[]): Record<string, T
         ...(t.blocksSight !== undefined ? { blocksSight: t.blocksSight } : {}),
         ...(t.footprint !== undefined ? { footprint: t.footprint } : {}),
         ...(t.connects !== undefined ? { connects: t.connects } : {}),
+        ...(t.cut !== undefined ? { cut: t.cut } : {}),
         kind: t.kind,
         ...(thin && floor !== undefined
           ? { underlay: { pattern: floor.pattern, colors: floor.colors } }

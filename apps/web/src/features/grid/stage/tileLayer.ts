@@ -22,7 +22,9 @@ import {
   type SceneMetrics,
 } from '../geometry.js';
 import { tileDefKey, type TileDrawDef } from '../types.js';
+import type { TileCut, TilePattern } from '@safehouse/rules';
 import { C, FACE_FOOT, FACE_SHADE, parseColor, shade } from './colors.js';
+import { drawCut, type CutRun } from './cuts.js';
 
 // Type-only pixi import: every draw here is a call on a Graphics-shaped object,
 // so the module stays runnable (and testable) without a renderer.
@@ -153,6 +155,31 @@ function drawGroundShadow(
 }
 
 /**
+ * The soft darkening on the floor all round a full-height thing.
+ *
+ * Distinct from the contact shadow, which falls to one side and says "this
+ * stands here". This is the light a wall takes away from the floor beside it
+ * on every side — the ambient occlusion a painter puts in every room corner —
+ * and it is what makes a room read as enclosed rather than as a floor with a
+ * fence on it. Faint and wide; it must never read as a shadow of its own.
+ */
+const AMBIENT_REACH = 0.22;
+const AMBIENT_ALPHA = 0.16;
+
+function drawAmbientRing(
+  g: Graphics,
+  m: SceneMetrics,
+  rect: readonly [number, number, number, number],
+): void {
+  const [x0, y0, x1, y1] = rect;
+  const d = AMBIENT_REACH;
+  poly(g, rectCorners(m, x0 - d, y0 - d, x1 + d, y1 + d)).fill({
+    color: C.ground,
+    alpha: AMBIENT_ALPHA,
+  });
+}
+
+/**
  * The lit edge along the top of a standing thing.
  *
  * One pixel, a third brighter than the top face. The crown is the edge the
@@ -195,37 +222,6 @@ function drawSheen(g: Graphics, def: TileDrawDef, top: readonly Point[]): void {
   poly(g, streak).fill({ color: tint, alpha: SHEEN_ALPHA_MAX * v * 0.55 });
 }
 
-/**
- * What marks a door as a door, and a window as a window, on the slab.
- *
- * Both are walls to the footprint code — a slab in a run — and in plan view a
- * slab is all there is, so without this a room's door was a wall painted a
- * slightly different brown. A door gets a bar across its slab in its accent;
- * anything a sightline passes through (glass, a grille, an empty frame) gets
- * a light line down its middle, the way glazing is drawn on a floor plan.
- */
-function drawCut(g: Graphics, def: TileDrawDef, top: readonly Point[], accent: number): void {
-  if (top.length < 4) return;
-  const mid = (a: Point, b: Point): Point => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
-  // The slab's long axis runs between the midpoints of its two short ends,
-  // whichever way the run goes; the two candidates are compared by length.
-  const [p0, p1, p2, p3] = top as [Point, Point, Point, Point];
-  const a1 = mid(p0, p1);
-  const b1 = mid(p2, p3);
-  const a2 = mid(p1, p2);
-  const b2 = mid(p3, p0);
-  const long1 = Math.hypot(b1.x - a1.x, b1.y - a1.y) >= Math.hypot(b2.x - a2.x, b2.y - a2.y);
-  const [a, b] = long1 ? [a1, b1] : [a2, b2];
-  if (def.kind === 'door') {
-    g.moveTo(a.x, a.y)
-      .lineTo(b.x, b.y)
-      .stroke({ width: 3, color: shade(accent, 1.2), alpha: 0.9 });
-  } else if (def.blocksSight === false) {
-    g.moveTo(a.x, a.y)
-      .lineTo(b.x, b.y)
-      .stroke({ width: 1, color: shade(accent, 1.7), alpha: 0.7, pixelLine: true });
-  }
-}
 
 /**
  * One cell, in whichever projection the scene is set to.
@@ -274,6 +270,7 @@ function drawStandingFace(
   rise: number,
   base: number,
   faceShade: number,
+  material?: { pattern: TilePattern | undefined; tones: Tones },
 ): void {
   for (let i = 0; i < FACE_BANDS; i += 1) {
     const lo = (i / FACE_BANDS) * rise;
@@ -289,6 +286,7 @@ function drawStandingFace(
       { x: a.x, y: a.y - hi },
     ]).fill({ color: shade(base, lit) });
   }
+  if (material) drawFaceCourses(g, a, b, rise, material.pattern, material.tones);
 }
 
 /**
@@ -304,6 +302,7 @@ function drawBox(
   rise: number,
   base: number,
   standing = false,
+  material?: { pattern: TilePattern | undefined; tones: Tones },
 ): Point[] {
   const [x0, y0, x1, y1] = rect;
   const ground = rectCorners(m, x0, y0, x1, y1);
@@ -314,13 +313,18 @@ function drawBox(
     // the north corner ([N, E, S, W]), so those are W→S and S→E; the back pair
     // is hidden by the solid itself and drawing it would show through the
     // translucent bloom on emissive tiles.
-    drawStandingFace(g, ground[3]!, ground[2]!, rise, base, FACE_SHADE.left);
-    drawStandingFace(g, ground[2]!, ground[1]!, rise, base, FACE_SHADE.right);
+    drawStandingFace(g, ground[3]!, ground[2]!, rise, base, FACE_SHADE.left, material);
+    drawStandingFace(g, ground[2]!, ground[1]!, rise, base, FACE_SHADE.right, material);
   }
 
   poly(g, top).fill({ color: rise > 0 ? shade(base, FACE_SHADE.top) : base });
-  // A thing that stands gets its lit edge in both projections. In plan view
-  // it is, with the contact shadow, the whole of what says "this is not floor".
+  // A thing that stands gets its ink line and its lit edge in both
+  // projections. In plan view they are, with the contact shadow, the whole
+  // of what says "this is not floor".
+  if (rise > 0 && material) drawOutline(g, ground, top, material.tones);
+  if (rise === 0 && standing && material) {
+    poly(g, top).stroke({ width: 1, color: material.tones.ink, alpha: 0.5, pixelLine: true });
+  }
   if (rise > 0 || standing) drawCrown(g, top, base);
   return top;
 }
@@ -345,11 +349,15 @@ function drawPrism(
   rise: number,
   base: number,
   sides = 8,
+  /** Per-vertex radius jitter, 0..1 of `radius` — what makes a crown organic. */
+  jitter = 0,
+  seed = 0,
 ): Point[] {
   const ring: Array<{ grid: { x: number; y: number }; world: Point }> = [];
   for (let i = 0; i < sides; i += 1) {
     const a = (i / sides) * Math.PI * 2 + Math.PI / sides;
-    const grid = { x: centre.x + Math.cos(a) * radius, y: centre.y + Math.sin(a) * radius };
+    const r = radius * (1 - jitter * rnd(seed, 100 + i));
+    const grid = { x: centre.x + Math.cos(a) * r, y: centre.y + Math.sin(a) * r };
     ring.push({ grid, world: worldFromGrid(m, grid) });
   }
 
@@ -374,129 +382,485 @@ function drawPrism(
   return top;
 }
 
-/** The largest axis-aligned square inside a face, for laying a pattern into. */
-function inscribed(face: readonly Point[]): { x: number; y: number; s: number } {
-  const xs = face.map((p) => p.x);
-  const ys = face.map((p) => p.y);
-  const s = Math.min(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
-  return {
-    x: (Math.min(...xs) + Math.max(...xs)) / 2 - s / 2,
-    y: (Math.min(...ys) + Math.max(...ys)) / 2 - s / 2,
-    s,
+// ---------------------------------------------------------------------------
+// Materials
+// ---------------------------------------------------------------------------
+
+/** A face's footprint in GRID units: `[x0, y0, x1, y1]`. */
+type FaceRect = readonly [number, number, number, number];
+
+/** Maps a cell-local `(u, v)` in 0..1 onto a face lifted by `rise`, in world px. */
+type FaceMap = (u: number, v: number) => Point;
+
+function faceMapper(m: SceneMetrics, rect: FaceRect, rise: number): FaceMap {
+  const [x0, y0, x1, y1] = rect;
+  const w = x1 - x0;
+  const h = y1 - y0;
+  return (u, v) => {
+    const p = worldFromGrid(m, { x: x0 + u * w, y: y0 + v * h });
+    return { x: p.x, y: p.y - rise };
   };
 }
 
+/** Deterministic 0..1 from a cell seed and a salt, so a texture never flickers. */
+function rnd(seed: number, salt: number): number {
+  return (hash32(`${seed}:${salt}`) % 10007) / 10007;
+}
+
+/** The tones a material is drawn with, all derived from the tile's own pair. */
+interface Tones {
+  base: number;
+  accent: number;
+  /** A touch lighter than the accent: the lit edge of a plank, a rivet. */
+  light: number;
+  /** A touch darker than the base: grout, gaps, the shadow side of a chunk. */
+  dark: number;
+  /** The darkest line the material may carry: a crack, a mortar joint. */
+  ink: number;
+}
+
+function tonesOf(base: number, accent: number): Tones {
+  return {
+    base,
+    accent,
+    light: shade(accent, 1.12),
+    dark: shade(base, 0.84),
+    ink: shade(base, 0.62),
+  };
+}
+
+function uvLine(g: Graphics, P: FaceMap, pts: ReadonlyArray<readonly [number, number]>): Graphics {
+  const first = pts[0];
+  if (first === undefined) return g;
+  const a = P(first[0], first[1]);
+  g.moveTo(a.x, a.y);
+  for (let i = 1; i < pts.length; i += 1) {
+    const p = P(pts[i]![0], pts[i]![1]);
+    g.lineTo(p.x, p.y);
+  }
+  return g;
+}
+
+function uvPoly(g: Graphics, P: FaceMap, pts: ReadonlyArray<readonly [number, number]>): Graphics {
+  return poly(
+    g,
+    pts.map(([u, v]) => P(u, v)),
+  );
+}
+
+/** A quad in uv space, filled. */
+function uvRect(
+  g: Graphics,
+  P: FaceMap,
+  u0: number,
+  v0: number,
+  u1: number,
+  v1: number,
+  style: { color: number; alpha: number },
+): void {
+  uvPoly(g, P, [
+    [u0, v0],
+    [u1, v0],
+    [u1, v1],
+    [u0, v1],
+  ]).fill(style);
+}
+
+/** A dot on the face: a circle on the ground, so an ellipse in isometric. */
+function uvDot(
+  g: Graphics,
+  m: SceneMetrics,
+  P: FaceMap,
+  u: number,
+  v: number,
+  r: number,
+  style: { color: number; alpha: number },
+): void {
+  const c = P(u, v);
+  const { rx, ry } = groundRadius(m, r);
+  g.ellipse(c.x, c.y, Math.max(0.6, rx), Math.max(0.5, ry)).fill(style);
+}
+
 /**
- * The surface texture, drawn into a square region of a face.
+ * The surface texture, drawn across the WHOLE face in grid space.
  *
- * Patterns are laid out axis-aligned rather than sheared onto the diamond.
- * Truly projecting every scratch would be correct and invisible at table zoom,
- * and getting it subtly wrong costs far more than not doing it.
+ * ## Why grid space and not a square in the middle
+ *
+ * The first renderer laid every pattern into the largest axis-aligned square
+ * inside the face. In plan view that is the face. In isometric it is the
+ * middle third of a diamond, and a 1px line at 50% alpha across the middle
+ * third of a diamond is invisible at table zoom — which is why every floor
+ * read as flat vinyl whatever it was called. Drawing in cell-local (u, v)
+ * and projecting each point through `worldFromGrid` puts the courses of a
+ * brick wall, the boards of a deck and the grout of a tiled floor where the
+ * eye expects them: foreshortened, running with the diamond, edge to edge.
+ *
+ * ## Why three tones
+ *
+ * A material is not one line colour. Each pattern is drawn from a small
+ * derived palette — the tile's base and accent, a lighter lit edge, a darker
+ * gap, and one ink for cracks and joints — with the bulk of each texture kept
+ * inside the study's tier-2 budget (the accent stays within twelve value
+ * points of the base) and only hairlines allowed the ink. Per-cell seeds vary
+ * the boards, chunks and cracks so forty cells of one tile do not tile.
  */
-function drawPattern(g: Graphics, def: TileDrawDef, accent: number, at: ReturnType<typeof inscribed>): void {
-  const { x, y, s } = at;
-  const half = s / 2;
+function drawPattern(
+  g: Graphics,
+  m: SceneMetrics,
+  def: TileDrawDef,
+  tones: Tones,
+  rect: FaceRect,
+  rise: number,
+  seed: number,
+): void {
+  const P = faceMapper(m, rect, rise);
+  const { accent, light, dark, ink } = tones;
+  const line = (
+    pts: ReadonlyArray<readonly [number, number]>,
+    color: number,
+    alpha: number,
+    width = 1,
+  ) =>
+    uvLine(g, P, pts).stroke({ width, color, alpha, ...(width <= 1 ? { pixelLine: true } : {}) });
+
   switch (def.pattern) {
     case 'planks': {
-      for (let i = 1; i < 4; i += 1) {
-        const yy = y + (s * i) / 4;
-        g.moveTo(x, yy).lineTo(x + s, yy);
+      const boards = 4;
+      for (let i = 0; i < boards; i += 1) {
+        const v0 = i / boards;
+        const v1 = (i + 1) / boards;
+        // Each board its own tone, so a deck reads as boards rather than stripes.
+        const tone = shade(tones.base, 0.95 + rnd(seed, i) * 0.1);
+        uvRect(g, P, 0, v0, 1, v1, { color: tone, alpha: 0.9 });
+        // Grain: one or two long strokes, never quite the full length.
+        const gv = v0 + (0.3 + rnd(seed, 10 + i) * 0.4) * (v1 - v0);
+        line(
+          [
+            [0.05 + rnd(seed, 20 + i) * 0.15, gv],
+            [0.6 + rnd(seed, 30 + i) * 0.35, gv],
+          ],
+          light,
+          0.28,
+        );
       }
-      g.stroke({ width: 1, color: accent, alpha: 0.55, pixelLine: true });
+      for (let i = 1; i < boards; i += 1) {
+        line(
+          [
+            [0, i / boards],
+            [1, i / boards],
+          ],
+          ink,
+          0.55,
+        );
+      }
       break;
     }
     case 'concrete': {
-      // Two short seams, offset, so a floor of these does not look tiled.
-      g.moveTo(x + s * 0.15, y + s * 0.3).lineTo(x + s * 0.6, y + s * 0.3);
-      g.moveTo(x + s * 0.45, y + s * 0.75).lineTo(x + s * 0.9, y + s * 0.75);
-      g.stroke({ width: 1, color: accent, alpha: 0.4, pixelLine: true });
-      break;
-    }
-    case 'grating': {
-      for (let i = 1; i < 4; i += 1) {
-        g.moveTo(x + (s * i) / 4, y).lineTo(x + (s * i) / 4, y + s);
+      // Mottling: a few soft patches either side of the base, then cracks.
+      for (let i = 0; i < 5; i += 1) {
+        const u = rnd(seed, i) * 0.7;
+        const v = rnd(seed, 10 + i) * 0.7;
+        const w = 0.15 + rnd(seed, 20 + i) * 0.3;
+        const h = 0.12 + rnd(seed, 30 + i) * 0.28;
+        const tone = i % 2 === 0 ? shade(tones.base, 1.06) : dark;
+        uvRect(g, P, u, v, Math.min(1, u + w), Math.min(1, v + h), { color: tone, alpha: 0.35 });
       }
-      g.stroke({ width: 1, color: accent, alpha: 0.7, pixelLine: true });
+      const cu = rnd(seed, 40) * 0.5;
+      const cv = rnd(seed, 41) * 0.6;
+      line(
+        [
+          [cu, cv],
+          [cu + 0.18, cv + 0.12 + rnd(seed, 42) * 0.15],
+          [cu + 0.36 + rnd(seed, 43) * 0.2, cv + 0.05],
+        ],
+        ink,
+        0.5,
+      );
+      for (let i = 0; i < 3; i += 1) {
+        uvDot(g, m, P, rnd(seed, 50 + i), rnd(seed, 60 + i), 0.02, { color: dark, alpha: 0.6 });
+      }
       break;
     }
     case 'tile': {
-      g.moveTo(x + half, y).lineTo(x + half, y + s);
-      g.moveTo(x, y + half).lineTo(x + s, y + half);
-      g.stroke({ width: 1, color: accent, alpha: 0.5, pixelLine: true });
+      const n = 3;
+      for (let i = 0; i < n; i += 1) {
+        for (let j = 0; j < n; j += 1) {
+          const tone = shade(tones.base, 0.96 + rnd(seed, i * n + j) * 0.08);
+          uvRect(g, P, i / n, j / n, (i + 1) / n, (j + 1) / n, { color: tone, alpha: 0.6 });
+        }
+      }
+      for (let i = 1; i < n; i += 1) {
+        line(
+          [
+            [i / n, 0],
+            [i / n, 1],
+          ],
+          ink,
+          0.6,
+        );
+        line(
+          [
+            [0, i / n],
+            [1, i / n],
+          ],
+          ink,
+          0.6,
+        );
+      }
       break;
     }
     case 'carpet': {
-      for (let i = 0; i < 4; i += 1) {
-        const yy = y + s * (0.2 + i * 0.2);
-        g.moveTo(x + s * 0.1, yy).lineTo(x + s * 0.9, yy);
+      // A fine diagonal weave, plus two blotches of wear.
+      for (let k = 1; k < 8; k += 1) {
+        const t = k / 8;
+        line(
+          [
+            [t, 0],
+            [0, t],
+          ],
+          accent,
+          0.22,
+        );
+        line(
+          [
+            [1, t],
+            [t, 1],
+          ],
+          accent,
+          0.22,
+        );
       }
-      g.stroke({ width: 1, color: accent, alpha: 0.28, pixelLine: true });
+      for (let i = 0; i < 2; i += 1) {
+        const u = rnd(seed, i) * 0.6;
+        const v = rnd(seed, 5 + i) * 0.6;
+        uvRect(g, P, u, v, u + 0.25, v + 0.2, { color: dark, alpha: 0.18 });
+      }
+      break;
+    }
+    case 'grating': {
+      // Dark below, bars above: the whole reason a grate reads as a grate is
+      // that something is visible through it.
+      uvRect(g, P, 0, 0, 1, 1, { color: ink, alpha: 0.35 });
+      const n = 5;
+      for (let i = 0; i <= n; i += 1) {
+        const t = i / n;
+        line(
+          [
+            [t, 0],
+            [t, 1],
+          ],
+          accent,
+          0.9,
+          2,
+        );
+        line(
+          [
+            [0, t],
+            [1, t],
+          ],
+          light,
+          0.6,
+          1,
+        );
+      }
       break;
     }
     case 'gravel': {
-      const dots: Array<[number, number]> = [
-        [0.25, 0.3],
-        [0.65, 0.22],
-        [0.45, 0.6],
-        [0.8, 0.72],
-        [0.18, 0.78],
-      ];
-      for (const [dx, dy] of dots) {
-        g.circle(x + s * dx, y + s * dy, Math.max(0.6, s * 0.04)).fill({
-          color: accent,
-          alpha: 0.6,
+      for (let i = 0; i < 16; i += 1) {
+        const tone = i % 3 === 0 ? light : i % 3 === 1 ? accent : dark;
+        uvDot(g, m, P, rnd(seed, i), rnd(seed, 40 + i), 0.025 + rnd(seed, 80 + i) * 0.035, {
+          color: tone,
+          alpha: 0.7,
         });
       }
       break;
     }
     case 'water': {
+      uvRect(g, P, 0, 0, 1, 1, { color: dark, alpha: 0.25 });
       for (let i = 0; i < 3; i += 1) {
-        const yy = y + s * (0.25 + i * 0.25);
-        g.moveTo(x + s * 0.1, yy)
-          .quadraticCurveTo(x + half, yy + s * 0.08, x + s * 0.9, yy);
+        const v = 0.2 + i * 0.28 + rnd(seed, i) * 0.08;
+        line(
+          [
+            [0.05, v],
+            [0.3, v + 0.04],
+            [0.55, v - 0.03],
+            [0.8, v + 0.03],
+            [0.95, v],
+          ],
+          accent,
+          0.55,
+        );
       }
-      g.stroke({ width: 1, color: accent, alpha: 0.55, pixelLine: true });
+      // Two highlights where the surface catches the key light.
+      for (let i = 0; i < 2; i += 1) {
+        const u = 0.15 + rnd(seed, 20 + i) * 0.5;
+        const v = 0.15 + rnd(seed, 30 + i) * 0.5;
+        line(
+          [
+            [u, v],
+            [u + 0.18, v - 0.02],
+          ],
+          light,
+          0.4,
+          2,
+        );
+      }
       break;
     }
     case 'brick': {
-      for (let i = 1; i < 4; i += 1) {
-        const yy = y + (s * i) / 4;
-        g.moveTo(x, yy).lineTo(x + s, yy);
+      const courses = 5;
+      const bw = 0.5;
+      for (let c = 0; c < courses; c += 1) {
+        const v0 = c / courses;
+        const v1 = (c + 1) / courses;
+        const off = c % 2 === 0 ? 0 : bw / 2;
+        for (let u = -bw; u < 1; u += bw) {
+          const u0 = Math.max(0, u + off);
+          const u1 = Math.min(1, u + off + bw);
+          if (u1 <= u0) continue;
+          const tone = shade(tones.base, 0.94 + rnd(seed, c * 7 + Math.round(u * 10)) * 0.12);
+          uvRect(g, P, u0 + 0.01, v0 + 0.015, u1 - 0.01, v1 - 0.015, { color: tone, alpha: 0.8 });
+        }
+        if (c > 0) {
+          line(
+            [
+              [0, v0],
+              [1, v0],
+            ],
+            ink,
+            0.55,
+          );
+        }
       }
-      // Staggered head joints, so courses read as brick rather than as a grid.
-      for (let row = 0; row < 4; row += 1) {
-        const yy = y + (s * row) / 4;
-        const xx = x + (row % 2 === 0 ? half : s * 0.25);
-        g.moveTo(xx, yy).lineTo(xx, yy + s / 4);
-      }
-      g.stroke({ width: 1, color: accent, alpha: 0.5, pixelLine: true });
       break;
     }
     case 'panel': {
-      g.rect(x + s * 0.12, y + s * 0.12, s * 0.76, s * 0.76).stroke({
-        width: 1,
-        color: accent,
-        alpha: 0.6,
-        pixelLine: true,
-      });
+      // A bevelled plate: lit on the two edges toward the key light, shadowed
+      // on the other two, with a rivet in each corner.
+      const i0 = 0.09;
+      const i1 = 0.91;
+      line(
+        [
+          [i0, i1],
+          [i0, i0],
+          [i1, i0],
+        ],
+        light,
+        0.55,
+      );
+      line(
+        [
+          [i1, i0],
+          [i1, i1],
+          [i0, i1],
+        ],
+        ink,
+        0.55,
+      );
+      for (const [u, v] of [
+        [0.14, 0.14],
+        [0.86, 0.14],
+        [0.14, 0.86],
+        [0.86, 0.86],
+      ] as const) {
+        uvDot(g, m, P, u, v, 0.028, { color: light, alpha: 0.85 });
+      }
       break;
     }
     case 'rubble': {
-      const chunks: Array<[number, number, number]> = [
-        [0.22, 0.28, 0.1],
-        [0.6, 0.35, 0.13],
-        [0.4, 0.7, 0.11],
-        [0.78, 0.68, 0.08],
-      ];
-      for (const [dx, dy, r] of chunks) {
-        g.rect(x + s * dx, y + s * dy, s * r, s * r).fill({ color: accent, alpha: 0.65 });
+      for (let i = 0; i < 9; i += 1) {
+        const u = rnd(seed, i) * 0.8;
+        const v = rnd(seed, 20 + i) * 0.8;
+        const w = 0.07 + rnd(seed, 40 + i) * 0.16;
+        const h = 0.06 + rnd(seed, 60 + i) * 0.14;
+        const tone = i % 3 === 0 ? light : i % 3 === 1 ? accent : dark;
+        // A shadow edge under each chunk, so the pile has depth.
+        uvRect(g, P, u + 0.015, v + 0.015, Math.min(1, u + w + 0.015), Math.min(1, v + h + 0.015), {
+          color: ink,
+          alpha: 0.45,
+        });
+        uvRect(g, P, u, v, Math.min(1, u + w), Math.min(1, v + h), { color: tone, alpha: 0.85 });
       }
       break;
     }
     case 'hatch': {
-      g.moveTo(x, y).lineTo(x + s, y + s);
-      g.moveTo(x + s, y).lineTo(x, y + s);
-      g.stroke({ width: 1, color: accent, alpha: 0.5, pixelLine: true });
+      uvPoly(g, P, [
+        [0.06, 0.06],
+        [0.94, 0.06],
+        [0.94, 0.94],
+        [0.06, 0.94],
+      ]).stroke({ width: 1, color: light, alpha: 0.35, pixelLine: true });
+      line(
+        [
+          [0.1, 0.1],
+          [0.9, 0.9],
+        ],
+        accent,
+        0.75,
+        3,
+      );
+      line(
+        [
+          [0.9, 0.1],
+          [0.1, 0.9],
+        ],
+        accent,
+        0.75,
+        3,
+      );
+      break;
+    }
+    case 'grass': {
+      // Soft mottling under short tufts leaning the same way, as turf does.
+      for (let i = 0; i < 3; i += 1) {
+        const u = rnd(seed, i) * 0.6;
+        const v = rnd(seed, 10 + i) * 0.6;
+        uvRect(g, P, u, v, u + 0.3, v + 0.25, {
+          color: i === 1 ? dark : shade(tones.base, 1.06),
+          alpha: 0.3,
+        });
+      }
+      for (let i = 0; i < 14; i += 1) {
+        const u = 0.05 + rnd(seed, 20 + i) * 0.9;
+        const v = 0.08 + rnd(seed, 40 + i) * 0.88;
+        const lean = 0.03 + rnd(seed, 60 + i) * 0.03;
+        line(
+          [
+            [u, v],
+            [u + lean, v - 0.07 - rnd(seed, 80 + i) * 0.05],
+          ],
+          i % 3 === 0 ? light : accent,
+          0.7,
+        );
+      }
+      break;
+    }
+    case 'dirt': {
+      for (let i = 0; i < 6; i += 1) {
+        const u = rnd(seed, i) * 0.7;
+        const v = rnd(seed, 10 + i) * 0.7;
+        uvRect(g, P, u, v, Math.min(1, u + 0.18 + rnd(seed, 20 + i) * 0.25), Math.min(1, v + 0.15 + rnd(seed, 30 + i) * 0.2), {
+          color: i % 2 === 0 ? dark : shade(tones.base, 1.05),
+          alpha: 0.32,
+        });
+      }
+      const cu = rnd(seed, 40) * 0.6;
+      const cv = 0.2 + rnd(seed, 41) * 0.5;
+      line(
+        [
+          [cu, cv],
+          [cu + 0.15, cv + 0.06],
+          [cu + 0.32, cv - 0.04],
+        ],
+        ink,
+        0.35,
+      );
+      for (let i = 0; i < 5; i += 1) {
+        uvDot(g, m, P, rnd(seed, 50 + i), rnd(seed, 60 + i), 0.018 + rnd(seed, 70 + i) * 0.02, {
+          color: i % 2 === 0 ? accent : dark,
+          alpha: 0.7,
+        });
+      }
       break;
     }
     case 'solid':
@@ -512,6 +876,67 @@ function drawPattern(g: Graphics, def: TileDrawDef, accent: number, at: ReturnTy
       break;
     }
   }
+}
+
+/**
+ * The courses on a STANDING face — brick joints, panel seams, plank gaps —
+ * so a wall's side is the same material as its top rather than a smooth
+ * band. Hairlines only, and only when the face is tall enough to carry them.
+ */
+function drawFaceCourses(
+  g: Graphics,
+  a: Point,
+  b: Point,
+  rise: number,
+  pattern: TilePattern | undefined,
+  tones: Tones,
+): void {
+  if (rise < 10) return;
+  const rows = pattern === 'brick' ? 4 : pattern === 'panel' || pattern === 'planks' ? 2 : 0;
+  if (rows === 0) return;
+  for (let i = 1; i < rows + (pattern === 'brick' ? 1 : 0); i += 1) {
+    const y = (i / (rows + (pattern === 'brick' ? 1 : 0))) * rise;
+    g.moveTo(a.x, a.y - y)
+      .lineTo(b.x, b.y - y)
+      .stroke({ width: 1, color: tones.ink, alpha: 0.4, pixelLine: true });
+  }
+  if (pattern === 'brick') {
+    // Staggered head joints, alternating courses.
+    const n = 3;
+    for (let c = 0; c < 4; c += 1) {
+      const y0 = (c / 5) * rise;
+      const y1 = ((c + 1) / 5) * rise;
+      for (let k = 0; k < n; k += 1) {
+        const t = (k + (c % 2 === 0 ? 0.5 : 0.25)) / n;
+        const x = a.x + (b.x - a.x) * t;
+        const y = a.y + (b.y - a.y) * t;
+        g.moveTo(x, y - y0)
+          .lineTo(x, y - y1)
+          .stroke({ width: 1, color: tones.ink, alpha: 0.3, pixelLine: true });
+      }
+    }
+  }
+}
+
+/**
+ * The ink line around a standing thing.
+ *
+ * Every hand-painted isometric game draws one, because two adjacent props of
+ * the same colour have no other way to be two things. Half-transparent and a
+ * pixel wide, in the tile's own darkest tone rather than black, so it reads as
+ * an edge and not as a cartoon.
+ */
+function drawOutline(g: Graphics, ground: readonly Point[], top: readonly Point[], tones: Tones): void {
+  // Silhouette: the top's back edges and the ground's front edges, joined by
+  // the two outer verticals. `ground`/`top` run [N, E, S, W].
+  const [tn, te, , tw] = top as [Point, Point, Point, Point];
+  const [, ge, gs, gw] = ground as [Point, Point, Point, Point];
+  poly(g, [tn, te, ge, gs, gw, tw]).stroke({
+    width: 1,
+    color: tones.ink,
+    alpha: 0.5,
+    pixelLine: true,
+  });
 }
 
 /**
@@ -656,13 +1081,31 @@ function drawUnderlay(
   const under = def.underlay;
   if (under === undefined) return;
   const base = grained(parseColor(under.colors[0], 0x3b3f45), col, row);
-  const floor = drawBox(g, m, [col, row, col + 1, row + 1], 0, base);
-  drawPattern(
-    g,
-    { ...def, pattern: under.pattern },
-    parseColor(under.colors[1], 0x5a6068),
-    inscribed(floor),
-  );
+  const accent = parseColor(under.colors[1], 0x5a6068);
+  const rect: FaceRect = [col, row, col + 1, row + 1];
+  drawBox(g, m, rect, 0, base);
+  drawPattern(g, m, { ...def, pattern: under.pattern }, tonesOf(base, accent), rect, 0, cellSeed(col, row));
+}
+
+/**
+ * The bevel on a standing block's top — a lit edge toward the key light and
+ * a shadowed one away from it — so a crate, a car or a counter reads as a
+ * made thing with a lip rather than a slab of colour.
+ */
+function drawBevel(g: Graphics, m: SceneMetrics, rect: FaceRect, rise: number, tones: Tones): void {
+  const P = faceMapper(m, rect, rise);
+  const i0 = 0.07;
+  const i1 = 0.93;
+  uvLine(g, P, [
+    [i0, i1],
+    [i0, i0],
+    [i1, i0],
+  ]).stroke({ width: 1, color: tones.light, alpha: 0.5, pixelLine: true });
+  uvLine(g, P, [
+    [i1, i0],
+    [i1, i1],
+    [i0, i1],
+  ]).stroke({ width: 1, color: tones.ink, alpha: 0.5, pixelLine: true });
 }
 
 /** The slabs a wall cell is made of, in scene cells, nearest last. */
@@ -699,17 +1142,33 @@ function drawWallTile(
   col: number,
   row: number,
   joins: WallJoins,
+  run: CutRun | null,
 ): void {
   const base = parseColor(def.colors[0], 0x3b3f45);
   const accent = parseColor(def.colors[1], 0x5a6068);
   const rise = heightRise(m, def.height ?? 0);
+  const tones = tonesOf(base, accent);
+  const material = { pattern: def.pattern, tones };
+  const seed = cellSeed(col, row);
+  const opening = cutOf(def) !== null;
 
   let lastTop: Point[] = [];
-  for (const r of wallRects(col, row, joins)) lastTop = drawBox(g, m, r, rise, base, true);
-  if (lastTop.length > 0) {
-    drawCut(g, def, lastTop, accent);
-    drawGlow(g, m, def, accent, lastTop);
+  for (const r of wallRects(col, row, joins)) {
+    lastTop = drawBox(g, m, r, rise, base, true, material);
+    // The material runs along the top of the slab too — brick courses, mesh,
+    // boards. A panel's bevel and rivets would be nonsense on a strip a third
+    // of a cell wide, so panelled walls carry their seams on the faces only;
+    // and an opening carries its own design instead.
+    if (!opening && def.pattern !== 'panel' && def.pattern !== 'solid') {
+      drawPattern(g, m, def, tones, r, rise, seed);
+    }
   }
+  // The opening's design, once per run, from the run's last cell.
+  if (run !== null) {
+    const cut = cutOf(def);
+    if (cut !== null) drawCut(g, m, cut, run, rise, tones, def.emissive);
+  }
+  if (lastTop.length > 0) drawGlow(g, m, def, accent, lastTop);
 }
 
 /**
@@ -736,26 +1195,49 @@ function drawObjectTile(
   const accent = parseColor(def.colors[1], 0x5a6068);
   const rise = heightRise(m, def.height ?? 0);
   const shape = def.footprint;
+  const tones = tonesOf(base, accent);
+  const seed = cellSeed(col, row);
+  const material = { pattern: undefined, tones };
 
   const centre = { x: col + 0.5, y: row + 0.5 };
   // A `round` prop is squat and wide; a post and a trunk are narrow.
   const radius = shape === 'round' ? 0.34 : 0.15;
+  /** A disc on the top face — a rim, a cap, a lid. */
+  const disc = (r: number, color: number, alpha: number, ink = false) => {
+    const c = worldFromGrid(m, centre);
+    const { rx, ry } = groundRadius(m, r);
+    const e = g.ellipse(c.x, c.y - rise, rx, ry).fill({ color, alpha });
+    if (ink) e.stroke({ width: 1, color: tones.ink, alpha: 0.45, pixelLine: true });
+  };
 
   if (shape === 'canopy') {
     // Trunk first, then the crown above it — drawing order IS the occlusion,
     // so the crown has to come second or the trunk sits on top of it.
     drawPrism(g, m, centre, radius, rise * 0.55, shade(base, 0.6), 6);
     // A wide round crown on a narrow trunk: narrow-then-wide is the whole
-    // silhouette, and it is what a box crown could never give.
-    const lifted = drawPrism(g, m, centre, 0.42, rise, base, 8);
-    drawPattern(g, def, accent, inscribed(lifted));
+    // silhouette, and it is what a box crown could never give. The crown's
+    // radius is jittered per vertex so no two trees are the same shape, and
+    // a lighter lump sits on its lit side.
+    const lifted = drawPrism(g, m, centre, 0.42, rise, base, 8, 0.35, seed);
+    drawPattern(g, m, def, tones, objectRect(def, col, row), rise, seed);
+    drawPrism(g, m, { x: centre.x - 0.1, y: centre.y - 0.1 }, 0.2, rise * 1.08, shade(base, 1.14), 7, 0.3, seed + 1);
     drawGlow(g, m, def, accent, lifted);
     return;
   }
 
   const top = drawPrism(g, m, centre, radius, rise, base, shape === 'round' ? 8 : 6);
-  drawPattern(g, def, accent, inscribed(top));
+  if (shape === 'round') {
+    // A rim and a lid: a drum, a planter and a fountain all read from the
+    // ring at the top, which a flat disc never gave them.
+    disc(radius * 0.72, shade(base, 1.08), 0.7, true);
+    drawPattern(g, m, def, tones, [centre.x - radius * 0.7, centre.y - radius * 0.7, centre.x + radius * 0.7, centre.y + radius * 0.7], rise, seed);
+  } else {
+    // A cap wider than the post: a stool seat, a hydrant top, a bollard head.
+    disc(radius * 1.6, shade(base, 1.15), 1, true);
+    disc(radius * 0.9, shade(base, 1.28), 0.7);
+  }
   drawCrown(g, top, base);
+  void material;
   drawGlow(g, m, def, accent, top);
 }
 
@@ -793,26 +1275,25 @@ function drawStairTile(
   const accent = parseColor(def.colors[1], 0x5a6068);
   const rise = heightRise(m, def.height ?? 0);
   const down = def.connects === 'down';
+  const tones = tonesOf(base, accent);
+  const material = { pattern: def.pattern, tones };
 
   const TREADS = 4;
   let top: Point[] = [];
+  let last: FaceRect = [col, row, col + 1, row + 1];
+  let lastRise = 0;
   for (let i = 0; i < TREADS; i += 1) {
     const y0 = row + (i / TREADS);
     const y1 = row + ((i + 1) / TREADS);
     // Rising away from the viewer, or falling into the floor for a descent.
     const step = ((down ? TREADS - 1 - i : i) + 1) / TREADS;
+    last = [col + 0.12, y0, col + 0.88, y1];
+    lastRise = rise * step;
     // In plan view the treads are bands of stepped brightness — the same
     // ladder of shades, read as a flight the way a floor plan draws one.
-    top = drawBox(
-      g,
-      m,
-      [col + 0.12, y0, col + 0.88, y1],
-      rise * step,
-      shade(base, 0.9 + i * 0.06),
-      true,
-    );
+    top = drawBox(g, m, last, lastRise, shade(base, 0.9 + i * 0.06), true, material);
   }
-  drawPattern(g, def, accent, inscribed(top));
+  drawPattern(g, m, def, tones, last, lastRise, cellSeed(col, row));
   drawGlow(g, m, def, accent, top);
 }
 
@@ -834,26 +1315,56 @@ function drawFillTile(
     : grained(parseColor(def.colors[0], 0x3b3f45), col, row);
   const accent = parseColor(def.colors[1], 0x5a6068);
   const rise = heightRise(m, def.height ?? 0);
-  const top = drawBox(g, m, [col, row, col + 1, row + 1], rise, base, standing);
-  drawPattern(g, def, accent, inscribed(top));
+  const tones = tonesOf(base, accent);
+  const rect: FaceRect = [col, row, col + 1, row + 1];
+  const top = drawBox(g, m, rect, rise, base, standing, { pattern: def.pattern, tones });
+  drawPattern(g, m, def, tones, rect, rise, cellSeed(col, row));
+  // A standing block is a made thing — a crate, a counter, a car — and gets
+  // a lip. A floor is a surface and does not.
+  if (standing) drawBevel(g, m, rect, rise, tones);
   drawSheen(g, def, top);
   drawGlow(g, m, def, accent, top);
 }
 
-/**
- * Draw the whole painted layer. Cells outside the grid are skipped.
- *
- * Painted BACK TO FRONT by `cellDepth`, because in isometric the draw order is
- * the depth buffer: there is no z-test here, so a wall only hides the floor
- * behind it if it is drawn after it. In plan view nothing overlaps and the
- * sort is a no-op that costs one comparison per cell.
- */
-export function drawTiles(g: Graphics, m: SceneMetrics, input: TileDrawInput): void {
-  g.clear();
-  PENDING_LIGHTS = [];
+// ---------------------------------------------------------------------------
+// The plan: what to draw, in what order, and which cells belong to which chunk
+// ---------------------------------------------------------------------------
 
-  const drawable: Array<{ col: number; row: number; def: TileDrawDef; layer: number }> = [];
-  /** Cells holding a thin-footprint tile, so a run can find its own corners. */
+/** One painted cell, resolved against the palette. */
+export interface TileCell {
+  col: number;
+  row: number;
+  /** The tile id within its set — what a run of the same opening is a run OF. */
+  id: string;
+  def: TileDrawDef;
+  /** 0 ground, 1 structure, 2 object — the draw order within a square. */
+  layer: number;
+}
+
+/**
+ * Everything a draw pass needs, computed once from the layer maps.
+ *
+ * Shared by the one-shot `drawTiles` (tests, and anything without a stage)
+ * and the chunked layer the stage uses, so the two can never disagree about
+ * what a cell is or which way a wall turns.
+ */
+export interface TilePlan {
+  /** Every drawable cell, back to front, ground before structure before object. */
+  cells: TileCell[];
+  /** `"col,row"` of every cell holding a thin-footprint tile — the wall runs. */
+  walls: Set<string>;
+  /** `"col,row"` of every cell with a floor of its own. */
+  grounded: Set<string>;
+  /** `"col,row"` of every cell with anything drawn in it — where the map is. */
+  occupied: Set<string>;
+  /** `"col,row"` → tile id for every structure cell, so an opening can find its run. */
+  structure: Map<string, string>;
+  /** The cells that stand proud of the floor, in draw order. */
+  standing: TileCell[];
+}
+
+export function planTiles(m: SceneMetrics, input: TileDrawInput): TilePlan {
+  const cells: TileCell[] = [];
   const walls = new Set<string>();
 
   // The legacy flat map draws as if it were ground: an un-migrated scene shows
@@ -872,12 +1383,17 @@ export function drawTiles(g: Graphics, m: SceneMetrics, input: TileDrawInput): v
       if (at.col < 0 || at.row < 0 || at.col >= m.cols || at.row >= m.rows) continue;
       const def = input.defs[tileDefKey(input.tilesetId, tileId)];
       if (def === undefined) continue; // unknown id (tileset changed) — draw nothing, lose nothing
-      drawable.push({ col: at.col, row: at.row, def, layer });
+      cells.push({ col: at.col, row: at.row, id: tileId, def, layer });
       if (def.footprint === 'wall') walls.add(`${at.col},${at.row}`);
     }
   }
 
-  drawable.sort(
+  const structure = new Map<string, string>();
+  for (const c of cells) {
+    if (c.def.footprint === 'wall') structure.set(`${c.col},${c.row}`, c.id);
+  }
+
+  cells.sort(
     (a, b) =>
       cellDepth(a.col, a.row) - cellDepth(b.col, b.row) ||
       a.layer - b.layer ||
@@ -892,85 +1408,414 @@ export function drawTiles(g: Graphics, m: SceneMetrics, input: TileDrawInput): v
    * `cells`" is not "a floor in this cell".
    */
   const grounded = new Set<string>();
-  for (const c of drawable) {
+  for (const c of cells) {
     if (c.layer === 0 && !isStanding(c.def) && (c.def.footprint ?? 'fill') === 'fill') {
       grounded.add(`${c.col},${c.row}`);
     }
   }
 
-  const joinsOf = (col: number, row: number): WallJoins => ({
+  const occupied = new Set<string>();
+  for (const c of cells) occupied.add(`${c.col},${c.row}`);
+
+  const standing = cells.filter((c) => isStanding(c.def) || c.def.footprint === 'wall');
+  return { cells, walls, grounded, occupied, structure, standing };
+}
+
+/** The design an opening draws with: named on the tile, or the plain fallback. */
+export function cutOf(def: TileDrawDef): TileCut | null {
+  if (def.cut !== undefined) return def.cut;
+  if (def.footprint !== 'wall') return null;
+  if (def.kind === 'door') return 'door';
+  // Only a FULL-height see-through wall is glazing. A railing or a velvet
+  // rope is see-through because it is low, not because it is glass.
+  if (def.blocksSight === false && (def.height ?? 0) >= 1) return 'glass';
+  return null;
+}
+
+/**
+ * The run of one opening this cell ends, or null.
+ *
+ * Adjacent cells of the same cut tile are one opening. It is drawn ONCE, from
+ * the run's last cell — the nearest, the one drawn last — so nothing of the
+ * run is painted over it afterwards. Every other cell of the run draws its
+ * slab and nothing else. The run follows the wall: along x when the cell is
+ * joined east or west, along y when north or south, and along x for a cell
+ * that stands alone.
+ */
+export function cutRunFor(
+  plan: Pick<TilePlan, 'structure' | 'walls'>,
+  cell: Pick<TileCell, 'col' | 'row' | 'id' | 'def'>,
+): CutRun | null {
+  const cut = cutOf(cell.def);
+  if (cut === null) return null;
+  const j = joinsOf(plan.walls, cell.col, cell.row);
+  const axis: 'x' | 'y' = (j.w || j.e) && !(j.n || j.s) ? 'x' : j.n || j.s ? 'y' : 'x';
+  const [dc, dr] = axis === 'x' ? [1, 0] : [0, 1];
+  const same = (c: number, r: number) => plan.structure.get(`${c},${r}`) === cell.id;
+  if (same(cell.col + dc, cell.row + dr)) return null; // not the last of its run
+  let n = 1;
+  while (n < 32 && same(cell.col - dc * n, cell.row - dr * n)) n += 1;
+  const lo = (1 - WALL_THICKNESS) / 2;
+  const hi = lo + WALL_THICKNESS;
+  const rect: CutRun['rect'] =
+    axis === 'x'
+      ? [cell.col - (n - 1), cell.row + lo, cell.col + 1, cell.row + hi]
+      : [cell.col + lo, cell.row - (n - 1), cell.col + hi, cell.row + 1];
+  return { rect, axis, n };
+}
+
+/**
+ * Widen a set of changed cells to the whole of any opening they belong to.
+ *
+ * An opening is drawn from its last cell across all of them, so a change to
+ * ANY cell of a run — or beside one, which can split or extend it — has to
+ * redraw the run's whole span. Both the old and the new layer are walked,
+ * because a cell that used to end a run and a cell that now does are not
+ * the same cell.
+ */
+export function expandCutRuns(
+  changed: Iterable<string>,
+  inputs: ReadonlyArray<TileDrawInput | null>,
+): Set<string> {
+  const out = new Set<string>(changed);
+  for (const input of inputs) {
+    if (input === null) continue;
+    const structure = { ...(input.cells ?? {}), ...(input.structure ?? {}) };
+    const isCut = (id: string | undefined): boolean => {
+      if (id === undefined) return false;
+      const def = input.defs[tileDefKey(input.tilesetId, id)];
+      return def !== undefined && cutOf(def) !== null;
+    };
+    for (const key of changed) {
+      const at = parseKey(key);
+      if (at === null) continue;
+      // The cell itself and its four neighbours: a change here may have
+      // joined or split a run that runs through any of them.
+      for (const [sc, sr] of [
+        [0, 0],
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ] as const) {
+        const c0 = at.col + sc;
+        const r0 = at.row + sr;
+        const id = structure[`${c0},${r0}`];
+        if (!isCut(id)) continue;
+        for (const [dc, dr] of [
+          [1, 0],
+          [-1, 0],
+          [0, 1],
+          [0, -1],
+        ] as const) {
+          for (let k = 1; k < 32; k += 1) {
+            const kk = `${c0 + dc * k},${r0 + dr * k}`;
+            if (structure[kk] !== id) break;
+            out.add(kk);
+          }
+        }
+        out.add(`${c0},${r0}`);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The edge of the map: where a painted square meets nothing.
+ *
+ * A floor that simply stops reads as tiles laid on a table. A floor with an
+ * edge — an ink line along the drop and a shadow falling off the near sides —
+ * reads as a slab with a thickness, and the unpainted void around it as
+ * space rather than an unfinished job. Drawn per floor cell against the four
+ * neighbours, so it costs nothing where the map continues.
+ */
+const EDGE_DROP = 0.16;
+const EDGE_ALPHA = 0.55;
+
+function drawFloorEdge(
+  g: Graphics,
+  m: SceneMetrics,
+  cell: TileCell,
+  occupied: ReadonlySet<string>,
+): void {
+  const { col, row } = cell;
+  const has = (c: number, r: number) => occupied.has(`${c},${r}`);
+  const [n, e, s, w] = rectCorners(m, col, row, col + 1, row + 1);
+  const base = parseColor(cell.def.colors[0], 0x3b3f45);
+  const ink = shade(base, 0.5);
+  const edge = (a: Point, b: Point) =>
+    g.moveTo(a.x, a.y).lineTo(b.x, b.y).stroke({ width: 2, color: ink, alpha: EDGE_ALPHA });
+  // The two sides that face the viewer take a shadow that falls off the slab.
+  const drop = (a: Point, b: Point, dx: number, dy: number) => {
+    const [a2, b2] = [
+      worldFromGrid(m, { x: 0, y: 0 }),
+      worldFromGrid(m, { x: dx, y: dy }),
+    ];
+    const ox = b2.x - a2.x;
+    const oy = b2.y - a2.y;
+    poly(g, [a, b, { x: b.x + ox, y: b.y + oy }, { x: a.x + ox, y: a.y + oy }]).fill({
+      color: C.ground,
+      alpha: 0.35,
+    });
+  };
+  if (!has(col, row - 1)) edge(n, e);
+  if (!has(col - 1, row)) edge(w, n);
+  if (!has(col + 1, row)) {
+    drop(e, s, EDGE_DROP, 0);
+    edge(e, s);
+  }
+  if (!has(col, row + 1)) {
+    drop(s, w, 0, EDGE_DROP);
+    edge(s, w);
+  }
+}
+
+function joinsOf(walls: ReadonlySet<string>, col: number, row: number): WallJoins {
+  return {
     n: walls.has(`${col},${row - 1}`),
     s: walls.has(`${col},${row + 1}`),
     w: walls.has(`${col - 1},${row}`),
     e: walls.has(`${col + 1},${row}`),
-  });
+  };
+}
 
-  // THREE PASSES, because a contact shadow has to land on the floor next to
-  // a thing and under the thing itself, and one depth-sorted pass cannot put
-  // it there: the floor in front of a wall is nearer than the wall, so it is
-  // drawn later, over anything the wall's turn painted onto it.
-  //
-  //   1. Everything flat — floors, stains, drains, and the default floor under
-  //      a standing tile whose cell has no ground of its own.
-  //   2. Every standing tile's shadow, on that finished floor.
-  //   3. Every standing tile, nearest last.
-  //
-  // Pass 1 never occludes pass 3: a flat cell sits at ground level, and a
-  // standing thing behind it rises AWAY from it on screen. So the split costs
-  // nothing in correctness and buys the shadows a floor to fall on.
-  const standing = drawable.filter((c) => isStanding(c.def) || c.def.footprint === 'wall');
+// ---------------------------------------------------------------------------
+// The three passes, one cell at a time
+// ---------------------------------------------------------------------------
 
-  for (const cell of drawable) {
-    const key = `${cell.col},${cell.row}`;
-    if (isStanding(cell.def) || cell.def.footprint === 'wall') {
-      if (!grounded.has(key)) drawUnderlay(g, cell.def, m, cell.col, cell.row);
-      continue;
-    }
-    // Flat props with a partial footprint — a storm drain, an oil stain —
-    // still want the default floor beneath them when nothing was painted.
-    if (cell.def.footprint !== undefined && cell.def.footprint !== 'fill' && !grounded.has(key)) {
+/**
+ * Pass 1: everything flat — floors, stains, drains, and the default floor
+ * under a standing tile whose cell has no ground of its own.
+ */
+export function drawFloorCell(
+  g: Graphics,
+  m: SceneMetrics,
+  cell: TileCell,
+  plan: Pick<TilePlan, 'grounded' | 'occupied'>,
+): void {
+  const key = `${cell.col},${cell.row}`;
+  if (isStanding(cell.def) || cell.def.footprint === 'wall') {
+    if (!plan.grounded.has(key)) {
       drawUnderlay(g, cell.def, m, cell.col, cell.row);
+      drawFloorEdge(g, m, cell, plan.occupied);
     }
+    return;
+  }
+  // Flat props with a partial footprint — a storm drain, an oil stain —
+  // still want the default floor beneath them when nothing was painted.
+  if (cell.def.footprint !== undefined && cell.def.footprint !== 'fill' && !plan.grounded.has(key)) {
+    drawUnderlay(g, cell.def, m, cell.col, cell.row);
+  }
+  drawFillTile(g, cell.def, m, cell.col, cell.row);
+  // The edge is drawn by whichever flat thing sits lowest in the square: the
+  // ground when there is one, otherwise the flat prop standing in for it.
+  if (cell.layer === 0 || !plan.grounded.has(key)) drawFloorEdge(g, m, cell, plan.occupied);
+}
+
+/** Pass 2a: the ambient ring a full-height thing takes out of the floor around it. */
+export function drawAmbientFor(
+  g: Graphics,
+  m: SceneMetrics,
+  cell: TileCell,
+  plan: Pick<TilePlan, 'walls'>,
+): void {
+  if ((cell.def.height ?? 0) < 1) return;
+  const shape = cell.def.footprint;
+  if (shape === 'wall') {
+    for (const r of wallRects(cell.col, cell.row, joinsOf(plan.walls, cell.col, cell.row))) {
+      drawAmbientRing(g, m, r);
+    }
+  } else if (shape === undefined || shape === 'fill') {
+    drawAmbientRing(g, m, [cell.col, cell.row, cell.col + 1, cell.row + 1]);
+  }
+}
+
+/** Pass 2b: the contact shadow a standing thing casts on the floor. */
+export function drawShadowFor(
+  g: Graphics,
+  m: SceneMetrics,
+  cell: TileCell,
+  plan: Pick<TilePlan, 'walls'>,
+): void {
+  const h = cell.def.height ?? (cell.def.footprint === 'stair' ? 0.5 : 0);
+  const shape = cell.def.footprint;
+  if (shape === 'wall') {
+    for (const r of wallRects(cell.col, cell.row, joinsOf(plan.walls, cell.col, cell.row))) {
+      drawGroundShadow(g, m, r, h);
+    }
+  } else if (shape === 'post' || shape === 'canopy' || shape === 'round') {
+    drawGroundShadow(g, m, objectRect(cell.def, cell.col, cell.row), h);
+  } else if (shape === 'stair') {
+    drawGroundShadow(g, m, [cell.col + 0.12, cell.row, cell.col + 0.88, cell.row + 1], h);
+  } else {
+    drawGroundShadow(g, m, [cell.col, cell.row, cell.col + 1, cell.row + 1], h);
+  }
+}
+
+/**
+ * Pass 3: one standing tile. Any light it gives off is collected into the
+ * open light pass (`PENDING_LIGHTS`) rather than drawn here — see `drawGlow`.
+ */
+export function drawStandingCell(
+  g: Graphics,
+  m: SceneMetrics,
+  cell: TileCell,
+  plan: Pick<TilePlan, 'walls' | 'structure'>,
+): void {
+  const shape = cell.def.footprint;
+  if (shape === 'stair') {
+    drawStairTile(g, cell.def, m, cell.col, cell.row);
+  } else if (shape === 'post' || shape === 'canopy' || shape === 'round') {
+    drawObjectTile(g, cell.def, m, cell.col, cell.row);
+  } else if (shape === 'wall') {
+    // Joins are read from the finished set, not from draw order, so a run
+    // looks the same whichever end the GM painted from.
+    drawWallTile(
+      g,
+      cell.def,
+      m,
+      cell.col,
+      cell.row,
+      joinsOf(plan.walls, cell.col, cell.row),
+      cutRunFor(plan as TilePlan, cell),
+    );
+  } else {
     drawFillTile(g, cell.def, m, cell.col, cell.row);
   }
+}
 
-  for (const cell of standing) {
-    const h = cell.def.height ?? (cell.def.footprint === 'stair' ? 0.5 : 0);
-    const shape = cell.def.footprint;
-    if (shape === 'wall') {
-      for (const r of wallRects(cell.col, cell.row, joinsOf(cell.col, cell.row))) {
-        drawGroundShadow(g, m, r, h);
-      }
-    } else if (shape === 'post' || shape === 'canopy' || shape === 'round') {
-      drawGroundShadow(g, m, objectRect(cell.def, cell.col, cell.row), h);
-    } else if (shape === 'stair') {
-      drawGroundShadow(g, m, [cell.col + 0.12, cell.row, cell.col + 0.88, cell.row + 1], h);
-    } else {
-      drawGroundShadow(g, m, [cell.col, cell.row, cell.col + 1, cell.row + 1], h);
-    }
-  }
+/** A light waiting for the unlit pass. */
+export interface PendingLight {
+  face: Point[];
+  glow: number;
+}
 
-  for (const cell of standing) {
-    const shape = cell.def.footprint;
-    if (shape === 'stair') {
-      drawStairTile(g, cell.def, m, cell.col, cell.row);
-    } else if (shape === 'post' || shape === 'canopy' || shape === 'round') {
-      drawObjectTile(g, cell.def, m, cell.col, cell.row);
-    } else if (shape === 'wall') {
-      // Joins are read from the finished set, not from draw order, so a run
-      // looks the same whichever end the GM painted from.
-      drawWallTile(g, cell.def, m, cell.col, cell.row, joinsOf(cell.col, cell.row));
-    } else {
-      drawFillTile(g, cell.def, m, cell.col, cell.row);
-    }
-  }
+/**
+ * Open a light pass. Every `drawGlow` until `closeLights` is called is
+ * collected rather than drawn, so the caller can paint the lights over
+ * whatever else it draws — a whole layer, or one chunk of one.
+ */
+export function openLights(): void {
+  PENDING_LIGHTS = [];
+}
 
-  // The unlit pass. Every light in the scene, over every tile in it — so a
-  // sign's bloom lands on the floor in front of it rather than being painted
-  // over by the next cell in the depth sort.
+export function closeLights(): PendingLight[] {
   const lights = PENDING_LIGHTS ?? [];
   PENDING_LIGHTS = null;
+  return lights;
+}
+
+/** The unlit pass: every collected light, over everything. */
+export function drawLights(g: Graphics, m: SceneMetrics, lights: readonly PendingLight[]): void {
   for (const light of lights) paintGlow(g, m, light.face, light.glow);
+}
+
+// ---------------------------------------------------------------------------
+// Chunks: the unit of redraw
+// ---------------------------------------------------------------------------
+
+/**
+ * Cells per chunk side. The stage redraws a chunk when any of its cells
+ * changes, so this is the trade between "one stroke redraws the world" (a
+ * single chunk) and "a thousand tiny graphics" (one per cell). Eight squared
+ * is sixty-four cells: a stroke touches one or two, a 40×30 scene has twenty.
+ */
+export const CHUNK = 8;
+
+export function chunkKey(col: number, row: number): string {
+  return `${Math.floor(col / CHUNK)},${Math.floor(row / CHUNK)}`;
+}
+
+/** Chunk draw order for standing things: nearer chunks later, like cells. */
+export function chunkDepth(key: string): number {
+  const [cx, cy] = key.split(',').map(Number) as [number, number];
+  return cx + cy;
+}
+
+/**
+ * The per-cell signature the diff compares, one string per painted square:
+ * every layer's tile id, so a change in any of them is a change.
+ */
+export function cellSignatures(input: TileDrawInput): Map<string, string> {
+  const out = new Map<string, string>();
+  const add = (map: Record<string, string> | undefined, layer: string) => {
+    for (const [key, tileId] of Object.entries(map ?? {})) {
+      out.set(key, `${out.get(key) ?? ''}${layer}=${tileId};`);
+    }
+  };
+  add(input.cells, 'c');
+  add(input.ground, 'g');
+  add(input.structure, 's');
+  add(input.object, 'o');
+  return out;
+}
+
+/**
+ * Which chunks a set of changed cells dirties.
+ *
+ * A cell's rendering depends on its four orthogonal neighbours — wall runs
+ * turn corners from them, and a shadow or an ambient ring reaches into them —
+ * so a change on a chunk's edge dirties the chunk next door as well.
+ */
+export function dirtyChunks(changed: Iterable<string>): Set<string> {
+  const out = new Set<string>();
+  for (const key of changed) {
+    const at = parseKey(key);
+    if (at === null) continue;
+    for (const [dc, dr] of [
+      [0, 0],
+      [1, 0],
+      [-1, 0],
+      [0, 1],
+      [0, -1],
+    ] as const) {
+      out.add(chunkKey(at.col + dc, at.row + dr));
+    }
+  }
+  return out;
+}
+
+/** The cells whose signature differs between two layers, either way round. */
+export function changedCells(
+  prev: ReadonlyMap<string, string>,
+  next: ReadonlyMap<string, string>,
+): string[] {
+  const out: string[] = [];
+  for (const [key, sig] of next) if (prev.get(key) !== sig) out.push(key);
+  for (const key of prev.keys()) if (!next.has(key)) out.push(key);
+  return out;
+}
+
+/**
+ * Draw the whole painted layer into ONE graphics. Cells outside the grid are
+ * skipped.
+ *
+ * THREE PASSES, because a contact shadow has to land on the floor next to a
+ * thing and under the thing itself, and one depth-sorted pass cannot put it
+ * there: the floor in front of a wall is nearer than the wall, so it is drawn
+ * later, over anything the wall's turn painted onto it.
+ *
+ *   1. Everything flat.
+ *   2. Every standing tile's ambient ring, then its shadow, on that floor.
+ *   3. Every standing tile, nearest last — then every light, over all of it.
+ *
+ * Pass 1 never occludes pass 3: a flat cell sits at ground level, and a
+ * standing thing behind it rises AWAY from it on screen. So the split costs
+ * nothing in correctness and buys the shadows a floor to fall on.
+ *
+ * This is the one-shot form. The stage draws the same passes through
+ * `ChunkedTileLayer`, which redraws only the chunks a stroke touched.
+ */
+export function drawTiles(g: Graphics, m: SceneMetrics, input: TileDrawInput): void {
+  g.clear();
+  const plan = planTiles(m, input);
+  openLights();
+  for (const cell of plan.cells) drawFloorCell(g, m, cell, plan);
+  for (const cell of plan.standing) drawAmbientFor(g, m, cell, plan);
+  for (const cell of plan.standing) drawShadowFor(g, m, cell, plan);
+  for (const cell of plan.standing) drawStandingCell(g, m, cell, plan);
+  drawLights(g, m, closeLights());
 }
 
 /** FNV-1a. Cheap, stable, and it notices a one-character change. */
