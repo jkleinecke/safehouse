@@ -18,13 +18,14 @@ export type GridTool =
   | 'zone' // GM: click vertices to draw a named zone (FR9.2)
   | 'pin' // GM: click to drop a map pin (FR9.3)
   | 'camera' // GM: click to mount a security camera; only the GM sees it (FR9.23)
+  | 'note' // GM: click to drop a GM note; only the GM ever sees it (FR9.25)
   | 'tile' // GM: paint tiles from a tileset (FR9.2 "assemble")
   | 'tile-area' // GM: drag a rectangle, fill it with the chosen ground
   | 'tile-room' // GM: drag a rectangle, floor inside and walls around it
   | 'tile-erase'; // GM: clear painted cells
 
 /** GM drawing tools that author scene geometry rather than play with it. */
-export const GEOMETRY_TOOLS: readonly GridTool[] = ['wall', 'door', 'zone', 'pin', 'camera'];
+export const GEOMETRY_TOOLS: readonly GridTool[] = ['wall', 'door', 'zone', 'pin', 'camera', 'note'];
 
 /**
  * The tools that lay tiles down. Kept as one list because the palette's
@@ -309,6 +310,14 @@ export interface StageSceneState {
    * never carries cameras.
    */
   cameraCones?: readonly CameraCone[] | null;
+  /** GM note open in the notes editor — drawn ringed (FR9.25). */
+  selectedNoteId?: string | null;
+  /**
+   * Tokens on a HIDDEN token layer (FR9.26), drawn ghosted for the GM the
+   * way a hidden token is. A player's state never has any: the server
+   * filtered them out with the layers themselves.
+   */
+  hiddenLayerTokenIds?: ReadonlySet<string>;
   /**
    * Cells outside the viewer's sightline, or null for "no viewpoint" — which
    * draws nothing at all. An unselected token must never black out the table.
@@ -334,7 +343,10 @@ export interface StageCallbacks {
   onPointer(x: number, y: number): void;
   /** Ruler changed (null = measurement ended). */
   onRuler(ruler: RulerState | null): void;
-  /** GM clicked a door with the select tool. */
+  /**
+   * A door's knob was clicked with the select tool (FR9.2, FR9.24) — by the
+   * GM or by a player. The server decides: a player is refused a locked one.
+   */
   onDoorToggle(doorId: string): void;
   /** AoE tool click (grid units). */
   onAoePlace(x: number, y: number): void;
@@ -371,6 +383,15 @@ export interface StageCallbacks {
   onCameraPlace?(x: number, y: number): void;
   /** select-tool click on a camera's eye — open it in the editor. */
   onCameraSelect?(cameraId: string): void;
+  /** note tool click — drop a GM note at grid coords (FR9.25). */
+  onNotePlace?(x: number, y: number): void;
+  /** select-tool click inside a GM note's box — open it in the editor. */
+  onNoteSelect?(noteId: string): void;
+  /**
+   * A painted door's cell was clicked with the select tool (FR9.24): open or
+   * shut it. `cell` is the `"col,row"` key on floor `level`.
+   */
+  onTileDoorToggle?(cell: string, level: number): void;
 }
 
 /** The cells one security camera covers on the floor being drawn (FR9.23). */

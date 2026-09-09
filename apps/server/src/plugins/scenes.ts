@@ -34,6 +34,7 @@ import {
   PointSchema,
   SceneEnvironmentSchema,
   SceneGeometrySchema,
+  SceneLayerSchema,
   SceneVisionSchema,
   TileLayerSchema,
   TokenAuraSchema,
@@ -50,14 +51,17 @@ import {
 } from '../services/auth.js';
 import type { EventTx } from '../hub.js';
 import { emitFogProximity } from '../fixer/proximity.js';
+import { applyDoorOp, doorRefusal, tileDoorState, withTileDoor, withTracedDoor } from '../services/doors.js';
 import {
   PerKeyThrottle,
   ScenesService,
   computeScatter,
   normalizeGrid,
+  hiddenByLayer,
   sceneForViewer,
   serializeScene,
   serializeToken,
+  tokenHidden,
   type SceneRow,
   type TokenRow,
 } from '../services/scenes.js';
@@ -90,6 +94,8 @@ const ScenePatchBody = z.object({
   environment: SceneEnvironmentSchema.partial().optional(),
   geometry: SceneGeometrySchema.optional(),
   vision: SceneVisionSchema.partial().optional(),
+  /** Token layers (FR9.26): the whole list, GM only. */
+  tokenLayers: SceneLayerSchema.array().optional(),
   mapAttachmentIds: z.array(z.string()).optional(),
   notes: z.string().max(20_000).optional(),
 });
@@ -127,6 +133,14 @@ const CellKeySchema = z
  * a level index cannot allocate an unbounded array of tile layers.
  */
 const MAX_LEVELS = 12;
+
+/** One door, one act (FR9.24). Traced doors by id, painted ones by cell and floor. */
+const DoorOpBody = z.object({
+  doorId: z.string().optional(),
+  cell: CellKeySchema.optional(),
+  level: z.number().int().min(0).max(MAX_LEVELS - 1).default(0),
+  op: z.enum(['open', 'close', 'lock', 'unlock']),
+});
 
 const TilePaintBody = z.object({
   tilesetId: z.string().min(1).max(64),
@@ -238,8 +252,13 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
   const svc = new ScenesService(app.db);
   const dragThrottle = new PerKeyThrottle(DRAG_INTERVAL_MS);
 
-  /** Visibility scope for a token's events: hidden ⇒ GM sockets only (FR9.7). */
-  const tokenVis = (hidden: boolean): Visibility => (hidden ? 'gm' : 'public');
+  /**
+   * Visibility scope for a token's events: hidden ⇒ GM sockets only (FR9.7).
+   * Hidden by its own flag, or by the layer it is on (FR9.26) — the scene
+   * says which, so every emit reads it from the row it has in hand.
+   */
+  const tokenVis = (token: { id: string; hidden: boolean }, scene: SceneRow): Visibility =>
+    tokenHidden(token, serializeScene(scene)) ? 'gm' : 'public';
 
   /** Load a scene, check campaign binding, and report whether the caller is GM. */
   async function openScene(
@@ -312,6 +331,20 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         type: 'scene.updated',
         payload: { sceneId: id, changed: written.changed, environment: written.scene.environment },
       });
+      // A layer shown or hidden is tokens arriving on or leaving the table
+      // (FR9.26): the same events a reveal or a hide of one token emits, so a
+      // player screen learns about each of them the only way it ever does.
+      if (body.tokenLayers !== undefined) {
+        const before = hiddenByLayer(serializeScene(scene));
+        const after = hiddenByLayer(written.scene);
+        for (const row of await svc.withDb(tx.db).tokensOf(scene.id)) {
+          if (row.hidden) continue; // hidden on its own account: never on a player's wire either way
+          const was = before.has(row.id);
+          const now = after.has(row.id);
+          if (was && !now) await tx.emit({ type: 'token.added', payload: { token: serializeToken(row) } });
+          if (!was && now) await tx.emit({ type: 'token.removed', payload: { tokenId: row.id, sceneId: scene.id } });
+        }
+      }
       return written.scene;
     });
     return { scene: updated };
@@ -328,6 +361,48 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       });
     });
     return { ok: true };
+  });
+
+  /**
+   * A door, opened or shut or locked (FR9.24).
+   *
+   * The one scene write a PLAYER may make: their own screen, their own hand
+   * on the handle, no asking. A locked door refuses them by name — "that
+   * door is locked" is what the runner learns and what the table should
+   * hear — and the lock itself is the GM's. Traced doors by id; painted ones
+   * by floor and cell. Both land as a `scene.updated`, so every device
+   * re-reads the scene and a sightline through an open door is a sightline.
+   */
+  app.post('/api/scenes/:id/doors', async (req) => {
+    const { id } = req.params as { id: string };
+    const { scene, gm } = await openScene(req, id);
+    const body = parseBody(DoorOpBody, req.body);
+    const current = serializeScene(scene);
+    const result = await app.hub.atomic(scene.campaignId, async (tx) => {
+      if (body.doorId !== undefined) {
+        const door = current.geometry.doors.find((d) => d.id === body.doorId);
+        if (!door) throw httpError(404, 'not_found', 'no such door');
+        const refusal = doorRefusal(gm, door, body.op);
+        if (refusal) throw httpError(403, refusal.code, refusal.message);
+        const state = applyDoorOp(door, body.op);
+        await tx.emit({ type: 'scene.updated', payload: { sceneId: id, changed: ['geometry'] } });
+        await svc.withDb(tx.db).updateScene(scene, { geometry: withTracedDoor(current.geometry, door.id, state) });
+        return { door: { id: door.id, ...state } };
+      }
+      if (body.cell === undefined) throw httpError(400, 'bad_request', 'name a door: doorId, or cell (and level)');
+      const ref = { level: body.level, cell: body.cell };
+      const found = tileDoorState(current, ref);
+      if (found === null) throw httpError(404, 'not_found', 'no door painted in that cell');
+      const refusal = doorRefusal(gm, found, body.op);
+      if (refusal) throw httpError(403, refusal.code, refusal.message);
+      const state = applyDoorOp(found, body.op);
+      const write = withTileDoor(current, ref, state);
+      if (write === null) throw httpError(404, 'not_found', 'no door painted in that cell');
+      await tx.emit({ type: 'scene.updated', payload: { sceneId: id, changed: ['tiles'] } });
+      await svc.withDb(tx.db).updateScene(scene, write);
+      return { door: { cell: body.cell, level: body.level, ...state } };
+    });
+    return result;
   });
 
   /**
@@ -364,7 +439,7 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       await tx.emit({
         type: 'token.added',
         payload: { token: created },
-        visibility: tokenVis(created.hidden),
+        visibility: tokenVis(created, scene),
       });
       return created;
     });
@@ -406,7 +481,7 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       await tx.emit({
         type: 'token.removed',
         payload: { tokenId: id, sceneId: scene.id },
-        visibility: tokenVis(token.hidden),
+        visibility: tokenVis(token, scene),
       });
     });
     return { ok: true };
@@ -430,6 +505,13 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     kind: { positional: boolean; nonPositional: boolean },
   ): Promise<void> {
     const dto = serializeToken(after);
+    // A token on a hidden layer stays off the players' wire whatever its own
+    // flag does: flipping `hidden` on one is a GM-only edit until the layer shows.
+    const layerHidden = hiddenByLayer(serializeScene(scene)).has(after.id);
+    if (layerHidden) {
+      await tx.emit({ type: 'token.updated', payload: { token: dto }, visibility: 'gm' });
+      return;
+    }
     if (before.hidden && !after.hidden) {
       await tx.emit({ type: 'token.added', payload: { token: dto } });
       return;
@@ -446,7 +528,7 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       });
       return;
     }
-    const visibility = tokenVis(after.hidden);
+    const visibility = tokenVis(after, scene);
     if (kind.positional) {
       await tx.emit({
         type: 'token.moved',
@@ -905,7 +987,7 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     app.hub.emitEphemeral(ctx.campaignId, {
       type: 'token.dragging',
       payload: { tokenId: token.id, sceneId: scene.id, x: parsed.data.x, y: parsed.data.y, by: ctx.auth.userId },
-      visibility: tokenVis(token.hidden),
+      visibility: tokenVis(token, scene),
     });
   });
 

@@ -47,6 +47,8 @@ export interface TileDrawInput {
   structure?: Record<string, string> | undefined;
   /** Furniture and props standing on it. */
   object?: Record<string, string> | undefined;
+  /** Painted doors' state by cell (FR9.24): an open one draws open. */
+  doors?: Record<string, { open: boolean; locked: boolean }> | undefined;
   defs: Record<string, TileDrawDef>;
 }
 
@@ -73,6 +75,7 @@ export function tileDrawInput(
     ground: tiles.ground,
     structure: tiles.structure,
     object: tiles.object,
+    doors: tiles.doors,
     defs,
   };
 }
@@ -1144,6 +1147,7 @@ function drawWallTile(
   row: number,
   joins: WallJoins,
   run: CutRun | null,
+  open: readonly boolean[] = [],
 ): void {
   const base = parseColor(def.colors[0], 0x3b3f45);
   const accent = parseColor(def.colors[1], 0x5a6068);
@@ -1167,7 +1171,7 @@ function drawWallTile(
   // The opening's design, once per run, from the run's last cell.
   if (run !== null) {
     const cut = cutOf(def);
-    if (cut !== null) drawCut(g, m, cut, run, rise, tones, def.emissive);
+    if (cut !== null) drawCut(g, m, cut, run, rise, tones, def.emissive, open);
   }
   if (lastTop.length > 0) drawGlow(g, m, def, accent, lastTop);
 }
@@ -1394,6 +1398,8 @@ export interface TilePlan {
   structure: Map<string, string>;
   /** The cells that stand proud of the floor, in draw order. */
   standing: TileCell[];
+  /** `"col,row"` of every painted door standing open (FR9.24). */
+  openDoors: Set<string>;
 }
 
 export function planTiles(m: SceneMetrics, input: TileDrawInput): TilePlan {
@@ -1451,7 +1457,26 @@ export function planTiles(m: SceneMetrics, input: TileDrawInput): TilePlan {
   for (const c of cells) occupied.add(`${c.col},${c.row}`);
 
   const standing = cells.filter((c) => isStanding(c.def) || c.def.footprint === 'wall');
-  return { cells, walls, grounded, occupied, structure, standing };
+  const openDoors = new Set<string>();
+  for (const [key, d] of Object.entries(input.doors ?? {})) if (d.open) openDoors.add(key);
+  return { cells, walls, grounded, occupied, structure, standing, openDoors };
+}
+
+/**
+ * Per cell of an opening's run, first to last, whether its painted door
+ * stands open (FR9.24). Empty when nothing on the floor is open, so a run
+ * with no doors costs nothing to ask.
+ */
+export function runOpen(
+  run: CutRun,
+  last: { col: number; row: number },
+  openDoors: ReadonlySet<string> | undefined,
+): boolean[] {
+  if (!openDoors || openDoors.size === 0) return [];
+  const [dc, dr] = run.axis === 'x' ? [1, 0] : [0, 1];
+  const out: boolean[] = [];
+  for (let i = run.n - 1; i >= 0; i -= 1) out.push(openDoors.has(`${last.col - dc * i},${last.row - dr * i}`));
+  return out;
 }
 
 /** The design an opening draws with: named on the tile, or the plain fallback. */
@@ -1711,7 +1736,7 @@ export function drawStandingCell(
   g: Graphics,
   m: SceneMetrics,
   cell: TileCell,
-  plan: Pick<TilePlan, 'walls' | 'structure'>,
+  plan: Pick<TilePlan, 'walls' | 'structure'> & Partial<Pick<TilePlan, 'openDoors'>>,
 ): void {
   const shape = cell.def.footprint;
   if (cell.def.prop !== undefined) {
@@ -1725,6 +1750,7 @@ export function drawStandingCell(
   } else if (shape === 'wall') {
     // Joins are read from the finished set, not from draw order, so a run
     // looks the same whichever end the GM painted from.
+    const run = cutRunFor(plan as TilePlan, cell);
     drawWallTile(
       g,
       cell.def,
@@ -1732,7 +1758,8 @@ export function drawStandingCell(
       cell.col,
       cell.row,
       joinsOf(plan.walls, cell.col, cell.row),
-      cutRunFor(plan as TilePlan, cell),
+      run,
+      run === null ? [] : runOpen(run, cell, plan.openDoors),
     );
   } else {
     drawFillTile(g, cell.def, m, cell.col, cell.row);
@@ -1802,6 +1829,11 @@ export function cellSignatures(input: TileDrawInput): Map<string, string> {
   add(input.ground, 'g');
   add(input.structure, 's');
   add(input.object, 'o');
+  // A door swinging open is a change in its cell (FR9.24), and the run rule
+  // widens it to the whole opening.
+  for (const [key, d] of Object.entries(input.doors ?? {})) {
+    if (out.has(key)) out.set(key, `${out.get(key)}d=${d.open ? 1 : 0};`);
+  }
   return out;
 }
 

@@ -25,6 +25,7 @@ const TOOLS: ToolDef[] = [
   { id: 'zone', label: 'Zone', glyph: '▱', hint: 'Click vertices for a named zone', gmOnly: true },
   { id: 'pin', label: 'Pin', glyph: '⚑', hint: 'Drop a map pin (FR9.3)', gmOnly: true },
   { id: 'camera', label: 'Camera', glyph: '◉', hint: 'Mount a security camera — only you see it and its cone', gmOnly: true },
+  { id: 'note', label: 'Note', glyph: '🗒', hint: 'Drop a GM note — only you ever see it (FR9.25)', gmOnly: true },
 ];
 
 export interface ToolbarProps {

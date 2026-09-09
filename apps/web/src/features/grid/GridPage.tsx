@@ -10,11 +10,13 @@ import { useParams } from 'react-router-dom';
 import type { Scene, Token } from '@safehouse/contracts';
 import { GROUND_LEVEL_NAME, deriveCharacter } from '@safehouse/rules';
 import { useMyCharacterId } from '../../api/campaigns.js';
+import { ApiError } from '../../api/client.js';
 import { getSession } from '../../api/session.js';
 import { getLiveSocket } from '../../live/socket.js';
 import {
   fileUrl,
   useCharacter,
+  useDoorOp,
   useGridLiveSync,
   usePatchGeometry,
   usePatchToken,
@@ -29,7 +31,7 @@ import {
 } from './api.js';
 import { GridCommands } from './commands.js';
 import { rollScatter } from './geometry.js';
-import { addCamera, addDoor, addPin, addWall, toggleDoor } from './geometryEdit.js';
+import { addCamera, addDoor, addNote, addPin, addWall, tileDoorOpen } from './geometryEdit.js';
 import GmPanel from './gm/GmPanel.js';
 import MeasurePanel from './hud/MeasurePanel.js';
 import Toolbar from './hud/Toolbar.js';
@@ -119,6 +121,7 @@ export default function GridPage() {
   const encounter = useHydratedEncounter(campaignId, sceneId);
   const drags = useRemoteDrags();
   const patchGeometry = usePatchGeometry();
+  const doorOp = useDoorOp(scene?.id);
   const paintTiles = usePaintTiles();
   const { data: tilesets } = useTilesets();
 
@@ -130,6 +133,12 @@ export default function GridPage() {
    * stroke ends. See `TileStrokeBuffer` for what it is defending against.
    */
   const [tileNotice, setTileNotice] = useState<string | null>(null);
+  // What the door said back (FR9.24): "that door is locked" is the whole point.
+  const [doorNotice, setDoorNotice] = useState<string | null>(null);
+  const showDoorNotice = useCallback((e: unknown) => {
+    setDoorNotice(e instanceof ApiError && e.code === 'door_locked' ? 'that door is locked' : 'the door did not move');
+    window.setTimeout(() => setDoorNotice(null), 2000);
+  }, []);
   const paintRef = useRef(paintTiles.mutateAsync);
   paintRef.current = paintTiles.mutateAsync;
   const strokeRef = useRef<TileStrokeBuffer | null>(null);
@@ -291,6 +300,7 @@ export default function GridPage() {
         selectedPinId: store.selectedPinId,
         selectedCameraId: store.selectedCameraId,
         cameraCones,
+        selectedNoteId: store.selectedNoteId,
         shroud,
         level: viewLevel,
       }),
@@ -308,6 +318,7 @@ export default function GridPage() {
       store.selectedPinId,
       store.selectedCameraId,
       cameraCones,
+      store.selectedNoteId,
       shroud,
       viewLevel,
     ],
@@ -327,8 +338,17 @@ export default function GridPage() {
       onPointer: (x, y) => commands.pointer(x, y),
       onRuler: (r: RulerState | null) => useGridStore.getState().setRuler(r),
       onDoorToggle: (doorId) => {
-        if (!scene || !isGm) return;
-        patchGeometry.mutate({ sceneId: scene.id, geometry: toggleDoor(scene.geometry, doorId) });
+        if (!scene) return;
+        const door = scene.geometry.doors.find((d) => d.id === doorId);
+        if (!door) return;
+        // A player's hand on the handle goes to the server, which knows the
+        // lock (FR9.24); the GM's goes the same way, so there is one path.
+        doorOp.mutate({ doorId, op: door.open ? 'close' : 'open' }, { onError: showDoorNotice });
+      },
+      onTileDoorToggle: (cell, level) => {
+        if (!scene) return;
+        const open = tileDoorOpen(scene, level, cell);
+        doorOp.mutate({ cell, level, op: open ? 'close' : 'open' }, { onError: showDoorNotice });
       },
       onAoePlace: (x, y) => {
         const s = useGridStore.getState();
@@ -461,8 +481,25 @@ export default function GridPage() {
         s.setGmTab('cameras');
         s.openGmPanel();
       },
+      // -- GM notes (FR9.25) -------------------------------------------------
+      onNotePlace: (x, y) => {
+        if (!scene || !isGm) return;
+        const geometry = addNote(scene.geometry, { x, y });
+        const placed = geometry.gmNotes?.[geometry.gmNotes.length - 1];
+        patchGeometry.mutate({ sceneId: scene.id, geometry });
+        const s = useGridStore.getState();
+        if (placed) s.selectNote(placed.id);
+        s.setGmTab('notes');
+        s.openGmPanel();
+      },
+      onNoteSelect: (noteId) => {
+        const s = useGridStore.getState();
+        s.selectNote(noteId);
+        s.setGmTab('notes');
+        s.openGmPanel();
+      },
     }),
-    [commands, scene, isGm, patchGeometry, tilesets],
+    [commands, scene, isGm, patchGeometry, tilesets, doorOp, showDoorNotice],
   );
 
   const urlFor = useCallback((id: string) => fileUrl(id), []);
@@ -638,6 +675,11 @@ export default function GridPage() {
               </div>
             )}
             {focusNotice && <span className="chip bg-panel/90 text-cyan">{focusNotice}</span>}
+            {doorNotice && (
+              <span data-testid="door-notice" className="chip bg-panel/90 text-warn">
+                {doorNotice}
+              </span>
+            )}
             {isGm && stairOffer && selectedToken && (
               <button
                 type="button"

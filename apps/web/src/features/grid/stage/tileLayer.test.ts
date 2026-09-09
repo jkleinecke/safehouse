@@ -24,7 +24,15 @@ import type { Graphics } from 'pixi.js';
 import { TILESETS } from '@safehouse/rules';
 import { metricsFor } from '../geometry.js';
 import { tileDefKey, tileDefsFromSets, type TileDrawDef } from '../types.js';
-import { drawTiles, tileDrawInput, tileLayerKey, wallBoxes } from './tileLayer.js';
+import {
+  cellSignatures,
+  drawTiles,
+  planTiles,
+  runOpen,
+  tileDrawInput,
+  tileLayerKey,
+  wallBoxes,
+} from './tileLayer.js';
 
 const M = metricsFor({ unitM: 1, cols: 10, rows: 8, offset: { x: 0, y: 0 }, projection: 'topdown' as const });
 
@@ -85,6 +93,49 @@ function fakeGraphics(): { g: Graphics; calls: Call[]; ops: () => string[] } {
 function catalogueDefs(): Record<string, TileDrawDef> {
   return tileDefsFromSets(TILESETS);
 }
+
+// ---------------------------------------------------------------------------
+// Painted doors standing open (FR9.24)
+// ---------------------------------------------------------------------------
+
+describe('a painted door standing open', () => {
+  const defs = catalogueDefs();
+  const structure = { '3,3': 'wall', '3,4': 'door', '3,5': 'door', '3,6': 'wall' };
+
+  it('rides from the scene into the draw input, and into the plan', () => {
+    const tiles = { tilesetId: 'docklands', cells: {}, ground: {}, structure, object: {}, doors: { '3,4': { open: true, locked: false } } };
+    const input = tileDrawInput(tiles as never, defs);
+    expect(input.doors).toEqual({ '3,4': { open: true, locked: false } });
+    const plan = planTiles(M, input);
+    expect([...plan.openDoors]).toEqual(['3,4']);
+    expect(planTiles(M, { tilesetId: 'docklands', structure, defs }).openDoors.size).toBe(0);
+  });
+
+  it('answers per leaf along the run, first to last', () => {
+    const run = { rect: [3.33, 4, 3.67, 6] as const, axis: 'y' as const, n: 2 };
+    expect(runOpen(run, { col: 3, row: 5 }, new Set(['3,4']))).toEqual([true, false]);
+    expect(runOpen(run, { col: 3, row: 5 }, new Set(['3,5']))).toEqual([false, true]);
+    expect(runOpen(run, { col: 3, row: 5 }, new Set())).toEqual([]);
+    expect(runOpen(run, { col: 3, row: 5 }, undefined)).toEqual([]);
+  });
+
+  it('is a change in its cell, so opening it redraws the run', () => {
+    const shut = cellSignatures({ tilesetId: 'docklands', structure, defs });
+    const open = cellSignatures({ tilesetId: 'docklands', structure, doors: { '3,4': { open: true, locked: false } }, defs });
+    expect(open.get('3,4')).not.toBe(shut.get('3,4'));
+    expect(open.get('3,5')).toBe(shut.get('3,5'));
+    // A door state for a cell with no tile in it is not a phantom cell.
+    expect(cellSignatures({ tilesetId: 'docklands', structure, doors: { '9,9': { open: true, locked: false } }, defs }).has('9,9')).toBe(false);
+  });
+
+  it('draws the floor differently with the door open', () => {
+    const a = fakeGraphics();
+    drawTiles(a.g, M, { tilesetId: 'docklands', structure, defs });
+    const b = fakeGraphics();
+    drawTiles(b.g, M, { tilesetId: 'docklands', structure, doors: { '3,4': { open: true, locked: false }, '3,5': { open: true, locked: false } }, defs });
+    expect(b.ops()).not.toEqual(a.ops());
+  });
+});
 
 // ---------------------------------------------------------------------------
 // The silent failure

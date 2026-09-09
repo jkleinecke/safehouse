@@ -18,7 +18,17 @@ import {
 } from '../geometry.js';
 import type { StageCallbacks, StageSceneState, TileRectMode } from '../types.js';
 import { Camera, wheelZoomFactor } from './camera.js';
-import { hitCamera, hitDoor, hitPin, hitToken, isDoubleTap, worldTolerance, type TapRecord } from './hit.js';
+import {
+  hitCamera,
+  hitDoor,
+  hitNote,
+  hitPin,
+  hitTileDoor,
+  hitToken,
+  isDoubleTap,
+  worldTolerance,
+  type TapRecord,
+} from './hit.js';
 
 type Mode =
   | 'idle'
@@ -314,6 +324,10 @@ export class PointerController {
         this.mode = 'idle';
         this.host.callbacks.onCameraPlace?.(grid.x, grid.y);
         return;
+      case 'note':
+        this.mode = 'idle';
+        this.host.callbacks.onNotePlace?.(grid.x, grid.y);
+        return;
       case 'tile-area':
       case 'tile-room': {
         // A rectangle, not a stroke: the drag picks two corners and the fill
@@ -413,13 +427,33 @@ export class PointerController {
       return;
     }
 
-    // GM: a click near a door's knob toggles it (FR9.2).
-    if (state.role === 'gm') {
+    // A GM note's box (FR9.25) — under the tokens, so a runner standing on
+    // a note is still the runner. The GM's payload is the only one with notes.
+    if (state.role === 'gm' && this.host.callbacks.onNoteSelect) {
+      const noteId = hitNote(m, state.scene, grid);
+      if (noteId) {
+        this.mode = 'idle';
+        this.host.callbacks.onNoteSelect(noteId);
+        return;
+      }
+    }
+
+    // A click near a door's knob opens or shuts it (FR9.2, FR9.24): the GM's
+    // hand or a player's. The server knows the lock and says no to a player
+    // at a locked one; a painted door is its whole cell.
+    if (state.role === 'gm' || state.role === 'player') {
       const tol = Math.max(12, worldTolerance(this.host.camera.scale, 12));
       const doorId = hitDoor(m, state.scene, grid, tol);
       if (doorId) {
         this.mode = 'idle';
         this.host.callbacks.onDoorToggle(doorId);
+        return;
+      }
+      const level = state.level ?? 0;
+      const cell = hitTileDoor(state.scene, grid, level);
+      if (cell && this.host.callbacks.onTileDoorToggle) {
+        this.mode = 'idle';
+        this.host.callbacks.onTileDoorToggle(cell, level);
         return;
       }
     }

@@ -19,12 +19,25 @@ import { tilesetById } from './catalogue.js';
 import { layerOf } from './types.js';
 
 /** The layered shape, structural so contracts stays the owner of the schema. */
+/** Open/locked state of a painted door, keyed by its cell (FR9.24). */
+export interface TileDoorStateLike {
+  open?: boolean | undefined;
+  locked?: boolean | undefined;
+}
+
 export interface LayeredTiles {
   tilesetId: string;
   cells?: Record<string, string> | undefined;
   ground?: Record<string, string> | undefined;
   structure?: Record<string, string> | undefined;
   object?: Record<string, string> | undefined;
+  doors?: Record<string, TileDoorStateLike> | undefined;
+}
+
+/** A painted door's state once resolved: both switches answered. */
+export interface TileDoorState {
+  open: boolean;
+  locked: boolean;
 }
 
 export interface ResolvedTileLayers {
@@ -32,6 +45,7 @@ export interface ResolvedTileLayers {
   ground: Record<string, string>;
   structure: Record<string, string>;
   object: Record<string, string>;
+  doors?: Record<string, TileDoorState> | undefined;
 }
 
 /**
@@ -40,12 +54,21 @@ export interface ResolvedTileLayers {
  * Already-layered data wins: a cell present in both is one that has been
  * repainted since the upgrade, and the newer answer is the layered one.
  */
+function resolveDoors(doors: Record<string, TileDoorStateLike>): Record<string, TileDoorState> {
+  const out: Record<string, TileDoorState> = {};
+  for (const [cell, d] of Object.entries(doors)) out[cell] = { open: d.open === true, locked: d.locked === true };
+  return out;
+}
+
 export function migrateTileLayer(tiles: LayeredTiles): ResolvedTileLayers {
   const out: ResolvedTileLayers = {
     tilesetId: tiles.tilesetId,
     ground: { ...(tiles.ground ?? {}) },
     structure: { ...(tiles.structure ?? {}) },
     object: { ...(tiles.object ?? {}) },
+    // Door state rides along, keyed by cell rather than by layer; a switch
+    // left unsaid is off.
+    ...(tiles.doors !== undefined ? { doors: resolveDoors(tiles.doors) } : {}),
   };
 
   const legacy = tiles.cells;

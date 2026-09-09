@@ -20,6 +20,7 @@
  * the same physical slop wherever it lands and whichever way the map is drawn.
  */
 import type { Point, Scene, Token } from '@safehouse/contracts';
+import { sceneLevels, tileById } from '@safehouse/rules';
 import {
   distToSegment,
   pinHeadRise,
@@ -28,6 +29,7 @@ import {
   worldGap,
   type SceneMetrics,
 } from '../geometry.js';
+import { inNoteFrame, noteFrame } from './notes.js';
 
 /** Never make a token harder to hit than a fingertip, however small it draws. */
 const MIN_TOKEN_HIT_PX = 12;
@@ -98,6 +100,31 @@ export function hitPin(m: SceneMetrics, scene: Scene, at: Point, tolerancePx = 2
     }
   }
   return best;
+}
+
+/** GM note whose box contains `at` (FR9.25). Later notes draw on top, so the last hit wins. */
+export function hitNote(m: SceneMetrics, scene: Scene, at: Point): string | null {
+  const p = worldFromGrid(m, at);
+  let best: string | null = null;
+  for (const note of scene.geometry.gmNotes ?? []) {
+    if (inNoteFrame(noteFrame(m, note), p)) best = note.id;
+  }
+  return best;
+}
+
+/**
+ * The painted door under `at` on floor `level`, as its cell key (FR9.24), or
+ * null when that cell holds no door tile. A painted door is the whole cell,
+ * so the cell is the target — there is no knob to miss.
+ */
+export function hitTileDoor(scene: Scene, at: Point, level: number): string | null {
+  const floor = sceneLevels(scene)[level];
+  if (!floor?.tiles) return null;
+  const key = `${Math.floor(at.x)},${Math.floor(at.y)}`;
+  const id = floor.tiles.structure?.[key];
+  if (id === undefined) return null;
+  const tile = tileById(floor.tiles.tilesetId, id);
+  return tile !== null && tile.kind === 'door' ? key : null;
 }
 
 /** Wall whose segment is within `tolerancePx` world px of `at` (GM editing). */

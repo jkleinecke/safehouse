@@ -14,12 +14,15 @@ import {
   SceneGeometrySchema,
   type Camera,
   type Door,
+  type Note,
+  type Scene,
   type Pin,
   type Point,
   type SceneGeometry,
   type Wall,
   type Zone,
 } from '@safehouse/contracts';
+import { sceneLevels } from '@safehouse/rules';
 import { gridDist, isDegenerateSegment, MIN_SEGMENT, snapVertex } from './geometry.js';
 
 // The two pure gestures live in `geometry.ts` so the pixi stage can reach them
@@ -28,7 +31,7 @@ import { gridDist, isDegenerateSegment, MIN_SEGMENT, snapVertex } from './geomet
 export { isDegenerateSegment, MIN_SEGMENT, snapVertex };
 
 /** What the GM's active drawing tool is authoring. */
-export type GeometryKind = 'wall' | 'door' | 'zone' | 'pin' | 'camera';
+export type GeometryKind = 'wall' | 'door' | 'zone' | 'pin' | 'camera' | 'note';
 
 /** A zone needs three vertices to be a polygon at all. */
 export const MIN_POLYGON_POINTS = 3;
@@ -120,6 +123,8 @@ export function removeWall(geo: SceneGeometry, id: string): SceneGeometry {
 
 export interface DoorOptions extends SegmentOptions {
   open?: boolean;
+  /** Locked doors refuse a player's hand (FR9.24); the GM's key always turns. */
+  locked?: boolean;
 }
 
 export function addDoor(geo: SceneGeometry, a: Point, b: Point, opts: DoorOptions = {}): SceneGeometry {
@@ -129,6 +134,7 @@ export function addDoor(geo: SceneGeometry, a: Point, b: Point, opts: DoorOption
     a: roundPoint(a),
     b: roundPoint(b),
     open: opts.open ?? false,
+    locked: opts.locked ?? false,
     ...(opts.note ? { note: opts.note } : {}),
   };
   return { ...geo, doors: [...geo.doors, door] };
@@ -150,6 +156,11 @@ export function setDoorOpen(geo: SceneGeometry, id: string, open: boolean): Scen
 }
 
 /** The canvas gesture: click the knob, flip the state (FR9.2). */
+/** Lock or unlock a traced door (FR9.24) — the GM's switch; players learn it by trying. */
+export function setDoorLocked(geo: SceneGeometry, id: string, locked: boolean): SceneGeometry {
+  return { ...geo, doors: geo.doors.map((d) => (d.id === id ? { ...d, locked } : d)) };
+}
+
 export function toggleDoor(geo: SceneGeometry, id: string): SceneGeometry {
   const door = geo.doors.find((d) => d.id === id);
   if (!door) return geo;
@@ -292,6 +303,7 @@ export function geometryCounts(geo: SceneGeometry): Record<GeometryKind, number>
     zone: geo.zones.length,
     pin: geo.pins.length,
     camera: camerasOf(geo).length,
+    note: notesOf(geo).length,
   };
 }
 
@@ -372,6 +384,81 @@ export function updateCamera(geo: SceneGeometry, id: string, patch: CameraPatch)
 
 export function removeCamera(geo: SceneGeometry, id: string): SceneGeometry {
   return { ...geo, cameras: camerasOf(geo).filter((c) => c.id !== id) };
+}
+
+// ---------------------------------------------------------------------------
+// GM notes (FR9.25 — a box of text on the map that only the GM ever sees)
+// ---------------------------------------------------------------------------
+
+export const NOTE_DEFAULT_WIDTH = 4;
+export const NOTE_MAX_CHARS = 2000;
+
+/** An old scene has no note list; read it as none. */
+export function notesOf(geo: SceneGeometry): readonly Note[] {
+  return geo.gmNotes ?? [];
+}
+
+export interface NoteOptions {
+  id?: string;
+  text?: string;
+  width?: number;
+  color?: string;
+}
+
+/** Drop a note at a grid point (its top-left corner), with a placeholder to overwrite. */
+export function addNote(geo: SceneGeometry, at: Point, opts: NoteOptions = {}): SceneGeometry {
+  const notes = notesOf(geo);
+  const note: Note = {
+    id: opts.id ?? nextGeometryId('note', notes),
+    at: roundPoint(at),
+    text: (opts.text ?? 'GM note').slice(0, NOTE_MAX_CHARS),
+    width: clampNoteWidth(opts.width ?? NOTE_DEFAULT_WIDTH),
+  };
+  if (opts.color) note.color = opts.color;
+  return { ...geo, gmNotes: [...notes, note] };
+}
+
+export type NotePatch = {
+  at?: Point;
+  text?: string;
+  width?: number;
+  /** null clears the colour. */
+  color?: string | null;
+};
+
+/** Every dial kept inside the contract, whatever the GM types. */
+export function updateNote(geo: SceneGeometry, id: string, patch: NotePatch): SceneGeometry {
+  return {
+    ...geo,
+    gmNotes: notesOf(geo).map((n) => {
+      if (n.id !== id) return n;
+      const next: Note = { ...n };
+      if (patch.at !== undefined) next.at = roundPoint(patch.at);
+      if (patch.text !== undefined) next.text = patch.text.slice(0, NOTE_MAX_CHARS);
+      if (patch.width !== undefined) next.width = clampNoteWidth(patch.width);
+      if (patch.color === null) delete next.color;
+      else if (patch.color !== undefined) next.color = patch.color;
+      return next;
+    }),
+  };
+}
+
+export function removeNote(geo: SceneGeometry, id: string): SceneGeometry {
+  return { ...geo, gmNotes: notesOf(geo).filter((n) => n.id !== id) };
+}
+
+function clampNoteWidth(w: number): number {
+  return Math.min(20, Math.max(1, Math.round(Number.isFinite(w) ? w : NOTE_DEFAULT_WIDTH)));
+}
+
+// ---------------------------------------------------------------------------
+// Painted doors (FR9.24) — reading their state off the floor they are on
+// ---------------------------------------------------------------------------
+
+/** Is the painted door in `cell` on floor `level` standing open? Shut when unsaid. */
+export function tileDoorOpen(scene: Scene, level: number, cell: string): boolean {
+  const floor = sceneLevels(scene)[level];
+  return floor?.tiles?.doors?.[cell]?.open === true;
 }
 
 /** The contract's bounds: narrower than a keyhole or wider than a dome is a typo. */

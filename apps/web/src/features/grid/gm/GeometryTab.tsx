@@ -7,7 +7,7 @@
  * refreshed scene query, so nothing is optimistic and nothing can drift.
  */
 import type { Point, Scene } from '@safehouse/contracts';
-import { usePatchGeometry } from '../api.js';
+import { useDoorOp, usePatchGeometry } from '../api.js';
 import { rectPolygon } from '../geometry.js';
 import {
   addZone,
@@ -15,7 +15,6 @@ import {
   removeDoor,
   removeWall,
   removeZone,
-  toggleDoor,
   updateWall,
   updateZone,
 } from '../geometryEdit.js';
@@ -54,6 +53,9 @@ function ToolButton({
 
 export default function GeometryTab({ scene, onCenter }: GeometryTabProps) {
   const patch = usePatchGeometry();
+  // Doors go through the door route (FR9.24), the same one a player's hand
+  // on the handle uses — so opening one here is exactly what the table does.
+  const doorOp = useDoorOp(scene.id);
   const tool = useGridStore((s) => s.tool);
   const setTool = useGridStore((s) => s.setTool);
   const draft = useGridStore((s) => s.fogDraft);
@@ -204,6 +206,7 @@ export default function GeometryTab({ scene, onCenter }: GeometryTabProps) {
             <li key={door.id} className="flex items-center gap-2">
               <span className={'min-w-0 flex-1 truncate text-xs ' + (door.open ? 'text-ok' : 'text-ink')}>
                 {door.id} {door.open ? 'open' : 'closed'}
+                {door.locked && <span className="mono-label ml-1 text-warn">locked</span>}
               </span>
               <button
                 type="button"
@@ -217,9 +220,19 @@ export default function GeometryTab({ scene, onCenter }: GeometryTabProps) {
                 type="button"
                 className={'btn py-1 ' + (door.open ? '' : 'btn-accent')}
                 aria-pressed={door.open}
-                onClick={() => save(toggleDoor(geo, door.id))}
+                onClick={() => doorOp.mutate({ doorId: door.id, op: door.open ? 'close' : 'open' })}
               >
                 {door.open ? 'close' : 'open'}
+              </button>
+              <button
+                type="button"
+                className={'btn py-1 ' + (door.locked ? 'text-warn' : '')}
+                aria-pressed={door.locked}
+                data-testid={`door-lock-${door.id}`}
+                title={door.locked ? 'Unlock: players may open it again' : 'Lock: players cannot open it'}
+                onClick={() => doorOp.mutate({ doorId: door.id, op: door.locked ? 'unlock' : 'lock' })}
+              >
+                {door.locked ? 'unlock' : 'lock'}
               </button>
               <button
                 type="button"
@@ -276,7 +289,10 @@ export default function GeometryTab({ scene, onCenter }: GeometryTabProps) {
         >
           back to the select tool
         </button>
-        <Empty>with select, clicking a door&apos;s knob on the map opens or shuts it</Empty>
+        <Empty>
+          with select, clicking a door&apos;s knob on the map opens or shuts it — players can too,
+          unless you lock it
+        </Empty>
       </PanelSection>
     </>
   );

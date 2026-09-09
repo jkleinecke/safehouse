@@ -8,6 +8,7 @@
  * top. These are the pure decisions; `useGridLive`/`api` do the fetching.
  */
 import type { Encounter, Role, Scene, Token } from '@safehouse/contracts';
+import { hiddenLayerTokenIds, layersOf } from './tokenLayers.js';
 import {
   actingTokenId,
   barsByToken,
@@ -153,6 +154,8 @@ export interface StageComposeInput {
   selectedCameraId?: string | null;
   /** What each camera on this floor covers — GM only (FR9.23). */
   cameraCones?: readonly CameraCone[] | null;
+  /** GM note open in the editor (FR9.25). */
+  selectedNoteId?: string | null;
   /** Cells outside the viewer's sightline, or null to draw no scrim. */
   shroud?: ShroudState | null;
   /** Which floor to draw (FR9.22). */
@@ -218,6 +221,9 @@ export function composeStageState(input: StageComposeInput): StageSceneState | n
     selectedPinId: input.selectedPinId ?? null,
     selectedCameraId: input.selectedCameraId ?? null,
     cameraCones: input.cameraCones ?? null,
+    selectedNoteId: input.selectedNoteId ?? null,
+    // A player's scene has no layers, so this is empty for them (FR9.26).
+    hiddenLayerTokenIds: hiddenLayerTokenIds(layersOf(scene)),
     shroud: input.shroud ?? null,
     level: input.level ?? 0,
   };

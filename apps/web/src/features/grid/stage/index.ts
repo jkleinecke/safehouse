@@ -30,7 +30,7 @@ import { parserSafeUrlFor, type AssetRegistry } from './assetUrl.js';
 import { Camera } from './camera.js';
 import { C } from './colors.js';
 import { FxLayer } from './fx.js';
-import { drawCameras, drawFog, drawGeometry, drawGrid, drawPins } from './layers.js';
+import { drawCameras, drawFog, drawGeometry, drawGrid, drawNotes, drawPins } from './layers.js';
 import { drawShroud, shroudKey } from './shroudLayer.js';
 import { ChunkedTileLayer } from './tileChunks.js';
 import { tileDrawInput, tileLayerKey } from './tileLayer.js';
@@ -77,7 +77,20 @@ function geometryKey(state: StageSceneState): string {
     // Endpoints, not just counts: editing a wall in place must redraw it.
     geo.walls.map((w) => `${w.id}:${w.a.x},${w.a.y},${w.b.x},${w.b.y}`).join(','),
     geo.zones.map((z) => `${z.id}:${z.name}:${z.color ?? ''}:${z.polygon.length}`).join(','),
-    geo.doors.map((d) => `${d.id}:${d.open ? 1 : 0}:${d.a.x},${d.a.y},${d.b.x},${d.b.y}`).join(','),
+    geo.doors
+      .map((d) => `${d.id}:${d.open ? 1 : 0}:${d.locked ? 1 : 0}:${d.a.x},${d.a.y},${d.b.x},${d.b.y}`)
+      .join(','),
+  ].join('|');
+}
+
+/** Notes redraw on any edit of any note, and on selection (FR9.25). */
+function noteKey(state: StageSceneState): string {
+  return [
+    state.role === 'gm' ? 'gm' : 'pc',
+    state.selectedNoteId ?? '',
+    (state.scene.geometry.gmNotes ?? [])
+      .map((n) => `${n.id}:${n.at.x},${n.at.y}:${n.width}:${n.color ?? ''}:${n.text}`)
+      .join('\u0001'),
   ].join('|');
 }
 
@@ -136,6 +149,11 @@ class Stage implements StageApi, PointerHost {
   private readonly cameraLabels = new Container();
   private readonly cameraLabelPool = new Map<string, Text>();
   private lastCameraKey = '';
+  /** The GM's notes (FR9.25). */
+  private readonly noteG = new Graphics();
+  private readonly noteLabels = new Container();
+  private readonly noteLabelPool = new Map<string, Text>();
+  private lastNoteKey = '';
   private readonly tokenLayer = new Container();
   private readonly fx = new FxLayer();
   private readonly map: MapLayer;
@@ -205,6 +223,8 @@ class Stage implements StageApi, PointerHost {
       this.pinG,
       this.pinLabels,
       this.cameraLabels,
+      this.noteG,
+      this.noteLabels,
       this.tokenLayer,
       this.fogG,
       this.fogLabels,
@@ -395,6 +415,20 @@ class Stage implements StageApi, PointerHost {
       );
     }
 
+    const nk = noteKey(next);
+    if (nk !== this.lastNoteKey) {
+      this.lastNoteKey = nk;
+      drawNotes(
+        this.noteG,
+        this.noteLabels,
+        this.noteLabelPool,
+        next.scene,
+        m,
+        next.selectedNoteId ?? null,
+        next.role === 'gm',
+      );
+    }
+
     const aoeKey = next.aoe
       ? `${next.aoe.center.x},${next.aoe.center.y},${next.aoe.radiusM}|${next.scatter?.to.x ?? ''},${next.scatter?.to.y ?? ''}`
       : '';
@@ -433,7 +467,8 @@ class Stage implements StageApi, PointerHost {
         acting: next.actingTokenId === token.id,
         draggable: next.draggableIds.has(token.id),
         bars: next.bars.get(token.id) ?? null,
-        ghosted: token.hidden,
+        // Hidden by its flag or by its layer (FR9.26): the GM sees it faded.
+        ghosted: token.hidden || (next.hiddenLayerTokenIds?.has(token.id) ?? false),
         metrics: this.m,
       });
       if (fresh) {

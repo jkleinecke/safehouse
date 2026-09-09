@@ -22,7 +22,13 @@ import {
   removePin,
   removeWall,
   removeZone,
+  setDoorLocked,
   setDoorOpen,
+  addNote,
+  notesOf,
+  removeNote,
+  updateNote,
+  tileDoorOpen,
   snapVertex,
   toggleDoor,
   updateDoor,
@@ -227,8 +233,65 @@ describe('geometryCounts', () => {
     geo = addDoor(geo, { x: 4, y: 0 }, { x: 5, y: 0 });
     geo = addZone(geo, square);
     geo = addPin(geo, { x: 2, y: 2 });
-    expect(geometryCounts(geo)).toEqual({ wall: 1, door: 1, zone: 1, pin: 1, camera: 0 });
+    expect(geometryCounts(geo)).toEqual({ wall: 1, door: 1, zone: 1, pin: 1, camera: 0, note: 0 });
+    expect(geometryCounts(addNote(geo, { x: 1, y: 1 })).note).toBe(1);
     expect(geometryCounts(addCamera(geo, { x: 3, y: 3 })).camera).toBe(1);
+  });
+});
+
+describe('door locks (FR9.24)', () => {
+  it('a new door is unlocked; the GM locks it, and it stays a valid door', () => {
+    let geo = addDoor(emptyGeometry(), { x: 0, y: 0 }, { x: 2, y: 0 });
+    expect(geo.doors[0]?.locked).toBe(false);
+    geo = setDoorLocked(geo, 'door_1', true);
+    expect(geo.doors[0]).toMatchObject({ open: false, locked: true });
+    expectValid(geo);
+    expect(setDoorLocked(geo, 'door_1', false).doors[0]?.locked).toBe(false);
+    expect(addDoor(emptyGeometry(), { x: 0, y: 0 }, { x: 2, y: 0 }, { locked: true }).doors[0]?.locked).toBe(true);
+  });
+
+  it('reads a painted door as shut unless its floor says open', () => {
+    const base = { id: 's', campaignId: 'c', name: 'n', state: 'draft', grid: { cols: 4, rows: 4 } };
+    const scene = {
+      ...base,
+      tiles: { tilesetId: 'docklands', structure: { '1,1': 'door' }, doors: { '1,1': { open: true, locked: false } } },
+      levels: [{ id: 'l2', name: 'Up', tiles: { tilesetId: 'docklands', structure: { '2,2': 'door' } } }],
+    } as never;
+    expect(tileDoorOpen(scene, 0, '1,1')).toBe(true);
+    expect(tileDoorOpen(scene, 0, '2,2')).toBe(false);
+    expect(tileDoorOpen(scene, 1, '2,2')).toBe(false);
+    expect(tileDoorOpen(scene, 5, '1,1')).toBe(false);
+    expect(tileDoorOpen({ ...base } as never, 0, '1,1')).toBe(false);
+  });
+});
+
+describe('GM notes (FR9.25)', () => {
+  it('drops one with a placeholder, four cells wide, numbered like the rest', () => {
+    const geo = addNote(emptyGeometry(), { x: 3.2, y: 4.7 });
+    expect(notesOf(geo)).toEqual([{ id: 'note_1', at: { x: 3.2, y: 4.7 }, text: 'GM note', width: 4 }]);
+    expect(notesOf(addNote(geo, { x: 1, y: 1 }, { text: 'Sniper after round 3', width: 6 }))[1]).toMatchObject({
+      id: 'note_2',
+      text: 'Sniper after round 3',
+      width: 6,
+    });
+    expectValid(geo);
+  });
+
+  it('reads an old scene with no note list as having none', () => {
+    expect(notesOf(emptyGeometry())).toEqual([]);
+    expect(notesOf(removeNote(emptyGeometry(), 'note_9'))).toEqual([]);
+  });
+
+  it('edits text, width and paper within the contract, and forgets', () => {
+    let geo = addNote(emptyGeometry(), { x: 2, y: 2 });
+    geo = updateNote(geo, 'note_1', { text: 'x'.repeat(3000), width: 99, color: '#f7a1c4' });
+    expect(notesOf(geo)[0]?.text).toHaveLength(2000);
+    expect(notesOf(geo)[0]).toMatchObject({ width: 20, color: '#f7a1c4' });
+    expectValid(geo);
+    geo = updateNote(geo, 'note_1', { width: 0, color: null, at: { x: 5, y: 5 } });
+    expect(notesOf(geo)[0]).toMatchObject({ width: 1, at: { x: 5, y: 5 } });
+    expect('color' in notesOf(geo)[0]!).toBe(false);
+    expect(notesOf(removeNote(geo, 'note_1'))).toEqual([]);
   });
 });
 

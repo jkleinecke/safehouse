@@ -509,3 +509,28 @@ describe('walls drawn in pieces are one wall', () => {
     expect(segmentTouchAt({ x: 3.5, y: 9.5 }, { x: 9.5, y: 7.5 }, { x: 8, y: 0 }, { x: 8, y: 7 })).toBeNaN();
   });
 });
+
+describe('painted doors (FR9.24)', () => {
+  const dock = (doors: Record<string, { open: boolean }> | undefined) =>
+    sightModelFor({
+      tiles: {
+        tilesetId: 'docklands',
+        structure: { '5,3': 'wall', '5,4': 'door', '5,5': 'wall' },
+        ...(doors ? { doors } : {}),
+      },
+    });
+
+  it('shut, a painted door blocks like the wall it is set in', () => {
+    const m = dock(undefined);
+    expect(lineOfSight(at(2, 4), at(8, 4), m).clear).toBe(false);
+    expect(m.cells.get('5,4')?.blocksMovement).toBe(true);
+  });
+
+  it('open, it is a doorway: sight and bodies pass, the frame still stands', () => {
+    const m = dock({ '5,4': { open: true } });
+    expect(lineOfSight(at(2, 4), at(8, 4), m).clear).toBe(true);
+    expect(m.cells.get('5,4')?.blocksMovement ?? false).toBe(false);
+    // The wall either side is untouched.
+    expect(lineOfSight(at(2, 3), at(8, 3), m).clear).toBe(false);
+  });
+});

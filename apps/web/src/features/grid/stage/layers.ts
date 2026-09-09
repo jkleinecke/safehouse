@@ -16,6 +16,7 @@ import {
   type SceneMetrics,
 } from '../geometry.js';
 import { C, parseColor } from './colors.js';
+import { NOTE_FONT_PX, NOTE_LINE_PX, NOTE_PAD_PX, noteFrame } from './notes.js';
 
 /**
  * Grid overlay per the scene grid config (FR9.1).
@@ -221,10 +222,96 @@ export function drawGeometry(g: Graphics, scene: Scene, m: SceneMetrics, isGm: b
     } else {
       g.moveTo(a.x, a.y).lineTo(b.x, b.y).stroke({ width: 4, color: C.danger, alpha: 0.9 });
     }
-    // Handle knob at the midpoint — the GM's click target.
+    // Handle knob at the midpoint — the click target, for the GM and for a
+    // player with their hand on the handle (FR9.24).
     g.circle(midX, midY, 5)
       .fill({ color: door.open ? C.ok : C.danger, alpha: 1 })
       .stroke({ width: 1.5, color: C.ground, alpha: 1 });
+    // The lock, GM only: a player's payload never says, and a player learns
+    // it the way a runner does, by trying the door.
+    if (isGm && door.locked) {
+      const lx = midX + 10;
+      const ly = midY - 10;
+      g.rect(lx - 4, ly - 1, 8, 6).fill({ color: C.warn, alpha: 1 });
+      g.moveTo(lx - 2.5, ly - 1)
+        .lineTo(lx - 2.5, ly - 4)
+        .lineTo(lx + 2.5, ly - 4)
+        .lineTo(lx + 2.5, ly - 1)
+        .stroke({ width: 1.5, color: C.warn, alpha: 1 });
+    }
+  }
+}
+
+/** The paper a note is written on, and its ink, unless the GM picked a colour. */
+const NOTE_PAPER = 0xf1d76a;
+const NOTE_EDGE = 0x8a6d1f;
+
+/** Pooled note text — wrapped inside the box, dark on the paper. */
+function ensureNoteText(layer: Container, pool: Map<string, Text>, key: string): Text {
+  const existing = pool.get(key);
+  if (existing) return existing;
+  const text = new Text({
+    text: '',
+    style: {
+      fill: C.ground,
+      fontSize: NOTE_FONT_PX,
+      lineHeight: NOTE_LINE_PX,
+      fontFamily: 'Inter, sans-serif',
+      wordWrap: true,
+      wordWrapWidth: 120,
+      breakWords: true,
+    },
+  });
+  text.anchor.set(0, 0);
+  pool.set(key, text);
+  layer.addChild(text);
+  return text;
+}
+
+/**
+ * GM notes (FR9.25): a sticky note pinned to a point on the map, for the GM
+ * alone. "How to run this room", "the guard is asleep until someone
+ * shoots" — the things a GM used to keep on paper beside the screen.
+ *
+ * Only the GM's payload carries notes (`sceneForViewer` strips them), and
+ * for anyone else this draws nothing at all, even if a note somehow reached
+ * their state. The box is `noteFrame`, the same frame the hit-test uses.
+ */
+export function drawNotes(
+  g: Graphics,
+  labelLayer: Container,
+  labelPool: Map<string, Text>,
+  scene: Scene,
+  m: SceneMetrics,
+  selectedNoteId: string | null,
+  isGm: boolean,
+): void {
+  g.clear();
+  const seen = new Set<string>();
+  if (isGm) {
+    for (const note of scene.geometry.gmNotes ?? []) {
+      const f = noteFrame(m, note);
+      const paper = parseColor(note.color, NOTE_PAPER);
+      g.rect(f.x + 2, f.y + 3, f.w, f.h).fill({ color: C.ground, alpha: 0.35 });
+      g.rect(f.x, f.y, f.w, f.h).fill({ color: paper, alpha: 0.94 }).stroke({ width: 1.5, color: NOTE_EDGE, alpha: 0.9 });
+      // A tack at the anchor: the box hangs from the point it was dropped on.
+      g.circle(f.x, f.y, 3.5).fill({ color: C.magenta, alpha: 1 }).stroke({ width: 1, color: C.ground, alpha: 1 });
+      if (note.id === selectedNoteId) {
+        g.rect(f.x - 3, f.y - 3, f.w + 6, f.h + 6).stroke({ width: 2, color: C.magenta, alpha: 0.95 });
+      }
+      const key = `note:${note.id}`;
+      seen.add(key);
+      const text = ensureNoteText(labelLayer, labelPool, key);
+      text.text = note.text;
+      text.style.wordWrapWidth = f.wrap;
+      text.x = f.x + NOTE_PAD_PX;
+      text.y = f.y + NOTE_PAD_PX;
+    }
+  }
+  for (const [id, text] of labelPool) {
+    if (seen.has(id)) continue;
+    text.destroy();
+    labelPool.delete(id);
   }
 }
 

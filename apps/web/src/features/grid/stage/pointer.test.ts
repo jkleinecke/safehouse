@@ -60,6 +60,10 @@ function harness(tool: StageSceneState['tool']) {
   const clearRect = vi.fn();
   const onCameraPlace = vi.fn<(x: number, y: number) => void>();
   const onCameraSelect = vi.fn<(id: string) => void>();
+  const onDoorToggle = vi.fn<(id: string) => void>();
+  const onTileDoorToggle = vi.fn<(cell: string, level: number) => void>();
+  const onNotePlace = vi.fn<(x: number, y: number) => void>();
+  const onNoteSelect = vi.fn<(id: string) => void>();
   const noop = (): void => {};
   const cb: StageCallbacks = {
     onTokenMove: noop,
@@ -68,7 +72,10 @@ function harness(tool: StageSceneState['tool']) {
     onPing: noop,
     onPointer: noop,
     onRuler: noop,
-    onDoorToggle: noop,
+    onDoorToggle,
+    onTileDoorToggle,
+    onNotePlace,
+    onNoteSelect,
     onAoePlace: noop,
     onFogVertex: noop,
     onFocus: noop,
@@ -137,10 +144,61 @@ function harness(tool: StageSceneState['tool']) {
 
   const cells = (): Array<[number, number, boolean]> => onTilePaint.mock.calls.map((c) => [...c]);
 
-  return { onTilePaint, onTileStrokeEnd, onTileRect, drawRect, clearRect, onCameraPlace, onCameraSelect, state, controller, send, cells };
+  return {
+    onTilePaint,
+    onTileStrokeEnd,
+    onTileRect,
+    drawRect,
+    clearRect,
+    onCameraPlace,
+    onCameraSelect,
+    onDoorToggle,
+    onTileDoorToggle,
+    onNotePlace,
+    onNoteSelect,
+    state,
+    controller,
+    send,
+    cells,
+  };
 }
 
 // ---------------------------------------------------------------------------
+
+describe('a hand on a door (FR9.24)', () => {
+  // Through the centre of column 4, where the test clicks land.
+  const door = { id: 'd1', a: { x: 4.5, y: 2 }, b: { x: 4.5, y: 4 }, open: false, locked: false };
+
+  it('the GM and a player both ask for the door under a select click; a display does not', () => {
+    for (const role of ['gm', 'player'] as const) {
+      const h = harness('select');
+      (h.state as { role: string }).role = role;
+      h.state.scene.geometry.doors = [door];
+      h.send('pointerdown', 4, 3);
+      h.send('pointerup', 4, 3);
+      expect(h.onDoorToggle, role).toHaveBeenCalledWith('d1');
+    }
+    const d = harness('select');
+    (d.state as { role: string }).role = 'display';
+    d.state.scene.geometry.doors = [door];
+    d.send('pointerdown', 4, 3);
+    d.send('pointerup', 4, 3);
+    expect(d.onDoorToggle).not.toHaveBeenCalled();
+  });
+
+  it('a painted door is its whole cell, on the floor being looked at', () => {
+    const h = harness('select');
+    (h.state as { role: string }).role = 'player';
+    (h.state.scene as { tiles?: unknown }).tiles = { tilesetId: 'docklands', structure: { '6,6': 'door', '6,5': 'wall' } };
+    h.send('pointerdown', 6, 6);
+    h.send('pointerup', 6, 6);
+    expect(h.onTileDoorToggle).toHaveBeenCalledWith('6,6', 0);
+    h.onTileDoorToggle.mockClear();
+    h.send('pointerdown', 6, 5);
+    h.send('pointerup', 6, 5);
+    expect(h.onTileDoorToggle).not.toHaveBeenCalled();
+  });
+});
 
 describe('a room or area drag', () => {
   it('fills nothing until the button comes up, then once, corners in order', () => {
@@ -401,6 +459,28 @@ describe('the camera tool (FR9.23)', () => {
     h.send('pointerup', 4, 3);
     expect(h.onCameraSelect).toHaveBeenCalledWith('cam_1');
     expect(h.onCameraPlace).not.toHaveBeenCalled();
+  });
+
+  it('drops a GM note under the note tool, and opens one under a select click', () => {
+    const h = harness('note');
+    h.send('pointerdown', 2, 2);
+    h.send('pointerup', 2, 2);
+    expect(h.onNotePlace).toHaveBeenCalledTimes(1);
+
+    const s = harness('select');
+    (s.state.scene.geometry as { gmNotes?: unknown[] }).gmNotes = [
+      // Three lines tall, so the box reaches the middle of the cell the test clicks.
+      { id: 'note_1', at: { x: 2, y: 2 }, text: 'Sniper on the roof after round 3.\nThen the HTR team.\nThen Lone Star.', width: 4 },
+    ];
+    s.send('pointerdown', 2, 2);
+    s.send('pointerup', 2, 2);
+    expect(s.onNoteSelect).toHaveBeenCalledWith('note_1');
+    // …but not for a player, even if a note somehow reached their state.
+    (s.state as { role: string }).role = 'player';
+    s.onNoteSelect.mockClear();
+    s.send('pointerdown', 2, 2);
+    s.send('pointerup', 2, 2);
+    expect(s.onNoteSelect).not.toHaveBeenCalled();
   });
 
   it('never opens one for a player, even if a camera somehow reached their state', () => {

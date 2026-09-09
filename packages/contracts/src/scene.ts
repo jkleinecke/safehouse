@@ -76,6 +76,13 @@ export const DoorSchema = z.object({
   a: PointSchema,
   b: PointSchema,
   open: z.boolean().default(false),
+  /**
+   * A locked door stays shut to players (FR9.24): they may open and close any
+   * door that is not, from their own screen, without asking; the GM locks and
+   * unlocks. Players are not told which doors are locked — they find out the
+   * way a runner does, by trying the handle.
+   */
+  locked: z.boolean().default(false),
   note: z.string().optional(),
 });
 export type Door = z.infer<typeof DoorSchema>;
@@ -133,6 +140,41 @@ export const CameraSchema = z.object({
 export type Camera = z.infer<typeof CameraSchema>;
 
 /**
+ * A GM note on the map (FR9.25): a box of text pinned to a point, for the GM
+ * alone — how to run the room, what the guard says, where the loot is. Never
+ * sent to a player socket (`sceneForViewer`). A pin is a marker with a label
+ * that can be shown to the table; a note is prose that never will be.
+ */
+export const NoteSchema = z.object({
+  id: z.string(),
+  at: PointSchema,
+  text: z.string().max(2000),
+  /** Width of the box in cells; the text wraps inside it. */
+  width: z.number().min(1).max(20).default(4),
+  color: z.string().optional(),
+});
+export type Note = z.infer<typeof NoteSchema>;
+
+/**
+ * A layer of tokens the GM shows or hides as one (FR9.26): the ambush party,
+ * the second wave, the crowd that is only there if the players go in loud.
+ * Membership lives here rather than on the token so a layer is one thing to
+ * edit and one thing to switch. Nothing to do with floors (FR9.22): a layer
+ * cuts across the whole scene, whatever storey each token stands on.
+ *
+ * A hidden layer's tokens are stripped from player payloads exactly as a
+ * hidden token is (Principle 4); showing the layer arrives on their screens
+ * as those tokens appearing.
+ */
+export const SceneLayerSchema = z.object({
+  id: z.string(),
+  name: z.string().min(1).max(60),
+  hidden: z.boolean().default(false),
+  tokenIds: z.array(z.string()).default([]),
+});
+export type SceneLayer = z.infer<typeof SceneLayerSchema>;
+
+/**
  * Tile painting (FR9.2's "assemble" half): a scene can be BUILT from a tileset
  * instead of, or on top of, an uploaded map image. Tiles are drawn from the
  * catalogue in `@safehouse/rules` — original artwork-free definitions rendered
@@ -162,6 +204,18 @@ export type TileLayerName = (typeof TILE_LAYERS)[number];
 /** `"col,row"` -> tile id within the layer's tileset. */
 const CellMap = z.record(z.string(), z.string()).default({});
 
+/**
+ * The state of a door PAINTED as a tile (FR9.24). A traced door carries its
+ * own `open`; a painted one is a cell holding a door tile, and this is where
+ * that cell's open/locked lives — keyed by cell, beside the tiles, so it
+ * travels with the floor it belongs to.
+ */
+export const TileDoorStateSchema = z.object({
+  open: z.boolean().default(false),
+  locked: z.boolean().default(false),
+});
+export type TileDoorState = z.infer<typeof TileDoorStateSchema>;
+
 export const TileLayerSchema = z.object({
   /** Catalogue id the cell ids belong to (e.g. `docklands`). */
   tilesetId: z.string().min(1),
@@ -179,6 +233,8 @@ export const TileLayerSchema = z.object({
   structure: CellMap,
   /** Furniture and props standing on the ground. */
   object: CellMap,
+  /** Open/locked state of painted doors, keyed by cell. Absent means all shut and unlocked. */
+  doors: z.record(z.string(), TileDoorStateSchema).optional(),
 });
 export type TileLayer = z.infer<typeof TileLayerSchema>;
 
@@ -216,6 +272,15 @@ export const SceneGeometrySchema = z.object({
    * scenes never use. Read it as `geometry.cameras ?? []`.
    */
   cameras: z.array(CameraSchema).optional(),
+  /**
+   * GM notes on the map (FR9.25) — optional for the same reason cameras are.
+   *
+   * `gmNotes`, not `notes`: the server keeps a scene's geometry in one JSONB
+   * envelope beside the scene's free-text `notes` string, and a key shared
+   * between the two made the whole geometry fail to parse — and an empty
+   * geometry is what the next write then saved.
+   */
+  gmNotes: z.array(NoteSchema).optional(),
 });
 export type SceneGeometry = z.infer<typeof SceneGeometrySchema>;
 
@@ -249,6 +314,8 @@ export const SceneSchema = z.object({
   grid: GridSchema,
   environment: SceneEnvironmentSchema.default({ light: 0, visibility: 0, glare: 0, wind: 0 }),
   vision: SceneVisionSchema.default({ playersSeeOwnSight: false }),
+  /** Token layers (FR9.26). Optional: most scenes have none. */
+  tokenLayers: z.array(SceneLayerSchema).optional(),
   geometry: SceneGeometrySchema.default({ walls: [], doors: [], zones: [], pins: [] }),
   /**
    * Painted tiles for the GROUND floor.

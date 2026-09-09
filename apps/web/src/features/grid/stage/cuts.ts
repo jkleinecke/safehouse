@@ -205,9 +205,39 @@ export function drawCut(
   rise: number,
   tones: CutTones,
   emissive: string | undefined,
+  open: readonly boolean[] = [],
 ): void {
-  if (rise > 0) drawElevation(g, m, cut, run, rise, tones, emissive);
-  else drawSymbol(g, m, cut, run, tones, emissive);
+  if (rise > 0) drawElevation(g, m, cut, run, rise, tones, emissive, open);
+  else drawSymbol(g, m, cut, run, tones, emissive, open);
+}
+
+/** The designs that are doors — the ones that can stand open (FR9.24). */
+const DOOR_CUTS: ReadonlySet<TileCut> = new Set<TileCut>([
+  'door',
+  'maglock',
+  'porthole',
+  'glassdoor',
+  'roller',
+  'shutter',
+  'hatch',
+]);
+
+/** Does this run's door stand open, at leaf `i` (or anywhere, when unasked)? */
+function isOpen(open: readonly boolean[], i?: number): boolean {
+  if (open.length === 0) return false;
+  return i === undefined ? open.some(Boolean) : open[i] === true;
+}
+
+/**
+ * An open leaf's span of the elevation: the doorway itself, dark — the way
+ * through — with the leaf swung back flat against its jamb.
+ */
+function openLeaf(f: Face, u0: number, u1: number, v1: number, tones: CutTones, hingeLeft: boolean): void {
+  f.fill(u0, 0, u1, v1, tones.dark, 0.96);
+  const w = (u1 - u0) * 0.12;
+  if (hingeLeft) f.fill(u0, 0, u0 + w, v1, shade(tones.base, 0.8));
+  else f.fill(u1 - w, 0, u1, v1, shade(tones.base, 0.8));
+  f.frame(u0, 0, u1, v1, tones.ink, 0.85);
 }
 
 function drawElevation(
@@ -218,6 +248,7 @@ function drawElevation(
   rise: number,
   tones: CutTones,
   emissive: string | undefined,
+  open: readonly boolean[],
 ): void {
   const P = faceMap(m, run, rise);
   const a = P(0, 0);
@@ -229,15 +260,31 @@ function drawElevation(
   // How wide one cell is in `u`, for things that come one per cell.
   const cell = 1 / n;
 
+  // Standing open (FR9.24): a rolling door rolls up into its housing; every
+  // other kind swings back and shows the way through.
+  if (DOOR_CUTS.has(cut) && cut !== 'door' && isOpen(open)) {
+    const pad = cell * 0.1;
+    if (cut === 'roller' || cut === 'shutter') {
+      f.fill(pad, 0, 1 - pad, 0.84, tones.dark, 0.96);
+      f.fill(pad, 0.72, 1 - pad, 0.86, shade(tones.base, 0.9));
+      f.fill(0.03, 0.86, 0.97, 1, tones.dark);
+      f.frame(pad, 0, 1 - pad, 0.86, tones.ink, 0.85);
+    } else {
+      openLeaf(f, pad, 1 - pad, 0.92, tones, true);
+    }
+    return;
+  }
+
   switch (cut) {
     case 'door': {
       // One leaf per cell, hinged at the outer ends, so two cells are a
-      // double door that meets in the middle.
+      // double door that meets in the middle. An open leaf is a doorway.
       const pad = cell * 0.14;
       for (let i = 0; i < n; i += 1) {
         const u0 = i * cell + (i === 0 ? pad : 0.006);
         const u1 = (i + 1) * cell - (i === n - 1 ? pad : 0.006);
-        leaf(f, u0, u1, 0.9, tones, i < n / 2);
+        if (isOpen(open, i)) openLeaf(f, u0, u1, 0.9, tones, i < n / 2);
+        else leaf(f, u0, u1, 0.9, tones, i < n / 2);
       }
       f.line([[cell * 0.14, 0.9], [1 - cell * 0.14, 0.9]], tones.ink, 0.9, 2);
       break;
@@ -433,6 +480,7 @@ function drawSymbol(
   run: CutRun,
   tones: CutTones,
   emissive: string | undefined,
+  open: readonly boolean[],
 ): void {
   const P = topMap(m, run);
   const a = P(0, 0.5);
@@ -445,8 +493,13 @@ function drawSymbol(
   const n = run.n;
   const glow = emissive === undefined ? tones.light : parseColor(emissive, tones.light);
 
-  /** A quarter-circle swing arc from a hinge at `u`, out across the floor. */
-  const swing = (hingeU: number, toU: number) => {
+  /**
+   * A quarter-circle swing arc from a hinge at `u`, out across the floor —
+   * the plan symbol of a door. Standing open (FR9.24), the arc goes and the
+   * leaf alone stands out from the wall, which is what an open door looks
+   * like from above.
+   */
+  const swing = (hingeU: number, toU: number, standingOpen = false) => {
     const [x0, y0, x1, y1] = run.rect;
     const len = run.axis === 'x' ? (x1 - x0) * Math.abs(toU - hingeU) : (y1 - y0) * Math.abs(toU - hingeU);
     const hinge =
@@ -467,27 +520,37 @@ function drawSymbol(
       );
     }
     const h = worldFromGrid(m, hinge);
-    g.moveTo(h.x, h.y);
-    for (const p of pts) g.lineTo(p.x, p.y);
-    g.stroke({ width: 1, color: tones.ink, alpha: 0.6, pixelLine: true });
     const end = pts[pts.length - 1]!;
-    g.moveTo(h.x, h.y).lineTo(end.x, end.y).stroke({ width: 2, color: tones.light, alpha: 0.9 });
+    if (!standingOpen) {
+      g.moveTo(h.x, h.y);
+      for (const p of pts) g.lineTo(p.x, p.y);
+      g.stroke({ width: 1, color: tones.ink, alpha: 0.6, pixelLine: true });
+    }
+    g.moveTo(h.x, h.y)
+      .lineTo(end.x, end.y)
+      .stroke({ width: standingOpen ? 3 : 2, color: tones.light, alpha: 0.95 });
   };
+
+  // Standing open (FR9.24): the slab's strip reads as floor, not wall.
+  const anyOpen = DOOR_CUTS.has(cut) && isOpen(open);
+  if (anyOpen) f.fill(0, 0.1, 1, 0.9, shade(tones.base, 1.35), 0.55);
 
   switch (cut) {
     case 'door':
     case 'porthole':
-      f.fill(0, 0.2, 1, 0.8, shade(tones.base, 1.1));
-      for (let i = 0; i < n; i += 1) swing(i < n / 2 ? i / n : (i + 1) / n, i < n / 2 ? (i + 1) / n : i / n);
+      if (!anyOpen) f.fill(0, 0.2, 1, 0.8, shade(tones.base, 1.1));
+      for (let i = 0; i < n; i += 1) {
+        swing(i < n / 2 ? i / n : (i + 1) / n, i < n / 2 ? (i + 1) / n : i / n, isOpen(open, i));
+      }
       break;
     case 'maglock':
-      f.fill(0, 0.2, 1, 0.8, shade(tones.base, 1.1));
-      swing(0, 1);
-      f.circle(1.02, 0.5, 0.15, 8).fill({ color: C.ok, alpha: 0.9 });
+      if (!anyOpen) f.fill(0, 0.2, 1, 0.8, shade(tones.base, 1.1));
+      swing(0, 1, anyOpen);
+      f.circle(1.02, 0.5, 0.15, 8).fill({ color: anyOpen ? C.warn : C.ok, alpha: 0.9 });
       break;
     case 'glassdoor':
-      f.fill(0, 0.3, 1, 0.7, GLASS, 0.6);
-      swing(0, 1);
+      if (!anyOpen) f.fill(0, 0.3, 1, 0.7, GLASS, 0.6);
+      swing(0, 1, anyOpen);
       break;
     case 'glass':
     case 'wireglass':

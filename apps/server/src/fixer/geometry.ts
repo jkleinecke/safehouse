@@ -246,6 +246,7 @@ export function compileLayout(proposal: LayoutProposalInput, gridRaw: unknown): 
       a: horizontal ? { x: start, y: at } : { x: at, y: start },
       b: horizontal ? { x: end, y: at } : { x: at, y: end },
       open: door.open,
+      locked: false,
       note: door.to ? `${room.name} → ${door.to}` : room.name,
     });
   }

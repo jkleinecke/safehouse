@@ -160,3 +160,33 @@ describe('TokenSchema', () => {
     ).toBe(false);
   });
 });
+
+describe('doors, notes and token layers (FR9.24–9.26)', () => {
+  it('a door starts shut and unlocked; a painted door keeps its state beside its tiles', () => {
+    const s = SceneSchema.parse({
+      ...scene,
+      geometry: { doors: [{ id: 'd1', a: { x: 0, y: 0 }, b: { x: 1, y: 0 } }] },
+      tiles: { tilesetId: 'docklands', structure: { '3,4': 'door' }, doors: { '3,4': { open: true } } },
+    });
+    expect(s.geometry.doors[0]).toMatchObject({ open: false, locked: false });
+    expect(s.tiles?.doors).toEqual({ '3,4': { open: true, locked: false } });
+    expect(SceneSchema.parse(scene).tiles?.doors).toBeUndefined();
+  });
+
+  it('a GM note is a box of text at a point, four cells wide unless told otherwise', () => {
+    const s = SceneSchema.parse({
+      ...scene,
+      geometry: { gmNotes: [{ id: 'n1', at: { x: 2, y: 2 }, text: 'The guard is asleep until someone shoots.' }] },
+    });
+    expect(s.geometry.gmNotes).toEqual([
+      { id: 'n1', at: { x: 2, y: 2 }, text: 'The guard is asleep until someone shoots.', width: 4 },
+    ]);
+    expect(SceneSchema.safeParse({ ...scene, geometry: { gmNotes: [{ id: 'n', at: { x: 0, y: 0 }, text: 'x'.repeat(2001) }] } }).success).toBe(false);
+  });
+
+  it('a token layer names its members and starts shown', () => {
+    const s = SceneSchema.parse({ ...scene, tokenLayers: [{ id: 'l1', name: 'Ambush', tokenIds: ['t1', 't2'] }] });
+    expect(s.tokenLayers).toEqual([{ id: 'l1', name: 'Ambush', hidden: false, tokenIds: ['t1', 't2'] }]);
+    expect(SceneSchema.parse(scene).tokenLayers).toBeUndefined();
+  });
+});

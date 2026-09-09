@@ -205,6 +205,36 @@ describe('displayFromEvents (FR9.21)', () => {
   });
 });
 
+describe('token layers reach the canvas (FR9.26)', () => {
+  it('names the tokens on hidden layers, and none when the scene has no layers', () => {
+    const base = {
+      tokens: [token(), token({ id: 't2', sourceId: null, source: 'prop' as const })],
+      viewer: gm,
+      encounter: null,
+      selectedTokenId: null,
+      tool: 'select' as const,
+      snapEnabled: true,
+      aoe: null,
+      scatter: null,
+      fogDraft: null,
+    };
+    const layered = composeStageState({
+      ...base,
+      scene: scene({
+        tokenLayers: [
+          { id: 'layer_1', name: 'Ambush', hidden: true, tokenIds: ['t2'] },
+          { id: 'layer_2', name: 'Shown', hidden: false, tokenIds: ['t1'] },
+        ],
+      }),
+    });
+    expect([...(layered?.hiddenLayerTokenIds ?? [])]).toEqual(['t2']);
+    // The GM still has both on the canvas — hidden means ghosted for them, not gone.
+    expect(layered?.tokens.map((t) => t.id)).toEqual(['t1', 't2']);
+    const plain = composeStageState({ ...base, scene: scene() });
+    expect(plain?.hiddenLayerTokenIds?.size).toBe(0);
+  });
+});
+
 describe('composeStageState (hydration with zero WS traffic)', () => {
   it('draws a complete frame from REST data alone', () => {
     const state = composeStageState({

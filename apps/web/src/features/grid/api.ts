@@ -265,6 +265,30 @@ export function usePatchGeometry() {
   });
 }
 
+/** One act on one door (FR9.24). A traced door by id, a painted one by cell and floor. */
+export interface DoorOpInput {
+  doorId?: string;
+  cell?: string;
+  level?: number;
+  op: 'open' | 'close' | 'lock' | 'unlock';
+}
+
+/**
+ * Open, shut, lock or unlock a door. The one scene write a player may make:
+ * players open and shut, and are refused a locked door (`door_locked`); the
+ * lock is the GM's. The scene is re-read on success, so a sightline through
+ * the doorway is recomputed from what the server now says.
+ */
+export function useDoorOp(sceneId: string | null | undefined) {
+  return useMutation({
+    mutationFn: async (input: DoorOpInput) =>
+      (await apiPost<{ door: DoorOpInput & { open: boolean; locked?: boolean } }>(`/api/scenes/${sceneId}/doors`, input)).door,
+    onSuccess: () => {
+      if (sceneId) invalidateScene(sceneId);
+    },
+  });
+}
+
 /** Codex pages a pin can link to (FR9.3 → FR5.3). GM-facing picker. */
 export interface WikiPageSummary {
   id: string;

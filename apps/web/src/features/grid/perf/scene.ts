@@ -197,10 +197,10 @@ export function perfGeometry(): SceneGeometry {
     walls.push({ id: `perf-wall-${i}`, a: { x, y }, b: { x: x + 2, y } });
   }
   const doors = [
-    { id: 'perf-door-1', a: { x: 6, y: 10 }, b: { x: 8, y: 10 }, open: true },
-    { id: 'perf-door-2', a: { x: 19, y: 10 }, b: { x: 21, y: 10 }, open: false },
-    { id: 'perf-door-3', a: { x: 6, y: 16 }, b: { x: 8, y: 16 }, open: false },
-    { id: 'perf-door-4', a: { x: 31, y: 16 }, b: { x: 33, y: 16 }, open: true },
+    { id: 'perf-door-1', a: { x: 6, y: 10 }, b: { x: 8, y: 10 }, open: true, locked: false },
+    { id: 'perf-door-2', a: { x: 19, y: 10 }, b: { x: 21, y: 10 }, open: false, locked: false },
+    { id: 'perf-door-3', a: { x: 6, y: 16 }, b: { x: 8, y: 16 }, open: false, locked: false },
+    { id: 'perf-door-4', a: { x: 31, y: 16 }, b: { x: 33, y: 16 }, open: true, locked: false },
   ];
   const pins = [
     { id: 'perf-pin-1', at: { x: 6, y: 5 }, label: 'Truck bay', visibility: 'public' as const },

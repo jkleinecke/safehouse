@@ -39,6 +39,41 @@ function counting(): { g: Graphics; ops: number } {
 const TONES = { base: 0x74644e, accent: 0x8b7760, light: 0x9c8a70, dark: 0x5f5240, ink: 0x463c2f };
 const RUN: CutRun = { rect: [3, 4.333, 5, 4.667], axis: 'x', n: 2 };
 
+describe('an open door draws open (FR9.24)', () => {
+  const doors = ['door', 'maglock', 'porthole', 'glassdoor', 'roller', 'shutter', 'hatch'] as const;
+
+  it('every door design draws differently open than shut, in both projections', () => {
+    for (const cut of doors) {
+      for (const [m, rise] of [[iso, 32], [plan, 0]] as const) {
+        const shut = counting();
+        drawCut(shut.g, m, cut, RUN, rise, TONES, undefined, [false, false]);
+        const open = counting();
+        drawCut(open.g, m, cut, RUN, rise, TONES, undefined, [true, true]);
+        expect(open.ops, `${cut} ${rise ? 'elevation' : 'plan'}`).toBeGreaterThan(3);
+        expect(open.ops, `${cut} ${rise ? 'elevation' : 'plan'} unchanged`).not.toBe(shut.ops);
+      }
+    }
+  });
+
+  it('a double door with one leaf open is neither shut nor open — it is half', () => {
+    const shut = counting();
+    drawCut(shut.g, iso, 'door', RUN, 32, TONES, undefined, []);
+    const half = counting();
+    drawCut(half.g, iso, 'door', RUN, 32, TONES, undefined, [true, false]);
+    const wide = counting();
+    drawCut(wide.g, iso, 'door', RUN, 32, TONES, undefined, [true, true]);
+    expect(new Set([shut.ops, half.ops, wide.ops]).size).toBe(3);
+  });
+
+  it('a window cannot be open: the flag changes nothing that is not a door', () => {
+    const a = counting();
+    drawCut(a.g, iso, 'glass', RUN, 32, TONES, undefined, []);
+    const b = counting();
+    drawCut(b.g, iso, 'glass', RUN, 32, TONES, undefined, [true, true]);
+    expect(b.ops).toBe(a.ops);
+  });
+});
+
 describe('every cut design draws', () => {
   for (const cut of TILE_CUTS) {
     it(`${cut} draws an elevation and a plan symbol`, () => {

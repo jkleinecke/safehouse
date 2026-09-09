@@ -54,9 +54,13 @@ export function sightModelFor(scene: SightSceneInput, level = 0): SightModel {
           if (parseCellKey(key) === null) continue;
           const tile = byId.get(tileId);
           if (tile === undefined) continue;
-          const blocksSight = stopsSight(tile);
-          const cover = givesCover(tile);
-          const blocksMovement = stopsMovement(tile);
+          // An OPEN painted door is a doorway (FR9.24): sight and bodies pass.
+          // The frame still stands, so its height is kept for the renderer.
+          const openDoor =
+            map === layers.structure && tile.kind === 'door' && layers.doors?.[key]?.open === true;
+          const blocksSight = !openDoor && stopsSight(tile);
+          const cover = !openDoor && givesCover(tile);
+          const blocksMovement = !openDoor && stopsMovement(tile);
           // An open floor tile is not worth an entry; the map stays sparse.
           const height = tile.height ?? 0;
           if (!blocksSight && !cover && !blocksMovement && height <= 0) continue;

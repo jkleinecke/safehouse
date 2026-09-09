@@ -36,7 +36,7 @@ export {
 };
 
 /** GM authoring side-panel tabs (FR9.1/9.2/9.3/9.13/9.11/9.21). */
-export type GmTab = 'scenes' | 'map' | 'tiles' | 'tokens' | 'geo' | 'pins' | 'cameras' | 'fog'
+export type GmTab = 'scenes' | 'map' | 'tiles' | 'tokens' | 'geo' | 'pins' | 'cameras' | 'notes' | 'fog'
   | 'env' | 'los' | 'tv';
 
 /** GM steering of the table display (FR9.21) — mirrors the TV's `TvControls`. */
@@ -117,6 +117,8 @@ export interface GridUiState {
   selectedPinId: string | null;
   /** Camera open in the camera editor (FR9.23) — ringed on the canvas. */
   selectedCameraId: string | null;
+  /** GM note open in the notes editor (FR9.25) — ringed on the canvas. */
+  selectedNoteId: string | null;
   /** Name/colour the zone tool will use for its next polygon. */
   zoneName: string;
   /** Last steering state the GM pushed to the TV (FR9.21), optimistic. */
@@ -148,6 +150,7 @@ export interface GridUiState {
   setPendingRollMod: (mod: PendingRollMod | null) => void;
   selectPin: (id: string | null) => void;
   selectCamera: (id: string | null) => void;
+  selectNote: (id: string | null) => void;
   setZoneName: (name: string) => void;
   setDisplay: (patch: Partial<DisplayControls>) => void;
 }
@@ -163,7 +166,7 @@ export interface GridUiState {
 function toolPatch(
   s: GridUiState,
   tool: GridTool,
-): Pick<GridUiState, 'tool' | 'fogDraft' | 'ruler' | 'selectedPinId' | 'selectedCameraId'> {
+): Pick<GridUiState, 'tool' | 'fogDraft' | 'ruler' | 'selectedPinId' | 'selectedCameraId' | 'selectedNoteId'> {
   return {
     tool,
     // Leaving a polygon tool abandons its in-progress draft; fog and zones
@@ -175,6 +178,7 @@ function toolPatch(
     selectedPinId: tool === 'select' || GEOMETRY_TOOLS.includes(tool) ? s.selectedPinId : null,
     selectedCameraId:
       tool === 'select' || GEOMETRY_TOOLS.includes(tool) ? s.selectedCameraId : null,
+    selectedNoteId: tool === 'select' || GEOMETRY_TOOLS.includes(tool) ? s.selectedNoteId : null,
   };
 }
 
@@ -203,6 +207,7 @@ export const useGridStore = create<GridUiState>()((set) => ({
   pendingRollMod: null,
   selectedPinId: null,
   selectedCameraId: null,
+  selectedNoteId: null,
   zoneName: '',
   display: DEFAULT_DISPLAY_CONTROLS,
 
@@ -274,6 +279,7 @@ export const useGridStore = create<GridUiState>()((set) => ({
   },
   selectPin: (selectedPinId) => set({ selectedPinId }),
   selectCamera: (selectedCameraId) => set({ selectedCameraId }),
+  selectNote: (selectedNoteId) => set({ selectedNoteId }),
   setZoneName: (zoneName) => set({ zoneName }),
   setDisplay: (patch) => set((s) => ({ display: { ...s.display, ...patch } })),
 }));

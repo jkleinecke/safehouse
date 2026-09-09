@@ -23,6 +23,8 @@ import {
   SceneGeometrySchema,
   SceneVisionSchema,
   type SceneVision,
+  SceneLayerSchema,
+  type SceneLayer,
   FogStateSchema,
   SheetV1Schema,
   TokenAuraSchema,
@@ -130,6 +132,7 @@ function geometryColumn(
   tiles?: TileLayer,
   levels?: SceneLevel[],
   vision?: SceneVision,
+  tokenLayers?: SceneLayer[],
 ) {
   // `tiles` rides in the existing geometry JSONB rather than earning a column:
   // it is scene-shaped authoring data like walls and pins, and this keeps the
@@ -142,6 +145,7 @@ function geometryColumn(
     ...(levels !== undefined ? { levels } : {}),
     // Sight settings ride in the same envelope, for the same reason tiles do.
     ...(vision !== undefined ? { vision } : {}),
+    ...(tokenLayers !== undefined ? { tokenLayers } : {}),
   };
 }
 
@@ -180,6 +184,9 @@ export function serializeScene(row: SceneRow): Scene {
   );
   const visionParsed = SceneVisionSchema.safeParse(geoRaw['vision']);
   const vision = visionParsed.success ? visionParsed.data : SceneVisionSchema.parse({});
+  // Token layers (FR9.26) ride in the same envelope as the floors.
+  const layersParsed = SceneLayerSchema.array().safeParse(geoRaw['tokenLayers']);
+  const tokenLayers = layersParsed.success ? layersParsed.data : undefined;
   return {
     id: row.id,
     campaignId: row.campaignId,
@@ -187,6 +194,7 @@ export function serializeScene(row: SceneRow): Scene {
     state: row.state,
     levels,
     vision,
+    ...(tokenLayers !== undefined ? { tokenLayers } : {}),
     grid: normalizeGrid(row.grid),
     environment: normalizeEnvironment(row.environment),
     geometry: normalizeGeometry(geoRaw),
@@ -200,9 +208,10 @@ export function serializeScene(row: SceneRow): Scene {
 
 /**
  * Strip GM-layer data for player/observer/display viewers (Principle 4):
- * GM notes, the GM's annotations (zones, non-public pins, cameras, the note
- * on a wall), and every unrevealed fog region — players get only revealed
- * fog geometry (FR9.13).
+ * GM notes (the scene's text and the boxes on the map, FR9.25), the GM's
+ * annotations (zones, non-public pins, cameras, the note on a wall, which
+ * doors are locked, the token layers), and every unrevealed fog region —
+ * players get only revealed fog geometry (FR9.13).
  *
  * Walls and doors themselves are NOT stripped (FR9.16). They are the map's
  * sight geometry, and every player device computes its own shroud from the
@@ -224,6 +233,14 @@ export function serializeScene(row: SceneRow): Scene {
  * *secrecy* boundary for everything else. If that ever needs to change, it
  * changes for map images at the same time, or not at all.
  */
+/** A floor's tiles with each painted door's lock unsaid (FR9.24). */
+function tilesForPlayers(tiles: NonNullable<Scene['tiles']>): NonNullable<Scene['tiles']> {
+  if (!tiles.doors) return tiles;
+  const doors: NonNullable<Scene['tiles']>['doors'] = {};
+  for (const [cell, d] of Object.entries(tiles.doors)) doors[cell] = { open: d.open } as (typeof doors)[string];
+  return { ...tiles, doors };
+}
+
 export function sceneForViewer(scene: Scene, gm: boolean): Scene {
   if (gm) return scene;
   const revealed = new Set(scene.fog.revealed);
@@ -238,10 +255,16 @@ export function sceneForViewer(scene: Scene, gm: boolean): Scene {
       // wall a runner sees straight through. What stays GM-only is the
       // annotation — the note on a wall, the zones, the private pins.
       walls: scene.geometry.walls.map(({ id, a, b }) => ({ id, a, b })),
-      doors: scene.geometry.doors.map(({ id, a, b, open }) => ({ id, a, b, open })),
+      // Whether a door is LOCKED is not on a player's wire (FR9.24): a runner
+      // learns that by trying the handle. The key is absent, and the contract
+      // reads an absent lock as "not known to be locked" — the client parse
+      // defaults it, which is why the cast is honest.
+      doors: scene.geometry.doors.map(({ id, a, b, open }) => ({ id, a, b, open }) as Scene['geometry']['doors'][number]),
       zones: [],
       pins: scene.geometry.pins.filter((p) => p.visibility === 'public'),
     },
+    ...(scene.tiles ? { tiles: tilesForPlayers(scene.tiles) } : {}),
+    levels: scene.levels.map((l) => (l.tiles ? { ...l, tiles: tilesForPlayers(l.tiles) } : l)),
     fog: {
       regions: scene.fog.regions.filter((r) => revealed.has(r.id)),
       revealed: scene.fog.revealed,
@@ -249,7 +272,30 @@ export function sceneForViewer(scene: Scene, gm: boolean): Scene {
     },
   };
   delete (filtered as { notes?: string }).notes;
+  // Which tokens the GM is holding back, and what they are called, is the
+  // GM's business (FR9.26); the tokens themselves are already filtered.
+  delete (filtered as { tokenLayers?: unknown }).tokenLayers;
   return filtered;
+}
+
+/**
+ * Every token id on a HIDDEN layer (FR9.26). A token on a hidden layer is
+ * hidden exactly as a token flagged `hidden` is: absent from player payloads,
+ * its events on GM sockets only. Computed from the scene rather than stored
+ * on the token, so a layer is one switch and not a write per token.
+ */
+export function hiddenByLayer(scene: Pick<Scene, 'tokenLayers'>): Set<string> {
+  const out = new Set<string>();
+  for (const layer of scene.tokenLayers ?? []) {
+    if (!layer.hidden) continue;
+    for (const id of layer.tokenIds) out.add(id);
+  }
+  return out;
+}
+
+/** Hidden to players: flagged hidden, or on a hidden layer. */
+export function tokenHidden(token: { id: string; hidden: boolean }, scene: Pick<Scene, 'tokenLayers'>): boolean {
+  return token.hidden || hiddenByLayer(scene).has(token.id);
 }
 
 /**
@@ -516,6 +562,8 @@ export interface SceneWriteInput {
   levels?: SceneLevel[];
   /** Sight settings (FR9.16); merged over the current ones. */
   vision?: Partial<SceneVision>;
+  /** Token layers (FR9.26). Replaces the list wholesale, like levels. */
+  tokenLayers?: SceneLayer[];
   fog?: FogState;
   mapAttachmentIds?: string[];
   notes?: string;
@@ -636,6 +684,7 @@ export class ScenesService {
     const levels = patch.levels !== undefined ? patch.levels : current.levels;
     const vision =
       patch.vision !== undefined ? SceneVisionSchema.parse({ ...current.vision, ...patch.vision }) : current.vision;
+    const tokenLayers = patch.tokenLayers !== undefined ? patch.tokenLayers : current.tokenLayers;
     const updated = (
       await this.db
         .update(scenes)
@@ -644,7 +693,7 @@ export class ScenesService {
           state: patch.state ?? row.state,
           grid,
           environment: env,
-          geometry: geometryColumn(geometry, mapAttachmentIds, notes, tiles, levels, vision),
+          geometry: geometryColumn(geometry, mapAttachmentIds, notes, tiles, levels, vision, tokenLayers),
           fog,
         })
         .where(eq(scenes.id, row.id))
@@ -681,14 +730,21 @@ export class ScenesService {
     const tokenRows = await this.db.select().from(tokens).where(eq(tokens.sceneId, row.id));
     const drawingRows = await this.db.select().from(drawings).where(eq(drawings.sceneId, row.id));
     const now = Date.now();
-    const visibleTokens = tokenRows.filter((t) => gm || !t.hidden).map(serializeToken);
+    // Hidden by flag or by layer (FR9.7 / FR9.26): either way, not on a player's wire.
+    const dto = serializeScene(row);
+    const visibleTokens = tokenRows.filter((t) => gm || !tokenHidden(t, dto)).map(serializeToken);
     const liveDrawings = drawingRows
       .filter((d) => !d.expiresAt || d.expiresAt.getTime() > now)
       .map(serializeDrawing);
-    return { scene: sceneForViewer(serializeScene(row), gm), tokens: visibleTokens, drawings: liveDrawings };
+    return { scene: sceneForViewer(dto, gm), tokens: visibleTokens, drawings: liveDrawings };
   }
 
   // --- tokens --------------------------------------------------------------
+
+  /** Every token on a scene, whatever its visibility — the GM's list. */
+  async tokensOf(sceneId: string): Promise<TokenRow[]> {
+    return this.db.select().from(tokens).where(eq(tokens.sceneId, sceneId));
+  }
 
   async tokenWithScene(tokenId: string): Promise<{ token: TokenRow; scene: SceneRow }> {
     const rows = await this.db
@@ -1039,7 +1095,9 @@ export class ScenesService {
             initBase,
             initKind: 'physical',
             monitors: derived ? derived.monitors : monitorsFrom(stats),
-            visibility: t.hidden ? 'gm' : 'public',
+            // Hidden by flag or by layer (FR9.26): a combatant nobody was
+            // shown must not appear in the tracker before it appears on the map.
+            visibility: tokenHidden(t, serializeScene(scene)) ? 'gm' : 'public',
             // `initDice` rides in the copilot JSONB (no column of its own); a
             // missing value would default to 1 die and lose the augmentation.
             copilot: { initDice: derived ? derived.dice : 1 },

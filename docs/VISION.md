@@ -52,6 +52,16 @@ With those, a player device darkens what its runner cannot see and draws no
 token outside that sightline; full-height tiles (walls, columns, containers,
 lockers, racks) and traced walls and closed doors all cut it.
 
+**Doors (2026-09-09, FR9.24).** Players open and shut doors themselves —
+traced doors by their knob, painted doors by their cell — through one route
+the GM's hand uses too (`POST /api/scenes/:id/doors`). The GM locks and
+unlocks; a locked door refuses a player by name, and which doors are locked
+is never on a player's wire. An OPEN door, painted or traced, passes sight:
+the sight model reads a painted door's state off its floor's `doors[cell]`
+and a traced door's `open`, so a runner who opens the freight door sees the
+warehouse floor the moment the scene re-reads. The canvas draws it open —
+the way through in elevation, the leaf standing out in plan.
+
 What is missing is the other half of the sentence: light is scene-wide
 rather than per cell, eyes are all the same, and nothing on the map is warm.
 

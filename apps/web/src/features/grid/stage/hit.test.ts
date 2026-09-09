@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Scene, Token } from '@safehouse/contracts';
 import { gridFromWorld, metricsFor, pinHeadRise, worldFromGrid } from '../geometry.js';
-import { hitDoor, hitPin, hitToken, hitWall, isDoubleTap, worldTolerance } from './hit.js';
+import { hitDoor, hitNote, hitPin, hitTileDoor, hitToken, hitWall, isDoubleTap, worldTolerance } from './hit.js';
+import { noteFrame } from './notes.js';
 
 /**
  * Plan view unless a test says otherwise. Everything here used to work in grid
@@ -61,6 +62,56 @@ describe('hitToken', () => {
   it('prefers the last token when circles overlap', () => {
     const stacked = [token('under', 3, 3), token('over', 3, 3)];
     expect(hitToken(m, stacked, { x: 3, y: 3 })?.id).toBe('over');
+  });
+});
+
+describe('hitNote (FR9.25)', () => {
+  const scene = {
+    geometry: {
+      walls: [],
+      zones: [],
+      pins: [],
+      doors: [],
+      gmNotes: [
+        { id: 'n1', at: { x: 2, y: 2 }, text: 'The guard is asleep.', width: 4 },
+        { id: 'n2', at: { x: 3, y: 3 }, text: 'Overlapping', width: 2 },
+      ],
+    },
+  } as unknown as Scene;
+
+  it('hits inside the box the note is drawn in, and misses outside it', () => {
+    expect(hitNote(m, scene, { x: 2.5, y: 2.2 })).toBe('n1');
+    expect(hitNote(m, scene, { x: 1.9, y: 2.2 })).toBeNull();
+    expect(hitNote(m, scene, { x: 12, y: 12 })).toBeNull();
+    // The bottom edge is where the frame says it is — the same measurement the drawing uses.
+    const f = noteFrame(m, scene.geometry.gmNotes![0]!);
+    const under = gridFromWorld(m, { x: f.x + 4, y: f.y + f.h + 2 });
+    expect(hitNote(m, scene, under)).toBeNull();
+  });
+
+  it('gives an overlap to the later note, which draws on top', () => {
+    expect(hitNote(m, scene, { x: 3.2, y: 3.1 })).toBe('n2');
+  });
+
+  it('reads a scene with no notes as nothing to hit', () => {
+    expect(hitNote(m, { geometry: { walls: [], zones: [], pins: [], doors: [] } } as unknown as Scene, { x: 1, y: 1 })).toBeNull();
+  });
+});
+
+describe('hitTileDoor (FR9.24)', () => {
+  const scene = {
+    geometry: { walls: [], zones: [], pins: [], doors: [] },
+    tiles: { tilesetId: 'docklands', structure: { '4,4': 'door', '4,3': 'wall' } },
+    levels: [{ id: 'l2', name: 'Up', tiles: { tilesetId: 'docklands', structure: { '6,6': 'door' } } }],
+  } as unknown as Scene;
+
+  it('names the cell when it holds a door tile on that floor, and nothing otherwise', () => {
+    expect(hitTileDoor(scene, { x: 4.5, y: 4.5 }, 0)).toBe('4,4');
+    expect(hitTileDoor(scene, { x: 4.5, y: 3.5 }, 0)).toBeNull(); // a wall
+    expect(hitTileDoor(scene, { x: 6.5, y: 6.5 }, 0)).toBeNull(); // upstairs door, ground clicked
+    expect(hitTileDoor(scene, { x: 6.5, y: 6.5 }, 1)).toBe('6,6');
+    expect(hitTileDoor(scene, { x: 4.5, y: 4.5 }, 1)).toBeNull();
+    expect(hitTileDoor({ geometry: scene.geometry } as unknown as Scene, { x: 4.5, y: 4.5 }, 0)).toBeNull();
   });
 });
 
