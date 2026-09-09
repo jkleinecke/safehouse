@@ -39,6 +39,7 @@ function scene(over: Partial<Scene> = {}): Scene {
     state: 'active',
     grid: { unitM: 1, cols: 30, rows: 20, offset: { x: 0, y: 0 }, projection: 'topdown' as const },
     environment: { light: 1, visibility: 0, glare: 0, wind: 0 },
+    vision: { playersSeeOwnSight: false },
     geometry: { walls: [], doors: [], zones: [], pins: [] },
     fog: { regions: [], revealed: [], revealedShapes: [] },
     levels: [],
@@ -149,6 +150,7 @@ describe('mergeSceneEvents', () => {
         sceneId: 's1',
         changed: ['environment'],
         environment: { light: 3, visibility: 2, glare: 0, wind: 0 },
+        vision: { playersSeeOwnSight: false },
       }),
     ]);
     expect(merged?.scene.environment.light).toBe(3);

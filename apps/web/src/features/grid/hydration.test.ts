@@ -8,6 +8,7 @@ import {
   mergeEncounter,
   pickEncounterId,
   resolveSceneId,
+  tokensInSight,
 } from './hydration.js';
 import type { Viewer } from './projection.js';
 
@@ -21,6 +22,7 @@ function scene(patch: Partial<Scene> = {}): Scene {
     state: 'active',
     grid: { unitM: 1, cols: 20, rows: 12, offset: { x: 0, y: 0 }, projection: 'topdown' as const },
     environment: { light: 0, visibility: 0, glare: 0, wind: 0 },
+    vision: { playersSeeOwnSight: false },
     geometry: emptyGeometry(),
     fog: { regions: [], revealed: [], revealedShapes: [] },
     levels: [],
@@ -267,5 +269,44 @@ describe('composeStageState (hydration with zero WS traffic)', () => {
         fogDraft: null,
       }),
     ).toBeNull();
+  });
+});
+
+describe('tokensInSight (FR9.16)', () => {
+  const player: Viewer = { role: 'player', userId: 'u2', characterId: 'char-me' };
+  const mine = token({ id: 'me', source: 'character', sourceId: 'char-me', x: 2.5, y: 2.5 });
+  const guardInView = token({ id: 'g1', source: 'npc_template', sourceId: null, x: 5.5, y: 2.5 });
+  const guardBehindWall = token({ id: 'g2', source: 'npc_template', sourceId: null, x: 9.5, y: 2.5 });
+  const shroud = { visible: new Set(['2,2', '3,2', '4,2', '5,2']), gm: false };
+
+  it('draws a player only the tokens their runner can see, and always their own', () => {
+    const drawn = tokensInSight([mine, guardInView, guardBehindWall], player, shroud);
+    expect(drawn.map((t) => t.id)).toEqual(['me', 'g1']);
+  });
+
+  it('draws everything when there is no sightline to apply', () => {
+    expect(tokensInSight([mine, guardBehindWall], player, null)).toHaveLength(2);
+  });
+
+  it('is a lens for the GM, not a limit', () => {
+    const drawn = tokensInSight([mine, guardBehindWall], gm, { ...shroud, gm: true });
+    expect(drawn).toHaveLength(2);
+  });
+
+  it('feeds the stage frame, so bars and drags follow what is drawn', () => {
+    const state = composeStageState({
+      scene: scene(),
+      tokens: [mine, guardBehindWall],
+      viewer: player,
+      encounter: null,
+      selectedTokenId: null,
+      tool: 'select',
+      snapEnabled: true,
+      aoe: null,
+      scatter: null,
+      fogDraft: null,
+      shroud,
+    });
+    expect(state?.tokens.map((t) => t.id)).toEqual(['me']);
   });
 });

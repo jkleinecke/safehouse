@@ -20,7 +20,9 @@
  */
 import type { Scene, Token } from '@safehouse/contracts';
 import { coverCall, lineOfSight, sightModelFor, type CoverLevel } from '@safehouse/rules';
+import { usePatchScene } from '../api.js';
 import { useGridStore } from '../store.js';
+import { cameraLensId } from '../useShroud.js';
 
 export interface LosTabProps {
   scene: Scene;
@@ -42,8 +44,13 @@ function cellOf(token: Token): { col: number; row: number } {
 export default function LosTab({ scene, tokens }: LosTabProps) {
   const losTokenId = useGridStore((s) => s.losTokenId);
   const setLosTokenId = useGridStore((s) => s.setLosTokenId);
-  const losForPlayers = useGridStore((s) => s.losForPlayers);
-  const setLosForPlayers = useGridStore((s) => s.setLosForPlayers);
+  // The players' switch is a fact about the SCENE, saved and broadcast, so
+  // their devices hear it; it used to live in this browser's store and never
+  // reached anyone. The console shows the server's answer, not a local echo.
+  const patchScene = usePatchScene();
+  const losForPlayers = scene.vision?.playersSeeOwnSight ?? false;
+  const setLosForPlayers = (on: boolean) =>
+    patchScene.mutate({ sceneId: scene.id, patch: { vision: { playersSeeOwnSight: on } } });
   const selectedTokenId = useGridStore((s) => s.selectedTokenId);
   const coverOverride = useGridStore((s) => s.coverOverride);
   const setCoverOverride = useGridStore((s) => s.setCoverOverride);
@@ -79,6 +86,16 @@ export default function LosTab({ scene, tokens }: LosTabProps) {
               {t.name}
             </option>
           ))}
+          {(scene.geometry.cameras ?? []).length > 0 && (
+            <optgroup label="Cameras">
+              {(scene.geometry.cameras ?? []).map((c) => (
+                <option key={c.id} value={cameraLensId(c.id)}>
+                  {c.label ?? c.id}
+                  {c.active ? '' : ' (off)'}
+                </option>
+              ))}
+            </optgroup>
+          )}
         </select>
         <p className="mt-1 text-xs text-faint">
           A lens, not a limit — your scrim stays light so you can still run the rest of the map.
@@ -90,6 +107,7 @@ export default function LosTab({ scene, tokens }: LosTabProps) {
           type="button"
           aria-pressed={losForPlayers}
           data-testid="los-for-players"
+          disabled={patchScene.isPending}
           onClick={() => setLosForPlayers(!losForPlayers)}
           className={
             'mono-label w-full rounded border px-2 py-1 ' +
@@ -99,9 +117,13 @@ export default function LosTab({ scene, tokens }: LosTabProps) {
           {losForPlayers ? 'players see their own sightline' : 'players see the whole map'}
         </button>
         <p className="mt-1 text-xs text-faint">
-          Each player device darkens what their own character cannot see. The map itself is still
-          sent — this tells them what they can act on, it does not hide the floor plan.
+          Each player device darkens what their own character cannot see and draws no token
+          outside it — walls, closed doors, columns and full-height props all cut the sightline.
+          The floor plan itself is still sent; this tells them what they can act on.
         </p>
+        {patchScene.isError && (
+          <p className="mono-label mt-1 text-danger">that did not save — try again</p>
+        )}
       </div>
 
       <div className="border-t border-edge pt-2">

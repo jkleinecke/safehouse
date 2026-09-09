@@ -18,7 +18,7 @@ import {
 } from '../geometry.js';
 import type { StageCallbacks, StageSceneState, TileRectMode } from '../types.js';
 import { Camera, wheelZoomFactor } from './camera.js';
-import { hitDoor, hitPin, hitToken, isDoubleTap, worldTolerance, type TapRecord } from './hit.js';
+import { hitCamera, hitDoor, hitPin, hitToken, isDoubleTap, worldTolerance, type TapRecord } from './hit.js';
 
 type Mode =
   | 'idle'
@@ -310,6 +310,10 @@ export class PointerController {
         this.mode = 'idle';
         this.host.callbacks.onPinPlace?.(grid.x, grid.y);
         return;
+      case 'camera':
+        this.mode = 'idle';
+        this.host.callbacks.onCameraPlace?.(grid.x, grid.y);
+        return;
       case 'tile-area':
       case 'tile-room': {
         // A rectangle, not a stroke: the drag picks two corners and the fill
@@ -378,6 +382,17 @@ export class PointerController {
       if (pinId) {
         this.mode = 'idle';
         this.host.callbacks.onPinSelect(pinId);
+        return;
+      }
+    }
+    // A camera's eye, likewise — the GM's own payload is the only one that
+    // has cameras in it at all (FR9.23).
+    if (state.role === 'gm' && this.host.callbacks.onCameraSelect) {
+      const camTol = Math.max(14, worldTolerance(this.host.camera.scale, 14));
+      const cameraId = hitCamera(m, state.scene, grid, camTol);
+      if (cameraId) {
+        this.mode = 'idle';
+        this.host.callbacks.onCameraSelect(cameraId);
         return;
       }
     }

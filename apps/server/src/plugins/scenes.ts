@@ -34,6 +34,7 @@ import {
   PointSchema,
   SceneEnvironmentSchema,
   SceneGeometrySchema,
+  SceneVisionSchema,
   TileLayerSchema,
   TokenAuraSchema,
   VisibilitySchema,
@@ -88,6 +89,7 @@ const ScenePatchBody = z.object({
   grid: GridSchema.partial().optional(),
   environment: SceneEnvironmentSchema.partial().optional(),
   geometry: SceneGeometrySchema.optional(),
+  vision: SceneVisionSchema.partial().optional(),
   mapAttachmentIds: z.array(z.string()).optional(),
   notes: z.string().max(20_000).optional(),
 });

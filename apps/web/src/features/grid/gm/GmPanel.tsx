@@ -6,6 +6,7 @@
 import type { Scene, Token } from '@safehouse/contracts';
 import type { GridCommands } from '../commands.js';
 import { useGridStore, type GmTab } from '../store.js';
+import CamerasTab from './CamerasTab.js';
 import DisplayTab from './DisplayTab.js';
 import EnvTab from './EnvTab.js';
 import FogTab from './FogTab.js';
@@ -24,6 +25,7 @@ const TABS: Array<{ id: GmTab; label: string }> = [
   { id: 'tokens', label: 'Tokens' },
   { id: 'geo', label: 'Geo' },
   { id: 'pins', label: 'Pins' },
+  { id: 'cameras', label: 'Cams' },
   { id: 'fog', label: 'Fog' },
   { id: 'env', label: 'Env' },
   { id: 'los', label: 'LOS' },
@@ -92,6 +94,7 @@ export default function GmPanel(props: GmPanelProps) {
         {tab === 'pins' && (
           <PinsTab campaignId={props.campaignId} scene={props.scene} onCenter={props.onCenter} />
         )}
+        {tab === 'cameras' && <CamerasTab scene={props.scene} onCenter={props.onCenter} />}
         {tab === 'fog' && <FogTab scene={props.scene} commands={props.commands} />}
         {tab === 'env' && <EnvTab scene={props.scene} />}
         {tab === 'tv' && <DisplayTab commands={props.commands} />}

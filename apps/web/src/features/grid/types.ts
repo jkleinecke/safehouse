@@ -17,13 +17,14 @@ export type GridTool =
   | 'door' // GM: drag to draw a door segment (FR9.2)
   | 'zone' // GM: click vertices to draw a named zone (FR9.2)
   | 'pin' // GM: click to drop a map pin (FR9.3)
+  | 'camera' // GM: click to mount a security camera; only the GM sees it (FR9.23)
   | 'tile' // GM: paint tiles from a tileset (FR9.2 "assemble")
   | 'tile-area' // GM: drag a rectangle, fill it with the chosen ground
   | 'tile-room' // GM: drag a rectangle, floor inside and walls around it
   | 'tile-erase'; // GM: clear painted cells
 
 /** GM drawing tools that author scene geometry rather than play with it. */
-export const GEOMETRY_TOOLS: readonly GridTool[] = ['wall', 'door', 'zone', 'pin'];
+export const GEOMETRY_TOOLS: readonly GridTool[] = ['wall', 'door', 'zone', 'pin', 'camera'];
 
 /**
  * The tools that lay tiles down. Kept as one list because the palette's
@@ -300,6 +301,14 @@ export interface StageSceneState {
   fogDraft: FogDraft | null;
   /** Pin currently open in the GM's pin editor — drawn ringed (FR9.3). */
   selectedPinId?: string | null;
+  /** Camera open in the GM's camera editor — drawn ringed (FR9.23). */
+  selectedCameraId?: string | null;
+  /**
+   * What each camera on this floor covers, GM only (FR9.23). Null or absent
+   * draws no cones; a player's state never carries any, because their scene
+   * never carries cameras.
+   */
+  cameraCones?: readonly CameraCone[] | null;
   /**
    * Cells outside the viewer's sightline, or null for "no viewpoint" — which
    * draws nothing at all. An unselected token must never black out the table.
@@ -358,6 +367,19 @@ export interface StageCallbacks {
   onTileStrokeEnd?(): void;
   /** select-tool click on an existing pin — open it in the editor. */
   onPinSelect?(pinId: string): void;
+  /** camera tool click — mount a camera at grid coords (FR9.23). */
+  onCameraPlace?(x: number, y: number): void;
+  /** select-tool click on a camera's eye — open it in the editor. */
+  onCameraSelect?(cameraId: string): void;
+}
+
+/** The cells one security camera covers on the floor being drawn (FR9.23). */
+export interface CameraCone {
+  id: string;
+  /** `"col,row"` of every cell in the cone. */
+  cells: ReadonlySet<string>;
+  /** Content signature, so the stage can tell a changed cone from a re-derived one. */
+  key: string;
 }
 
 /** Imperative API of the lazily-loaded pixi stage. */

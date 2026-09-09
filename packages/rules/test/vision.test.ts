@@ -22,6 +22,7 @@ import {
   givesCover,
   lineOfSight,
   segmentsCross,
+  segmentTouchAt,
   sightModelFor,
   stopsMovement,
   stopsSight,
@@ -470,5 +471,41 @@ describe('coverCall — the system suggests, the GM decides', () => {
     expect(mod?.note).toContain('GM');
     // …and an un-overridden one stays a plain situational modifier.
     expect(coverCallModifier(coverCall('partial'))?.source.kind).toBe('situational');
+  });
+});
+
+describe('walls drawn in pieces are one wall', () => {
+  // The dock wall of the demo: a wall to the door frame, the door, the wall
+  // after it. Each piece ends where the next begins.
+  const dock = (doorOpen: boolean) =>
+    model([], [
+      { id: 'w.upper', a: { x: 8, y: 0 }, b: { x: 8, y: 8 }, blocksSight: true },
+      { id: 'd.freight', a: { x: 8, y: 8 }, b: { x: 8, y: 11 }, blocksSight: !doorOpen },
+      { id: 'w.lower', a: { x: 8, y: 11 }, b: { x: 8, y: 20 }, blocksSight: true },
+    ]);
+
+  it('cannot be threaded through the joint between two pieces', () => {
+    // From (3,9) the ray to (9,7) crosses x=8 at exactly y=8 — the seam
+    // between the upper wall and the closed door. It used to pass.
+    expect(lineOfSight(at(3, 9), at(9, 7), dock(false)).clear).toBe(false);
+    expect(lineOfSight(at(3, 9), at(9, 11), dock(false)).clear).toBe(false);
+    expect(lineOfSight(at(3, 9), at(15, 5), dock(false)).clear).toBe(false);
+    // …and symmetrically from the other side.
+    expect(lineOfSight(at(9, 7), at(3, 9), dock(false)).clear).toBe(false);
+  });
+
+  it('passes through the door once it is open — but not through its frame', () => {
+    // Straight through the opening.
+    expect(lineOfSight(at(3, 9), at(12, 9), dock(true)).clear).toBe(true);
+    // The seam at y=8 is now the tip of the upper wall alone, and the open
+    // door stops nothing: grazing one wall's end is still not being stopped.
+    expect(lineOfSight(at(3, 9), at(9, 7), dock(true)).clear).toBe(true);
+  });
+
+  it('still lets a sightline graze the free end of a lone wall', () => {
+    const lone = model([], [{ id: 'w', a: { x: 8, y: 0 }, b: { x: 8, y: 8 }, blocksSight: true }]);
+    expect(lineOfSight(at(3, 9), at(9, 7), lone).clear).toBe(true);
+    expect(segmentTouchAt({ x: 3.5, y: 9.5 }, { x: 9.5, y: 7.5 }, { x: 8, y: 0 }, { x: 8, y: 8 })).toBeCloseTo(0.75);
+    expect(segmentTouchAt({ x: 3.5, y: 9.5 }, { x: 9.5, y: 7.5 }, { x: 8, y: 0 }, { x: 8, y: 7 })).toBeNaN();
   });
 });

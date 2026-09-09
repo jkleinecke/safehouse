@@ -8,6 +8,11 @@ import {
   convertWallToDoor,
   emptyGeometry,
   geometryCounts,
+  addCamera,
+  camerasOf,
+  normalizeFacing,
+  removeCamera,
+  updateCamera,
   isDegenerateSegment,
   isPinLinked,
   isValidGeometry,
@@ -222,6 +227,45 @@ describe('geometryCounts', () => {
     geo = addDoor(geo, { x: 4, y: 0 }, { x: 5, y: 0 });
     geo = addZone(geo, square);
     geo = addPin(geo, { x: 2, y: 2 });
-    expect(geometryCounts(geo)).toEqual({ wall: 1, door: 1, zone: 1, pin: 1 });
+    expect(geometryCounts(geo)).toEqual({ wall: 1, door: 1, zone: 1, pin: 1, camera: 0 });
+    expect(geometryCounts(addCamera(geo, { x: 3, y: 3 })).camera).toBe(1);
+  });
+});
+
+describe('cameras (FR9.23)', () => {
+  it('mounts one with working defaults, numbered like every other geometry', () => {
+    const geo = addCamera(emptyGeometry(), { x: 3.2, y: 4.7 });
+    expect(camerasOf(geo)).toEqual([
+      { id: 'cam_1', at: { x: 3.2, y: 4.7 }, facing: 90, fov: 90, range: 12, level: 0, active: true },
+    ]);
+    expect(camerasOf(addCamera(geo, { x: 1, y: 1 }))[1]?.id).toBe('cam_2');
+    expectValid(geo);
+  });
+
+  it('reads an old scene with no camera list as having none', () => {
+    expect(camerasOf(emptyGeometry())).toEqual([]);
+    expect(camerasOf(removeCamera(emptyGeometry(), 'cam_9'))).toEqual([]);
+  });
+
+  it('keeps every dial inside the contract, whatever the GM types', () => {
+    let geo = addCamera(emptyGeometry(), { x: 2, y: 2 });
+    geo = updateCamera(geo, 'cam_1', { facing: -30, fov: 1, range: 900, level: -2 });
+    expect(camerasOf(geo)[0]).toMatchObject({ facing: 330, fov: 5, range: 200, level: 0 });
+    geo = updateCamera(geo, 'cam_1', { facing: 720, fov: 999 });
+    expect(camerasOf(geo)[0]).toMatchObject({ facing: 0, fov: 360 });
+    expectValid(geo);
+    expect(normalizeFacing(-90)).toBe(270);
+    expect(normalizeFacing(450.04)).toBe(90);
+  });
+
+  it('labels, switches off, and forgets', () => {
+    let geo = addCamera(emptyGeometry(), { x: 2, y: 2 });
+    geo = updateCamera(geo, 'cam_1', { label: '  Lobby cam ', active: false });
+    expect(camerasOf(geo)[0]).toMatchObject({ label: 'Lobby cam', active: false });
+    geo = updateCamera(geo, 'cam_1', { label: null });
+    expect(camerasOf(geo)[0]?.label).toBeUndefined();
+    expect(camerasOf(removeCamera(geo, 'cam_1'))).toEqual([]);
+    // Patching a camera that is not there changes nothing.
+    expect(updateCamera(geo, 'cam_2', { fov: 30 })).toEqual(geo);
   });
 });

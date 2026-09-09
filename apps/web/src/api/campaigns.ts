@@ -64,19 +64,40 @@ export function useJoinQr(campaignId: string | undefined, role: Role, enabled: b
  * also the only place it can safely live: a client-declared character id would
  * let any device claim any sheet.
  */
-export function useMyCharacterId(campaignId: string | undefined): string | null {
+/** `GET /api/me` — who this device is, from the server that minted it. */
+export interface Me {
+  user: { id: string; displayName: string };
+  role: Role;
+  campaignId: string | null;
+  deviceId: string;
+  /** The character this user plays in the campaign, or null. */
+  characterId: string | null;
+}
+
+/**
+ * Keyed by token, so switching sessions in this tab asks again rather than
+ * answering for whoever was here before.
+ */
+export function useMe() {
   const session = getSession();
-  const { data } = useQuery({
-    queryKey: ['characters', campaignId],
-    queryFn: async () =>
-      (
-        await apiGet<{ characters: Array<{ id: string; ownerUserId?: string | null }> }>(
-          `/api/campaigns/${campaignId}/characters`,
-        )
-      ).characters,
-    enabled: Boolean(campaignId && session?.userId),
+  return useQuery({
+    queryKey: ['me', session?.token ?? ''],
+    queryFn: () => apiGet<Me>('/api/me'),
+    enabled: Boolean(session),
     staleTime: 60_000,
   });
-  if (!session?.userId) return null;
-  return data?.find((c) => c.ownerUserId === session.userId)?.id ?? null;
+}
+
+/**
+ * The character this device plays, or null.
+ *
+ * From the SERVER, not the session: a device that signed in by pasting a
+ * token has no user id stored, and the old lookup — match the roster's owners
+ * against `session.userId` — answered null for it, which meant no sightline of
+ * its own and no draggable runner. The server knows who minted the token.
+ */
+export function useMyCharacterId(campaignId: string | undefined): string | null {
+  const { data } = useMe();
+  if (!campaignId || !data || data.campaignId !== campaignId) return null;
+  return data.characterId;
 }

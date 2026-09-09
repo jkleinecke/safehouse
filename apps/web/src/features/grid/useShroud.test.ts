@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Token } from '@safehouse/contracts';
-import { viewpointTokenId, type ShroudInputs } from './useShroud.js';
+import { cameraLensId, viewpointCameraId, viewpointTokenId, type ShroudInputs } from './useShroud.js';
 
 const token = (id: string, over: Partial<Token> = {}): Token =>
   ({
@@ -99,5 +99,16 @@ describe('viewpointTokenId', () => {
         }),
       ),
     ).toBe('guard');
+  });
+});
+
+describe('the camera lens (FR9.23)', () => {
+  it('names a camera, for the GM only', () => {
+    expect(viewpointCameraId(base({ isGm: true, losTokenId: cameraLensId('cam_1') }))).toBe('cam_1');
+    // A camera lens is not a token, so the token resolver stands down.
+    expect(viewpointTokenId(base({ isGm: true, losTokenId: cameraLensId('cam_1') }))).toBeNull();
+    // A player's scene never carries cameras; a lens id from them means nothing.
+    expect(viewpointCameraId(base({ isGm: false, losTokenId: cameraLensId('cam_1') }))).toBeNull();
+    expect(viewpointCameraId(base({ isGm: true, losTokenId: 'tok_1' }))).toBeNull();
   });
 });

@@ -21,6 +21,8 @@ import {
   GridSchema,
   SceneEnvironmentSchema,
   SceneGeometrySchema,
+  SceneVisionSchema,
+  type SceneVision,
   FogStateSchema,
   SheetV1Schema,
   TokenAuraSchema,
@@ -127,6 +129,7 @@ function geometryColumn(
   notes?: string,
   tiles?: TileLayer,
   levels?: SceneLevel[],
+  vision?: SceneVision,
 ) {
   // `tiles` rides in the existing geometry JSONB rather than earning a column:
   // it is scene-shaped authoring data like walls and pins, and this keeps the
@@ -137,6 +140,8 @@ function geometryColumn(
     ...(notes !== undefined ? { notes } : {}),
     ...(tiles !== undefined ? { tiles } : {}),
     ...(levels !== undefined ? { levels } : {}),
+    // Sight settings ride in the same envelope, for the same reason tiles do.
+    ...(vision !== undefined ? { vision } : {}),
   };
 }
 
@@ -173,12 +178,15 @@ export function serializeScene(row: SceneRow): Scene {
       ];
     },
   );
+  const visionParsed = SceneVisionSchema.safeParse(geoRaw['vision']);
+  const vision = visionParsed.success ? visionParsed.data : SceneVisionSchema.parse({});
   return {
     id: row.id,
     campaignId: row.campaignId,
     name: row.name,
     state: row.state,
     levels,
+    vision,
     grid: normalizeGrid(row.grid),
     environment: normalizeEnvironment(row.environment),
     geometry: normalizeGeometry(geoRaw),
@@ -192,8 +200,15 @@ export function serializeScene(row: SceneRow): Scene {
 
 /**
  * Strip GM-layer data for player/observer/display viewers (Principle 4):
- * GM notes, GM-layer geometry (walls/doors/zones, non-public pins), and every
- * unrevealed fog region — players get only revealed geometry (FR9.13).
+ * GM notes, the GM's annotations (zones, non-public pins, cameras, the note
+ * on a wall), and every unrevealed fog region — players get only revealed
+ * fog geometry (FR9.13).
+ *
+ * Walls and doors themselves are NOT stripped (FR9.16). They are the map's
+ * sight geometry, and every player device computes its own shroud from the
+ * scene it is sent: a wall withheld here is a wall a runner's sightline goes
+ * straight through, which was exactly the bug. They are treated like tiles —
+ * the floor plan — and the reasoning below covers them too.
  *
  * `tiles` and `mapAttachmentIds` deliberately pass through UNFILTERED, and the
  * distinction is worth stating because it looks like an oversight and is not.
@@ -214,9 +229,16 @@ export function sceneForViewer(scene: Scene, gm: boolean): Scene {
   const revealed = new Set(scene.fog.revealed);
   const filtered: Scene = {
     ...scene,
+    // Cameras are omitted entirely (FR9.23): a camera a player can see on the
+    // map is a camera their character has already found. The list is not
+    // even an empty array on the wire — nothing says there is a list.
     geometry: {
-      walls: [],
-      doors: [],
+      // Walls and doors are the map's SIGHT geometry, and a player device
+      // computes its own shroud from them (FR9.16): a wall stripped here is a
+      // wall a runner sees straight through. What stays GM-only is the
+      // annotation — the note on a wall, the zones, the private pins.
+      walls: scene.geometry.walls.map(({ id, a, b }) => ({ id, a, b })),
+      doors: scene.geometry.doors.map(({ id, a, b, open }) => ({ id, a, b, open })),
       zones: [],
       pins: scene.geometry.pins.filter((p) => p.visibility === 'public'),
     },
@@ -492,6 +514,8 @@ export interface SceneWriteInput {
   tiles?: TileLayer;
   /** Floors above the ground one (FR9.22). Replaces the list wholesale. */
   levels?: SceneLevel[];
+  /** Sight settings (FR9.16); merged over the current ones. */
+  vision?: Partial<SceneVision>;
   fog?: FogState;
   mapAttachmentIds?: string[];
   notes?: string;
@@ -610,6 +634,8 @@ export class ScenesService {
     // it wants to keep. Merging by index would make "delete the top storey"
     // impossible to express.
     const levels = patch.levels !== undefined ? patch.levels : current.levels;
+    const vision =
+      patch.vision !== undefined ? SceneVisionSchema.parse({ ...current.vision, ...patch.vision }) : current.vision;
     const updated = (
       await this.db
         .update(scenes)
@@ -618,7 +644,7 @@ export class ScenesService {
           state: patch.state ?? row.state,
           grid,
           environment: env,
-          geometry: geometryColumn(geometry, mapAttachmentIds, notes, tiles, levels),
+          geometry: geometryColumn(geometry, mapAttachmentIds, notes, tiles, levels, vision),
           fog,
         })
         .where(eq(scenes.id, row.id))

@@ -58,6 +58,8 @@ function harness(tool: StageSceneState['tool']) {
     vi.fn<(c0: number, r0: number, c1: number, r1: number, mode: 'area' | 'room') => void>();
   const drawRect = vi.fn();
   const clearRect = vi.fn();
+  const onCameraPlace = vi.fn<(x: number, y: number) => void>();
+  const onCameraSelect = vi.fn<(id: string) => void>();
   const noop = (): void => {};
   const cb: StageCallbacks = {
     onTokenMove: noop,
@@ -73,6 +75,8 @@ function harness(tool: StageSceneState['tool']) {
     onSegmentDraw: noop,
     onPinPlace: noop,
     onPinSelect: noop,
+    onCameraPlace,
+    onCameraSelect,
     onTilePaint,
     onTileStrokeEnd,
     onTileRect,
@@ -133,7 +137,7 @@ function harness(tool: StageSceneState['tool']) {
 
   const cells = (): Array<[number, number, boolean]> => onTilePaint.mock.calls.map((c) => [...c]);
 
-  return { onTilePaint, onTileStrokeEnd, onTileRect, drawRect, clearRect, controller, send, cells };
+  return { onTilePaint, onTileStrokeEnd, onTileRect, drawRect, clearRect, onCameraPlace, onCameraSelect, state, controller, send, cells };
 }
 
 // ---------------------------------------------------------------------------
@@ -372,5 +376,41 @@ describe('cellsBetween', () => {
       { col: -1, row: -1 },
       { col: 0, row: -1 },
     ]);
+  });
+});
+
+describe('the camera tool (FR9.23)', () => {
+  it('mounts a camera where the GM clicks, and nothing else', () => {
+    const h = harness('camera');
+    h.send('pointerdown', 4, 3);
+    h.send('pointerup', 4, 3);
+    expect(h.onCameraPlace).toHaveBeenCalledTimes(1);
+    const [x, y] = h.onCameraPlace.mock.calls[0]!;
+    expect(Math.floor(x)).toBe(4);
+    expect(Math.floor(y)).toBe(3);
+    expect(h.onTilePaint).not.toHaveBeenCalled();
+    expect(h.onTileRect).not.toHaveBeenCalled();
+  });
+
+  it('opens a camera under a select-tool click, for the GM', () => {
+    const h = harness('select');
+    (h.state.scene.geometry as { cameras?: unknown[] }).cameras = [
+      { id: 'cam_1', at: { x: 4.5, y: 3.5 }, facing: 90, fov: 90, range: 12, level: 0, active: true },
+    ];
+    h.send('pointerdown', 4, 3);
+    h.send('pointerup', 4, 3);
+    expect(h.onCameraSelect).toHaveBeenCalledWith('cam_1');
+    expect(h.onCameraPlace).not.toHaveBeenCalled();
+  });
+
+  it('never opens one for a player, even if a camera somehow reached their state', () => {
+    const h = harness('select');
+    (h.state as { role: string }).role = 'player';
+    (h.state.scene.geometry as { cameras?: unknown[] }).cameras = [
+      { id: 'cam_1', at: { x: 4.5, y: 3.5 }, facing: 90, fov: 90, range: 12, level: 0, active: true },
+    ];
+    h.send('pointerdown', 4, 3);
+    h.send('pointerup', 4, 3);
+    expect(h.onCameraSelect).not.toHaveBeenCalled();
   });
 });

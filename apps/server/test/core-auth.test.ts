@@ -249,3 +249,23 @@ describe('device revoke (FR1.3)', () => {
     expect(res.statusCode).toBe(200);
   });
 });
+
+describe('GET /api/me (FR1.1 / FR9.16)', () => {
+  it('tells a device who it is, and which runner it plays', async () => {
+    const joined = await joinAs(t.app, boot.campaignId, boot.gmToken, 'player', 'Quill');
+    const res = await t.app.inject({ method: 'GET', url: '/api/me', headers: { authorization: `Bearer ${joined.token}` } });
+    expect(res.statusCode).toBe(200);
+    const me = res.json() as { user: { id: string; displayName: string }; role: string; campaignId: string; characterId: string | null };
+    expect(me.user.id).toBe(joined.user.id);
+    expect(me.user.displayName).toBe('Quill');
+    expect(me.role).toBe('player');
+    expect(me.campaignId).toBe(boot.campaignId);
+    // No sheet yet, so no runner — and never a guess.
+    expect(me.characterId).toBeNull();
+  });
+
+  it('refuses an unpaired browser', async () => {
+    const res = await t.app.inject({ method: 'GET', url: '/api/me' });
+    expect(res.statusCode).toBe(401);
+  });
+});

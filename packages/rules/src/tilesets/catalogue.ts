@@ -78,6 +78,7 @@ export const DOCKLANDS: Tileset = {
     { id: 'spool', name: 'Cable spool', kind: 'feature', category: 'interior', pattern: 'planks', colors: ['#8d7550', '#9a8058'], footprint: 'round', height: WAIST, prop: 'spool', hint: 'Waist high and it rolls.' },
     { id: 'worklight', name: 'Work light', kind: 'feature', category: 'decoration', pattern: 'solid', colors: ['#6e6553', '#7c725e'], footprint: 'post', height: FULL, blocksSight: false, emissive: '#ffc76a', prop: 'worklight', hint: 'A tripod lamp: it lights the ground around it, and it can be kicked over.' },
     { id: 'pallet', name: 'Empty pallet', kind: 'feature', category: 'decoration', pattern: 'planks', colors: ['#8a6f48', '#957a50'], prop: 'pallet', placement: { on: ['floor', 'stain', 'grate'] }, hint: 'Flat. Something was here and has gone.' },
+    { id: 'pillar', name: 'Concrete pillar', kind: 'feature', category: 'interior', pattern: 'concrete', colors: ['#7e6f5a', '#8c7c66'], footprint: 'post', height: FULL, prop: 'column', hint: 'Full height: stops a look and a round. Cover for whoever gets to it first.' },
   ],
 };
 
@@ -114,6 +115,7 @@ export const CORP_INTERIOR: Tileset = {
     { id: 'cabinet', name: 'Filing cabinet', kind: 'feature', category: 'interior', pattern: 'panel', colors: ['#85837d', '#908e88'], height: WAIST, prop: 'locker', placement: { againstWall: true }, hint: 'Paper. Somebody still keeps paper.' },
     { id: 'cooler', name: 'Water cooler', kind: 'feature', category: 'decoration', pattern: 'solid', colors: ['#94928b', '#9f9d96'], footprint: 'post', height: WAIST, prop: 'cooler', placement: { againstWall: true, on: ['carpet', 'hall', 'lobby'] }, hint: 'Where the gossip is.' },
     { id: 'bin', name: 'Waste bin', kind: 'feature', category: 'decoration', pattern: 'solid', colors: ['#8a857c', '#959087'], footprint: 'post', height: WAIST, prop: 'bin', placement: { on: ['carpet', 'hall', 'lobby', 'raised'] } },
+    { id: 'column', name: 'Lobby column', kind: 'feature', category: 'interior', pattern: 'tile', colors: ['#a09b8f', '#a49f94'], footprint: 'post', height: FULL, prop: 'column', hint: 'Full height: stops a look and a round. Cover for whoever gets to it first.' },
   ],
 };
 
@@ -161,6 +163,7 @@ export const SPRAWL_STREET: Tileset = {
     { id: 'kiosk', name: 'Matrix kiosk', kind: 'feature', category: 'decoration', pattern: 'panel', colors: ['#6d6a5e', '#7a7668'], height: FULL, prop: 'vending', placement: { on: ['walk'], againstWall: true }, hint: 'Public terminal. Logged, and so is whoever uses it.' },
     { id: 'stall', name: 'Market stall', kind: 'feature', category: 'interior', pattern: 'planks', colors: ['#8b6e52', '#9c7c5d'], height: WAIST, blocksSight: false, prop: 'tent', placement: { on: ['walk', 'alley'] }, hint: 'Cover with an awning; a crowd around it if you want one.' },
     { id: 'barrier', name: 'Jersey barrier', kind: 'feature', category: 'interior', pattern: 'concrete', colors: ['#7d7263', '#8b7f6f'], footprint: 'wall', height: WAIST, hint: 'Concrete. Stops a car and a round.' },
+    { id: 'pillar', name: 'Support pillar', kind: 'feature', category: 'interior', pattern: 'concrete', colors: ['#7a6a5a', '#8a786a'], footprint: 'post', height: FULL, prop: 'column', hint: 'Full height: stops a look and a round. Cover for whoever gets to it first.' },
   ],
 };
 
@@ -194,6 +197,7 @@ export const MAINTENANCE: Tileset = {
     { id: 'crates', name: 'Parts crates', kind: 'feature', category: 'interior', pattern: 'planks', colors: ['#8a7048', '#977b50'], height: WAIST, prop: 'crates' },
     { id: 'drum', name: 'Chemical drum', kind: 'feature', category: 'decoration', pattern: 'solid', colors: ['#6f7a45', '#7c884e'], footprint: 'round', height: WAIST, prop: 'barrel', placement: { on: ['duct', 'tray', 'walkway'] }, hint: 'Do not open it. Do not shoot it either.' },
     { id: 'reel', name: 'Hose reel', kind: 'feature', category: 'decoration', pattern: 'panel', colors: ['#8a7454', '#97805c'], footprint: 'round', height: WAIST, prop: 'spool', placement: { on: ['duct', 'tray'] } },
+    { id: 'pillar', name: 'Support pillar', kind: 'feature', category: 'interior', pattern: 'concrete', colors: ['#77705a', '#867e66'], footprint: 'post', height: FULL, prop: 'column', hint: 'Full height: stops a look and a round. Cover for whoever gets to it first.' },
   ],
 };
 
@@ -229,6 +233,7 @@ export const BARRENS: Tileset = {
     { id: 'crates', name: 'Scavenged crates', kind: 'feature', category: 'interior', pattern: 'planks', colors: ['#8b6f4c', '#987a54'], height: WAIST, prop: 'crates', hint: 'Whatever was in them is long gone.' },
     { id: 'lantern', name: 'Oil lantern', kind: 'feature', category: 'decoration', pattern: 'solid', colors: ['#7d6046', '#8a6a4e'], footprint: 'post', height: WAIST, emissive: '#ffb056', prop: 'lantern', placement: { on: ['dirt', 'slab', 'ash'] }, hint: 'A small light. Whoever lit it is close.' },
     { id: 'cart', name: 'Shopping cart', kind: 'feature', category: 'decoration', pattern: 'grating', colors: ['#6e6659', '#7b7264'], footprint: 'post', height: WAIST, blocksSight: false, prop: 'cart', placement: { on: ['dirt', 'slab', 'ash', 'rubble'] }, hint: 'Everything somebody owns.' },
+    { id: 'pillar', name: 'Standing pillar', kind: 'feature', category: 'interior', pattern: 'brick', colors: ['#8a6653', '#9a745f'], footprint: 'post', height: FULL, prop: 'column', hint: 'What is left of the floor above. Full height: stops a look and a round.' },
   ],
 };
 
@@ -265,6 +270,7 @@ export const CLUB: Tileset = {
     { id: 'cigs', name: 'Cigarette machine', kind: 'feature', category: 'decoration', pattern: 'panel', colors: ['#4a5d66', '#587079'], height: FULL, prop: 'vending', placement: { againstWall: true }, hint: 'Also sells things that are not cigarettes.' },
     { id: 'crates', name: 'Beer crates', kind: 'feature', category: 'interior', pattern: 'panel', colors: ['#3f5a6b', '#4c6a7c'], height: WAIST, prop: 'crates', hint: 'Behind the bar, or blocking the fire door.' },
     { id: 'keg', name: 'Beer keg', kind: 'feature', category: 'decoration', pattern: 'solid', colors: ['#6b7378', '#767e83'], footprint: 'round', height: WAIST, prop: 'barrel', placement: { on: ['bar', 'quiet'] } },
+    { id: 'column', name: 'Mirrored column', kind: 'feature', category: 'interior', pattern: 'panel', colors: ['#3e535c', '#4b636d'], footprint: 'post', height: FULL, prop: 'column', hint: 'Full height: stops a look and a round. Cover for whoever gets to it first.' },
   ],
 };
 

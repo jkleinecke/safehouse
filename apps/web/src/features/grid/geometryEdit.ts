@@ -12,6 +12,7 @@
  */
 import {
   SceneGeometrySchema,
+  type Camera,
   type Door,
   type Pin,
   type Point,
@@ -27,7 +28,7 @@ import { gridDist, isDegenerateSegment, MIN_SEGMENT, snapVertex } from './geomet
 export { isDegenerateSegment, MIN_SEGMENT, snapVertex };
 
 /** What the GM's active drawing tool is authoring. */
-export type GeometryKind = 'wall' | 'door' | 'zone' | 'pin';
+export type GeometryKind = 'wall' | 'door' | 'zone' | 'pin' | 'camera';
 
 /** A zone needs three vertices to be a polygon at all. */
 export const MIN_POLYGON_POINTS = 3;
@@ -290,5 +291,94 @@ export function geometryCounts(geo: SceneGeometry): Record<GeometryKind, number>
     door: geo.doors.length,
     zone: geo.zones.length,
     pin: geo.pins.length,
+    camera: camerasOf(geo).length,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Cameras (FR9.23 — a fixed eye only the GM sees)
+// ---------------------------------------------------------------------------
+
+/** What a click mounts, before the GM has touched a dial. */
+export const CAMERA_DEFAULTS = { facing: 90, fov: 90, range: 12 } as const;
+
+/** The list, whether or not the scene has ever had one. */
+export function camerasOf(geo: SceneGeometry): readonly Camera[] {
+  return geo.cameras ?? [];
+}
+
+/** A bearing on the compass, 0 ≤ deg < 360, to a tenth of a degree. */
+export function normalizeFacing(deg: number): number {
+  const d = ((deg % 360) + 360) % 360;
+  return Math.round(d * 10) / 10;
+}
+
+export interface CameraOptions {
+  id?: string;
+  facing?: number;
+  fov?: number;
+  range?: number;
+  level?: number;
+  label?: string;
+}
+
+export function addCamera(geo: SceneGeometry, at: Point, opts: CameraOptions = {}): SceneGeometry {
+  const cameras = camerasOf(geo);
+  const camera: Camera = {
+    id: opts.id ?? nextGeometryId('cam', cameras),
+    at: roundPoint(at),
+    facing: normalizeFacing(opts.facing ?? CAMERA_DEFAULTS.facing),
+    fov: clampFov(opts.fov ?? CAMERA_DEFAULTS.fov),
+    range: clampRange(opts.range ?? CAMERA_DEFAULTS.range),
+    level: Math.max(0, Math.floor(opts.level ?? 0)),
+    active: true,
+    ...(opts.label?.trim() ? { label: opts.label.trim() } : {}),
+  };
+  return { ...geo, cameras: [...cameras, camera] };
+}
+
+export type CameraPatch = {
+  at?: Point;
+  facing?: number;
+  fov?: number;
+  range?: number;
+  level?: number;
+  active?: boolean;
+  /** `null` clears the label. */
+  label?: string | null;
+};
+
+export function updateCamera(geo: SceneGeometry, id: string, patch: CameraPatch): SceneGeometry {
+  return {
+    ...geo,
+    cameras: camerasOf(geo).map((c) => {
+      if (c.id !== id) return c;
+      const next: Camera = { ...c };
+      if (patch.at) next.at = roundPoint(patch.at);
+      if (patch.facing !== undefined) next.facing = normalizeFacing(patch.facing);
+      if (patch.fov !== undefined) next.fov = clampFov(patch.fov);
+      if (patch.range !== undefined) next.range = clampRange(patch.range);
+      if (patch.level !== undefined) next.level = Math.max(0, Math.floor(patch.level));
+      if (patch.active !== undefined) next.active = patch.active;
+      if (patch.label !== undefined) {
+        const label = patch.label?.trim() ?? '';
+        if (label === '') delete next.label;
+        else next.label = label;
+      }
+      return next;
+    }),
+  };
+}
+
+export function removeCamera(geo: SceneGeometry, id: string): SceneGeometry {
+  return { ...geo, cameras: camerasOf(geo).filter((c) => c.id !== id) };
+}
+
+/** The contract's bounds: narrower than a keyhole or wider than a dome is a typo. */
+function clampFov(fov: number): number {
+  return Math.min(360, Math.max(5, Math.round(fov)));
+}
+
+function clampRange(range: number): number {
+  return Math.min(200, Math.max(1, Math.round(range * 10) / 10));
 }

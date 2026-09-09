@@ -681,7 +681,7 @@ describe('Principle 4 — what a player sees of the painted floor', () => {
 
   it('still strips the GM layer around it', async () => {
     const scene = await sceneAs(sceneId, player.token);
-    expect(scene.geometry.walls).toEqual([]);
+    expect(scene.geometry.zones).toEqual([]);
     expect(scene.notes).toBeUndefined();
     expect(scene.fog.regions).toEqual([]); // nothing revealed yet
   });

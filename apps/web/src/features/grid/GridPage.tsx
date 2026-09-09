@@ -29,7 +29,7 @@ import {
 } from './api.js';
 import { GridCommands } from './commands.js';
 import { rollScatter } from './geometry.js';
-import { addDoor, addPin, addWall, toggleDoor } from './geometryEdit.js';
+import { addCamera, addDoor, addPin, addWall, toggleDoor } from './geometryEdit.js';
 import GmPanel from './gm/GmPanel.js';
 import MeasurePanel from './hud/MeasurePanel.js';
 import Toolbar from './hud/Toolbar.js';
@@ -42,6 +42,7 @@ import {
 } from './projection.js';
 import { autoTileFor } from './autoPlace.js';
 import { roomPlan, roomTileIds } from './roomFill.js';
+import { useCameraCones } from './useCameraCones.js';
 import { useShroud } from './useShroud.js';
 import { useStairOffer } from './useStairs.js';
 import { useGridStore } from './store.js';
@@ -214,7 +215,9 @@ export default function GridPage() {
     isGm,
     losTokenId: store.losTokenId,
     myCharacterId: myCharacterId ?? null,
-    enabledForPlayers: store.losForPlayers,
+    // The scene's own setting (FR9.16), so every player device hears the
+    // GM's switch the moment it flips rather than never.
+    enabledForPlayers: scene?.vision?.playersSeeOwnSight ?? false,
   });
 
   /**
@@ -268,6 +271,10 @@ export default function GridPage() {
     return mine?.level ?? 0;
   }, [isGm, store.activeLevel, tokens, myCharacterId]);
 
+  // What the GM's cameras cover on this floor (FR9.23). Null for players,
+  // whose scene carries no cameras to begin with.
+  const cameraCones = useCameraCones(scene, isGm, viewLevel);
+
   const stageState: StageSceneState | null = useMemo(
     () =>
       composeStageState({
@@ -282,6 +289,8 @@ export default function GridPage() {
         scatter: store.scatter,
         fogDraft: store.fogDraft,
         selectedPinId: store.selectedPinId,
+        selectedCameraId: store.selectedCameraId,
+        cameraCones,
         shroud,
         level: viewLevel,
       }),
@@ -297,6 +306,8 @@ export default function GridPage() {
       store.scatter,
       store.fogDraft,
       store.selectedPinId,
+      store.selectedCameraId,
+      cameraCones,
       shroud,
       viewLevel,
     ],
@@ -429,6 +440,25 @@ export default function GridPage() {
         const s = useGridStore.getState();
         s.selectPin(pinId);
         s.setGmTab('pins');
+        s.openGmPanel();
+      },
+      // -- Security cameras (FR9.23) -----------------------------------------
+      onCameraPlace: (x, y) => {
+        if (!scene || !isGm) return;
+        // Mounted on the floor the GM is looking at, facing the way a GM
+        // most often wants first: toward the bottom of the screen.
+        const geometry = addCamera(scene.geometry, { x, y }, { level: useGridStore.getState().activeLevel });
+        const placed = geometry.cameras?.[geometry.cameras.length - 1];
+        patchGeometry.mutate({ sceneId: scene.id, geometry });
+        const s = useGridStore.getState();
+        if (placed) s.selectCamera(placed.id);
+        s.setGmTab('cameras');
+        s.openGmPanel();
+      },
+      onCameraSelect: (cameraId) => {
+        const s = useGridStore.getState();
+        s.selectCamera(cameraId);
+        s.setGmTab('cameras');
         s.openGmPanel();
       },
     }),

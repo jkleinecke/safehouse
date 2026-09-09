@@ -9,3 +9,4 @@ export * from './los.js';
 export * from './model.js';
 export * from './cover.js';
 export * from './visible.js';
+export * from './cone.js';

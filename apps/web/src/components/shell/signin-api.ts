@@ -14,6 +14,7 @@
 import { useMutation } from '@tanstack/react-query';
 import type { Role } from '@safehouse/contracts';
 import { apiGet, apiPost, queryClient } from '../../api/client.js';
+import type { Me } from '../../api/campaigns.js';
 import { saveSession, sessionFrom, type JoinResponse, type Session } from '../../api/session.js';
 import { useLiveStore } from '../../live/store.js';
 
@@ -113,28 +114,45 @@ export function useRedeemCode() {
 }
 
 /**
- * Prove a pasted token before storing it. `GET /api/campaigns/:id` is the
- * cheapest authenticated read and it also runs the server's `assertCampaign`,
- * so a token for another campaign fails here rather than half-signing the
+ * Prove a pasted token before storing it, and learn who it is.
+ *
+ * `GET /api/me` is the cheapest authenticated read and it answers the question
+ * a pasted token cannot: which user, which device, which runner. Without that
+ * the session had a token and nothing else, and every feature keyed on the
+ * user — the player's own sightline first among them — quietly did nothing.
+ * A token for another campaign is refused here rather than half-signing the
  * browser in. The header is passed explicitly because the stored session is,
  * by definition, not this token yet — which is also why a 401 here must not
  * retire anything: a bad paste is a bad paste, not an expired session.
  */
-export async function verifyPastedSession(session: Session): Promise<{ id: string; name: string }> {
-  return apiGet<{ id: string; name: string }>(`/api/campaigns/${session.campaignId}`, {
+export async function verifyPastedSession(session: Session): Promise<Me> {
+  const me = await apiGet<Me>('/api/me', {
     anonymous: true,
     keepSessionOn401: true,
     headers: { Authorization: `Bearer ${session.token}` },
   });
+  if (me.campaignId !== session.campaignId) {
+    throw new Error('that token belongs to a different campaign');
+  }
+  return me;
 }
 
 /** Verify, then store — the landing screen's "paste a device token" button. */
 export function useAdoptPastedSession() {
   return useMutation({
     mutationFn: async (session: Session): Promise<Session> => {
-      await verifyPastedSession(session);
-      saveSession(session);
-      return session;
+      const me = await verifyPastedSession(session);
+      // The server's word on who this is, kept with the token so the rest of
+      // the app has a user id to work from — the join flow stores the same.
+      const known: Session = {
+        ...session,
+        role: me.role,
+        userId: me.user.id,
+        deviceId: me.deviceId,
+        ...(session.displayName ? {} : { displayName: me.user.displayName }),
+      };
+      saveSession(known);
+      return known;
     },
     onSuccess: () => {
       void queryClient.invalidateQueries();

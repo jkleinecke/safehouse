@@ -19,8 +19,25 @@
  */
 import { useMemo } from 'react';
 import type { Scene, Token } from '@safehouse/contracts';
-import { sightModelFor, visibleFrom, DEFAULT_SIGHT_RANGE } from '@safehouse/rules';
+import { coneCells, sightModelFor, visibleFrom, DEFAULT_SIGHT_RANGE } from '@safehouse/rules';
 import type { ShroudState } from './types.js';
+
+/**
+ * A lens id that names a camera rather than a token (FR9.23): the GM's
+ * "show me what this camera sees". Cameras never appear in a player's
+ * scene, so a player asking for one gets nothing.
+ */
+export const CAMERA_LENS = 'camera:';
+
+export function cameraLensId(cameraId: string): string {
+  return `${CAMERA_LENS}${cameraId}`;
+}
+
+/** The camera a lens id names, or null when it names a token or nothing. */
+export function viewpointCameraId(inputs: ShroudInputs): string | null {
+  if (!inputs.isGm || inputs.losTokenId === null) return null;
+  return inputs.losTokenId.startsWith(CAMERA_LENS) ? inputs.losTokenId.slice(CAMERA_LENS.length) : null;
+}
 
 export interface ShroudInputs {
   scene: Scene | null | undefined;
@@ -46,7 +63,7 @@ export interface ShroudInputs {
  * "what does the guard see" is the question that makes this tool worth having.
  */
 export function viewpointTokenId(inputs: ShroudInputs): string | null {
-  if (inputs.isGm) return inputs.losTokenId;
+  if (inputs.isGm) return viewpointCameraId(inputs) === null ? inputs.losTokenId : null;
   if (!inputs.enabledForPlayers || inputs.myCharacterId === null) return null;
   const mine = inputs.tokens.find(
     (t) => t.source === 'character' && t.sourceId === inputs.myCharacterId,
@@ -67,11 +84,25 @@ export function useShroud(inputs: ShroudInputs): ShroudState | null {
   const { scene, tokens, isGm } = inputs;
   const tokenId = viewpointTokenId(inputs);
   const viewer = tokenId === null ? undefined : tokens.find((t) => t.id === tokenId);
+  const cameraId = viewpointCameraId(inputs);
+  const camera = cameraId === null ? undefined : scene?.geometry.cameras?.find((c) => c.id === cameraId);
 
   const vx = viewer?.x;
   const vy = viewer?.y;
 
   return useMemo(() => {
+    if (scene && camera !== undefined) {
+      // Through the camera's eye (FR9.23): its cone, plus the square it is
+      // mounted in, so the mount itself is not scrimmed out of the picture.
+      const model = sightModelFor(scene, camera.level ?? 0);
+      const visible = new Set(coneCells(camera, model, { cols: scene.grid.cols, rows: scene.grid.rows }).keys());
+      visible.add(`${Math.floor(camera.at.x)},${Math.floor(camera.at.y)}`);
+      const heights = new Map<string, number>();
+      for (const [key, cell] of model.cells) {
+        if (cell.height > 0) heights.set(key, cell.height);
+      }
+      return { visible, gm: true, heights };
+    }
     if (!scene || viewer === undefined || vx === undefined || vy === undefined) {
       return null;
     }
@@ -108,5 +139,7 @@ export function useShroud(inputs: ShroudInputs): ShroudState | null {
     vy,
     viewer?.level ?? 0,
     isGm,
+    // The camera lens: which camera, and where it points.
+    JSON.stringify(camera ?? null),
   ]);
 }

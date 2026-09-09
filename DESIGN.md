@@ -216,6 +216,7 @@ Full Roll20-parity mapping plus the SR5 integrations no generic VTT gives us. `[
 
 - **FR9.16** Wall-based token vision and dynamic lighting: walls from FR9.2 block sight lines; vision modes per token (normal, low-light, thermographic — from metatype/'ware, engine-derived) alter what each player's view reveals; light sources on the map. This is the single most expensive VTT feature (R9) and manual fog must remain a first-class permanent alternative, not a deprecated stopgap.
 - **FR9.17** Matrix overlay (stretch): an AR/VR restyle of the active scene for deckers — host icons, personas, spotted marks — same geometry, different skin. Flavor, not a second map engine.
+- **FR9.23** Security cameras: the GM mounts a camera (a point, a facing, a field of view, a reach) and the canvas draws the cone of cells it actually covers, cut by the same walls and tiles a token's sightline is cut by; "look through it" shows the map the camera's way. GM-only end to end — a player socket never receives a camera (Principle 4), because a camera a player can see is one their character has already found. The first piece of FR9.16's vision system to ship, on the same engine; the plan for the rest is `docs/VISION.md`.
 - **FR9.18** ~~Per-scene ambient audio loop (stretch, waits for demand)~~ **Superseded 0.7:** ambient audio arrived as an AI feature — the Fixer's stagecraft (FR12.10) tags the GM's music library and matches scenes to tracks. This FR folds into it.
 
 ### M10 — The Opposition Kit: NPC generator, encounter planner, combat copilot *(Phase 3)*

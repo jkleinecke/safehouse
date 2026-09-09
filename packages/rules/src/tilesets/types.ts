@@ -266,6 +266,13 @@ export const TILE_PROPS = [
   'decks',
   /** Two cabinets stacked, cones on the front. */
   'speakers',
+  // --- structure ---------------------------------------------------------
+  /**
+   * A square pillar with a plinth and a cap. Full height, so it stops a
+   * look and a round like a wall does — the thing a runner ducks behind in
+   * a car park or a lobby.
+   */
+  'column',
   // --- freight and machinery ---------------------------------------------
   /** Three boxes, one on top of two. */
   'crates',

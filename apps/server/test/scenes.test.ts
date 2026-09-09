@@ -453,15 +453,15 @@ describe('scene → roll bridge and pin visibility (FR9.11, FR9.3)', () => {
     expect(await activeSceneModifiers(t.db, randomUUID())).toEqual([]);
   });
 
-  it('sends players the public pins and none of the GM-layer geometry', async () => {
+  it('sends players the sight geometry and the public pins, and none of the GM annotations', async () => {
     await t.app.inject({
       method: 'PATCH',
       url: `/api/scenes/${sceneId}`,
       headers: gm(),
       payload: {
         geometry: {
-          walls: [{ id: 'w1', a: { x: 0, y: 0 }, b: { x: 10, y: 0 } }],
-          doors: [{ id: 'd1', a: { x: 4, y: 0 }, b: { x: 5, y: 0 }, open: false }],
+          walls: [{ id: 'w1', a: { x: 0, y: 0 }, b: { x: 10, y: 0 }, note: 'load-bearing, do not blow' }],
+          doors: [{ id: 'd1', a: { x: 4, y: 0 }, b: { x: 5, y: 0 }, open: false, note: 'maglock rating 4' }],
           zones: [],
           pins: [
             { id: 'p-open', at: { x: 2, y: 2 }, label: 'loading bay', visibility: 'public' },
@@ -477,10 +477,42 @@ describe('scene → roll bridge and pin visibility (FR9.11, FR9.3)', () => {
     });
     const geo = (res.json() as { scene: { geometry: { walls: unknown[]; doors: unknown[]; pins: { id: string }[] } } })
       .scene.geometry;
-    expect(geo.walls).toEqual([]);
-    expect(geo.doors).toEqual([]);
+    // Walls and doors reach the player — their device cuts its own sightline
+    // on them (FR9.16) — but the GM's notes on them do not.
+    expect(geo.walls).toEqual([{ id: 'w1', a: { x: 0, y: 0 }, b: { x: 10, y: 0 } }]);
+    expect(geo.doors).toEqual([{ id: 'd1', a: { x: 4, y: 0 }, b: { x: 5, y: 0 }, open: false }]);
+    expect(res.body).not.toContain('load-bearing');
+    expect(res.body).not.toContain('maglock rating');
     expect(geo.pins.map((p) => p.id)).toEqual(['p-open']);
     expect(res.body).not.toContain('the stash');
+  });
+});
+
+describe('the players’ own sightline is a scene setting (FR9.16)', () => {
+  it('starts off, flips when the GM says so, and reaches a player device', async () => {
+    const before = await t.app.inject({ method: 'GET', url: `/api/scenes/${sceneId}`, headers: as(player.token) });
+    expect((before.json() as { scene: { vision: { playersSeeOwnSight: boolean } } }).scene.vision).toEqual({
+      playersSeeOwnSight: false,
+    });
+    const flip = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/scenes/${sceneId}`,
+      headers: gm(),
+      payload: { vision: { playersSeeOwnSight: true } },
+    });
+    expect(flip.statusCode).toBe(200);
+    const after = await t.app.inject({ method: 'GET', url: `/api/scenes/${sceneId}`, headers: as(player.token) });
+    expect((after.json() as { scene: { vision: { playersSeeOwnSight: boolean } } }).scene.vision.playersSeeOwnSight).toBe(true);
+  });
+
+  it('is the GM’s switch alone', async () => {
+    const res = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/scenes/${sceneId}`,
+      headers: as(player.token),
+      payload: { vision: { playersSeeOwnSight: false } },
+    });
+    expect(res.statusCode).toBe(403);
   });
 });
 

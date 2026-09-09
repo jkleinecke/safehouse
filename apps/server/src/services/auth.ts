@@ -57,7 +57,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import QRCode from 'qrcode';
 import { z } from 'zod';
 import { RoleSchema, type Role } from '@safehouse/contracts';
-import { campaigns, devices, invites, memberships, users, wsEvents, type Db } from '@safehouse/db';
+import { campaigns, characters, devices, invites, memberships, users, wsEvents, type Db } from '@safehouse/db';
 import { installStarterArchetypes } from './archetypes.js';
 
 // ---------------------------------------------------------------------------
@@ -185,6 +185,22 @@ export class AuthService {
       role: row.device.role,
       displayName: row.user.displayName,
     };
+  }
+
+  /**
+   * The character this user plays in `campaignId`, or null. The server's
+   * answer to "which runner is mine" — a client-declared id would let any
+   * device claim any viewpoint (FR9.16), so the sheet's owner is the only
+   * source. First by creation when a user somehow owns two.
+   */
+  async characterOwnedBy(campaignId: string, userId: string): Promise<string | null> {
+    const rows = await this.db
+      .select({ id: characters.id })
+      .from(characters)
+      .where(and(eq(characters.campaignId, campaignId), eq(characters.ownerUserId, userId)))
+      .orderBy(characters.createdAt)
+      .limit(1);
+    return rows[0]?.id ?? null;
   }
 
   async campaignCount(): Promise<number> {
@@ -893,6 +909,27 @@ function parseBody<T extends z.ZodType>(schema: T, body: unknown): z.output<T> {
  * The request-auth resolution hook itself lives in app.ts.
  */
 export function registerAuthRoutes(app: FastifyInstance, auth: AuthService): void {
+  /**
+   * Who this token is, as the server sees it (FR1.1/FR9.16).
+   *
+   * A device that signed in by pasting a token knows its token and nothing
+   * else — no user id, so no way to find its own runner, so no sightline of
+   * its own. This is the one place a client learns which user and which
+   * character it is, from the authority that minted the device.
+   */
+  app.get('/api/me', async (req) => {
+    const ctx = requireAuth(req);
+    const characterId =
+      ctx.campaignId === null ? null : await auth.characterOwnedBy(ctx.campaignId, ctx.userId);
+    return {
+      user: { id: ctx.userId, displayName: ctx.displayName },
+      role: ctx.role,
+      campaignId: ctx.campaignId,
+      deviceId: ctx.deviceId,
+      characterId,
+    };
+  });
+
   // Bootstrap / create campaign (FR1.1).
   app.post('/api/campaigns', async (req, reply) => {
     const body = parseBody(CreateCampaignBody, req.body);

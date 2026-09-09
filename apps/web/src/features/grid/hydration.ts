@@ -14,7 +14,15 @@ import {
   draggableTokenIds,
   type Viewer,
 } from './projection.js';
-import type { AoeTemplate, FogDraft, GridTool, ScatterResult, ShroudState, StageSceneState } from './types.js';
+import type {
+  AoeTemplate,
+  CameraCone,
+  FogDraft,
+  GridTool,
+  ScatterResult,
+  ShroudState,
+  StageSceneState,
+} from './types.js';
 
 // ---------------------------------------------------------------------------
 // Which scene is on screen
@@ -141,10 +149,39 @@ export interface StageComposeInput {
   fogDraft: FogDraft | null;
   /** Pin open in the GM's editor (FR9.3). */
   selectedPinId?: string | null;
+  /** Camera open in the GM's editor (FR9.23). */
+  selectedCameraId?: string | null;
+  /** What each camera on this floor covers — GM only (FR9.23). */
+  cameraCones?: readonly CameraCone[] | null;
   /** Cells outside the viewer's sightline, or null to draw no scrim. */
   shroud?: ShroudState | null;
   /** Which floor to draw (FR9.22). */
   level?: number;
+}
+
+/**
+ * The tokens a viewer's canvas draws, given their sightline (FR9.16).
+ *
+ * A PLAYER whose own sightline is on sees only what their runner can see: a
+ * guard behind a wall, a teammate down the corridor, a drone round the
+ * corner — none of them is drawn until the runner has line of sight. Their
+ * own token is always drawn; a runner does not lose sight of themself. A GM's
+ * lens is a lens, not a limit, so the GM keeps every token on screen.
+ *
+ * Presentation, not secrecy: hidden tokens are stripped server-side and this
+ * only decides what one device paints. The design note is in `useShroud`.
+ */
+export function tokensInSight(
+  tokens: readonly Token[],
+  viewer: Viewer,
+  shroud: ShroudState | null,
+): Token[] {
+  if (shroud === null || shroud.gm) return [...tokens];
+  return tokens.filter((t) => {
+    if (t.source === 'character' && t.sourceId === viewer.characterId) return true;
+    // Tokens sit on cell centres; the square they occupy is what the eye sees.
+    return shroud.visible.has(`${Math.floor(t.x)},${Math.floor(t.y)}`);
+  });
 }
 
 /**
@@ -162,8 +199,9 @@ export function composeStageState(input: StageComposeInput): StageSceneState | n
   // A token with no level is on the ground, which is where every token was
   // before floors existed.
   const level = input.level ?? 0;
-  const tokens = input.tokens.filter((t) => (t.level ?? 0) === level);
+  const onFloor = input.tokens.filter((t) => (t.level ?? 0) === level);
   const role: Role = input.viewer.role;
+  const tokens = tokensInSight(onFloor, input.viewer, input.shroud ?? null);
   return {
     scene,
     tokens,
@@ -178,6 +216,8 @@ export function composeStageState(input: StageComposeInput): StageSceneState | n
     scatter: input.scatter,
     fogDraft: input.fogDraft,
     selectedPinId: input.selectedPinId ?? null,
+    selectedCameraId: input.selectedCameraId ?? null,
+    cameraCones: input.cameraCones ?? null,
     shroud: input.shroud ?? null,
     level: input.level ?? 0,
   };

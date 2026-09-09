@@ -36,8 +36,8 @@ export {
 };
 
 /** GM authoring side-panel tabs (FR9.1/9.2/9.3/9.13/9.11/9.21). */
-export type GmTab = 'scenes' | 'map' | 'tiles' | 'tokens' | 'geo' | 'pins' | 'fog' | 'env' | 'los'
-  | 'tv';
+export type GmTab = 'scenes' | 'map' | 'tiles' | 'tokens' | 'geo' | 'pins' | 'cameras' | 'fog'
+  | 'env' | 'los' | 'tv';
 
 /** GM steering of the table display (FR9.21) — mirrors the TV's `TvControls`. */
 export interface DisplayControls {
@@ -99,13 +99,6 @@ export interface GridUiState {
   viewProjection: ViewProjection;
   losTokenId: string | null;
   /**
-   * Whether PLAYERS see their own character's sightline shroud.
-   *
-   * The GM's switch, because it changes the feel of a scene: illuminating for
-   * a careful infiltration, unwanted noise in a straight brawl in one room.
-   */
-  losForPlayers: boolean;
-  /**
    * The GM's cover ruling for the shot in hand, or null to let the map decide.
    *
    * Deliberately NOT persisted on the scene: it is a call about one exchange,
@@ -122,6 +115,8 @@ export interface GridUiState {
   pendingRollMod: PendingRollMod | null;
   /** Pin open in the pin editor (FR9.3) — also ringed on the canvas. */
   selectedPinId: string | null;
+  /** Camera open in the camera editor (FR9.23) — ringed on the canvas. */
+  selectedCameraId: string | null;
   /** Name/colour the zone tool will use for its next polygon. */
   zoneName: string;
   /** Last steering state the GM pushed to the TV (FR9.21), optimistic. */
@@ -134,7 +129,6 @@ export interface GridUiState {
   setActiveLevel: (level: number) => void;
   setViewProjection: (view: ViewProjection) => void;
   setLosTokenId: (tokenId: string | null) => void;
-  setLosForPlayers: (on: boolean) => void;
   setCoverOverride: (cover: 'none' | 'partial' | 'full' | null) => void;
   toggleSnap: () => void;
   setGmTab: (tab: GmTab) => void;
@@ -153,6 +147,7 @@ export interface GridUiState {
   setViewSceneId: (id: string | null) => void;
   setPendingRollMod: (mod: PendingRollMod | null) => void;
   selectPin: (id: string | null) => void;
+  selectCamera: (id: string | null) => void;
   setZoneName: (name: string) => void;
   setDisplay: (patch: Partial<DisplayControls>) => void;
 }
@@ -168,7 +163,7 @@ export interface GridUiState {
 function toolPatch(
   s: GridUiState,
   tool: GridTool,
-): Pick<GridUiState, 'tool' | 'fogDraft' | 'ruler' | 'selectedPinId'> {
+): Pick<GridUiState, 'tool' | 'fogDraft' | 'ruler' | 'selectedPinId' | 'selectedCameraId'> {
   return {
     tool,
     // Leaving a polygon tool abandons its in-progress draft; fog and zones
@@ -178,6 +173,8 @@ function toolPatch(
     // Leaving authoring entirely drops the pin ring off the canvas; the
     // select tool keeps it, because that is how a pin is opened.
     selectedPinId: tool === 'select' || GEOMETRY_TOOLS.includes(tool) ? s.selectedPinId : null,
+    selectedCameraId:
+      tool === 'select' || GEOMETRY_TOOLS.includes(tool) ? s.selectedCameraId : null,
   };
 }
 
@@ -189,7 +186,6 @@ export const useGridStore = create<GridUiState>()((set) => ({
   activeLevel: 0,
   viewProjection: 'scene',
   losTokenId: null,
-  losForPlayers: false,
   coverOverride: null,
   snapEnabled: true,
   selectedTokenId: null,
@@ -206,6 +202,7 @@ export const useGridStore = create<GridUiState>()((set) => ({
   viewSceneId: null,
   pendingRollMod: null,
   selectedPinId: null,
+  selectedCameraId: null,
   zoneName: '',
   display: DEFAULT_DISPLAY_CONTROLS,
 
@@ -239,7 +236,6 @@ export const useGridStore = create<GridUiState>()((set) => ({
   setActiveLevel: (activeLevel) => set({ activeLevel: Math.max(0, Math.floor(activeLevel)) }),
   setViewProjection: (viewProjection) => set({ viewProjection }),
   setLosTokenId: (losTokenId) => set({ losTokenId, coverOverride: null }),
-  setLosForPlayers: (losForPlayers) => set({ losForPlayers }),
   setCoverOverride: (coverOverride) => set({ coverOverride }),
   setTileCategory: (tileCategory) =>
     set((s) => ({
@@ -277,6 +273,7 @@ export const useGridStore = create<GridUiState>()((set) => ({
     set({ pendingRollMod });
   },
   selectPin: (selectedPinId) => set({ selectedPinId }),
+  selectCamera: (selectedCameraId) => set({ selectedCameraId }),
   setZoneName: (zoneName) => set({ zoneName }),
   setDisplay: (patch) => set((s) => ({ display: { ...s.display, ...patch } })),
 }));

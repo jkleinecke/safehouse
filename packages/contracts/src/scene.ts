@@ -48,6 +48,21 @@ export const SceneEnvironmentSchema = z.object({
 });
 export type SceneEnvironment = z.infer<typeof SceneEnvironmentSchema>;
 
+/**
+ * How sight is shown at the table (FR9.16).
+ *
+ * `playersSeeOwnSight`: each player device darkens what their own runner
+ * cannot see and draws no token outside that sightline. The GM's call per
+ * scene, because it changes the feel of one: illuminating for a careful
+ * infiltration, unwanted noise in a brawl in one room. Lives on the scene —
+ * not in the GM's browser — so every player device hears it the moment it
+ * flips, and still has it after a reload.
+ */
+export const SceneVisionSchema = z.object({
+  playersSeeOwnSight: z.boolean().default(false),
+});
+export type SceneVision = z.infer<typeof SceneVisionSchema>;
+
 export const WallSchema = z.object({
   id: z.string(),
   a: PointSchema,
@@ -84,6 +99,38 @@ export const PinSchema = z.object({
   visibility: z.enum(['public', 'gm']).default('gm'),
 });
 export type Pin = z.infer<typeof PinSchema>;
+
+/**
+ * A security camera (FR9.23): a fixed eye the GM mounts, and only the GM sees.
+ *
+ * A camera is the thing a runner most wants to know about and the thing a GM
+ * most often forgets they put there. It is a point with a facing and a field
+ * of view; the canvas draws the cone of cells it actually covers, cut by the
+ * same walls and tiles a token's sightline is cut by, so "does the camera
+ * cover the loading-bay door" is a glance and not a ruling.
+ *
+ * Never sent to a player socket — `sceneForViewer` strips the whole list
+ * (Principle 4) — because a camera a player can see on the map is a camera
+ * their character has already found. When the decker spots it on the host,
+ * the GM tells them; that is a scene, not a payload.
+ */
+export const CameraSchema = z.object({
+  id: z.string(),
+  at: PointSchema,
+  /** Degrees on the plan: 0 = east (+x), 90 = south (+y), clockwise. */
+  facing: z.number().min(0).max(360).default(90),
+  /** Field of view in degrees; 360 is a dome. */
+  fov: z.number().min(5).max(360).default(90),
+  /** How far it sees, in cells. */
+  range: z.number().positive().max(200).default(12),
+  /** Which floor it is mounted on (FR9.22). */
+  level: z.number().int().min(0).default(0),
+  /** Switched off — by the decker, by a bullet — draws as a dead eye, no cone. */
+  active: z.boolean().default(true),
+  label: z.string().max(60).optional(),
+  note: z.string().optional(),
+});
+export type Camera = z.infer<typeof CameraSchema>;
 
 /**
  * Tile painting (FR9.2's "assemble" half): a scene can be BUILT from a tileset
@@ -162,6 +209,13 @@ export const SceneGeometrySchema = z.object({
   doors: z.array(DoorSchema).default([]),
   zones: z.array(ZoneSchema).default([]),
   pins: z.array(PinSchema).default([]),
+  /**
+   * Optional rather than defaulted, deliberately: every scene ever saved and
+   * every fixture ever written spells geometry as the four lists above, and a
+   * required fifth would make each of them a type error for a feature most
+   * scenes never use. Read it as `geometry.cameras ?? []`.
+   */
+  cameras: z.array(CameraSchema).optional(),
 });
 export type SceneGeometry = z.infer<typeof SceneGeometrySchema>;
 
@@ -194,6 +248,7 @@ export const SceneSchema = z.object({
   state: SceneStateSchema.default('draft'),
   grid: GridSchema,
   environment: SceneEnvironmentSchema.default({ light: 0, visibility: 0, glare: 0, wind: 0 }),
+  vision: SceneVisionSchema.default({ playersSeeOwnSight: false }),
   geometry: SceneGeometrySchema.default({ walls: [], doors: [], zones: [], pins: [] }),
   /**
    * Painted tiles for the GROUND floor.

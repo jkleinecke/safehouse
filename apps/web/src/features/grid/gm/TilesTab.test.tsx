@@ -34,6 +34,7 @@ function scene(tiles?: Scene['tiles']): Scene {
     state: 'draft',
     grid: { unitM: 1, cols: 40, rows: 30, offset: { x: 0, y: 0 }, projection: 'topdown' as const },
     environment: { light: 0, visibility: 0, glare: 0, wind: 0 },
+    vision: { playersSeeOwnSight: false },
     geometry: { walls: [], doors: [], zones: [], pins: [] },
     fog: { regions: [], revealed: [], revealedShapes: [] },
     levels: [],

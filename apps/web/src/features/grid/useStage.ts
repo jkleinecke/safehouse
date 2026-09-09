@@ -77,6 +77,8 @@ export function useStage(params: UseStageParams): UseStageResult {
       onSegmentDraw: (kind, a, b) => cbRef.current.onSegmentDraw?.(kind, a, b),
       onPinPlace: (x, y) => cbRef.current.onPinPlace?.(x, y),
       onPinSelect: (id) => cbRef.current.onPinSelect?.(id),
+      onCameraPlace: (x, y) => cbRef.current.onCameraPlace?.(x, y),
+      onCameraSelect: (id) => cbRef.current.onCameraSelect?.(id),
       onTilePaint: (col, row, erase) => cbRef.current.onTilePaint?.(col, row, erase),
       onTileStrokeEnd: () => cbRef.current.onTileStrokeEnd?.(),
       onTileRect: (c0, r0, c1, r1, mode) => cbRef.current.onTileRect?.(c0, r0, c1, r1, mode),

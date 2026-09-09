@@ -107,6 +107,34 @@ export function segmentsCross(p: Point, p2: Point, q: Point, q2: Point): boolean
 }
 
 /**
+ * Where along `p→p2` (as a fraction of it) the ray touches segment `q→q2`,
+ * endpoints of the OBSTACLE included; NaN when it does not.
+ *
+ * `segmentsCross` deliberately ignores a ray that passes through the very
+ * end of a wall — grazing a tip is not being stopped by it. But a wall drawn
+ * in two pieces has an end in the middle of it, and a ray through that
+ * joint grazed both pieces' ends and stopped at neither. On a 1 m grid with
+ * cell centres at .5 and walls on the integers that is not a rare ray: from
+ * the loading dock every seventh square of the warehouse floor was visible
+ * through a closed door's frame. So a touch is recorded with its position,
+ * and `lineOfSight` treats two obstacles touched at the same point as the
+ * joint they are.
+ */
+export function segmentTouchAt(p: Point, p2: Point, q: Point, q2: Point): number {
+  const r = { x: p2.x - p.x, y: p2.y - p.y };
+  const s = { x: q2.x - q.x, y: q2.y - q.y };
+  const denom = r.x * s.y - r.y * s.x;
+  if (Math.abs(denom) < EPSILON) return NaN;
+  const qp = { x: q.x - p.x, y: q.y - p.y };
+  const t = (qp.x * s.y - qp.y * s.x) / denom;
+  const u = (qp.x * r.y - qp.y * r.x) / denom;
+  // The ray's own ends stay exempt — those are the two cells' centres.
+  if (t <= EPSILON || t >= 1 - EPSILON) return NaN;
+  if (u < -EPSILON || u > 1 + EPSILON) return NaN;
+  return t;
+}
+
+/**
  * Every cell the segment `from → to` passes through, endpoints INCLUDED.
  *
  * Amanatides–Woo voxel traversal: step to whichever axis boundary is nearer,
@@ -196,10 +224,23 @@ export function lineOfSight(
   const b = cellCentre(dst.col, dst.row);
 
   // Traced walls first: they are the GM's explicit statement about the map.
+  // A proper crossing stops the ray outright. A touch at a wall's end does
+  // not — unless a second wall ends at the same point, which makes it a
+  // joint in one wall rather than the tip of one (see `segmentTouchAt`).
+  const touches: Array<{ t: number; seg: SightSegment }> = [];
   for (const seg of model.segments) {
     if (!seg.blocksSight) continue;
     if (segmentsCross(a, b, seg.a, seg.b)) {
       return { clear: false, cover: 'full', blockedBy: seg.id };
+    }
+    const t = segmentTouchAt(a, b, seg.a, seg.b);
+    if (!Number.isNaN(t)) touches.push({ t, seg });
+  }
+  for (let i = 0; i < touches.length; i += 1) {
+    for (let j = i + 1; j < touches.length; j += 1) {
+      if (Math.abs(touches[i]!.t - touches[j]!.t) < 1e-6) {
+        return { clear: false, cover: 'full', blockedBy: touches[i]!.seg.id };
+      }
     }
   }
 

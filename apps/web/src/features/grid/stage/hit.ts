@@ -147,3 +147,20 @@ export function isDoubleTap(
   if (next.t - prev.t > withinMs) return false;
   return Math.hypot(next.x - prev.x, next.y - prev.y) <= withinPx;
 }
+
+/** Camera whose eye is within `tolerancePx` world px of `at` (GM editing, FR9.23). */
+export function hitCamera(m: SceneMetrics, scene: Scene, at: Point, tolerancePx = 20): string | null {
+  let best: string | null = null;
+  let bestDist = tolerancePx;
+  const p = worldFromGrid(m, at);
+  // Later cameras draw on top, so a tie goes to the last one mounted.
+  for (const cam of scene.geometry.cameras ?? []) {
+    const eye = worldFromGrid(m, cam.at);
+    const d = Math.hypot(p.x - eye.x, p.y - eye.y);
+    if (d <= bestDist) {
+      bestDist = d;
+      best = cam.id;
+    }
+  }
+  return best;
+}

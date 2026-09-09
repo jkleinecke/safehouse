@@ -293,6 +293,7 @@ const FOOTPRINTS: Readonly<Record<TileProp, readonly [number, number, number, nu
   plant: [0.2, 0.2, 0.8, 0.8],
   decks: [0.05, 0.25, 0.95, 0.8],
   speakers: [0.2, 0.2, 0.8, 0.8],
+  column: [0.24, 0.24, 0.76, 0.76],
   crates: [0.05, 0.1, 0.95, 0.9],
   pallet: [0.06, 0.1, 0.94, 0.9],
   barrel: [0.2, 0.2, 0.8, 0.8],
@@ -521,6 +522,16 @@ const DESIGNS: Readonly<Record<TileProp, Draw>> = {
     k.faceCircle(0.5, 0.78, h * 0.78, 0.13, 'u', t.ink, 0.95);
     k.faceCircle(0.5, 0.78, h * 0.78, 0.05, 'u', glow ?? t.light, 0.9);
     return glow ? k.pool(0.5, 0.7, 0.32) : null;
+  },
+  column: (k, h) => {
+    const t = k.t;
+    // Plinth, shaft, cap: the three parts every column has, and the cap is
+    // what reads at table zoom as "this is a column and not a crate".
+    k.box(0.24, 0.24, 0.76, 0.76, 0, h * 0.06, t.dark);
+    k.box(0.3, 0.3, 0.7, 0.7, h * 0.06, h * 0.92, t.base);
+    k.line([[0.3, 0.7, h * 0.06], [0.3, 0.7, h * 0.92]], t.light, 1, 0.35);
+    k.box(0.24, 0.24, 0.76, 0.76, h * 0.92, h, shade(t.base, 1.08));
+    return null;
   },
   crates: (k, h) => {
     const t = k.t;

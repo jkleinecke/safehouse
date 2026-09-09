@@ -30,7 +30,7 @@ import { parserSafeUrlFor, type AssetRegistry } from './assetUrl.js';
 import { Camera } from './camera.js';
 import { C } from './colors.js';
 import { FxLayer } from './fx.js';
-import { drawFog, drawGeometry, drawGrid, drawPins } from './layers.js';
+import { drawCameras, drawFog, drawGeometry, drawGrid, drawPins } from './layers.js';
 import { drawShroud, shroudKey } from './shroudLayer.js';
 import { ChunkedTileLayer } from './tileChunks.js';
 import { tileDrawInput, tileLayerKey } from './tileLayer.js';
@@ -82,6 +82,20 @@ function geometryKey(state: StageSceneState): string {
 }
 
 /** Pins redraw on any label/position/visibility edit, and on selection. */
+function cameraKey(state: StageSceneState): string {
+  const geo = state.scene.geometry;
+  return [
+    state.role === 'gm' ? 'gm' : 'pc',
+    state.level ?? 0,
+    state.selectedCameraId ?? '',
+    (geo.cameras ?? [])
+      .map((c) => `${c.id}:${c.at.x},${c.at.y}:${c.facing}:${c.fov}:${c.range}:${c.level}:${c.active ? 1 : 0}:${c.label ?? ''}`)
+      .join(','),
+    // The cones carry their own content signature (`useCameraCones`).
+    (state.cameraCones ?? []).map((c) => c.key).join('|'),
+  ].join('|');
+}
+
 function pinKey(state: StageSceneState): string {
   const geo = state.scene.geometry;
   return [
@@ -117,6 +131,11 @@ class Stage implements StageApi, PointerHost {
   private readonly pinG = new Graphics();
   private readonly pinLabels = new Container();
   private readonly pinLabelPool = new Map<string, Text>();
+  /** The GM's security cameras and their cones (FR9.23). */
+  private readonly cameraG = new Graphics();
+  private readonly cameraLabels = new Container();
+  private readonly cameraLabelPool = new Map<string, Text>();
+  private lastCameraKey = '';
   private readonly tokenLayer = new Container();
   private readonly fx = new FxLayer();
   private readonly map: MapLayer;
@@ -182,8 +201,10 @@ class Stage implements StageApi, PointerHost {
       this.shroudG,
       this.gridG,
       this.geoG,
+      this.cameraG,
       this.pinG,
       this.pinLabels,
+      this.cameraLabels,
       this.tokenLayer,
       this.fogG,
       this.fogLabels,
@@ -355,6 +376,22 @@ class Stage implements StageApi, PointerHost {
         m,
         next.selectedPinId ?? null,
         next.role === 'gm',
+      );
+    }
+
+    const ck = cameraKey(next);
+    if (ck !== this.lastCameraKey) {
+      this.lastCameraKey = ck;
+      drawCameras(
+        this.cameraG,
+        this.cameraLabels,
+        this.cameraLabelPool,
+        next.scene,
+        m,
+        next.cameraCones,
+        next.selectedCameraId ?? null,
+        next.role === 'gm',
+        next.level ?? 0,
       );
     }
 

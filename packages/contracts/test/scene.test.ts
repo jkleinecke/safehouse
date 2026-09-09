@@ -71,6 +71,30 @@ describe('SceneSchema', () => {
     expect(s.environment).toMatchObject({ light: 0, visibility: 0, glare: 0, wind: 0 });
     expect(s.geometry).toEqual({ walls: [], doors: [], zones: [], pins: [] });
     expect(s.fog).toEqual({ regions: [], revealed: [], revealedShapes: [] });
+    // Sight starts as the whole map for players; the GM switches it per scene.
+    expect(s.vision).toEqual({ playersSeeOwnSight: false });
+  });
+
+  it('mounts a camera with sensible defaults, and leaves geometry without one untouched', () => {
+    // A camera is a point and a facing; everything else has a working default
+    // so the GM's click is a camera, not a form.
+    const s = SceneSchema.parse({
+      ...scene,
+      geometry: { cameras: [{ id: 'cam_1', at: { x: 3, y: 4 } }] },
+    });
+    expect(s.geometry.cameras).toEqual([
+      { id: 'cam_1', at: { x: 3, y: 4 }, facing: 90, fov: 90, range: 12, level: 0, active: true },
+    ]);
+    expect(SceneSchema.parse(scene).geometry.cameras).toBeUndefined();
+    // A field of view narrower than a keyhole, or a facing off the compass, is a typo.
+    expect(
+      SceneSchema.safeParse({ ...scene, geometry: { cameras: [{ id: 'c', at: { x: 0, y: 0 }, fov: 1 }] } })
+        .success,
+    ).toBe(false);
+    expect(
+      SceneSchema.safeParse({ ...scene, geometry: { cameras: [{ id: 'c', at: { x: 0, y: 0 }, facing: 400 }] } })
+        .success,
+    ).toBe(false);
   });
 
   it('rejects env levels outside 0..3 and zones with <3 points', () => {

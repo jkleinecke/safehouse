@@ -4,8 +4,10 @@
  */
 import { Container, Graphics, Text } from 'pixi.js';
 import type { Point, Scene } from '@safehouse/contracts';
+import type { CameraCone } from '../types.js';
 import { TILE_HEIGHTS } from '@safehouse/rules';
 import {
+  cellCorners,
   gridOverlay,
   heightRise,
   polygonCenter,
@@ -311,6 +313,121 @@ export function drawPins(
     label.style.fill = color;
     label.x = at.x + r * 1.6;
     label.y = at.y - r * 2.4;
+  }
+
+  for (const [id, label] of labelPool) {
+    if (seen.has(id)) continue;
+    label.destroy();
+    labelPool.delete(id);
+  }
+}
+
+/**
+ * Security cameras (FR9.23): the GM's, and only the GM's.
+ *
+ * Each camera on the floor being drawn gets its eye — a wedge pointing the
+ * way it looks, a dot at the mount — and, while it is switched on, its cone:
+ * every cell it covers as a flat amber wash on the floor, with the two edges
+ * of its field of view drawn out to its reach. A player's scene carries no
+ * cameras at all (`sceneForViewer`), so for anyone else this clears the
+ * layer and draws nothing, whatever it was handed.
+ */
+const CAMERA_CONE_ALPHA = 0.16;
+
+/** A point `dist` cells from `at` along a plan bearing in degrees. */
+function alongBearing(at: Point, degrees: number, dist: number): Point {
+  const rad = (degrees * Math.PI) / 180;
+  return { x: at.x + Math.cos(rad) * dist, y: at.y + Math.sin(rad) * dist };
+}
+
+/**
+ * How far along `bearing` the cone still has cells, in cells. Walks the ray
+ * in half-cell steps and stops one step past the last covered square; the
+ * edge of a cone the wall has cut should end at the wall, not the reach.
+ */
+function edgeReach(cells: ReadonlySet<string>, at: Point, bearing: number, range: number): number {
+  let reach = 0;
+  for (let t = 0.5; t <= range; t += 0.5) {
+    const p = alongBearing(at, bearing, t);
+    // The edge ray runs along the cone's boundary, so test the square on
+    // its inner side as well: a boundary that grazes a corner is still in.
+    const inner = alongBearing(at, bearing + (bearing > 0 ? -1 : 1) * 0.0001, t);
+    const keyOf = (q: Point) => `${Math.floor(q.x)},${Math.floor(q.y)}`;
+    if (cells.has(keyOf(p)) || cells.has(keyOf(inner))) reach = t;
+    else if (t > 1.5 && reach > 0) break;
+  }
+  return Math.max(reach, Math.min(range, 1));
+}
+
+export function drawCameras(
+  g: Graphics,
+  labelLayer: Container,
+  labelPool: Map<string, Text>,
+  scene: Scene,
+  m: SceneMetrics,
+  cones: readonly CameraCone[] | null | undefined,
+  selectedCameraId: string | null,
+  isGm: boolean,
+  level: number,
+): void {
+  g.clear();
+  const seen = new Set<string>();
+
+  if (isGm) {
+    for (const cam of scene.geometry.cameras ?? []) {
+      // One floor at a time, like everything else on the canvas.
+      if ((cam.level ?? 0) !== level) continue;
+      const color = cam.active ? C.warn : C.faint;
+      const cone = cam.active ? cones?.find((c) => c.id === cam.id) : undefined;
+
+      if (cone) {
+        for (const key of cone.cells) {
+          const [col, row] = key.split(',').map(Number);
+          if (col === undefined || row === undefined || Number.isNaN(col) || Number.isNaN(row)) continue;
+          g.poly(cellCorners(m, col, row).flatMap((p) => [p.x, p.y])).fill({
+            color,
+            alpha: CAMERA_CONE_ALPHA,
+          });
+        }
+        // The edges of the field of view, as far as the cone itself reaches
+        // along them — a wall that cuts the cone cuts its edge too. A dome
+        // has none.
+        if (cam.fov < 360) {
+          const eye = worldFromGrid(m, cam.at);
+          for (const side of [-1, 1]) {
+            const bearing = cam.facing + (side * cam.fov) / 2;
+            const far = worldFromGrid(m, alongBearing(cam.at, bearing, edgeReach(cone.cells, cam.at, bearing, cam.range)));
+            g.moveTo(eye.x, eye.y).lineTo(far.x, far.y).stroke({ width: 1, color, alpha: 0.55 });
+          }
+        }
+      }
+
+      // The eye: a wedge along the facing, a dot at the mount. Built in grid
+      // space and projected, so it foreshortens with the floor in isometric.
+      const eye = worldFromGrid(m, cam.at);
+      const tip = worldFromGrid(m, alongBearing(cam.at, cam.facing, 0.55));
+      const left = worldFromGrid(m, alongBearing(cam.at, cam.facing - 38, 0.3));
+      const right = worldFromGrid(m, alongBearing(cam.at, cam.facing + 38, 0.3));
+      g.poly([eye.x, eye.y, left.x, left.y, tip.x, tip.y, right.x, right.y])
+        .fill({ color, alpha: cam.active ? 0.9 : 0.5 })
+        .stroke({ width: 1, color: C.ground, alpha: 0.9 });
+      g.circle(eye.x, eye.y, 4).fill({ color: C.ground, alpha: 1 }).stroke({ width: 2, color, alpha: 1 });
+      if (!cam.active) {
+        // A dead eye: struck through, so "off" reads without a label.
+        g.moveTo(eye.x - 7, eye.y - 7).lineTo(eye.x + 7, eye.y + 7).stroke({ width: 2, color: C.danger, alpha: 0.9 });
+      }
+      if (cam.id === selectedCameraId) {
+        g.circle(eye.x, eye.y, 13).stroke({ width: 2, color: C.magenta, alpha: 0.95 });
+      }
+
+      const key = `cam:${cam.id}`;
+      seen.add(key);
+      const label = ensureLabel(labelLayer, labelPool, key, 0);
+      label.text = cam.label ?? cam.id;
+      label.style.fill = color;
+      label.x = eye.x + 10;
+      label.y = eye.y - 12;
+    }
   }
 
   for (const [id, label] of labelPool) {
