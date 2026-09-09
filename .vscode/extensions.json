@@ -1,0 +1,5 @@
+{
+  // Nothing here is required to run the launch configurations — the JavaScript
+  // debugger, Chrome and Edge launchers are built into VS Code.
+  "recommendations": ["dbaeumer.vscode-eslint", "esbenp.prettier-vscode", "bradlc.vscode-tailwindcss"]
+}

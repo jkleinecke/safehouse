@@ -31,7 +31,12 @@ backups/
 # Editor/OS noise
 .DS_Store
 Thumbs.db
-.vscode/
+# Editor state stays personal; the shared launch/task/extension files are kept
+# so F5 runs the site on any checkout (Windows, macOS, Linux).
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/extensions.json
 .idea/
 
 # Cygwin crash dumps (a wedged grep leaves these behind)

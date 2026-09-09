@@ -1,0 +1,55 @@
+{
+  // Run ▸ Start Debugging (F5). "Safehouse: full stack" is the one to reach
+  // for: it starts Vite, runs the API server under the debugger, and opens the
+  // site in Chrome with breakpoints working in both the React app and the
+  // Fastify code. Everything here is cross-platform — the server is launched
+  // as `node --import tsx`, not through a shell, so no .cmd shims are involved.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Safehouse: server (debug)",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/apps/server/src/index.ts",
+      "runtimeArgs": ["--import", "tsx"],
+      // The same working directory `pnpm dev:server` uses, so DATA_DIR=./data
+      // lands in apps/server/data either way. The repo-root .env is found by
+      // the server itself (src/dotenv.ts), whatever the cwd.
+      "cwd": "${workspaceFolder}/apps/server",
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**", "**/node_modules/**"]
+    },
+    {
+      "name": "Safehouse: web (Chrome)",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/apps/web",
+      "preLaunchTask": "safehouse: dev web"
+    },
+    {
+      "name": "Safehouse: web (Edge)",
+      "type": "msedge",
+      "request": "launch",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/apps/web",
+      "preLaunchTask": "safehouse: dev web"
+    },
+    {
+      "name": "Safehouse: site (both servers, Chrome)",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}/apps/web",
+      // Starts the API server and Vite as tasks (no debugger on the server).
+      "preLaunchTask": "safehouse: dev"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Safehouse: full stack (debug server + Chrome)",
+      "configurations": ["Safehouse: server (debug)", "Safehouse: web (Chrome)"],
+      "stopAll": true
+    }
+  ]
+}

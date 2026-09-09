@@ -1,0 +1,86 @@
+{
+  // Safehouse dev servers as VS Code tasks (Terminal ▸ Run Task…), and the
+  // background tasks the launch configurations wait on. Every command is a
+  // plain `pnpm` script, so the same file works on Windows, macOS and Linux;
+  // the only requirement is pnpm on the PATH, which `pnpm install` already needs.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "safehouse: dev server",
+      "detail": "API + WebSocket hub on :8787 (tsx watch, embedded PGlite at apps/server/data)",
+      "type": "shell",
+      "command": "pnpm",
+      "args": ["dev:server"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "presentation": { "group": "safehouse", "panel": "dedicated", "reveal": "always" },
+      "problemMatcher": {
+        "owner": "safehouse-server",
+        "pattern": { "regexp": "^$" },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "safehouse|tsx watch|restarting",
+          // The server's first log line once it is listening.
+          "endsPattern": "serving the table at http"
+        }
+      }
+    },
+    {
+      "label": "safehouse: dev web",
+      "detail": "Vite on :5173, proxying /api, /files, /read and /ws to :8787",
+      "type": "shell",
+      "command": "pnpm",
+      "args": ["dev:web"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "presentation": { "group": "safehouse", "panel": "dedicated", "reveal": "always" },
+      "problemMatcher": {
+        "owner": "safehouse-web",
+        "pattern": { "regexp": "^$" },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "VITE|vite",
+          // "VITE vX ready in N ms" is printed everywhere; the Local: line only on a TTY.
+          "endsPattern": "ready in|Local:\\s+http"
+        }
+      }
+    },
+    {
+      "label": "safehouse: dev",
+      "detail": "Both dev servers, side by side",
+      "dependsOn": ["safehouse: dev server", "safehouse: dev web"],
+      "dependsOrder": "parallel",
+      "problemMatcher": [],
+      "group": { "kind": "build", "isDefault": true }
+    },
+    {
+      "label": "safehouse: build",
+      "detail": "Build every package (what Docker and the e2e harness run)",
+      "type": "shell",
+      "command": "pnpm",
+      "args": ["build"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$tsc"],
+      "group": "build"
+    },
+    {
+      "label": "safehouse: test",
+      "detail": "Every package's unit tests",
+      "type": "shell",
+      "command": "pnpm",
+      "args": ["test"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "group": "test"
+    },
+    {
+      "label": "safehouse: seed demo",
+      "detail": "Reseed the demo campaign into the native dev database (stop the dev server first — PGlite is single-process)",
+      "type": "shell",
+      "command": "pnpm",
+      "args": ["seed:demo"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    }
+  ]
+}
