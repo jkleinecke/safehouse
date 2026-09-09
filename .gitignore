@@ -33,3 +33,6 @@ backups/
 Thumbs.db
 .vscode/
 .idea/
+
+# Cygwin crash dumps (a wedged grep leaves these behind)
+*.stackdump
