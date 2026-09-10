@@ -163,6 +163,14 @@ export interface PlayerCombatantView {
   actedThisPass: boolean;
   /** True when this row is the viewer's own PC. */
   own: boolean;
+  /**
+   * The initiative line — how many dice to roll and what to add — on the
+   * party's rows (FR4.2): a runner rolling their own initiative from a phone
+   * has to be able to read it, and a teammate's is no secret at the table.
+   * An NPC's line stays the GM's (FR4.9: presence and condition only).
+   */
+  initBase?: number;
+  initDice?: number;
   condition: Condition;
   /**
    * The token this row drives, when it has one — what lets the table TV put
@@ -228,6 +236,7 @@ export function encounterForViewer(
       initKind: c.initKind,
       actedThisPass: c.actedThisPass,
       own,
+      ...(own || c.source === 'character' ? { initBase: c.initBase, initDice: c.initDice } : {}),
       condition: conditionOf(c.monitors),
       ...(c.tokenId ? { tokenId: c.tokenId } : {}),
       ...(own ? { monitors: c.monitors } : {}),

@@ -109,6 +109,31 @@ export interface TrackerRow {
   woundModifier: number;
   detail: MonitorDetail;
   own: boolean;
+  /** False while the line is blank this turn — the dice have not come in yet. */
+  rolled: boolean;
+}
+
+/** Which stretch of the fight the tracker is in. */
+export type FightPhase = 'none' | 'prep' | 'live' | 'done';
+
+export function fightPhase(encounter: Encounter | null | undefined): FightPhase {
+  return encounter ? encounter.state : 'none';
+}
+
+/**
+ * Has this row's initiative come in this turn? A score of 0 in the first
+ * pass is a blank line, not a runner with no initiative — the tracker shows
+ * "—" and offers the dice rather than ranking a zero. Later in the turn a 0
+ * is a spent score, which is a different thing and is drawn as one.
+ */
+export function isRolled(encounter: Encounter | null | undefined, c: Combatant): boolean {
+  if (!encounter) return false;
+  return c.initScore !== 0 || (encounter.pass ?? 0) > 1 || c.actedThisPass;
+}
+
+/** The score a hand-rolled dice total makes: base + dice + wounds (what the server computes). */
+export function scoreFromRolled(c: Combatant, rolled: number): number {
+  return c.initBase + rolled + computeWoundModifier(c.monitors);
 }
 
 /** Score desc, then initiative base desc, then id — matches the rules engine. */
@@ -141,6 +166,7 @@ export function trackerRows(encounter: Encounter | null | undefined, viewer: Vie
       woundModifier: computeWoundModifier(c.monitors),
       detail: monitorDetailFor(c, viewer),
       own: isOwnCombatant(c, viewer),
+      rolled: isRolled(encounter, c),
     };
   });
 }

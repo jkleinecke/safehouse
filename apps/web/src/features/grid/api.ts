@@ -338,6 +338,26 @@ interface EncounterDetailDto {
   activeCombatantId?: string | null;
 }
 
+/**
+ * Start a fight from this scene's tokens (FR9.10), or add its newer tokens to
+ * a fight already linked to it. Every runner and NPC token becomes a
+ * combatant on the server; hidden tokens arrive as GM-only rows.
+ */
+export function useStartFight(campaignId: string | undefined) {
+  return useMutation({
+    mutationFn: ({ sceneId, name, encounterId }: { sceneId: string; name?: string; encounterId?: string }) =>
+      apiPost<{ encounterId: string; createdEncounter: boolean; combatantIds: string[] }>(
+        `/api/scenes/${sceneId}/stage-encounter`,
+        encounterId ? { encounterId } : { name },
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['encounters', campaignId] });
+      void queryClient.invalidateQueries({ queryKey: ['live', 'encounter', campaignId] });
+      void queryClient.invalidateQueries({ queryKey: ['encounter'] });
+    },
+  });
+}
+
 export function useEncounter(encounterId: string | null | undefined) {
   return useQuery({
     queryKey: ['encounter', encounterId],

@@ -459,7 +459,7 @@ describe('honest empty states', () => {
     ).toContain('No combatants yet');
     expect(
       renderToStaticMarkup(<TrackerEmptyLine asked failed={false} hasEncounter={false} />),
-    ).toContain('No live encounter');
+    ).toContain('No fight yet');
   });
 
   it('says a failed read failed instead of pretending the table was quiet', () => {

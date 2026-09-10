@@ -293,3 +293,36 @@ describe('pickLiveEncounter', () => {
     expect(pickLiveEncounter(undefined)).toBeNull();
   });
 });
+
+describe('a thin encounter delta folded onto the fight on screen', () => {
+  const live = normalizeEncounter({
+    encounter: { id: 'enc_1', campaignId: 'c1', name: 'Pier 23 ambush', state: 'live', turn: 2, pass: 1, sceneId: 's1' },
+    combatants: [{ id: 'a', name: 'Static', initScore: 14 }],
+    activeCombatantId: 'a',
+  })!;
+
+  it('keeps the name, the turn and the state a "staged" frame never mentioned', () => {
+    const staged = normalizeEncounter({ encounterId: 'enc_1', sceneId: 's1', staged: 3, created: false })!;
+    const merged = mergeEncounter(live, staged)!;
+    expect(merged.name).toBe('Pier 23 ambush');
+    expect(merged.state).toBe('live');
+    expect(merged.turn).toBe(2);
+    expect(merged.pass).toBe(1);
+    expect(merged.combatants?.map((c) => c.id)).toEqual(['a']);
+    expect(merged.activeCombatantId).toBe('a');
+  });
+
+  it('takes the header fields a delta does carry', () => {
+    const over = normalizeEncounter({ encounter: { id: 'enc_1', state: 'done' } })!;
+    const merged = mergeEncounter(live, over)!;
+    expect(merged.state).toBe('done');
+    expect(merged.name).toBe('Pier 23 ambush');
+    expect(merged.turn).toBe(2);
+  });
+
+  it('a hand-built delta with no provenance still replaces the header, as before', () => {
+    const merged = mergeEncounter(live, { ...live, name: 'Renamed', combatants: undefined } as never)!;
+    expect(merged.name).toBe('Renamed');
+    expect(merged.combatants?.length).toBe(1);
+  });
+});

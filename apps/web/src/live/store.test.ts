@@ -314,3 +314,51 @@ describe('live store hydration', () => {
     expect(st.reconnectEpoch).toBe(0);
   });
 });
+
+describe('the two scopes of encounter.updated', () => {
+  beforeEach(() => {
+    useLiveStore.getState().reset();
+  });
+
+  const full = {
+    encounterId: 'enc_1',
+    scope: 'gm',
+    encounter: { id: 'enc_1', campaignId: 'c1', name: 'Ambush', state: 'live', turn: 1, pass: 1 },
+    combatants: [
+      { id: 'a', name: 'Static', initScore: 14, visibility: 'public' },
+      { id: 'b', name: 'Halo ganger', initScore: 9, visibility: 'gm' },
+    ],
+    activeCombatantId: 'a',
+  };
+  const stripped = {
+    ...full,
+    scope: 'public',
+    combatants: [{ id: 'a', name: 'Static', initScore: 14 }],
+  };
+  const roster = () => (useLiveStore.getState().encounter?.combatants ?? []).map((c) => c.id);
+
+  it('a GM socket keeps the full roster when the player-safe twin arrives after it', () => {
+    const s = useLiveStore.getState();
+    s.applyEvent(evt(1, 'encounter.updated', full));
+    s.applyEvent(evt(2, 'encounter.updated', stripped));
+    expect(roster()).toEqual(['a', 'b']);
+    // …and the next full frame still lands (the twin did not advance the watermark).
+    s.applyEvent(evt(3, 'encounter.updated', { ...full, combatants: [full.combatants[0]!] }));
+    expect(roster()).toEqual(['a']);
+  });
+
+  it('a player socket, which only ever hears public frames, takes every one', () => {
+    const s = useLiveStore.getState();
+    s.applyEvent(evt(1, 'encounter.updated', stripped));
+    expect(roster()).toEqual(['a']);
+    s.applyEvent(evt(2, 'encounter.updated', { ...stripped, combatants: [] }));
+    expect(roster()).toEqual([]);
+  });
+
+  it('a public frame about a DIFFERENT fight replaces the one on screen', () => {
+    const s = useLiveStore.getState();
+    s.applyEvent(evt(1, 'encounter.updated', full));
+    s.applyEvent(evt(2, 'encounter.updated', { ...stripped, encounterId: 'enc_2', encounter: { ...stripped.encounter, id: 'enc_2' } }));
+    expect(useLiveStore.getState().encounter?.id).toBe('enc_2');
+  });
+});

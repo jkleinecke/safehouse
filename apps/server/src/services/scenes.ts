@@ -25,6 +25,8 @@ import {
   type SceneVision,
   SceneLayerSchema,
   type SceneLayer,
+  GenTemplateSchema,
+  type CombatantMonitors,
   FogStateSchema,
   SheetV1Schema,
   TokenAuraSchema,
@@ -44,7 +46,7 @@ import {
   SceneLevelSchema,
   type SceneLevel,
 } from '@safehouse/contracts';
-import { environment } from '@safehouse/rules';
+import { deriveCharacter, environment, generateNpc } from '@safehouse/rules';
 import {
   attachments,
   characters,
@@ -62,6 +64,7 @@ import { httpError } from './auth.js';
 // Pure row-model helper (no db, no hub): the one place an initiative line is
 // derived from a sheet, shared with the encounters domain (FR4.2).
 import { deriveFor } from './encounters-model.js';
+import { catalogOf, monitorsFor, type NpcTemplateRow } from './generator.js';
 
 export type SceneRow = typeof scenes.$inferSelect;
 export type TokenRow = typeof tokens.$inferSelect;
@@ -593,6 +596,61 @@ export interface FogOpInput {
   shape?: Point[];
 }
 
+/** What a staged NPC token brings to the tracker when its archetype can be rolled. */
+interface RolledBody {
+  initBase: number;
+  monitors: CombatantMonitors;
+  copilot: Record<string, unknown>;
+}
+
+/**
+ * The body behind an NPC token (FR9.10 / FR10.2).
+ *
+ * A token placed from an archetype used to stage as a name with 0+1d6 and
+ * ten boxes, because the archetype is generation RANGES and nothing rolled
+ * them. Now the same engine the encounter builder uses rolls one body per
+ * token — the first tier, seeded by the token's id, so staging the same
+ * token twice is the same ganger both times — and it lands with its sheet
+ * in `copilot`, which is what gives the row a rack. A template that is a
+ * full statblock instead derives straight from that. Anything else stages
+ * as before.
+ */
+function rolledBodyFor(row: NpcTemplateRow | undefined, seed: string): RolledBody | null {
+  if (!row) return null;
+  const gen = GenTemplateSchema.safeParse(row.gen);
+  const tier = gen.success ? gen.data.tiers[0] : undefined;
+  if (gen.success && tier) {
+    const npc = generateNpc(gen.data, tier.id, seed, { catalog: catalogOf(row) });
+    const derived = deriveCharacter(npc.sheet);
+    return {
+      initBase: derived.initiative.physical.base.value,
+      monitors: monitorsFor(npc.monitors),
+      copilot: {
+        sheet: npc.sheet,
+        initDice: derived.initiative.physical.dice.value,
+        generator: {
+          templateId: row.id,
+          tierId: tier.id,
+          seed: npc.seed,
+          professionalRating: npc.professionalRating,
+          loadout: npc.loadout,
+          flavor: npc.flavor,
+        },
+      },
+    };
+  }
+  const sheet = SheetV1Schema.safeParse(row.statblock);
+  if (sheet.success) {
+    const derived = deriveFor(sheet.data, 'physical');
+    return {
+      initBase: derived.base,
+      monitors: derived.monitors,
+      copilot: { sheet: sheet.data, initDice: derived.dice },
+    };
+  }
+  return null;
+}
+
 interface StatShape {
   attributes?: { bod?: number; wil?: number; rea?: number; int?: number };
 }
@@ -1069,6 +1127,17 @@ export class ScenesService {
       : [];
     const sheetById = new Map(charRows.map((c) => [c.id, c.sheet]));
 
+    // The archetype behind each NPC token, so the ganger the GM placed on the
+    // catwalk arrives on the tracker as a BODY — attributes, pools, monitors,
+    // a copilot rack — and not as a name with 0+1d6 and ten boxes.
+    const templateIds = stageable
+      .filter((t) => t.source === 'npc_template' && t.sourceId)
+      .map((t) => t.sourceId!);
+    const templateRows = templateIds.length
+      ? await this.db.select().from(npcTemplates).where(inArray(npcTemplates.id, templateIds))
+      : [];
+    const templateById = new Map(templateRows.map((r) => [r.id, r]));
+
     const combatantIds: string[] = [];
     for (const t of stageable) {
       const raw = t.sourceId ? sheetById.get(t.sourceId) : undefined;
@@ -1080,9 +1149,15 @@ export class ScenesService {
       const parsed = raw !== undefined && raw !== null ? SheetV1Schema.safeParse(raw) : null;
       const derived = parsed?.success ? deriveFor(parsed.data, 'physical') : null;
       const stats = (raw ?? undefined) as StatShape | undefined;
-      const initBase = derived
-        ? derived.base
-        : (stats?.attributes?.rea ?? 0) + (stats?.attributes?.int ?? 0);
+      const body =
+        t.source === 'npc_template' && t.sourceId
+          ? rolledBodyFor(templateById.get(t.sourceId), t.id)
+          : null;
+      const initBase = body
+        ? body.initBase
+        : derived
+          ? derived.base
+          : (stats?.attributes?.rea ?? 0) + (stats?.attributes?.int ?? 0);
       const row = (
         await this.db
           .insert(combatants)
@@ -1094,13 +1169,13 @@ export class ScenesService {
             name: t.name,
             initBase,
             initKind: 'physical',
-            monitors: derived ? derived.monitors : monitorsFrom(stats),
+            monitors: body ? body.monitors : derived ? derived.monitors : monitorsFrom(stats),
             // Hidden by flag or by layer (FR9.26): a combatant nobody was
             // shown must not appear in the tracker before it appears on the map.
             visibility: tokenHidden(t, serializeScene(scene)) ? 'gm' : 'public',
             // `initDice` rides in the copilot JSONB (no column of its own); a
             // missing value would default to 1 die and lose the augmentation.
-            copilot: { initDice: derived ? derived.dice : 1 },
+            copilot: body ? body.copilot : { initDice: derived ? derived.dice : 1 },
           })
           .returning()
       )[0]!;

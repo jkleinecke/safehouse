@@ -130,6 +130,14 @@ export interface LiveState {
 
   /** WS event id that last wrote `encounter` / `activeSceneId`. */
   encounterEventId: number;
+  /**
+   * Which frame filled `encounter`: the server announces every fight twice,
+   * `gm` (everything) then `public` (hidden rows stripped, lines reduced), and
+   * a GM socket hears both. Once a `gm` frame has painted the roster, a
+   * `public` one for the same fight must not overwrite it — that emptied the
+   * GM's own tracker of every hidden ganger the moment anything happened.
+   */
+  encounterScope: 'gm' | 'public' | null;
   sceneEventId: number;
 
   setStatus: (status: SocketStatus) => void;
@@ -167,6 +175,7 @@ const initialState = {
   reconnectEpoch: 0,
   hasBeenOnline: false,
   encounterEventId: 0,
+  encounterScope: null,
   sceneEventId: 0,
 };
 
@@ -232,8 +241,12 @@ export const useLiveStore = create<LiveState>()((set, get) => ({
         // stops a roster-less delta from emptying a populated tracker.
         const next = normalizeEncounter(event.payload);
         if (next) {
+          const scope = payload['scope'] === 'gm' ? 'gm' : payload['scope'] === 'public' ? 'public' : null;
+          // The player-safe twin of a frame this socket already took in full.
+          if (scope === 'public' && state.encounterScope === 'gm' && state.encounter?.id === next.id) break;
           patch.encounter = mergeEncounter(state.encounter, next);
           patch.encounterEventId = event.id;
+          patch.encounterScope = scope ?? (state.encounter?.id === next.id ? state.encounterScope : null);
         }
         break;
       }

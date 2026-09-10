@@ -126,6 +126,13 @@ const SetInitiativeBody = z.object({
   base: z.number().int().optional(),
   dice: z.number().int().min(0).max(5).optional(),
   kind: InitKindSchema.optional(),
+  /** The dice total rolled at the table (5d6 at most); the server adds base and wounds. */
+  rolled: z.number().int().min(0).max(30).optional(),
+});
+
+const NewTurnBody = z.object({
+  /** False opens the turn with blank scores for hand rolls (FR4.2). */
+  roll: z.boolean().default(true),
 });
 
 const InterruptBody = z.object({
@@ -210,6 +217,25 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
   async function combatantScope(req: FastifyRequest, combatantId: string) {
     const row = await service.getCombatant(combatantId);
     const { encounter, auth } = await scope(req, row.encounterId);
+    return { row, encounter, auth };
+  }
+
+  /**
+   * The runner whose row it is may roll and hand-enter their own initiative
+   * (FR4.2 "roll or hand-enter", from their own phone); everyone else's row is
+   * the GM's. A row is "theirs" when it is their character's — the one their
+   * device is bound to on the roster — and nothing hidden is ever theirs.
+   */
+  async function ownRowScope(req: FastifyRequest, combatantId: string) {
+    const row = await service.getCombatant(combatantId);
+    const auth = requireAuth(req);
+    const encounter = await service.getEncounter(row.encounterId);
+    assertCampaign(auth, encounter.campaignId);
+    if (auth.role === 'gm') return { row, encounter, auth };
+    const mine = await app.authService.characterOwnedBy(encounter.campaignId, auth.userId);
+    if (row.source !== 'character' || row.sourceId === null || row.sourceId !== mine) {
+      throw httpError(403, 'forbidden', 'only the GM, or the runner whose row it is, may set initiative');
+    }
     return { row, encounter, auth };
   }
 
@@ -309,14 +335,27 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
 
   app.post('/api/encounters/:id/roll-initiative', async (req) => {
     const { id } = req.params as { id: string };
-    await scope(req, id);
-    return service.rollInitiativeAll(id, parse(RollInitiativeBody, req.body));
+    const body = parse(RollInitiativeBody, req.body);
+    const { auth } = await scope(req, id, false);
+    if (auth.role !== 'gm') {
+      // A player rolls their own row and nothing else (FR4.2).
+      if (!body.combatantIds || body.combatantIds.length === 0) {
+        throw httpError(403, 'forbidden', 'only the GM rolls initiative for the table');
+      }
+      for (const combatantId of body.combatantIds) await ownRowScope(req, combatantId);
+    }
+    return service.rollInitiativeAll(id, body);
   });
 
   app.post('/api/combatants/:id/initiative', async (req) => {
     const { id } = req.params as { id: string };
-    await combatantScope(req, id);
-    return { combatant: await service.setInitiative(id, parse(SetInitiativeBody, req.body)) };
+    const body = parse(SetInitiativeBody, req.body);
+    const { auth } = await ownRowScope(req, id);
+    // The line itself — base, dice, kind — stays the GM's; a player enters what they rolled.
+    if (auth.role !== 'gm' && (body.base !== undefined || body.dice !== undefined || body.kind !== undefined)) {
+      throw httpError(403, 'forbidden', 'only the GM changes an initiative line');
+    }
+    return { combatant: await service.setInitiative(id, body) };
   });
 
   app.post('/api/encounters/:id/next-actor', async (req) => {
@@ -335,7 +374,7 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
   app.post('/api/encounters/:id/new-turn', async (req) => {
     const { id } = req.params as { id: string };
     await scope(req, id);
-    const out = await service.newTurn(id);
+    const out = await service.newTurn(id, parse(NewTurnBody, req.body));
     return { encounter: serializeEncounter(out.encounter), combatants: out.combatants };
   });
 

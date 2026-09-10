@@ -9,7 +9,7 @@
  * Hidden combatants are filtered server-side (Principle 4 / FR4.9): the player
  * view never carries a `gm` row, not even a redacted one.
  */
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, ne } from 'drizzle-orm';
 import {
   SceneEnvironmentSchema,
   SheetV1Schema,
@@ -26,6 +26,7 @@ import {
   advancePass,
   anyActiveScores,
   applyInterrupt,
+  computeWoundModifier,
   DEFAULT_INTERRUPTS,
   environment,
   nextActor as nextActorRules,
@@ -159,6 +160,7 @@ export class EncountersService {
       const row = (
         await tx.db.update(encounters).set(patch).where(eq(encounters.id, id)).returning()
       )[0]!;
+      if (patch.state === 'live') await this.retireOtherLive(tx, row.campaignId, row.id);
       await this.emitUpdated(row, 'updated', tx);
       return row;
     });
@@ -434,13 +436,27 @@ export class EncountersService {
     });
   }
 
-  /** Hand-set a score or line (FR4.2 "roll or hand-enter", FR4.8). */
+  /**
+   * Hand-set a score or line (FR4.2 "roll or hand-enter", FR4.8).
+   *
+   * `rolled` is the dice total off a real table — the player rolled 2d6 and
+   * got 9 — and the server adds the base and the wound modifier, so nobody
+   * at the table does arithmetic and a wounded runner's penalty is never
+   * forgotten. `score` remains the blunt override: whatever number the GM
+   * types is the number.
+   */
   async setInitiative(
     combatantId: string,
-    input: { score?: number; base?: number; dice?: number; kind?: InitKind },
+    input: { score?: number; base?: number; dice?: number; kind?: InitKind; rolled?: number },
   ): Promise<Combatant> {
+    let score = input.score;
+    if (input.rolled !== undefined) {
+      const current = serializeCombatant(await this.getCombatant(combatantId));
+      const base = input.base ?? current.initBase;
+      score = base + input.rolled + computeWoundModifier(current.monitors);
+    }
     return this.updateCombatant(combatantId, {
-      ...(input.score !== undefined ? { initScore: input.score } : {}),
+      ...(score !== undefined ? { initScore: score, actedThisPass: false } : {}),
       ...(input.base !== undefined ? { initBase: input.base } : {}),
       ...(input.dice !== undefined ? { initDice: input.dice } : {}),
       ...(input.kind !== undefined ? { initKind: input.kind } : {}),
@@ -515,7 +531,10 @@ export class EncountersService {
    * counter that moved with nobody's initiative rerolled, or the reverse —
    * is a tracker the table has to unpick by hand mid-fight.
    */
-  async newTurn(encounterId: string): Promise<{ encounter: EncounterRow; combatants: Combatant[] }> {
+  async newTurn(
+    encounterId: string,
+    opts: { roll?: boolean } = {},
+  ): Promise<{ encounter: EncounterRow; combatants: Combatant[] }> {
     const encounter = await this.getEncounter(encounterId);
     return this.hub.atomic(encounter.campaignId, async (tx) => {
       const row = (
@@ -525,10 +544,33 @@ export class EncountersService {
           .where(eq(encounters.id, encounterId))
           .returning()
       )[0]!;
+      // One fight at a time: the table, the phones and the TV all follow
+      // "the live encounter", and two of them would be a coin toss.
+      await this.retireOtherLive(tx, row.campaignId, row.id);
+      if (opts.roll === false) {
+        // Hand rolls (FR4.2): the turn opens with every score blank, and the
+        // dice come in from the table one row at a time.
+        await tx.db
+          .update(combatants)
+          .set({ initScore: 0, actedThisPass: false })
+          .where(eq(combatants.encounterId, encounterId));
+        const list = await this.emitUpdated(row, 'new-turn', tx);
+        return { encounter: row, combatants: list };
+      }
       const rolled = await this.rollInitiativeAll(encounterId, {}, tx);
       await this.emitUpdated(row, 'new-turn', tx);
       return { encounter: row, combatants: rolled.combatants };
     });
+  }
+
+  /** Every other live encounter in the campaign is over (state `done`). */
+  private async retireOtherLive(tx: EventTx, campaignId: string, keepId: string): Promise<void> {
+    const others = await tx.db
+      .update(encounters)
+      .set({ state: 'done' })
+      .where(and(eq(encounters.campaignId, campaignId), eq(encounters.state, 'live'), ne(encounters.id, keepId)))
+      .returning();
+    for (const other of others) await this.emitUpdated(other, 'updated', tx);
   }
 
   /** Interrupt action: deduct its Initiative Score cost immediately (FR4.4). */
@@ -727,6 +769,8 @@ export class EncountersService {
           initScore: c.initScore,
           initKind: c.initKind,
           actedThisPass: c.actedThisPass,
+          // The party's dice lines travel with the frame (FR4.2); an NPC's stays the GM's.
+          ...(c.source === 'character' ? { initBase: c.initBase, initDice: c.initDice } : {}),
           condition: conditionOf(c.monitors),
         })),
         activeCombatantId: visible.some((c) => c.id === active) ? active : null,

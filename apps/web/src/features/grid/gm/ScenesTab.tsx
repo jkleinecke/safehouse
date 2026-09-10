@@ -3,10 +3,20 @@
  * player device and the table TV via `scene.activated` (§11).
  */
 import { useState } from 'react';
-import type { Scene } from '@safehouse/contracts';
-import { useActivateScene, useCreateScene, useScenes } from '../api.js';
+import { Link } from 'react-router-dom';
+import type { Encounter, Scene } from '@safehouse/contracts';
+import { useActivateScene, useCampaignEncounters, useCreateScene, useScenes, useStartFight } from '../api.js';
 import { useGridStore } from '../store.js';
 import { Empty, inputCls, PanelSection } from './ui.js';
+
+/**
+ * The fight this scene is part of, if any: the live one first, else the one
+ * being prepped. A fight that is over is not "this scene's fight" any more.
+ */
+export function fightForScene(encounters: readonly Encounter[] | undefined, sceneId: string): Encounter | null {
+  const here = (encounters ?? []).filter((e) => e.sceneId === sceneId && e.state !== 'done');
+  return here.find((e) => e.state === 'live') ?? here[0] ?? null;
+}
 
 /**
  * One sentence on what players and the TV get from this scene's fog.
@@ -38,10 +48,13 @@ export default function ScenesTab({
   const scenes = useScenes(campaignId);
   const create = useCreateScene(campaignId);
   const activate = useActivateScene();
+  const encounters = useCampaignEncounters(campaignId);
+  const startFight = useStartFight(campaignId);
   const setViewSceneId = useGridStore((s) => s.setViewSceneId);
   const [name, setName] = useState('');
 
   const list = scenes.data ?? [];
+  const fight = fightForScene(encounters.data, scene.id);
 
   return (
     <>
@@ -96,6 +109,56 @@ export default function ScenesTab({
         <p className="text-xs text-faint" data-testid="scene-visibility">
           {tableVisibility(scene)}
         </p>
+      </PanelSection>
+
+      {/*
+        FR9.10: the fight starts HERE, on the map the GM is already looking at.
+        Every runner and NPC token on the scene becomes a combatant — hidden
+        tokens as GM-only rows, an NPC placed from an archetype as a rolled
+        body — and the tracker on the Table page takes it from there.
+      */}
+      <PanelSection title="Fight" hint="FR9.10">
+        {fight ? (
+          <>
+            <p className="text-xs" data-testid="scene-fight">
+              <span className="text-cyan">{fight.name}</span>{' '}
+              <span className={`mono-label ${fight.state === 'live' ? 'text-ok' : 'text-faint'}`}>
+                {fight.state === 'live' ? 'live' : 'prepped'}
+              </span>
+            </p>
+            <div className="flex gap-1.5">
+              <button
+                type="button"
+                className="btn flex-1 py-1"
+                disabled={startFight.isPending}
+                onClick={() => startFight.mutate({ sceneId: scene.id, encounterId: fight.id })}
+                title="Tokens placed since the fight was staged join it as combatants"
+              >
+                add new tokens
+              </button>
+              <Link className="btn btn-accent flex-1 py-1 text-center" to={`/c/${campaignId}/table`}>
+                open the tracker
+              </Link>
+            </div>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="btn btn-accent w-full py-1"
+              data-testid="start-fight"
+              disabled={startFight.isPending}
+              onClick={() => startFight.mutate({ sceneId: scene.id, name: scene.name })}
+            >
+              start a fight from this scene’s tokens
+            </button>
+            <Empty>
+              every runner and NPC token on this map becomes a combatant — hidden ones stay hidden — and
+              the tracker on the Table page runs it from there.
+            </Empty>
+          </>
+        )}
+        {startFight.isError && <p className="mono-label text-danger">could not stage the fight — retry</p>}
       </PanelSection>
 
       <PanelSection title="New scene">

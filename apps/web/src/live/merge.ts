@@ -316,14 +316,19 @@ export function normalizeEncounter(raw: unknown, fallbackId?: string): Encounter
   const activeCombatantId =
     firstDefined(str(root['activeCombatantId']), str(enc['activeCombatantId'])) ?? null;
 
-  return {
+  const name = firstDefined(str(enc['name']), str(root['name']));
+  const turn = firstDefined(int(enc['turn']), int(root['turn']));
+  const pass = firstDefined(int(enc['pass']), int(root['pass']));
+  const sceneId = firstDefined(str(enc['sceneId']), str(root['sceneId']));
+
+  const out: Encounter = {
     id,
     campaignId: firstDefined(str(enc['campaignId']), str(root['campaignId'])) ?? '',
-    sceneId: firstDefined(str(enc['sceneId']), str(root['sceneId'])) ?? null,
-    name: firstDefined(str(enc['name']), str(root['name'])) ?? 'Encounter',
+    sceneId: sceneId ?? null,
+    name: name ?? 'Encounter',
     state,
-    turn: Math.max(0, firstDefined(int(enc['turn']), int(root['turn'])) ?? 0),
-    pass: Math.max(0, firstDefined(int(enc['pass']), int(root['pass'])) ?? 0),
+    turn: Math.max(0, turn ?? 0),
+    pass: Math.max(0, pass ?? 0),
     activeCombatantId,
     // Present only when the source actually carried rows: an encounter list
     // entry has none, and an empty array there would look like "0 combatants"
@@ -332,6 +337,27 @@ export function normalizeEncounter(raw: unknown, fallbackId?: string): Encounter
       ? { combatants }
       : {}),
   };
+  // Which header fields the source actually said, so a thin delta ("this
+  // fight was staged") can be folded onto the fight on screen without its
+  // defaults — "Encounter", prep, turn 0 — overwriting a name and a turn the
+  // delta never mentioned. Non-enumerable: it is bookkeeping, not data.
+  const carried: CarriedField[] = [];
+  if (name !== undefined) carried.push('name');
+  if (stateRaw !== undefined) carried.push('state');
+  if (turn !== undefined) carried.push('turn');
+  if (pass !== undefined) carried.push('pass');
+  if (sceneId !== undefined) carried.push('sceneId');
+  Object.defineProperty(out, CARRIED, { value: carried, enumerable: false });
+  return out;
+}
+
+type CarriedField = 'name' | 'state' | 'turn' | 'pass' | 'sceneId';
+const CARRIED = Symbol('carried');
+
+/** The header fields a normalised encounter's source actually carried, or null for a hand-built one. */
+function carriedFields(e: Encounter): ReadonlySet<CarriedField> | null {
+  const list = (e as unknown as Record<symbol, unknown>)[CARRIED];
+  return Array.isArray(list) ? new Set(list as CarriedField[]) : null;
 }
 
 /**
@@ -348,8 +374,23 @@ export function mergeEncounter(prev: Encounter | null, next: Encounter | null): 
   if (!next) return prev;
   if (!prev || prev.id !== next.id) return next;
   if (next.combatants !== undefined) return next;
+  // A delta: the roster, the acting row AND every header field it did not
+  // mention come from the fight already on screen. A "staged" frame that
+  // named neither the fight nor its turn used to rename it "Encounter" and
+  // set a live fight back to prep until the next read.
+  const carried = carriedFields(next);
+  const header: Partial<Encounter> = carried
+    ? {
+        ...(carried.has('name') ? { name: next.name } : {}),
+        ...(carried.has('state') ? { state: next.state } : {}),
+        ...(carried.has('turn') ? { turn: next.turn } : {}),
+        ...(carried.has('pass') ? { pass: next.pass } : {}),
+        ...(carried.has('sceneId') ? { sceneId: next.sceneId } : {}),
+      }
+    : { name: next.name, state: next.state, turn: next.turn, pass: next.pass, sceneId: next.sceneId };
   return {
-    ...next,
+    ...prev,
+    ...header,
     ...(prev.combatants !== undefined ? { combatants: prev.combatants } : {}),
     activeCombatantId: next.activeCombatantId ?? prev.activeCombatantId ?? null,
   };

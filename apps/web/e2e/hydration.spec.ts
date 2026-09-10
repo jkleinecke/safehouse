@@ -35,7 +35,7 @@ test.describe('LIVE-1 · mount-time hydration', () => {
     await expect(log.getByText('The log is empty')).toHaveCount(0);
 
     await expect(tracker.getByText('No combatants yet')).toHaveCount(0);
-    await expect(tracker.getByText('No live encounter')).toHaveCount(0);
+    await expect(tracker.getByText('No fight yet')).toHaveCount(0);
     for (const name of world.publicCombatants.slice(0, 3)) {
       await expect(tracker.getByText(name).first()).toBeVisible();
     }

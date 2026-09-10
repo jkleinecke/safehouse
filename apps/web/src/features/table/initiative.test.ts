@@ -3,11 +3,14 @@ import type { Combatant, CombatantMonitors, Encounter } from '@safehouse/contrac
 import {
   conditionBand,
   effectHint,
+  fightPhase,
   formatModifier,
+  isRolled,
   monitorDetailFor,
   moraleLine,
   moralePrompts,
   passLabel,
+  scoreFromRolled,
   trackerRows,
   visibleCombatants,
   type Viewer,
@@ -248,5 +251,36 @@ describe('moralePrompts', () => {
     expect(prompt).toBeDefined();
     expect(moraleLine(prompt!)).toContain('Alley crew');
     expect(moraleLine(prompt!)).toContain('2/4 standing');
+  });
+});
+
+describe('blank lines and hand rolls (FR4.2)', () => {
+  it('a 0 in the first pass is a line nobody has rolled; later it is a spent score', () => {
+    const blank = combatant({ id: 'a', initScore: 0 });
+    expect(isRolled(encounter([blank], { turn: 0, pass: 0, state: 'prep' }), blank)).toBe(false);
+    expect(isRolled(encounter([blank], { turn: 1, pass: 1 }), blank)).toBe(false);
+    expect(isRolled(encounter([blank], { turn: 1, pass: 2 }), blank)).toBe(true);
+    expect(isRolled(encounter([blank]), combatant({ id: 'b', initScore: 0, actedThisPass: true }))).toBe(true);
+    expect(isRolled(encounter([blank]), combatant({ id: 'c', initScore: 12 }))).toBe(true);
+    expect(isRolled(null, blank)).toBe(false);
+    const rows = trackerRows(encounter([blank, combatant({ id: 'd', initScore: 12 })], { pass: 1 }), GM);
+    expect(rows.map((r) => [r.combatant.id, r.rolled])).toEqual([
+      ['d', true],
+      ['a', false],
+    ]);
+  });
+
+  it('a dice total becomes base + dice + wounds, exactly as the server computes it', () => {
+    const fresh = combatant({ id: 'a', initBase: 8 });
+    expect(scoreFromRolled(fresh, 9)).toBe(17);
+    const hurt = combatant({ id: 'b', initBase: 8, monitors: mon(3) });
+    expect(scoreFromRolled(hurt, 9)).toBe(16);
+  });
+
+  it('names the phase of a fight', () => {
+    expect(fightPhase(null)).toBe('none');
+    expect(fightPhase(encounter([], { state: 'prep' }))).toBe('prep');
+    expect(fightPhase(encounter([]))).toBe('live');
+    expect(fightPhase(encounter([], { state: 'done' }))).toBe('done');
   });
 });

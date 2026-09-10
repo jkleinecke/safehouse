@@ -6,6 +6,7 @@
  * the server for a fresh roll (generation stays server-authoritative).
  */
 import { useMemo, useState, type Dispatch, type SetStateAction } from 'react';
+import { Link } from 'react-router-dom';
 import type { NpcTemplate } from '@safehouse/contracts';
 import { useScenes } from '../../grid/api.js';
 import { randomSeed } from '../common.js';
@@ -146,6 +147,11 @@ export default function EncounterBuilder({
             </button>
           )}
           {savedId && <span className="mono-label text-ok">saved</span>}
+          {savedId && (
+            <Link className="btn btn-accent px-3 py-1.5" to={`/c/${campaignId}/table`}>
+              open the tracker
+            </Link>
+          )}
         </div>
         <ErrorNote error={create.error ?? stage.error} />
 

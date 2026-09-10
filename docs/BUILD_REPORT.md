@@ -59,7 +59,7 @@ and the evidence), then re-verified against the source on 2026-08-31.
 | 2 | **Build a scene** — create it, put a map on it, cut fog regions, set the environment, activate it | **works** | GM console → *At the table* → **Scenes** for the list and the levers; **Grid** for the drawing. Both cards say which is which. |
 | 3 | **Write a codex page with AI help** — draft one, expand a stub, turn tonight's log into lore | **works** | **Codex** → open a page → the AI panel beside it (*draft · expand · summarise the log · suggest links*). Every result is a proposal the GM accepts or bins. |
 | 4 | **Prep opposition** — author an archetype, roll a squad, check it against the party, stage it on the map | works-but-awkward | GM console → *Prep* → **Generator**. Completes end to end. Three warts, listed below. |
-| 5 | **Run a fight** — pick tonight's encounter, start it, roll initiative, apply damage, use the copilot | **cannot-complete** | **There is no route.** The tracker shows whichever encounter `pickLiveEncounter` guesses; no screen lists encounters, sets one live, adds a combatant by hand, or rolls initiative. |
+| 5 | **Run a fight** — pick tonight's encounter, start it, roll initiative, apply damage, use the copilot | **works** | Three ways in, all on screen: **Generator** → roll a squad and a lieutenant → *Encounter + readout* → save, *stage on map*, *open the tracker*; **Grid** → *Scenes* → **Fight** → *start a fight from this scene's tokens* (an NPC placed from an archetype arrives as a rolled body with a rack) or *add new tokens* to the fight already linked; **Table** → *manage ▾* → a new empty fight, rename, link a scene, add a combatant by hand, delete. Then the tracker: a picker when there is more than one fight, **Start the fight** (server dice, or *hand rolls on* and the table's dice typed in as totals), ROLL on every row, Next, End pass, New turn, DMG, remove a row, End the fight; a runner rolls or types their own row from their phone. Driven end to end in a browser with no API call on 2026-09-09 — the Generator to a deleted spare fight. |
 | 6 | **Look up a rule, show a player the page** | works-but-awkward | **Books** on both the GM rail and the phone nav; the reader is excellent. But there is no search box anywhere, and nothing pushes a page to the table. |
 | 7 | **Close a session** — approve karma, draft and publish a recap | **works** | GM console → *Prep* → **Sessions**. Awards can also be originated from the Party roster now. |
 | 8 | **Onboard** — start a campaign, get a character into it, get a player's phone onto that sheet, get the TV up | **works** | **Party** → *add a runner* / *import .chum5*; then pick the player's device on that row. *Pair the TV* is its own rail entry. |
@@ -104,23 +104,27 @@ point of this table:
   where the GM is standing when they want to give the table karma. The Party
   roster is the workaround, and it is a good one.
 
-### What job 5 needs, precisely
+### What job 5 still needs, precisely
 
 Everything *inside* a fight is built and good — end-pass over the socket, the
 damage dialog that previews before it commits, wound modifiers moving derived
 numbers in front of you, the copilot rack, morale, interrupts, the
-server-authoritative resolve chain. What is missing is the list and the switch:
+server-authoritative resolve chain. The list and the switch landed on
+2026-09-09 (`features/table/Tracker.tsx`, `features/grid/gm/ScenesTab.tsx`):
 
-| Missing | Already written, uncalled |
+| Was missing | Now |
 | --- | --- |
-| an encounter list on the tracker | `useEncounterList` (`features/table/commands.ts:120`) — exported, consumed by nothing |
-| set live / end / rename / relink / delete | `PATCH`/`DELETE /api/encounters/:id` — **no caller in `apps/web/src`** |
-| add a combatant by hand (FR4.1) | `POST /api/encounters/:id/combatants` — no caller |
-| roll initiative as a deliberate act | `POST /api/encounters/:id/roll-initiative` — no caller |
-| a button that says it starts the fight | today it is "New turn", whose tooltip says "Re-roll initiative (FR4.3)" |
+| a way to start a fight from the map | **Grid ▸ Scenes ▸ Fight ▸ start a fight from this scene's tokens** (`POST /api/scenes/:id/stage-encounter { name }`); the same panel adds tokens placed since, and links to the tracker |
+| NPC tokens staging as `0+1d6`, ten boxes | an NPC token placed from an archetype stages as a rolled body (first tier, seeded by the token) with its sheet in `copilot`, so it has a real line, real monitors and a rack (`services/scenes.ts` `rolledBodyFor`) |
+| an encounter list on the tracker | a **Which fight** picker in the tracker header, GM only, shown when there is more than one |
+| a button that says it starts the fight | **Start the fight** while the fight is `prep`/`done`; Next · Roll initiative · End pass · New turn · **End the fight** while live |
+| roll initiative as a deliberate act | **Roll initiative** (everyone) and **ROLL** on every row; a blank line shows `—`, not a ranked 0 |
+| manual rolls | **hand rolls on**: the turn opens blank and each row takes the *dice total* (`POST /api/combatants/:id/initiative { rolled }`), the server adding base and wounds; a runner does the same for their own row from their phone (FR4.2) |
+| two fights both "live" | one live fight per campaign: starting one, or flipping one live, retires the other (`state: 'done'`) |
 
-Until someone presses "New turn", `encounter.state` never becomes `live`, so the
-TV cannot draw the initiative ribbon either (`features/tv/encounterState.ts:203`).
+| a fight with nothing but names and typed scores (FR4.8 "dumb mode") | **manage ▾** on the tracker (`features/table/FightMenu.tsx`): a new empty fight, rename, link a scene, **add a combatant by hand** (name, base, dice, kind, boxes, hidden), delete the fight; every row has a two-click **✕**. Every encounter route now has a caller. |
+| a way from the Generator's saved fight to the tracker | *open the tracker* beside *saved* in the encounter builder |
+| the GM's tracker losing its hidden rows | the player-safe twin of every `encounter.updated` no longer overwrites the GM's roster (`live/store.ts` `encounterScope`), and a thin "staged" delta no longer renames the fight or resets its turn (`live/merge.ts` carried fields) |
 
 ---
 
@@ -170,9 +174,9 @@ TV cannot draw the initiative ribbon either (`features/tv/encounterState.ts:203`
 
 | FR | Status | Where |
 | --- | --- | --- |
-| FR4.1 encounters from PCs / templates / generator / grunt groups; prep + launch, incl. from a scene | **done · thin surface — the worst one in this document** | `plugins/encounters.ts`, `POST /api/scenes/:id/stage-encounter`. The server does all of it. The browser does **prep only**: `POST /api/encounters/build` from the generator and `stage-encounter` from a scene. **Nothing in `apps/web/src` lists encounters, picks one, launches one, renames or relinks one, deletes one, or adds a combatant by hand** — `PATCH`/`DELETE /api/encounters/:id` and `POST …/combatants` have no caller, and `useEncounterList` (`features/table/commands.ts:120`) is written, exported and consumed by nothing. The tracker shows whatever `pickLiveEncounter` (`live/merge.ts:368`) guesses. This row read `done` for four revisions; it is job 5 in §1. |
+| FR4.1 encounters from PCs / templates / generator / grunt groups; prep + launch, incl. from a scene | done | `plugins/encounters.ts`, `POST /api/scenes/:id/stage-encounter`. The browser launches from a scene (Grid ▸ Scenes ▸ Fight), builds from the generator and walks to the tracker, lists and picks fights, starts and ends them, and — from the tracker's *manage ▾* — makes an empty one, renames, relinks, deletes, and adds a row by hand (FR4.8's "dumb mode"). Every encounter route has a caller in `apps/web/src`. `test/fight-from-scene.test.ts`, `initiative-hand.test.ts`; web `FightMenu.test.tsx`, `trackerControls.test.tsx`. |
 | FR4.2 SR5 initiative incl. astral / cold-sim / hot-sim variants, wound mods | done | `rules/src/combat/initiative.ts`. Staged encounters derive through the engine too (FR9.10). |
-| FR4.3 native pass structure (−10 loop, re-roll on new turn) | **done · thin surface** | `services/encounters.ts:365` — `rollInitiativeAll` opens on turn 1 / pass 1. The engine is right; the button is not. **Starting a fight is done by pressing "New turn", whose tooltip reads "Re-roll initiative (FR4.3)"** — the flip to `state: 'live'` is a side effect of `newTurn` (`services/encounters.ts:524`), and `POST …/roll-initiative` has no UI at all. A GM opening the tracker has no reason to press it, and until they do the TV cannot draw the initiative ribbon (`features/tv/encounterState.ts:203`). |
+| FR4.3 native pass structure (−10 loop, re-roll on new turn) | done | `services/encounters.ts` — `rollInitiativeAll` opens on turn 1 / pass 1; `newTurn(id, { roll })` flips to `live`, retires any other live fight, and either rolls everyone or opens the turn blank for hand rolls. The tracker says **Start the fight** until it is live and reads `NOT STARTED` / `OVER` in place of a pass count it does not have; `Roll initiative` and per-row `ROLL` call `POST …/roll-initiative`. |
 | FR4.4 interrupt menu with editable costs | done | `DEFAULT_INTERRUPTS` + custom cost. Seize/Blitz reachable from the sheet and stamped into the tracker's order (`services/rolls-edge.ts`). |
 | FR4.5 damage → monitor → overflow → wound recompute, one-tap undo | done | `services/encounters-damage.ts`, both write paths now inside `Hub.atomic`. |
 | FR4.6 grunt groups, shared PR + Group Edge | done | `professionalRating` on `AddCombatantBody` and `PATCH /api/combatants/:id`. Playthrough asserts `pressure 4 vs PR 3`. |
@@ -333,7 +337,7 @@ not the strongest.
 | Fog of war | shipped (manual + staged) |
 | Measurement / ruler | shipped, SR5-native |
 | Dice + macros | **shipped — macros now follow the person, not the handset** (FR2.8) |
-| Initiative tracker | shipped, **with no way to choose which encounter it tracks** — see job 5 in §1 |
+| Initiative tracker | shipped; picks its fight, starts it, rolls or takes the table's dice — see job 5 in §1 |
 | Character sheets | shipped via Chummer import — **and the import finally has a button** (`home/AddCharacter.tsx`); re-import and rollback are still API-only |
 | Handouts | shipped — upload, attach, stage, reveal, TV takeover |
 | Journal / notes | shipped (M5 codex, with templates page-referenced) |
