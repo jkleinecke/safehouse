@@ -57,7 +57,7 @@ export default function CodexPage() {
             </p>
             <p className="mt-2 text-sm text-faint">
               {isGm
-                ? 'Pages are GM-only until you reveal them, and each `##` section reveals on its own (FR5.2).'
+                ? 'Pages are GM-only until you reveal them, and each `##` section reveals on its own.'
                 : 'You see what the GM has shared. The rest is not hidden in your browser — it never left the server.'}
             </p>
           </div>

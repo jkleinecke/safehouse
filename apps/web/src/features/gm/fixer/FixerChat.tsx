@@ -121,7 +121,7 @@ export default function FixerChat({ campaignId, sessionLive, dense }: FixerChatP
     <div className="panel flex min-h-0 flex-1 flex-col p-4">
       <div className="flex flex-wrap items-center gap-2">
         <SectionTitle hint="GM-only — players never talk to it">The Fixer</SectionTitle>
-        <span className="chip text-faint" title="Model slot (FR12.16)">
+        <span className="chip text-faint" title="Model slot">
           {slot}
         </span>
         <button
@@ -146,7 +146,7 @@ export default function FixerChat({ campaignId, sessionLive, dense }: FixerChatP
       {view.snapshot && (
         <div
           className="mt-2 rounded-md border border-cyan-dim/50 bg-deck px-3 py-2"
-          title="Auto-prefixed while a session is live (FR12.18)"
+          title="Auto-prefixed while a session is live"
         >
           <span className="mono-label text-cyan">situation</span>
           <p className="mt-0.5 text-xs text-dim">{view.snapshot}</p>

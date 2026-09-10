@@ -48,7 +48,7 @@ export default function CamerasTab({ scene, onCenter }: CamerasTabProps) {
 
   return (
     <>
-      <PanelSection title="Mount a camera" hint="FR9.23">
+      <PanelSection title="Mount a camera">
         <button
           type="button"
           aria-pressed={tool === 'camera'}

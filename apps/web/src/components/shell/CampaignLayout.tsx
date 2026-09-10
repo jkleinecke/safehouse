@@ -25,7 +25,7 @@ function NoSession() {
         <h1 className="mt-4 text-lg font-semibold">No device token</h1>
         <p className="mt-2 text-sm text-dim">
           This device hasn't joined the campaign. Scan the GM's join QR, or sign in from the front
-          door — a GM can start a campaign or pair with a code there (FR1.1).
+          door — a GM can start a campaign or pair with a code there.
         </p>
         <Link className="btn btn-accent mt-5 w-full" to="/">
           go to sign-in

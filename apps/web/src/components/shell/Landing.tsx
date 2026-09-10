@@ -341,7 +341,7 @@ export default function Landing() {
           >
             <p className="text-sm text-dim">
               First run on this server: this creates the campaign and signs this browser in as its
-              GM. No password — the token lives on this device (FR1.1).
+              GM. No password — the token lives on this device.
             </p>
             <label className="block">
               <span className="mono-label block">Campaign name</span>

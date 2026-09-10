@@ -120,7 +120,7 @@ export default function HandoutsPanel({ campaignId, page, isGm }: HandoutsPanelP
 
   return (
     <section className="panel p-3">
-      <div className="mono-label text-cyan">Handouts (FR5.4)</div>
+      <div className="mono-label text-cyan">Handouts</div>
 
       {page.handouts.length === 0 && (
         <p className="mt-2 text-xs text-faint">Nothing pinned to this page.</p>

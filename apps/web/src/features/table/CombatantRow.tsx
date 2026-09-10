@@ -274,7 +274,7 @@ export default function CombatantRow({
               type="button"
               className={`chip ${row.rolled ? 'border-edge-bright' : 'border-warn text-warn'} hover:border-cyan hover:text-cyan`}
               onClick={() => onRoll(c)}
-              title={`Roll ${c.initDice}d6 + ${c.initBase} with the server’s dice (FR4.2)`}
+              title={`Roll ${c.initDice}d6 + ${c.initBase} with the server’s dice`}
             >
               ROLL
             </button>
@@ -284,7 +284,7 @@ export default function CombatantRow({
               type="button"
               className="chip border-edge-bright hover:border-danger hover:text-danger"
               onClick={() => onDamage(c)}
-              title="Apply damage (FR4.5)"
+              title="Apply damage"
             >
               DMG
             </button>
@@ -295,7 +295,7 @@ export default function CombatantRow({
               className="chip border-edge-bright hover:border-cyan hover:text-cyan"
               onClick={() => setMenuOpen((v) => !v)}
               aria-expanded={menuOpen}
-              title="Interrupt actions (FR4.4)"
+              title="Interrupt actions"
             >
               INT ▾
             </button>
@@ -307,7 +307,7 @@ export default function CombatantRow({
               onClick={remove}
               onBlur={() => setConfirmRemove(false)}
               aria-label={`Remove ${c.name} from the fight`}
-              title={confirmRemove ? 'Click again to remove this row' : 'Remove this row from the fight (FR4.8)'}
+              title={confirmRemove ? 'Click again to remove this row' : 'Remove this row from the fight'}
             >
               {confirmRemove ? 'remove?' : '✕'}
             </button>

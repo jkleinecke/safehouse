@@ -34,7 +34,8 @@ import { rollScatter } from './geometry.js';
 import { addCamera, addDoor, addNote, addPin, addWall, tileDoorOpen } from './geometryEdit.js';
 import GmPanel from './gm/GmPanel.js';
 import MeasurePanel from './hud/MeasurePanel.js';
-import Toolbar from './hud/Toolbar.js';
+import Toolbar, { ViewControls } from './hud/Toolbar.js';
+import { useGridShortcuts } from './hud/useGridShortcuts.js';
 import { composeStageState, resolveSceneId } from './hydration.js';
 import {
   movementFrom,
@@ -283,6 +284,8 @@ export default function GridPage() {
   // What the GM's cameras cover on this floor (FR9.23). Null for players,
   // whose scene carries no cameras to begin with.
   const cameraCones = useCameraCones(scene, isGm, viewLevel);
+  // Single-key tools and 1–9 for floors (docs/UX_MAP_BUILDER.md §3.3).
+  useGridShortcuts(isGm, 1 + (scene?.levels?.length ?? 0));
 
   const stageState: StageSceneState | null = useMemo(
     () =>
@@ -621,28 +624,29 @@ export default function GridPage() {
           worst of both: the GM can read the offer and nothing happens.
         */}
         <div className="pointer-events-none absolute inset-x-3 top-3 z-10 flex items-start justify-between gap-2">
-          <Toolbar
-            isGm={isGm}
-            tool={store.tool}
-            snapEnabled={store.snapEnabled}
-            gmPanelOpen={store.gmPanelOpen}
-            viewProjection={store.viewProjection}
-            sceneProjection={scene?.grid.projection ?? 'topdown'}
-            onView={store.setViewProjection}
-            onTool={store.setTool}
-            onToggleSnap={store.toggleSnap}
-            onToggleGmPanel={store.toggleGmPanel}
-            onZoom={(f) => api?.zoomBy(f)}
-            onFit={() => api?.fitScene()}
-          />
+          <Toolbar isGm={isGm} mode={store.mode} tool={store.tool} onMode={store.setMode} onTool={store.setTool} />
 
           <div className="flex shrink-0 flex-col items-end gap-1.5">
-            <span className="chip pointer-events-auto bg-panel/90 text-ink">
+            <div className="flex items-center gap-1.5">
+              <ViewControls
+                isGm={isGm}
+                snapEnabled={store.snapEnabled}
+                gmPanelOpen={store.gmPanelOpen}
+                viewProjection={store.viewProjection}
+                sceneProjection={scene?.grid.projection ?? 'topdown'}
+                onView={store.setViewProjection}
+                onToggleSnap={store.toggleSnap}
+                onToggleGmPanel={store.toggleGmPanel}
+                onZoom={(f) => api?.zoomBy(f)}
+                onFit={() => api?.fitScene()}
+              />
+              <span className="chip pointer-events-auto bg-panel/90 text-ink">
               {scene?.name ?? '…'}
               {scene && scene.id !== activeSceneId && (
                 <span className="text-warn">staging</span>
               )}
-            </span>
+              </span>
+            </div>
             {/*
               Which floor is on screen, right on the canvas. The Map tab has the
               full list, but a GM two tabs away from it had no way to tell the

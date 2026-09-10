@@ -117,7 +117,7 @@ export default function ScenesTab({
         tokens as GM-only rows, an NPC placed from an archetype as a rolled
         body — and the tracker on the Table page takes it from there.
       */}
-      <PanelSection title="Fight" hint="FR9.10">
+      <PanelSection title="Fight">
         {fight ? (
           <>
             <p className="text-xs" data-testid="scene-fight">

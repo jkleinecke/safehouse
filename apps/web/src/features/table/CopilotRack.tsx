@@ -74,7 +74,7 @@ export default function CopilotRack({
       <button
         type="button"
         className="chip border-magenta-dim text-magenta hover:border-magenta"
-        title="Resolve a full attack exchange (FR10.8)"
+        title="Resolve a full attack exchange"
         onClick={onOpenChain}
       >
         CHAIN ▸

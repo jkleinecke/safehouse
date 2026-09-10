@@ -172,7 +172,7 @@ export default function Tracker({ campaignId }: TrackerProps) {
               className={`chip ${manageOpen ? 'border-cyan text-cyan' : 'border-edge-bright text-faint'}`}
               aria-pressed={manageOpen}
               onClick={() => setManageOpen((v) => !v)}
-              title="New fight, rename, link a scene, add a combatant by hand, delete (FR4.1)"
+              title="New fight, rename, link a scene, add a combatant by hand, delete"
             >
               manage ▾
             </button>
@@ -210,8 +210,8 @@ export default function Tracker({ campaignId }: TrackerProps) {
                 onClick={hints.toggle}
                 title={
                   hints.enabled
-                    ? 'A one-line suggestion on the acting NPC’s row. It never acts (FR10.10).'
-                    : 'Off by default. Turn on to get a one-line suggestion on the acting NPC’s row — advice only, it never acts (FR10.10).'
+                    ? 'A one-line suggestion on the acting NPC’s row. It never acts.'
+                    : 'Off by default. Turn on to get a one-line suggestion on the acting NPC’s row — advice only, it never acts.'
                 }
               >
                 hints {hints.enabled ? 'on' : 'off'}
@@ -225,8 +225,8 @@ export default function Tracker({ campaignId }: TrackerProps) {
                 onClick={() => run(() => postNewTurn(encounterId, !handRolls))}
                 title={
                   handRolls
-                    ? 'Turn 1, pass 1, every line blank — type the dice as the table rolls them (FR4.2)'
-                    : 'Turn 1, pass 1, the server rolls everyone’s initiative (FR4.2)'
+                    ? 'Turn 1, pass 1, every line blank — type the dice as the table rolls them'
+                    : 'Turn 1, pass 1, the server rolls everyone’s initiative'
                 }
               >
                 Start the fight
@@ -239,7 +239,7 @@ export default function Tracker({ campaignId }: TrackerProps) {
                   className="btn btn-accent px-2.5 py-1"
                   disabled={busy}
                   onClick={() => sendCommand(campaignId, { cmd: 'encounter.advance', encounterId })}
-                  title="The acting combatant is done; on to the next (FR4.3)"
+                  title="The acting combatant is done; on to the next"
                 >
                   Next ▸
                 </button>
@@ -257,7 +257,7 @@ export default function Tracker({ campaignId }: TrackerProps) {
                   className="btn px-2.5 py-1"
                   disabled={busy}
                   onClick={() => run(() => postEndPass(encounterId))}
-                  title="Every score −10 (FR4.3)"
+                  title="Every score −10"
                 >
                   End pass
                 </button>
@@ -268,8 +268,8 @@ export default function Tracker({ campaignId }: TrackerProps) {
                   onClick={() => run(() => postNewTurn(encounterId, !handRolls))}
                   title={
                     handRolls
-                      ? 'Next combat turn: every line blank again, for the table’s dice (FR4.3)'
-                      : 'Next combat turn: everyone re-rolls (FR4.3)'
+                      ? 'Next combat turn: every line blank again, for the table’s dice'
+                      : 'Next combat turn: everyone re-rolls'
                   }
                 >
                   New turn

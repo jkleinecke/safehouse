@@ -134,7 +134,7 @@ export default function PartyPanel({ campaignId, limit, compact, onShowQr }: Par
 
   return (
     <div className="panel p-4" data-testid="party-panel">
-      <SectionTitle hint={rows.length > 0 ? `${rows.length} on the crew` : 'FR3.1'}>
+      <SectionTitle hint={rows.length > 0 ? `${rows.length} on the crew` : 'nobody on the crew yet'}>
         Party
       </SectionTitle>
 

@@ -171,7 +171,7 @@ export default function MapTab({ scene }: { scene: Scene }) {
             value={grid.unitM}
             min={0.1}
             step={0.5}
-            title="Metres per square (FR9.1)"
+            title="Metres per square"
             onChange={(n) => setGrid({ unitM: n > 0 ? n : 1 })}
           />
         </Row>

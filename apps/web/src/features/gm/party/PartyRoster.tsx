@@ -63,7 +63,7 @@ function EmptyRoster({ campaignId }: { campaignId: string }) {
         sheet.
       </p>
       <p className="mt-2 text-sm text-dim">
-        Import a Chummer5a <code className="text-cyan">.chum5</code> export (FR3.1) — skills,
+        Import a Chummer5a <code className="text-cyan">.chum5</code> export — skills,
         gear, qualities and the build&apos;s opening karma and nuyen all come across as ledger
         entries — or start a blank sheet and fill it in at the table.
       </p>

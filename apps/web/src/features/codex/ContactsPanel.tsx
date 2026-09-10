@@ -271,7 +271,7 @@ export default function ContactsPanel({
   if (bare) return body;
   return (
     <section className="panel p-3">
-      <div className="mono-label text-cyan">Contacts (FR5.8)</div>
+      <div className="mono-label text-cyan">Contacts</div>
       {body}
     </section>
   );

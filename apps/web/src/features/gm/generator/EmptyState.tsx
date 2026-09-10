@@ -36,7 +36,7 @@ export default function GeneratorEmptyState({
   return (
     <div className={compact ? 'space-y-3' : 'panel space-y-4 p-6'}>
       {!compact && (
-        <SectionTitle hint="FR10.1 — nothing here is a book stat block">
+        <SectionTitle hint="nothing here is a book stat block">
           No archetypes in this campaign yet
         </SectionTitle>
       )}

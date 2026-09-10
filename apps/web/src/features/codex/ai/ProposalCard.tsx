@@ -131,7 +131,7 @@ export default function ProposalCard({
             no draft row
           </span>
         ) : (
-          <span className="chip text-dim" title="Saved as an ai_generations draft (FR12.15)">
+          <span className="chip text-dim" title="Saved as an ai_generations draft">
             draft
           </span>
         )}
@@ -144,14 +144,14 @@ export default function ProposalCard({
 
       {proposal.unverified && (
         <p className="mono-label mt-2 text-warn">
-          The Fixer answered without saving a draft, so the FR12.19 spoiler guard never ran on this
+          The Fixer answered without saving a draft, so the spoiler guard never ran on this
           text. Read it yourself before you accept it.
         </p>
       )}
 
       {flagged && (
         <div className="mt-2 rounded-md border border-warn/40 bg-warn/10 p-2">
-          <div className="mono-label text-warn">spoiler guard (FR12.19) — reveal or cut?</div>
+          <div className="mono-label text-warn">spoiler guard — reveal or cut?</div>
           <p className="mt-1 text-xs text-warn/90">
             This draft is meant for the table and leans on things only you know:
           </p>

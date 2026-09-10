@@ -66,7 +66,7 @@ export default function DisplayTab({ commands }: DisplayTabProps) {
       <section className="border-b border-edge px-3 py-3">
         <div className="flex items-baseline justify-between gap-2">
           <span className="mono-label text-cyan">The table display</span>
-          <span className="mono-label text-faint">FR9.21</span>
+
         </div>
         <div className="mt-2 space-y-2">
           <Toggle
@@ -92,7 +92,7 @@ export default function DisplayTab({ commands }: DisplayTabProps) {
       <section className="border-b border-edge px-3 py-3">
         <div className="flex items-baseline justify-between gap-2">
           <span className="mono-label text-cyan">Focus &amp; pointer</span>
-          <span className="mono-label text-faint">FR9.15</span>
+
         </div>
         <div className="mt-2 space-y-2">
           <Toggle

@@ -95,7 +95,7 @@ export default function NewPagePrompt({ campaignId, seedTitle }: NewPagePromptPr
   return (
     <div className="border-t border-edge pt-3">
       <div className="flex items-center gap-2">
-        <div className="mono-label text-magenta">Or describe it (FR12.2)</div>
+        <div className="mono-label text-magenta">Or describe it</div>
         {ask.isPending && <Spinner label="drafting" />}
       </div>
 

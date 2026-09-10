@@ -127,7 +127,7 @@ export default function CalendarView() {
 
   return (
     <div className="p-6">
-      <SectionTitle hint="FR5.7 — the Sixth World clock">Calendar</SectionTitle>
+      <SectionTitle hint="the Sixth World clock">Calendar</SectionTitle>
       <div className="mt-1 flex flex-wrap items-center gap-2">
         <span className="chip border-cyan-dim text-cyan">{clock ?? '2076-??-??'}</span>
         <span className="mono-label text-faint">in-game today</span>

@@ -53,7 +53,7 @@ export default function TemplatePanel({ campaignId, page, isGm }: TemplatePanelP
 
   return (
     <section className="panel p-3">
-      <div className="mono-label text-cyan">Archetypes (FR5.6)</div>
+      <div className="mono-label text-cyan">Archetypes</div>
 
       {linked.length === 0 ? (
         <p className="mt-2 text-xs text-faint">
@@ -75,7 +75,7 @@ export default function TemplatePanel({ campaignId, page, isGm }: TemplatePanelP
                 )}
               </Link>
               {t.hasPageRef && (
-                <span className="mono-label text-faint" title="Also carries a book ref (FR11.2)">
+                <span className="mono-label text-faint" title="Also carries a book ref">
                   ref
                 </span>
               )}

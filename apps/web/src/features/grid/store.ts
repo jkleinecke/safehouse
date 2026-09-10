@@ -20,6 +20,25 @@ import {
   type ScatterResult,
   type ViewProjection,
 } from './types.js';
+import { MODE_TABS, modeOfTab, modeOfTool, type GridMode } from './hud/modes.js';
+
+/** The last mode used on this device — a GM mid-prep comes back to Prep. */
+const MODE_KEY = 'safehouse.grid.mode';
+function readStoredMode(): GridMode {
+  try {
+    const v = globalThis.localStorage?.getItem(MODE_KEY);
+    return v === 'build' || v === 'prep' || v === 'play' ? v : 'build';
+  } catch {
+    return 'build';
+  }
+}
+function storeMode(mode: GridMode): void {
+  try {
+    globalThis.localStorage?.setItem(MODE_KEY, mode);
+  } catch {
+    /* a private window, or none at all */
+  }
+}
 
 /**
  * The ruler → dice handoff (FR9.9) lives in `src/live/rollHandoff.ts`: a
@@ -110,6 +129,8 @@ export interface GridUiState {
   fogDraft: FogDraft | null;
   gmPanelOpen: boolean;
   gmTab: GmTab;
+  /** Build · Prep · Play — which of the Grid's three jobs the GM is doing (hud/modes.ts). */
+  mode: GridMode;
   /** GM only: view a non-active scene while staging (FR9.1). */
   viewSceneId: string | null;
   pendingRollMod: PendingRollMod | null;
@@ -134,6 +155,7 @@ export interface GridUiState {
   setCoverOverride: (cover: 'none' | 'partial' | 'full' | null) => void;
   toggleSnap: () => void;
   setGmTab: (tab: GmTab) => void;
+  setMode: (mode: GridMode) => void;
   selectToken: (id: string | null) => void;
   selectWeapon: (name: string | null) => void;
   setRuler: (ruler: RulerState | null) => void;
@@ -203,6 +225,7 @@ export const useGridStore = create<GridUiState>()((set) => ({
   fogDraft: null,
   gmPanelOpen: true,
   gmTab: 'scenes',
+  mode: readStoredMode(),
   viewSceneId: null,
   pendingRollMod: null,
   selectedPinId: null,
@@ -212,7 +235,20 @@ export const useGridStore = create<GridUiState>()((set) => ({
   display: DEFAULT_DISPLAY_CONTROLS,
 
   toggleSnap: () => set((s) => ({ snapEnabled: !s.snapEnabled })),
-  setGmTab: (gmTab) => set({ gmTab }),
+  // A tab reached from anywhere (a pin just dropped opens Pins) brings its
+  // mode with it; a mode switch keeps the tab if the mode has it, else opens
+  // the mode's first section, and puts down a tool the mode does not offer.
+  setGmTab: (gmTab) => set((s) => ({ gmTab, mode: modeOfTab(gmTab, s.mode) })),
+  setMode: (mode) =>
+    set((s) => {
+      storeMode(mode);
+      const owner = modeOfTool(s.tool);
+      return {
+        mode,
+        gmTab: MODE_TABS[mode].includes(s.gmTab) ? s.gmTab : (MODE_TABS[mode][1] ?? 'scenes'),
+        ...(owner !== null && owner !== mode ? toolPatch(s, 'select') : {}),
+      };
+    }),
 
   // A tile id only means anything inside its own set, so changing sets drops
   // the selection rather than carrying an id the new set may not have.
@@ -257,7 +293,12 @@ export const useGridStore = create<GridUiState>()((set) => ({
           : 'tile',
       ),
     })),
-  setTool: (tool) => set((s) => toolPatch(s, tool)),
+  setTool: (tool) =>
+    set((s) => {
+      const mode = modeOfTool(tool) ?? s.mode;
+      if (mode !== s.mode) storeMode(mode);
+      return { ...toolPatch(s, tool), mode };
+    }),
   selectToken: (selectedTokenId) =>
     set({ selectedTokenId, selectedWeapon: null, coverOverride: null }),
   selectWeapon: (selectedWeapon) => set({ selectedWeapon }),

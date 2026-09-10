@@ -34,7 +34,7 @@ export default function Housekeeping({ campaignId }: HousekeepingProps) {
   return (
     <div className="panel p-4">
       <div className="flex items-center gap-2">
-        <SectionTitle hint="FR3.6 — the GM's approval is the transaction">
+        <SectionTitle hint="the GM's approval is the transaction">
           Housekeeping
         </SectionTitle>
         {rows.length > 0 && <span className="chip border-warn/50 text-warn">{rows.length}</span>}

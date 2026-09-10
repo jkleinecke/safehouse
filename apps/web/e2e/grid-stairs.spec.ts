@@ -103,6 +103,8 @@ test.describe('FR9.22 · stairs', () => {
 
     // Selecting from the roster rather than the canvas: the offer is about
     // which token is selected, not about how the GM selected it.
+    // Tokens live in Prep and Play; a fresh browser lands the GM in Build.
+    await page.getByRole('button', { name: 'Prep', exact: true }).click();
     await page.getByRole('tab', { name: 'Tokens' }).click();
     await page.getByRole('button', { name: 'Stairwalker', exact: true }).click();
 
@@ -144,6 +146,8 @@ test.describe('FR9.22 · stairs', () => {
 
     await signInWithToken(page, world.gm);
     await page.goto(`/c/${world.campaignId}/grid`);
+    // Tokens live in Prep and Play; a fresh browser lands the GM in Build.
+    await page.getByRole('button', { name: 'Prep', exact: true }).click();
     await page.getByRole('tab', { name: 'Tokens' }).click();
     await page.getByRole('button', { name: 'Nowhereman', exact: true }).click();
 

@@ -23,10 +23,10 @@ import { blankDraft, draftFor, duplicateDraft } from './drafts.js';
 import type { RosterEntry } from './roster.js';
 
 const TABS = [
-  { id: 'generate', label: 'Generate', hint: 'FR10.2' },
-  { id: 'encounter', label: 'Encounter + readout', hint: 'FR10.4–10.6' },
-  { id: 'archetypes', label: 'Archetypes', hint: 'FR10.1' },
-  { id: 'library', label: 'Starter library', hint: 'FR10.1 — original content' },
+  { id: 'generate', label: 'Generate', hint: 'Roll an NPC or a whole squad from an archetype' },
+  { id: 'encounter', label: 'Encounter + readout', hint: 'Compose the fight and read the threat math against the party' },
+  { id: 'archetypes', label: 'Archetypes', hint: 'Your archetypes: the ranges, loadouts and tiers bodies are rolled from' },
+  { id: 'library', label: 'Starter library', hint: 'Original starter archetypes to install — none of them a book stat block' },
 ] as const;
 
 export type TabId = (typeof TABS)[number]['id'];

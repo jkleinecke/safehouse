@@ -181,7 +181,7 @@ export default function TemplateEditor({
   return (
     <div className="grid grid-cols-1 gap-4 xl:grid-cols-[18rem_minmax(0,1fr)]">
       <div className="panel p-4">
-        <SectionTitle hint="FR10.1">Archetypes</SectionTitle>
+        <SectionTitle>Archetypes</SectionTitle>
         {templates.isLoading && <div className="mt-3"><Spinner label="loading" /></div>}
         <ErrorNote error={templates.error} />
         <ul className="mt-3 space-y-1">

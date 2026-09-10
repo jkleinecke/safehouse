@@ -101,7 +101,7 @@ export default function EncounterBuilder({
   return (
     <div className="space-y-4">
       <div className="panel p-4">
-        <SectionTitle hint="FR10.4 — parts, not snapshots: the server re-rolls from template+tier+seed">
+        <SectionTitle hint="parts, not snapshots: the server re-rolls from template+tier+seed">
           Encounter
         </SectionTitle>
 
@@ -141,7 +141,7 @@ export default function EncounterBuilder({
               onClick={() => {
                 if (sceneId) stage.mutate({ sceneId, encounterId: savedId });
               }}
-              title="Re-place its combatants as tokens on the linked scene (FR9.10)"
+              title="Re-place its combatants as tokens on the linked scene"
             >
               {stage.isPending ? 'staging…' : 'stage on map'}
             </button>

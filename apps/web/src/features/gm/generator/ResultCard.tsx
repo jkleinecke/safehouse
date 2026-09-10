@@ -99,7 +99,7 @@ export default function ResultCard({
                 persona,
               })
             }
-            title="Promote to a reusable archetype template (FR10.3)"
+            title="Promote to a reusable archetype template"
           >
             {promote.isPending ? 'promoting…' : promote.isSuccess ? 'promoted ✓' : 'promote to template'}
           </button>
@@ -187,7 +187,7 @@ export default function ResultCard({
 
         <div className="space-y-3">
           <div>
-            <SectionTitle hint="original flavor tables (FR10.2)">Face</SectionTitle>
+            <SectionTitle hint="original flavor tables">Face</SectionTitle>
             <dl className="mt-1.5 space-y-1 text-sm">
               <div className="flex gap-2">
                 <dt className="mono-label w-24 shrink-0 text-faint">quirk</dt>
@@ -205,7 +205,7 @@ export default function ResultCard({
           </div>
 
           <div className="rounded-md border border-edge bg-deck p-3">
-            <SectionTitle hint="the Fixer expands this (FR12.5)">Persona stub</SectionTitle>
+            <SectionTitle hint="the Fixer expands this">Persona stub</SectionTitle>
             <div className="mt-2 space-y-2">
               <List label="traits" items={persona.traits ?? []} />
               <List label="goals" items={persona.goals ?? []} />

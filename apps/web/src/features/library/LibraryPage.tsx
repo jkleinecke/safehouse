@@ -63,7 +63,7 @@ function ShelfCard({ book, onOpen }: { book: BookRecord; onOpen: (page: number) 
         </div>
       )}
       <p className="mono-label mt-2 text-faint">
-        printed page numbers — the app maps them onto the PDF (FR11.1)
+        printed page numbers — the app maps them onto the PDF
       </p>
     </div>
   );
@@ -77,7 +77,7 @@ export function SharedShelf({ campaignId }: { campaignId: string }) {
 
   return (
     <div className="p-4 md:p-6">
-      <SectionTitle hint="FR11.5 — what the GM shared with the table">Rules library</SectionTitle>
+      <SectionTitle hint="what the GM shared with the table">Rules library</SectionTitle>
       <h1 className="mt-1 text-lg font-semibold">Books</h1>
 
       {books.isLoading && (

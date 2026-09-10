@@ -39,7 +39,7 @@ export default function NotesTab({ scene, onCenter }: NotesTabProps) {
 
   return (
     <>
-      <PanelSection title="Drop a note" hint="FR9.25">
+      <PanelSection title="Drop a note">
         <button
           type="button"
           aria-pressed={tool === 'note'}

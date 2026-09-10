@@ -60,7 +60,7 @@ function SettingsPanel({ campaignId }: { campaignId: string }) {
 
   return (
     <div className="panel p-4">
-      <SectionTitle hint="FR5.7 / FR6.3">Campaign settings</SectionTitle>
+      <SectionTitle>Campaign settings</SectionTitle>
       <div className="mt-3 space-y-3">
         <Field label="Campaign name">
           <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} />
@@ -126,7 +126,7 @@ function InvitePanel({
 
   return (
     <div className="panel p-4">
-      <SectionTitle hint="FR1.1 — nobody ever types an IP">Invites & join QR</SectionTitle>
+      <SectionTitle hint="nobody ever types an IP">Invites & join QR</SectionTitle>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <select
           className={`${inputClass} w-auto`}
@@ -175,7 +175,7 @@ function DevicesPanel({ campaignId, onShowQr }: { campaignId: string; onShowQr: 
 
   return (
     <div className="panel p-4">
-      <SectionTitle hint="FR1.3 — lost phone? revoke it">Devices</SectionTitle>
+      <SectionTitle hint="lost phone? revoke it">Devices</SectionTitle>
       {devices.isLoading && (
         <div className="mt-3">
           <Spinner label="loading devices" />

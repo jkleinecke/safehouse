@@ -8,17 +8,17 @@ import type { TileCut, TilePattern, TileProp } from '@safehouse/rules';
 /** Active pointer tool on the canvas. */
 export type GridTool =
   | 'select' // move tokens / toggle doors (GM) / pan
-  | 'ruler' // click-drag measurement (FR9.8/9.9)
-  | 'aoe' // place AoE circle template (FR9.12)
-  | 'pointer' // pointer trail broadcast (FR9.15)
-  | 'fogdef' // GM: click vertices to define a named fog region (FR9.14)
-  | 'focus' // GM: next click broadcasts "focus here" (FR9.15)
-  | 'wall' // GM: drag to draw a wall segment (FR9.2)
-  | 'door' // GM: drag to draw a door segment (FR9.2)
-  | 'zone' // GM: click vertices to draw a named zone (FR9.2)
-  | 'pin' // GM: click to drop a map pin (FR9.3)
-  | 'camera' // GM: click to mount a security camera; only the GM sees it (FR9.23)
-  | 'note' // GM: click to drop a GM note; only the GM ever sees it (FR9.25)
+  | 'ruler' // click-drag measurement
+  | 'aoe' // place AoE circle template
+  | 'pointer' // pointer trail broadcast
+  | 'fogdef' // GM: click vertices to define a named fog region
+  | 'focus' // GM: next click broadcasts "focus here"
+  | 'wall' // GM: drag to draw a wall segment
+  | 'door' // GM: drag to draw a door segment
+  | 'zone' // GM: click vertices to draw a named zone
+  | 'pin' // GM: click to drop a map pin
+  | 'camera' // GM: click to mount a security camera; only the GM sees it
+  | 'note' // GM: click to drop a GM note; only the GM ever sees it
   | 'tile' // GM: paint tiles from a tileset (FR9.2 "assemble")
   | 'tile-area' // GM: drag a rectangle, fill it with the chosen ground
   | 'tile-room' // GM: drag a rectangle, floor inside and walls around it

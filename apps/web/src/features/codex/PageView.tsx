@@ -342,7 +342,7 @@ export default function PageView({ campaignId, pageId, isGm, onCreatePrompt }: P
 
           {isGm && (
             <section className="panel p-3">
-              <div className="mono-label text-cyan">Section visibility (FR5.2)</div>
+              <div className="mono-label text-cyan">Section visibility</div>
               <SectionControls page={page} campaignId={campaignId} />
             </section>
           )}
@@ -392,7 +392,7 @@ export default function PageView({ campaignId, pageId, isGm, onCreatePrompt }: P
 
           {page.refs.length > 0 && (
             <section className="panel p-3">
-              <div className="mono-label text-cyan">Book refs (FR11.2)</div>
+              <div className="mono-label text-cyan">Book refs</div>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {page.refs.map((r) => (
                   <RefChip key={`${r.book}-${r.page}`} refValue={{ book: r.book, page: r.page }} />

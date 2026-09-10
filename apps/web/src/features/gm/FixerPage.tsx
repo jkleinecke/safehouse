@@ -25,7 +25,7 @@ export default function FixerPage() {
             The Fixer
           </SectionTitle>
           {sessionLive && (
-            <span className="chip border-ok/50 text-ok" title="FR12.16 — fast slot during play">
+            <span className="chip border-ok/50 text-ok" title="fast slot during play">
               session live
             </span>
           )}

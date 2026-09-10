@@ -180,7 +180,7 @@ export default function GeneratePanel({
   return (
     <div className="space-y-4">
       <div className="panel p-4">
-        <SectionTitle hint="FR10.2 — seeded, so the same squad comes back identical">
+        <SectionTitle hint="seeded, so the same squad comes back identical">
           Generate
         </SectionTitle>
 
@@ -375,7 +375,7 @@ export default function GeneratePanel({
             <span className="chip border-warn/40 text-warn">PR {group.professionalRating}</span>
             <span className="chip text-faint">seed {group.seed}</span>
             <span className="mono-label text-faint">
-              one shared statblock, {group.members.length} faces (FR4.6)
+              one shared statblock, {group.members.length} faces
             </span>
             <button
               className="btn ml-auto px-3 py-1.5"

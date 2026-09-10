@@ -45,7 +45,7 @@ export default function PinsTab({ campaignId, scene, onCenter }: PinsTabProps) {
 
   return (
     <>
-      <PanelSection title="Place a pin" hint="FR9.3">
+      <PanelSection title="Place a pin">
         <button
           type="button"
           aria-pressed={tool === 'pin'}

@@ -6,6 +6,7 @@
 import type { Scene, Token } from '@safehouse/contracts';
 import type { GridCommands } from '../commands.js';
 import { useGridStore, type GmTab } from '../store.js';
+import { MODE_TABS } from '../hud/modes.js';
 import CamerasTab from './CamerasTab.js';
 import DisplayTab from './DisplayTab.js';
 import EnvTab from './EnvTab.js';
@@ -45,14 +46,19 @@ export interface GmPanelProps {
 
 export default function GmPanel(props: GmPanelProps) {
   const tab = useGridStore((s) => s.gmTab);
+  const mode = useGridStore((s) => s.mode);
   const setTab = useGridStore((s) => s.setGmTab);
   const toggle = useGridStore((s) => s.toggleGmPanel);
+  // Only the current mode's sections (docs/UX_MAP_BUILDER.md §3.1): a GM laying
+  // a floor is not shown the TV controls, and a GM running a fight is not
+  // shown calibration.
+  const tabs = MODE_TABS[mode].map((id) => TABS.find((t) => t.id === id)!).filter(Boolean);
 
   return (
     <aside className="flex w-full shrink-0 flex-col border-t border-edge bg-panel xl:h-full xl:w-80 xl:border-l xl:border-t-0">
       <div className="flex items-center gap-1 border-b border-edge px-2 py-1.5">
         <div className="flex min-w-0 flex-1 flex-wrap gap-1" role="tablist" aria-label="GM tools">
-          {TABS.map((t) => (
+          {tabs.map((t) => (
             <button
               key={t.id}
               type="button"
@@ -103,9 +109,6 @@ export default function GmPanel(props: GmPanelProps) {
         {tab === 'tv' && <DisplayTab commands={props.commands} />}
       </div>
 
-      <p className="mono-label border-t border-edge px-3 py-2 text-faint">
-        doors toggle by clicking their knob with the select tool
-      </p>
     </aside>
   );
 }

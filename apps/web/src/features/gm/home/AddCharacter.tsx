@@ -91,7 +91,7 @@ export default function AddCharacter({
         />
       </div>
       <p className="mono-label mt-2 text-faint">
-        Chummer's karma and nuyen land as opening ledger entries, not sheet numbers (FR3.6).
+        Chummer's karma and nuyen land as opening ledger entries, not sheet numbers.
       </p>
       {note && <p className="mono-label mt-1 text-ok">{note}</p>}
       <ErrorNote error={create.error} />

@@ -47,7 +47,7 @@ export default function SessionList({ campaignId, selectedId, onSelect }: Sessio
 
   return (
     <div className="panel p-4">
-      <SectionTitle hint="FR6.1/6.2">Sessions</SectionTitle>
+      <SectionTitle>Sessions</SectionTitle>
 
       <div className="mt-3 flex flex-wrap items-end gap-3">
         <Field label="Date (real world)">
@@ -100,7 +100,7 @@ export default function SessionList({ campaignId, selectedId, onSelect }: Sessio
                     className="btn px-2.5 py-1"
                     disabled={start.isPending || session.state === 'done'}
                     onClick={() => start.mutate(session.id)}
-                    title="Live mode: presence, log recording, encounter launching (FR6.2)"
+                    title="Live mode: presence, log recording, encounter launching"
                   >
                     start session
                   </button>

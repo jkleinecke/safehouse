@@ -23,7 +23,7 @@ export default function ContactsTab({ character }: TabProps) {
         {...(error ? { error } : {})}
       />
       <p className="mt-4 text-xs text-faint">
-        Contacts are shared with the GM and nobody else at the table (FR5.8).
+        Contacts are shared with the GM and nobody else at the table.
       </p>
     </div>
   );

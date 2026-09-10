@@ -164,11 +164,14 @@ pins, cameras and notes all behave the same way, so learning one teaches all.
 
 Single-key tools on the current mode's toolbar — **V** select, **R** room,
 **A** area, **B** brush, **E** erase, **W** wall, **D** door, **Z** zone,
-**P** pin, **F** fog region, **C** camera, **N** note; **Esc** returns to
-select, **1–9** switch floors — shown in every tool's tooltip. One contextual
-line under the toolbar replaces the paragraphs and the repeated footer:
+**P** pin, **F** fog region, **C** camera, **N** note, **M** measure,
+**O** area of effect, **X** point, **G** focus; **Esc** returns to select,
+**1–9** switch floors — shown in every tool's tooltip. A key only fires when
+nobody is typing in a field, never with a modifier held, and a player's keys
+only reach the four tools a player has. One contextual line under the toolbar
+replaces the paragraphs and the repeated footer:
 
-> **Wall** — drag along the wall · Shift for a free angle · Esc when done
+> Drag along the wall. Shift for a free angle. Esc when done.
 
 Jakob's Law and the Paradox of the Active User: a GM who has used any map
 tool will try the keys; the hint line teaches the one thing the current tool
@@ -234,7 +237,7 @@ different.
 
 | Phase | Changes | Files (approx.) | Size |
 | --- | --- | --- | --- |
-| 1 | Modes replace tabs; toolbar filtered per mode; view controls out of the tool row; FR ids and repeated footers gone; hint line; keyboard shortcuts | `GridPage.tsx`, `hud/Toolbar.tsx`, `gm/GmPanel.tsx`, `store.ts` (`mode`), tab files' titles | 1–2 days, no server change |
+| 1 | **Landed 2026-09-09.** Modes replace tabs; toolbar filtered per mode; view controls out of the tool row; FR ids and repeated footers gone; hint line; keyboard shortcuts | `hud/modes.ts` (new), `hud/useGridShortcuts.ts` (new), `hud/Toolbar.tsx`, `gm/GmPanel.tsx`, `store.ts` (`mode`), `GridPage.tsx`, 43 screen files' titles | 1–2 days, no server change |
 | 2 | Inspector for the selected wall / door / pin / camera / note; Geo list rewritten as list + inspector; pins/cams/notes tabs folded in | `gm/Inspector.tsx` (new), `gm/GeometryTab.tsx`, `gm/PinsTab.tsx`, `gm/CamerasTab.tsx`, `gm/NotesTab.tsx`, `stage/pointer.ts` (select walls) | 2–3 days |
 | 3 | Build checklist; palette redesign with rendered swatches; floors as a canvas control; accent audit | `gm/BuildProgress.tsx` (new), `gm/TilesTab.tsx`, `GridPage.tsx` | 2–3 days |
 
@@ -242,6 +245,17 @@ Each phase ships on its own; none needs the next. Every existing test that
 asserts on a control still finds it — the controls move, they do not change
 name — and the e2e specs that drive the Grid (`e2e/grid*.spec.ts`,
 `hints.spec.ts`) are the regression net for the move.
+
+**Phase 1 as built.** The mode model lives in one file, `hud/modes.ts`: which
+tabs and tools each mode owns, which mode a tool or tab belongs to, the key
+table, and the hint line per tool. The store follows it both ways — picking a
+tool switches to the mode that owns it, switching mode drops a tool the new
+mode does not have and lands on a tab it does — and remembers the last mode
+on the device (`safehouse.grid.mode`), so a GM mid-prep comes back to Prep.
+Players never see the mode switch; their four tools are the same in every
+mode. The one existing spec that moved was the stairs spec, which now clicks
+**Prep** before it opens Tokens — a fresh browser lands the GM in Build, where
+tokens are not a concern.
 
 ## 6. What I would measure
 

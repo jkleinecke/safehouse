@@ -230,7 +230,7 @@ export default function PageBrowser({
 
       {isGm && (unresolved.data?.length ?? 0) > 0 && (
         <div className="border-t border-edge pt-3">
-          <div className="mono-label text-warn">Links with no page (FR5.3)</div>
+          <div className="mono-label text-warn">Links with no page</div>
           <ul className="mt-1.5 space-y-1">
             {(unresolved.data ?? []).slice(0, 12).map((u) => (
               <li key={u.target} className="flex items-center gap-2">

@@ -129,7 +129,7 @@ export default function RecapEditor({
             title={
               webhookConfigured === false
                 ? 'Set the Discord webhook URL in campaign settings first'
-                : 'Post the recap to the table Discord (FR6.3)'
+                : 'Post the recap to the table Discord'
             }
           >
             publish to Discord

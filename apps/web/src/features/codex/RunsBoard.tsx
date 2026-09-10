@@ -225,7 +225,7 @@ function AwardsPanel({ run, campaignId }: { run: RunRecord; campaignId: string }
         </button>
       </div>
       <p className="mono-label mt-1.5 text-faint">
-        Lands unapproved — settle it at the table (FR3.6).
+        Lands unapproved — settle it at the table.
       </p>
       <ErrorNote error={award.error} />
     </div>
@@ -352,7 +352,7 @@ export default function RunsBoard() {
 
   return (
     <div className="p-6">
-      <SectionTitle hint="FR5.5 — Johnson, objectives, payout, awards, recap">Runs</SectionTitle>
+      <SectionTitle hint="Johnson, objectives, payout, awards, recap">Runs</SectionTitle>
 
       {isGm && (
         <form

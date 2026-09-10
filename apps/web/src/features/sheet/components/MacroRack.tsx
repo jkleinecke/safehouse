@@ -182,7 +182,7 @@ function MacroEditor({
         Save macro
       </button>
       <p className="mt-2 text-xs text-faint">
-        Macros are free-form rolls (FR2.8): the server takes the pool as given —
+        Macros are free-form rolls: the server takes the pool as given —
         there is no sheet pool to check them against.
       </p>
     </Sheet>

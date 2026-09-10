@@ -69,7 +69,7 @@ export const CODEX_AI_ACTIONS: readonly ActionSpec[] = [
   {
     id: 'links',
     label: 'suggest links',
-    hint: 'backlinks to pages that already exist (FR5.3), appended as “See also”',
+    hint: 'backlinks to pages that already exist, appended as “See also”',
     mode: 'append',
   },
 ];
@@ -345,7 +345,7 @@ export function buildPrompt(input: PromptInput): string {
         `File it as kind "${ctx.kind}".`,
         contextBlock({ ...ctx, contentMd: '' }, false),
         '',
-        'Write the whole page. Open with two or three sentences a GM can read aloud, then break it into `## ` sections so each one can be revealed separately (FR5.2). Link to existing pages with [[Exact Title]] where they genuinely connect. End with a `## GM only` section holding what the players must not learn yet.',
+        'Write the whole page. Open with two or three sentences a GM can read aloud, then break it into `## ` sections so each one can be revealed separately. Link to existing pages with [[Exact Title]] where they genuinely connect. End with a `## GM only` section holding what the players must not learn yet.',
         steer,
         contract({ ...ctx, title: titleFromBrief(brief, ctx.title) }, playerFacing, 'the COMPLETE page body'),
       ].join('\n');
@@ -357,7 +357,7 @@ export function buildPrompt(input: PromptInput): string {
         `Write the first draft of this ${ctx.kind} page.`,
         contextBlock(ctx, true),
         '',
-        'Open with two or three sentences a GM can read aloud at the table, then break the rest into `## ` sections so each can be revealed separately (FR5.2). Keep anything the players must not learn yet in a final `## GM only` section. Link to existing pages with [[Exact Title]] where they genuinely connect.',
+        'Open with two or three sentences a GM can read aloud at the table, then break the rest into `## ` sections so each can be revealed separately. Keep anything the players must not learn yet in a final `## GM only` section. Link to existing pages with [[Exact Title]] where they genuinely connect.',
         'Preserve every line the GM has already written — add around it, never over it.',
         steer,
         contract(ctx, playerFacing, 'the COMPLETE page body'),
@@ -402,7 +402,7 @@ export function buildPrompt(input: PromptInput): string {
       return [
         GROUNDING,
         '',
-        `Suggest wiki links from "${ctx.title}" to pages that already exist (FR5.3).`,
+        `Suggest wiki links from "${ctx.title}" to pages that already exist.`,
         contextBlock(ctx, true),
         '',
         'Choose ONLY from the existing page titles listed above — never invent a title, never link a page that is not on that list. Skip anything already linked from this page. At most eight, fewest is better.',

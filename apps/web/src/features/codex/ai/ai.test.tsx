@@ -390,7 +390,7 @@ describe('the proposal card', () => {
     expect(html).toContain('replace this section');
   });
 
-  it('shows the FR12.19 spoiler guard and holds accept until it is acknowledged', () => {
+  it('shows the spoiler guard and holds accept until it is acknowledged', () => {
     const html = render(
       <ProposalCard
         proposal={proposal({
@@ -403,7 +403,7 @@ describe('the proposal card', () => {
       />,
       client(),
     );
-    expect(html).toContain('spoiler guard (FR12.19)');
+    expect(html).toContain('spoiler guard — reveal or cut?');
     expect(html).toContain('Mr. Kessler');
     expect(html).toContain('the hidden sniper');
     expect(html).toContain('I have read these');

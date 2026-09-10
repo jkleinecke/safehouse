@@ -281,7 +281,7 @@ export default function GeometryTab({ scene, onCenter }: GeometryTabProps) {
         </ul>
       </PanelSection>
 
-      <PanelSection title="Play" hint="FR9.2">
+      <PanelSection title="Play">
         <button
           type="button"
           className={'btn w-full py-1 ' + (tool === 'select' ? 'border-cyan text-cyan' : '')}
