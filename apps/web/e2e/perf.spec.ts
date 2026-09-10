@@ -160,9 +160,16 @@ const ZOOM_NOTCHES = 48;
 const ZOOM_DELAY_MS = 25;
 const DRAG_STEPS = 60;
 const DRAG_DELAY_MS = 20;
-// Long enough that even a 7 fps idle clears MIN_FRAMES_PER_PHASE — a short
-// baseline is the one that would quietly turn the whole comparison into noise.
+// The idle baseline runs for at least this long, and then for as long as it
+// takes to collect IDLE_TARGET_FRAMES, up to IDLE_MAX_MS. A fixed six seconds
+// assumed a 7 fps idle; a busy shared runner under the 4× throttle idled at
+// 4.5 fps and handed the baseline 27 frames — SHORT, and the whole comparison
+// thrown out for a reason that had nothing to do with the renderer. A short
+// baseline is the one that would quietly turn the comparison into noise, so
+// the sample is sized by frames, not by the clock.
 const IDLE_MS = 6000;
+const IDLE_MAX_MS = 24_000;
+const IDLE_TARGET_FRAMES = MIN_FRAMES_PER_PHASE + 12;
 /** The control run on an empty page, same browser, same throttle. */
 const CONTROL_MS = 2000;
 
@@ -217,6 +224,8 @@ declare global {
     __perfProbe?: {
       begin(phase: string): void;
       end(): void;
+      /** Frames recorded so far in `phase` — how the idle baseline knows it is long enough. */
+      count(phase: string): number;
       dump(): ProbeDump;
     };
     __perfGl?: { draws: number };
@@ -251,6 +260,18 @@ describeIfEnabled('grid frame budget (DESIGN §15 / §17.4)', () => {
     world = readWorld();
     api = new Api(world.baseUrl);
     const gm = world.gm.token;
+
+    // A retry runs this hook again (the group is serial), and a second scene
+    // with the bench's name made `stageBenchScene`'s exact-name click ambiguous
+    // — so the retry that exists to absorb a noisy first run failed on its own
+    // arrangement instead. Clear any earlier attempt's scene first.
+    const existing = await api.get<{ scenes: { id: string; name: string }[] }>(
+      `/api/campaigns/${world.campaignId}/scenes`,
+      gm,
+    );
+    for (const stale of existing.scenes.filter((s) => s.name === SCENE_NAME)) {
+      await api.request('DELETE', `/api/scenes/${stale.id}`, { token: gm });
+    }
 
     const created = await api.post<{ scene: { id: string } }>(
       `/api/campaigns/${world.campaignId}/scenes`,
@@ -313,6 +334,13 @@ describeIfEnabled('grid frame budget (DESIGN §15 / §17.4)', () => {
         await cdp.send('Emulation.setCPUThrottlingRate', { rate: THROTTLE });
         await phase(page, 'idle', async () => {
           await page.waitForTimeout(IDLE_MS);
+          // Then keep sitting still until the baseline has the frames it needs.
+          const deadline = Date.now() + (IDLE_MAX_MS - IDLE_MS);
+          while (Date.now() < deadline) {
+            const n = await page.evaluate(() => window.__perfProbe?.count('idle') ?? 0);
+            if (n >= IDLE_TARGET_FRAMES) break;
+            await page.waitForTimeout(250);
+          }
         });
         await phase(page, 'pan', () => panGesture(page, box));
         await phase(page, 'zoom', () => zoomGesture(page, box));
@@ -665,6 +693,9 @@ async function installProbe(page: Page): Promise<void> {
         const phase = state.phase;
         if (phase) state.draws[phase] = (window.__perfGl?.draws ?? 0) - state.drawsAt;
         state.phase = null;
+      },
+      count(phase: string) {
+        return state.deltas[phase]?.length ?? 0;
       },
       dump() {
         return {
