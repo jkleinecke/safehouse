@@ -16,8 +16,10 @@ export function useGridShortcuts(isGm: boolean, floorCount: number): void {
       if (!action) return;
       const s = useGridStore.getState();
       if (action.kind === 'escape') {
-        // Esc is "stop": back to select, and any polygon in progress is dropped.
-        if (s.tool === 'select') return;
+        // Esc is "stop": the inspector closes, the tool goes back to select,
+        // and any polygon in progress is dropped.
+        if (s.tool === 'select' && s.selected === null) return;
+        s.select(null);
         s.setTool('select');
       } else if (action.kind === 'tool') {
         s.setTool(action.tool);

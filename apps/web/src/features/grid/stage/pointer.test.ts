@@ -64,6 +64,9 @@ function harness(tool: StageSceneState['tool']) {
   const onTileDoorToggle = vi.fn<(cell: string, level: number) => void>();
   const onNotePlace = vi.fn<(x: number, y: number) => void>();
   const onNoteSelect = vi.fn<(id: string) => void>();
+  const onWallSelect = vi.fn<(id: string) => void>();
+  const onZoneSelect = vi.fn<(id: string) => void>();
+  const onSelectClear = vi.fn<() => void>();
   const noop = (): void => {};
   const cb: StageCallbacks = {
     onTokenMove: noop,
@@ -76,6 +79,9 @@ function harness(tool: StageSceneState['tool']) {
     onTileDoorToggle,
     onNotePlace,
     onNoteSelect,
+    onWallSelect,
+    onZoneSelect,
+    onSelectClear,
     onAoePlace: noop,
     onFogVertex: noop,
     onFocus: noop,
@@ -156,6 +162,9 @@ function harness(tool: StageSceneState['tool']) {
     onTileDoorToggle,
     onNotePlace,
     onNoteSelect,
+    onWallSelect,
+    onZoneSelect,
+    onSelectClear,
     state,
     controller,
     send,
@@ -492,5 +501,69 @@ describe('the camera tool (FR9.23)', () => {
     h.send('pointerdown', 4, 3);
     h.send('pointerup', 4, 3);
     expect(h.onCameraSelect).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('the inspector’s clicks (docs/UX_MAP_BUILDER.md §3.2)', () => {
+  // Through the centre of column 4, where the test clicks land.
+  const wall = { id: 'w1', a: { x: 4.5, y: 1 }, b: { x: 4.5, y: 6 } };
+  const zone = {
+    id: 'z1',
+    name: 'dock',
+    polygon: [{ x: 8, y: 8 }, { x: 12, y: 8 }, { x: 12, y: 12 }, { x: 8, y: 12 }],
+  };
+
+  it('opens a wall under a select click, for the GM only', () => {
+    const h = harness('select');
+    h.state.scene.geometry.walls = [wall];
+    h.send('pointerdown', 4, 3);
+    h.send('pointerup', 4, 3);
+    expect(h.onWallSelect).toHaveBeenCalledWith('w1');
+    expect(h.onSelectClear).not.toHaveBeenCalled();
+
+    const p = harness('select');
+    (p.state as { role: string }).role = 'player';
+    p.state.scene.geometry.walls = [wall];
+    p.send('pointerdown', 4, 3);
+    p.send('pointerup', 4, 3);
+    expect(p.onWallSelect).not.toHaveBeenCalled();
+    expect(p.onSelectClear).not.toHaveBeenCalled();
+  });
+
+  it('prefers the door to the wall that meets it', () => {
+    const h = harness('select');
+    h.state.scene.geometry.doors = [{ id: 'd1', a: { x: 4.5, y: 2 }, b: { x: 4.5, y: 3.5 }, open: false, locked: false }];
+    h.state.scene.geometry.walls = [{ id: 'w1', a: { x: 4.5, y: 3.5 }, b: { x: 4.5, y: 8 } }];
+    h.send('pointerdown', 4, 3);
+    h.send('pointerup', 4, 3);
+    expect(h.onDoorToggle).toHaveBeenCalledWith('d1');
+    expect(h.onWallSelect).not.toHaveBeenCalled();
+  });
+
+  it('opens a zone under a click on its floor — but a drag across it pans', () => {
+    const h = harness('select');
+    h.state.scene.geometry.zones = [zone];
+    h.send('pointerdown', 9, 9);
+    h.send('pointerup', 9, 9);
+    expect(h.onZoneSelect).toHaveBeenCalledWith('z1');
+    expect(h.onSelectClear).not.toHaveBeenCalled();
+
+    h.onZoneSelect.mockClear();
+    h.send('pointerdown', 9, 9);
+    h.send('pointermove', 11, 11);
+    h.send('pointerup', 11, 11);
+    expect(h.onZoneSelect).not.toHaveBeenCalled();
+    expect(h.onSelectClear).not.toHaveBeenCalled();
+  });
+
+  it('closes the inspector on a click on nothing at all', () => {
+    const h = harness('select');
+    h.send('pointerdown', 2, 2);
+    h.send('pointerup', 2, 2);
+    expect(h.onSelectClear).toHaveBeenCalledTimes(1);
+    expect(h.onZoneSelect).not.toHaveBeenCalled();
+    expect(h.onWallSelect).not.toHaveBeenCalled();
   });
 });

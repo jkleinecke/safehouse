@@ -1,7 +1,13 @@
 /**
- * GM authoring side panel for the Grid (FR9.1/9.2/9.6/9.7/9.11/9.13/9.14).
- * Desktop-first by design (NG5): the panel docks beside the canvas on wide
- * screens and stacks under it on narrow ones.
+ * GM authoring side panel for the Grid. Desktop-first by design (NG5): the
+ * panel docks beside the canvas on wide screens and stacks under it on
+ * narrow ones.
+ *
+ * Two parts (docs/UX_MAP_BUILDER.md §3.1–3.2): the current mode's tabs, and
+ * above them the inspector for whatever the GM has picked on the map — a
+ * wall, a door, a zone, a pin, a camera, a note. The inspector sits outside
+ * the tab's scroll, so it is in view whichever tab is open and however far
+ * down it is.
  */
 import type { Scene, Token } from '@safehouse/contracts';
 import type { GridCommands } from '../commands.js';
@@ -12,9 +18,8 @@ import DisplayTab from './DisplayTab.js';
 import EnvTab from './EnvTab.js';
 import FogTab from './FogTab.js';
 import GeometryTab from './GeometryTab.js';
+import Inspector from './Inspector.js';
 import MapTab from './MapTab.js';
-import NotesTab from './NotesTab.js';
-import PinsTab from './PinsTab.js';
 import ScenesTab from './ScenesTab.js';
 import TilesTab from './TilesTab.js';
 import LosTab from './LosTab.js';
@@ -24,12 +29,10 @@ const TABS: Array<{ id: GmTab; label: string }> = [
   { id: 'scenes', label: 'Scenes' },
   { id: 'map', label: 'Map' },
   { id: 'tiles', label: 'Tiles' },
+  { id: 'geo', label: 'Layout' },
   { id: 'tokens', label: 'Tokens' },
-  { id: 'geo', label: 'Geo' },
-  { id: 'pins', label: 'Pins' },
-  { id: 'cameras', label: 'Cams' },
-  { id: 'notes', label: 'Notes' },
   { id: 'fog', label: 'Fog' },
+  { id: 'cameras', label: 'Cams & notes' },
   { id: 'env', label: 'Env' },
   { id: 'los', label: 'LOS' },
   { id: 'tv', label: 'TV' },
@@ -47,11 +50,13 @@ export interface GmPanelProps {
 export default function GmPanel(props: GmPanelProps) {
   const tab = useGridStore((s) => s.gmTab);
   const mode = useGridStore((s) => s.mode);
+  const selected = useGridStore((s) => s.selected);
+  const tool = useGridStore((s) => s.tool);
+  const lens = useGridStore((s) => s.losTokenId);
   const setTab = useGridStore((s) => s.setGmTab);
   const toggle = useGridStore((s) => s.toggleGmPanel);
-  // Only the current mode's sections (docs/UX_MAP_BUILDER.md §3.1): a GM laying
-  // a floor is not shown the TV controls, and a GM running a fight is not
-  // shown calibration.
+  // Only the current mode's sections (§3.1): a GM laying a floor is not shown
+  // the TV controls, and a GM running a fight is not shown calibration.
   const tabs = MODE_TABS[mode].map((id) => TABS.find((t) => t.id === id)!).filter(Boolean);
 
   return (
@@ -79,6 +84,17 @@ export default function GmPanel(props: GmPanelProps) {
         </button>
       </div>
 
+      {selected && (
+        <div className="max-h-96 shrink-0 overflow-y-auto border-b border-edge">
+          <Inspector
+            campaignId={props.campaignId}
+            scene={props.scene}
+            selection={selected}
+            onCenter={props.onCenter}
+          />
+        </div>
+      )}
+
       <div className="min-h-0 flex-1 overflow-y-auto">
         {tab === 'scenes' && (
           <ScenesTab
@@ -98,17 +114,12 @@ export default function GmPanel(props: GmPanelProps) {
             onCenter={props.onCenter}
           />
         )}
-        {tab === 'geo' && <GeometryTab scene={props.scene} onCenter={props.onCenter} />}
-        {tab === 'pins' && (
-          <PinsTab campaignId={props.campaignId} scene={props.scene} onCenter={props.onCenter} />
-        )}
-        {tab === 'cameras' && <CamerasTab scene={props.scene} onCenter={props.onCenter} />}
-        {tab === 'notes' && <NotesTab scene={props.scene} onCenter={props.onCenter} />}
+        {tab === 'geo' && <GeometryTab scene={props.scene} selected={selected} tool={tool} />}
+        {tab === 'cameras' && <CamerasTab scene={props.scene} selected={selected} lens={lens} />}
         {tab === 'fog' && <FogTab scene={props.scene} commands={props.commands} />}
         {tab === 'env' && <EnvTab scene={props.scene} />}
         {tab === 'tv' && <DisplayTab commands={props.commands} />}
       </div>
-
     </aside>
   );
 }

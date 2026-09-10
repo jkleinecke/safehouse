@@ -283,6 +283,16 @@ export interface ShroudState {
 }
 
 /** Everything the pixi stage needs to (re)draw a frame of scene state. */
+/**
+ * The one thing the GM has picked on the map — ringed on the canvas, open in
+ * the panel's inspector (docs/UX_MAP_BUILDER.md §3.2). One at a time: the
+ * inspector shows one thing, so the canvas rings one thing.
+ */
+export interface GeometrySelection {
+  kind: 'wall' | 'door' | 'zone' | 'pin' | 'camera' | 'note';
+  id: string;
+}
+
 export interface StageSceneState {
   scene: Scene;
   tokens: Token[];
@@ -300,18 +310,14 @@ export interface StageSceneState {
   aoe: AoeTemplate | null;
   scatter: ScatterResult | null;
   fogDraft: FogDraft | null;
-  /** Pin currently open in the GM's pin editor — drawn ringed (FR9.3). */
-  selectedPinId?: string | null;
-  /** Camera open in the GM's camera editor — drawn ringed (FR9.23). */
-  selectedCameraId?: string | null;
+  /** What the GM has picked — drawn ringed, whatever kind it is (§3.2). */
+  selection?: GeometrySelection | null;
   /**
    * What each camera on this floor covers, GM only (FR9.23). Null or absent
    * draws no cones; a player's state never carries any, because their scene
    * never carries cameras.
    */
   cameraCones?: readonly CameraCone[] | null;
-  /** GM note open in the notes editor — drawn ringed (FR9.25). */
-  selectedNoteId?: string | null;
   /**
    * Tokens on a HIDDEN token layer (FR9.26), drawn ghosted for the GM the
    * way a hidden token is. A player's state never has any: the server
@@ -387,6 +393,12 @@ export interface StageCallbacks {
   onNotePlace?(x: number, y: number): void;
   /** select-tool click inside a GM note's box — open it in the editor. */
   onNoteSelect?(noteId: string): void;
+  /** select-tool click on a wall — open it in the inspector (§3.2). */
+  onWallSelect?(wallId: string): void;
+  /** select-tool CLICK (not a drag) on open floor inside a zone — open the zone. */
+  onZoneSelect?(zoneId: string): void;
+  /** select-tool click on nothing at all — close the inspector. */
+  onSelectClear?(): void;
   /**
    * A painted door's cell was clicked with the select tool (FR9.24): open or
    * shut it. `cell` is the `"col,row"` key on floor `level`.

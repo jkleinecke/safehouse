@@ -238,7 +238,7 @@ different.
 | Phase | Changes | Files (approx.) | Size |
 | --- | --- | --- | --- |
 | 1 | **Landed 2026-09-09.** Modes replace tabs; toolbar filtered per mode; view controls out of the tool row; FR ids and repeated footers gone; hint line; keyboard shortcuts | `hud/modes.ts` (new), `hud/useGridShortcuts.ts` (new), `hud/Toolbar.tsx`, `gm/GmPanel.tsx`, `store.ts` (`mode`), `GridPage.tsx`, 43 screen files' titles | 1–2 days, no server change |
-| 2 | Inspector for the selected wall / door / pin / camera / note; Geo list rewritten as list + inspector; pins/cams/notes tabs folded in | `gm/Inspector.tsx` (new), `gm/GeometryTab.tsx`, `gm/PinsTab.tsx`, `gm/CamerasTab.tsx`, `gm/NotesTab.tsx`, `stage/pointer.ts` (select walls) | 2–3 days |
+| 2 | **Landed 2026-09-10.** Inspector for the selected wall / door / zone / pin / camera / note; Geo list rewritten as list + inspector; pins/cams/notes tabs folded in | `gm/Inspector.tsx` (new), `gm/GeometryTab.tsx` (Layout), `gm/CamerasTab.tsx` (Cams & notes), `gm/GmPanel.tsx`, `store.ts` (`selected`), `stage/pointer.ts` (walls, zones, click-on-nothing), `stage/layers.ts` (the ring) | 2–3 days |
 | 3 | Build checklist; palette redesign with rendered swatches; floors as a canvas control; accent audit | `gm/BuildProgress.tsx` (new), `gm/TilesTab.tsx`, `GridPage.tsx` | 2–3 days |
 
 Each phase ships on its own; none needs the next. Every existing test that
@@ -256,6 +256,31 @@ Players never see the mode switch; their four tools are the same in every
 mode. The one existing spec that moved was the stairs spec, which now clicks
 **Prep** before it opens Tokens — a fresh browser lands the GM in Build, where
 tokens are not a concern.
+
+**Phase 2 as built.** The store holds one selection — `{ kind, id }` for a
+wall, door, zone, pin, camera or note — and the panel docks one inspector
+above whichever tab is open, outside the tab's scroll, so it is in view
+however far down a palette the GM was. A click on the thing opens it: walls
+and zones joined pins, cameras, notes and doors as canvas targets (a door
+still opens or shuts under the click, and now shows its lock beside it), a
+click on nothing closes the inspector, and Esc closes it and puts the tool
+down. The canvas rings whatever is open, in the same magenta a pin already
+used. The Pins and Notes tabs are gone; Geo became **Layout** — one line per
+wall, door, zone and pin, with a length, a state and a badge, and no
+coordinate boxes — and Cams became **Cams & notes**, the same one-line list
+for the two things only the GM ever sees. The tabs' own "click the map to…"
+buttons went with them: the toolbar is the one place a tool is picked up.
+Build is now four tabs and Prep six. The lists take the selection and the
+tool as props from the panel, which is what lets their tests render them
+without a DOM.
+
+One bug surfaced on the way and is fixed with it: the campaign shell was a
+*minimum* of one viewport tall, so a long panel tab (the old Geo tab, the
+Tiles palette, now Layout) stretched the row, grew the canvas under a camera
+that had already fitted the map, and put every click on the canvas half a
+cell off — a wall you aimed at was missed by the width of its own line. The
+shell is now exactly one viewport tall and the main column scrolls inside
+it, on every campaign page.
 
 ## 6. What I would measure
 

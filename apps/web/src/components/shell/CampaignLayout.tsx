@@ -52,8 +52,13 @@ export default function CampaignLayout() {
   const isGm = session.role === 'gm';
   const name = campaign?.name ?? 'Campaign';
 
+  // The shell is exactly one viewport tall and the main column scrolls inside
+  // it: a page can never grow the document. The Grid depends on that — its
+  // canvas fills what is left beside the GM panel, and a long panel tab used
+  // to stretch the row, grow the canvas under a camera that had already
+  // fitted the map, and put every click half a cell off (docs/UX_MAP_BUILDER.md §3.2).
   return (
-    <div className="flex min-h-dvh bg-ground text-ink">
+    <div className="flex h-dvh bg-ground text-ink">
       {isGm && (
         <GmSidebar
           campaignId={campaignId}
@@ -88,7 +93,7 @@ export default function CampaignLayout() {
           )}
         </header>
 
-        <main className="min-w-0 flex-1 overflow-y-auto">
+        <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           <Outlet />
         </main>
 

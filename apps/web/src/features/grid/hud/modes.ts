@@ -24,8 +24,8 @@ export const MODES: ReadonlyArray<{ id: GridMode; label: string; hint: string }>
 
 /** Which panel sections each mode shows, in order. Scenes is first in all three. */
 export const MODE_TABS: Record<GridMode, readonly GmTab[]> = {
-  build: ['scenes', 'map', 'tiles', 'geo', 'pins'],
-  prep: ['scenes', 'tokens', 'fog', 'cameras', 'notes', 'env', 'los'],
+  build: ['scenes', 'map', 'tiles', 'geo'],
+  prep: ['scenes', 'tokens', 'fog', 'cameras', 'env', 'los'],
   play: ['scenes', 'tokens', 'los', 'tv'],
 };
 
@@ -113,7 +113,7 @@ export function isTypingTarget(target: EventTarget | null): boolean {
 
 /** One line under the toolbar: what the tool in hand wants from the GM. */
 export const TOOL_HINTS: Record<GridTool, string> = {
-  select: 'Click a token to drag it, a door’s knob to open it, a pin or note to edit it. Double-tap to ping.',
+  select: 'Drag a token to move it. Click a wall, door, zone, pin, camera or note to edit it in the panel. Double-tap to ping.',
   ruler: 'Drag to measure in metres; start on a token to see its walk and run.',
   aoe: 'Click to place the circle; set its radius in the measure panel.',
   pointer: 'Drag to draw a pointer trail everyone sees.',
@@ -121,10 +121,10 @@ export const TOOL_HINTS: Record<GridTool, string> = {
   focus: 'Click to pull every screen to that spot, once.',
   wall: 'Drag along the wall. Shift for a free angle. Esc when done.',
   door: 'Drag across the doorway. Click a door’s knob later to open or shut it.',
-  zone: 'Click the corners of a named area; name it on the Geo section.',
-  pin: 'Click to drop a pin; it opens on the Pins section.',
-  camera: 'Click to mount a camera; aim it on the Cams section. Only you see it.',
-  note: 'Click to drop a note only you ever see.',
+  zone: 'Click the corners of a named area, then save and name it on the Layout tab.',
+  pin: 'Click to drop a pin; it opens in the panel, where you name and link it.',
+  camera: 'Click to mount a camera; it opens in the panel, where you aim it. Only you see it.',
+  note: 'Click to drop a note only you ever see; it opens in the panel to write on.',
   tile: 'Drag to paint with the chosen material; Auto reads the square around it.',
   'tile-area': 'Drag a rectangle of floor.',
   'tile-room': 'Drag a rectangle: floor inside, walls around it.',

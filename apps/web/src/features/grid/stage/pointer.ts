@@ -16,6 +16,7 @@ import {
   worldFromGrid,
   type SceneMetrics,
 } from '../geometry.js';
+import { pointInPolygon } from '../geometry.js';
 import type { StageCallbacks, StageSceneState, TileRectMode } from '../types.js';
 import { Camera, wheelZoomFactor } from './camera.js';
 import {
@@ -25,6 +26,7 @@ import {
   hitPin,
   hitTileDoor,
   hitToken,
+  hitWall,
   isDoubleTap,
   worldTolerance,
   type TapRecord,
@@ -457,7 +459,41 @@ export class PointerController {
         return;
       }
     }
+
+    // A wall, for the GM's inspector (docs/UX_MAP_BUILDER.md §3.2). After the
+    // doors: a door's knob sits on the same line as the walls either side of
+    // it, and the knob is the smaller target.
+    if (state.role === 'gm' && this.host.callbacks.onWallSelect) {
+      const wallId = hitWall(m, state.scene, grid, Math.max(12, worldTolerance(this.host.camera.scale, 12)));
+      if (wallId) {
+        this.mode = 'idle';
+        this.host.callbacks.onWallSelect(wallId);
+        return;
+      }
+    }
     this.mode = 'pan';
+  }
+
+  /**
+   * A click — not a drag — on open floor with the select tool. For the GM it
+   * opens the zone under it in the inspector, or closes the inspector when
+   * there is none. Decided on the way UP, because a drag that starts inside a
+   * zone is a pan, and a zone can be most of the map.
+   */
+  private clickOnFloor(e: PointerEvent): void {
+    const state = this.host.state();
+    if (state.role !== 'gm' || state.tool !== 'select') return;
+    const grid = this.toGrid(this.local(e));
+    const zones = state.scene.geometry.zones;
+    // Later zones draw on top, so the last one containing the click wins.
+    for (let i = zones.length - 1; i >= 0; i -= 1) {
+      const zone = zones[i];
+      if (zone && pointInPolygon(grid, zone.polygon)) {
+        this.host.callbacks.onZoneSelect?.(zone.id);
+        return;
+      }
+    }
+    this.host.callbacks.onSelectClear?.();
   }
 
   // -------------------------------------------------------------------------
@@ -592,6 +628,7 @@ export class PointerController {
       if (b) this.host.callbacks.onTileRect?.(b.c0, b.r0, b.c1, b.r1, this.rectMode);
     } else if (this.mode === 'pan' && !this.moved) {
       this.host.callbacks.onSelectToken(null);
+      this.clickOnFloor(e);
     }
     this.mode = 'idle';
   }

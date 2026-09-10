@@ -1,299 +1,183 @@
 /**
- * GM-layer geometry authoring (FR9.2): draw, edit and delete walls, place
- * doors with an open/closed toggle, and draw named zones.
- *
- * Everything here is a call into `../geometryEdit.js` followed by one whole
- * -object `PATCH /api/scenes/:id { geometry }`. The canvas redraws from the
- * refreshed scene query, so nothing is optimistic and nothing can drift.
+ * The layout list (docs/UX_MAP_BUILDER.md §3.2): every wall, door, zone and
+ * pin on the map, one line each. Pick a row and the inspector opens it — the
+ * same inspector a click on the canvas opens — so there is one way to edit a
+ * thing, and this list is only for finding it. The tools that draw live on
+ * the toolbar; the zone tool's drafting controls are the one exception here,
+ * because a polygon is saved when the GM says so, not dropped on a click.
  */
 import type { Point, Scene } from '@safehouse/contracts';
-import { useDoorOp, usePatchGeometry } from '../api.js';
+import type { ReactNode } from 'react';
+import { usePatchGeometry } from '../api.js';
 import { rectPolygon } from '../geometry.js';
-import {
-  addZone,
-  convertWallToDoor,
-  removeDoor,
-  removeWall,
-  removeZone,
-  updateWall,
-  updateZone,
-} from '../geometryEdit.js';
+import { addZone, isPinLinked, segmentLength } from '../geometryEdit.js';
 import { useGridStore } from '../store.js';
-import type { GridTool } from '../types.js';
-import { Empty, inputCls, Num, PanelSection, Row } from './ui.js';
+import type { GeometrySelection, GridTool } from '../types.js';
+import { Empty, inputCls, PanelSection } from './ui.js';
 
 export interface GeometryTabProps {
   scene: Scene;
-  onCenter: (x: number, y: number) => void;
-}
-
-function ToolButton({
-  tool,
-  label,
-  hint,
-}: {
+  /** What the inspector has open — the panel owns it, the list only rings it. */
+  selected: GeometrySelection | null;
+  /** The tool in hand: the zone tool brings its drafting controls with it. */
   tool: GridTool;
-  label: string;
-  hint: string;
-}) {
-  const active = useGridStore((s) => s.tool) === tool;
-  const setTool = useGridStore((s) => s.setTool);
-  return (
-    <button
-      type="button"
-      title={hint}
-      aria-pressed={active}
-      className={'btn flex-1 py-1 ' + (active ? 'border-cyan text-cyan' : '')}
-      onClick={() => setTool(active ? 'select' : tool)}
-    >
-      {label}
-    </button>
-  );
 }
 
-export default function GeometryTab({ scene, onCenter }: GeometryTabProps) {
+/** A segment's length in metres, the way the ruler would say it. */
+export function metres(a: Point, b: Point, unitM: number): string {
+  const n = segmentLength(a, b) * unitM;
+  return `${Number.isInteger(n) ? n : n.toFixed(1)} m`;
+}
+
+export default function GeometryTab({ scene, selected, tool }: GeometryTabProps) {
   const patch = usePatchGeometry();
-  // Doors go through the door route (FR9.24), the same one a player's hand
-  // on the handle uses — so opening one here is exactly what the table does.
-  const doorOp = useDoorOp(scene.id);
-  const tool = useGridStore((s) => s.tool);
-  const setTool = useGridStore((s) => s.setTool);
   const draft = useGridStore((s) => s.fogDraft);
   const clearDraft = useGridStore((s) => s.clearFogDraft);
   const zoneName = useGridStore((s) => s.zoneName);
   const setZoneName = useGridStore((s) => s.setZoneName);
+  const select = useGridStore((s) => s.select);
 
   const geo = scene.geometry;
+  const unit = scene.grid.unitM;
   const save = (next: typeof geo) => patch.mutate({ sceneId: scene.id, geometry: next });
 
   const points = draft?.points ?? [];
   const first = points[0];
   const second = points[1];
   const canRect = points.length === 2 && first !== undefined && second !== undefined;
-
   const saveZone = (polygon: Point[]) => {
     save(addZone(geo, polygon, { name: zoneName }));
     setZoneName('');
     clearDraft();
   };
 
+  const on = (kind: GeometrySelection['kind'], id: string) =>
+    selected !== null && selected.kind === kind && selected.id === id;
+  const pick = (kind: GeometrySelection['kind'], id: string) =>
+    select(on(kind, id) ? null : { kind, id });
+
   return (
     <>
-      <PanelSection title="Draw" hint="drag for segments">
-        <div className="flex gap-2">
-          <ToolButton tool="wall" label="wall" hint="Drag a wall segment (snaps to grid corners)" />
-          <ToolButton tool="door" label="door" hint="Drag a door segment; click its knob to open it" />
-          <ToolButton tool="zone" label="zone" hint="Click vertices for a named area" />
-        </div>
-        {(tool === 'wall' || tool === 'door') && (
-          <Empty>
-            drag from corner to corner; hold Shift to place a vertex off the grid, and a click that
-            never moves draws nothing
-          </Empty>
-        )}
-        {tool === 'zone' && (
-          <>
-            <input
-              className={inputCls}
-              placeholder="loading dock, the vault…"
-              value={zoneName}
-              onChange={(e) => setZoneName(e.target.value)}
-            />
-            <div className="flex gap-2">
-              <button
-                type="button"
-                className="btn btn-accent flex-1 py-1"
-                disabled={points.length < 3}
-                onClick={() => saveZone(points)}
-              >
-                save polygon ({points.length})
-              </button>
-              <button
-                type="button"
-                className="btn flex-1 py-1"
-                disabled={!canRect}
-                title="Two clicks = opposite corners"
-                onClick={() => {
-                  if (first && second) saveZone(rectPolygon(first, second));
-                }}
-              >
-                save rect
-              </button>
-              <button
-                type="button"
-                className="btn py-1"
-                disabled={points.length === 0}
-                onClick={clearDraft}
-              >
-                clear
-              </button>
-            </div>
-          </>
-        )}
-        {patch.isError && <p className="mono-label text-danger">geometry not saved — retry</p>}
-      </PanelSection>
+      {tool === 'zone' && (
+        <PanelSection title="New zone" hint={`${points.length} vertices`}>
+          <input
+            className={inputCls}
+            placeholder="loading dock, the vault…"
+            value={zoneName}
+            onChange={(e) => setZoneName(e.target.value)}
+          />
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="btn btn-accent flex-1 py-1"
+              disabled={points.length < 3}
+              onClick={() => saveZone(points)}
+            >
+              save polygon
+            </button>
+            <button
+              type="button"
+              className="btn flex-1 py-1"
+              disabled={!canRect}
+              title="Two clicks = opposite corners"
+              onClick={() => {
+                if (first && second) saveZone(rectPolygon(first, second));
+              }}
+            >
+              save rect
+            </button>
+            <button type="button" className="btn py-1" disabled={points.length === 0} onClick={clearDraft}>
+              clear
+            </button>
+          </div>
+          <Empty>click the map for each corner; a name is how the zone reads on your map</Empty>
+        </PanelSection>
+      )}
+      {patch.isError && (
+        <p className="mono-label px-3 pt-2 text-danger">geometry not saved — retry</p>
+      )}
 
       <PanelSection title="Walls" hint={`${geo.walls.length}`}>
-        {geo.walls.length === 0 && <Empty>drag with the wall tool to block a sight line</Empty>}
-        <ul className="space-y-2">
+        {geo.walls.length === 0 && <Empty>drag with the wall tool (W) to block a sight line</Empty>}
+        <ul className="space-y-1" data-testid="wall-list">
           {geo.walls.map((wall) => (
-            <li key={wall.id} className="rounded border border-edge p-2">
-              <div className="flex items-center gap-2">
-                <span className="mono-label min-w-0 flex-1 truncate text-dim">{wall.id}</span>
-                <button
-                  type="button"
-                  className="btn py-1"
-                  title="Centre the canvas here"
-                  onClick={() => onCenter((wall.a.x + wall.b.x) / 2, (wall.a.y + wall.b.y) / 2)}
-                >
-                  find
-                </button>
-                <button
-                  type="button"
-                  className="btn py-1"
-                  title="Turn this segment into a door"
-                  onClick={() => save(convertWallToDoor(geo, wall.id))}
-                >
-                  → door
-                </button>
-                <button
-                  type="button"
-                  className="btn py-1 text-danger"
-                  onClick={() => save(removeWall(geo, wall.id))}
-                >
-                  delete
-                </button>
-              </div>
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                <Row label="from x">
-                  <Num
-                    value={wall.a.x}
-                    step={0.5}
-                    onChange={(n) => save(updateWall(geo, wall.id, { a: { ...wall.a, x: n } }))}
-                  />
-                </Row>
-                <Row label="from y">
-                  <Num
-                    value={wall.a.y}
-                    step={0.5}
-                    onChange={(n) => save(updateWall(geo, wall.id, { a: { ...wall.a, y: n } }))}
-                  />
-                </Row>
-                <Row label="to x">
-                  <Num
-                    value={wall.b.x}
-                    step={0.5}
-                    onChange={(n) => save(updateWall(geo, wall.id, { b: { ...wall.b, x: n } }))}
-                  />
-                </Row>
-                <Row label="to y">
-                  <Num
-                    value={wall.b.y}
-                    step={0.5}
-                    onChange={(n) => save(updateWall(geo, wall.id, { b: { ...wall.b, y: n } }))}
-                  />
-                </Row>
-              </div>
-            </li>
+            <Line key={wall.id} id={wall.id} on={on('wall', wall.id)} onPick={() => pick('wall', wall.id)}>
+              <span className="min-w-0 flex-1 truncate">{wall.id}</span>
+              <span className="mono-label text-faint">{metres(wall.a, wall.b, unit)}</span>
+            </Line>
           ))}
         </ul>
       </PanelSection>
 
       <PanelSection title="Doors" hint={`${geo.doors.length}`}>
-        {geo.doors.length === 0 && <Empty>doors toggle open and shut mid-fight</Empty>}
-        <ul className="space-y-1">
+        {geo.doors.length === 0 && (
+          <Empty>draw one with the door tool (D), or turn a wall into one</Empty>
+        )}
+        <ul className="space-y-1" data-testid="door-list">
           {geo.doors.map((door) => (
-            <li key={door.id} className="flex items-center gap-2">
-              <span className={'min-w-0 flex-1 truncate text-xs ' + (door.open ? 'text-ok' : 'text-ink')}>
-                {door.id} {door.open ? 'open' : 'closed'}
-                {door.locked && <span className="mono-label ml-1 text-warn">locked</span>}
+            <Line key={door.id} id={door.id} on={on('door', door.id)} onPick={() => pick('door', door.id)}>
+              <span className="min-w-0 flex-1 truncate">{door.id}</span>
+              <span className={'mono-label ' + (door.open ? 'text-ok' : 'text-dim')}>
+                {door.open ? 'open' : 'shut'}
               </span>
-              <button
-                type="button"
-                className="btn py-1"
-                title="Centre the canvas here"
-                onClick={() => onCenter((door.a.x + door.b.x) / 2, (door.a.y + door.b.y) / 2)}
-              >
-                find
-              </button>
-              <button
-                type="button"
-                className={'btn py-1 ' + (door.open ? '' : 'btn-accent')}
-                aria-pressed={door.open}
-                onClick={() => doorOp.mutate({ doorId: door.id, op: door.open ? 'close' : 'open' })}
-              >
-                {door.open ? 'close' : 'open'}
-              </button>
-              <button
-                type="button"
-                className={'btn py-1 ' + (door.locked ? 'text-warn' : '')}
-                aria-pressed={door.locked}
-                data-testid={`door-lock-${door.id}`}
-                title={door.locked ? 'Unlock: players may open it again' : 'Lock: players cannot open it'}
-                onClick={() => doorOp.mutate({ doorId: door.id, op: door.locked ? 'unlock' : 'lock' })}
-              >
-                {door.locked ? 'unlock' : 'lock'}
-              </button>
-              <button
-                type="button"
-                className="btn py-1 text-danger"
-                onClick={() => save(removeDoor(geo, door.id))}
-              >
-                delete
-              </button>
-            </li>
+              {door.locked && <span className="mono-label text-warn">locked</span>}
+            </Line>
           ))}
         </ul>
       </PanelSection>
 
       <PanelSection title="Zones" hint={`${geo.zones.length}`}>
-        {geo.zones.length === 0 && <Empty>named areas label the map for you alone</Empty>}
-        <ul className="space-y-2">
+        {geo.zones.length === 0 && <Empty>named areas label the map for you alone — Z draws one</Empty>}
+        <ul className="space-y-1" data-testid="zone-list">
           {geo.zones.map((zone) => (
-            <li key={zone.id} className="rounded border border-edge p-2">
-              <div className="flex items-center gap-2">
-                <input
-                  className={inputCls}
-                  value={zone.name}
-                  aria-label={`Zone name (${zone.id})`}
-                  onChange={(e) => save(updateZone(geo, zone.id, { name: e.target.value }))}
-                />
-                <button
-                  type="button"
-                  className="btn py-1 text-danger"
-                  onClick={() => save(removeZone(geo, zone.id))}
-                >
-                  delete
-                </button>
-              </div>
-              <div className="mt-2 flex items-center gap-2">
-                <input
-                  type="color"
-                  aria-label={`Zone colour (${zone.id})`}
-                  className="h-7 w-10 rounded border border-edge bg-deck"
-                  value={zone.color ?? '#1596ab'}
-                  onChange={(e) => save(updateZone(geo, zone.id, { color: e.target.value }))}
-                />
-                <span className="mono-label text-faint">{zone.polygon.length} vertices</span>
-              </div>
-            </li>
+            <Line key={zone.id} id={zone.id} on={on('zone', zone.id)} onPick={() => pick('zone', zone.id)}>
+              <span
+                className="h-2.5 w-2.5 shrink-0 rounded-sm"
+                style={{ background: zone.color ?? '#1596ab' }}
+                aria-hidden
+              />
+              <span className="min-w-0 flex-1 truncate">{zone.name || zone.id}</span>
+              <span className="mono-label text-faint">{zone.polygon.length} pts</span>
+            </Line>
           ))}
         </ul>
       </PanelSection>
 
-      <PanelSection title="Play">
-        <button
-          type="button"
-          className={'btn w-full py-1 ' + (tool === 'select' ? 'border-cyan text-cyan' : '')}
-          onClick={() => setTool('select')}
-        >
-          back to the select tool
-        </button>
-        <Empty>
-          with select, clicking a door&apos;s knob on the map opens or shuts it — players can too,
-          unless you lock it
-        </Empty>
+      <PanelSection title="Pins" hint={`${geo.pins.length}`}>
+        {geo.pins.length === 0 && <Empty>no pins on this map yet — P drops one</Empty>}
+        <ul className="space-y-1" data-testid="pin-list">
+          {geo.pins.map((pin) => (
+            <Line key={pin.id} id={pin.id} on={on('pin', pin.id)} onPick={() => pick('pin', pin.id)}>
+              <span className="min-w-0 flex-1 truncate">{pin.label || pin.id}</span>
+              {!isPinLinked(pin) && <span className="mono-label text-faint">unlinked</span>}
+              <span className={'mono-label ' + (pin.visibility === 'public' ? 'text-ok' : 'text-dim')}>
+                {pin.visibility === 'public' ? 'revealed' : 'private'}
+              </span>
+            </Line>
+          ))}
+        </ul>
       </PanelSection>
     </>
+  );
+}
+
+/** One row: the whole line is the button, and the picked one is ringed like its thing on the map. */
+function Line({ id, on, onPick, children }: { id: string; on: boolean; onPick: () => void; children: ReactNode }) {
+  return (
+    <li>
+      <button
+        type="button"
+        data-row={id}
+        aria-pressed={on}
+        title={on ? 'Close the inspector' : 'Open it in the inspector'}
+        className={
+          'flex w-full items-center gap-2 rounded border px-2 py-1 text-left text-xs ' +
+          (on ? 'border-magenta bg-raised/60 text-ink' : 'border-edge text-ink hover:border-edge-bright')
+        }
+        onClick={onPick}
+      >
+        {children}
+      </button>
+    </li>
   );
 }

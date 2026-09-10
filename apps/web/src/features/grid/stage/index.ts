@@ -6,6 +6,7 @@
  * TokenViews and pooled fx graphics, and layer redraws keyed on content hashes
  * so a pan/zoom or a token move never re-tessellates the grid, fog or geometry.
  */
+import type { GeometrySelection } from '../types.js';
 import { Application, Assets, Container, Graphics, Text, type Texture } from 'pixi.js';
 import type { Point, Token } from '@safehouse/contracts';
 import { TILESETS, levelTiles } from '@safehouse/rules';
@@ -60,6 +61,18 @@ const GHOST_TTL_MS = 4000;
  */
 const CATALOGUE_DEFS: Record<string, TileDrawDef> = tileDefsFromSets(TILESETS);
 
+/** The selected id when the selection is one of `kinds`, else null. */
+function selectedOf(state: StageSceneState, ...kinds: GeometrySelection['kind'][]): string | null {
+  const sel = state.selection;
+  return sel && kinds.includes(sel.kind) ? sel.id : null;
+}
+
+/** The selection as a redraw-key fragment, for the layer that draws those kinds (§3.2). */
+function selectionKey(state: StageSceneState, ...kinds: GeometrySelection['kind'][]): string {
+  const id = selectedOf(state, ...kinds);
+  return id === null ? '' : `${state.selection?.kind}:${id}`;
+}
+
 function fogKey(state: StageSceneState): string {
   const fog = state.scene.fog;
   return [
@@ -74,6 +87,7 @@ function geometryKey(state: StageSceneState): string {
   const geo = state.scene.geometry;
   return [
     state.role === 'gm' ? 'gm' : 'pc',
+    selectionKey(state, 'wall', 'door', 'zone'),
     // Endpoints, not just counts: editing a wall in place must redraw it.
     geo.walls.map((w) => `${w.id}:${w.a.x},${w.a.y},${w.b.x},${w.b.y}`).join(','),
     geo.zones.map((z) => `${z.id}:${z.name}:${z.color ?? ''}:${z.polygon.length}`).join(','),
@@ -87,7 +101,7 @@ function geometryKey(state: StageSceneState): string {
 function noteKey(state: StageSceneState): string {
   return [
     state.role === 'gm' ? 'gm' : 'pc',
-    state.selectedNoteId ?? '',
+    selectionKey(state, 'note'),
     (state.scene.geometry.gmNotes ?? [])
       .map((n) => `${n.id}:${n.at.x},${n.at.y}:${n.width}:${n.color ?? ''}:${n.text}`)
       .join('\u0001'),
@@ -100,7 +114,7 @@ function cameraKey(state: StageSceneState): string {
   return [
     state.role === 'gm' ? 'gm' : 'pc',
     state.level ?? 0,
-    state.selectedCameraId ?? '',
+    selectionKey(state, 'camera'),
     (geo.cameras ?? [])
       .map((c) => `${c.id}:${c.at.x},${c.at.y}:${c.facing}:${c.fov}:${c.range}:${c.level}:${c.active ? 1 : 0}:${c.label ?? ''}`)
       .join(','),
@@ -113,7 +127,7 @@ function pinKey(state: StageSceneState): string {
   const geo = state.scene.geometry;
   return [
     state.role === 'gm' ? 'gm' : 'pc',
-    state.selectedPinId ?? '',
+    selectionKey(state, 'pin'),
     geo.pins.map((p) => `${p.id}:${p.at.x},${p.at.y}:${p.visibility}:${p.label ?? ''}`).join(','),
     // Zone names render into the same label layer for the GM.
     geo.zones.map((z) => `${z.id}:${z.name}`).join(','),
@@ -382,7 +396,7 @@ class Stage implements StageApi, PointerHost {
     const gk = geometryKey(next);
     if (gk !== this.lastGeoKey) {
       this.lastGeoKey = gk;
-      drawGeometry(this.geoG, next.scene, m, next.role === 'gm');
+      drawGeometry(this.geoG, next.scene, m, next.role === 'gm', next.selection ?? null);
     }
 
     const pk = pinKey(next);
@@ -394,7 +408,7 @@ class Stage implements StageApi, PointerHost {
         this.pinLabelPool,
         next.scene,
         m,
-        next.selectedPinId ?? null,
+        selectedOf(next, 'pin'),
         next.role === 'gm',
       );
     }
@@ -409,7 +423,7 @@ class Stage implements StageApi, PointerHost {
         next.scene,
         m,
         next.cameraCones,
-        next.selectedCameraId ?? null,
+        selectedOf(next, 'camera'),
         next.role === 'gm',
         next.level ?? 0,
       );
@@ -424,7 +438,7 @@ class Stage implements StageApi, PointerHost {
         this.noteLabelPool,
         next.scene,
         m,
-        next.selectedNoteId ?? null,
+        selectedOf(next, 'note'),
         next.role === 'gm',
       );
     }

@@ -300,10 +300,8 @@ export default function GridPage() {
         aoe: store.aoe,
         scatter: store.scatter,
         fogDraft: store.fogDraft,
-        selectedPinId: store.selectedPinId,
-        selectedCameraId: store.selectedCameraId,
+        selection: store.selected,
         cameraCones,
-        selectedNoteId: store.selectedNoteId,
         shroud,
         level: viewLevel,
       }),
@@ -318,10 +316,8 @@ export default function GridPage() {
       store.aoe,
       store.scatter,
       store.fogDraft,
-      store.selectedPinId,
-      store.selectedCameraId,
+      store.selected,
       cameraCones,
-      store.selectedNoteId,
       shroud,
       viewLevel,
     ],
@@ -345,7 +341,10 @@ export default function GridPage() {
         const door = scene.geometry.doors.find((d) => d.id === doorId);
         if (!door) return;
         // A player's hand on the handle goes to the server, which knows the
-        // lock (FR9.24); the GM's goes the same way, so there is one path.
+        // lock (FR9.24); the GM's goes the same way, so there is one path —
+        // and for the GM the door opens in the inspector too, where the lock
+        // is one click away (docs/UX_MAP_BUILDER.md §3.2).
+        if (isGm) useGridStore.getState().select({ kind: 'door', id: doorId });
         doorOp.mutate({ doorId, op: door.open ? 'close' : 'open' }, { onError: showDoorNotice });
       },
       onTileDoorToggle: (cell, level) => {
@@ -378,8 +377,7 @@ export default function GridPage() {
         const placed = geometry.pins[geometry.pins.length - 1];
         patchGeometry.mutate({ sceneId: scene.id, geometry });
         const s = useGridStore.getState();
-        if (placed) s.selectPin(placed.id);
-        s.setGmTab('pins');
+        if (placed) s.select({ kind: 'pin', id: placed.id });
         s.openGmPanel();
       },
       // -- tile painting (FR9.2) --------------------------------------------
@@ -459,12 +457,24 @@ export default function GridPage() {
           }
         })();
       },
+      // -- the inspector (docs/UX_MAP_BUILDER.md §3.2): a click on a thing opens
+      // it in the panel, whichever tab is showing; a click on nothing closes it.
       onPinSelect: (pinId) => {
         const s = useGridStore.getState();
-        s.selectPin(pinId);
-        s.setGmTab('pins');
+        s.select({ kind: 'pin', id: pinId });
         s.openGmPanel();
       },
+      onWallSelect: (wallId) => {
+        const s = useGridStore.getState();
+        s.select({ kind: 'wall', id: wallId });
+        s.openGmPanel();
+      },
+      onZoneSelect: (zoneId) => {
+        const s = useGridStore.getState();
+        s.select({ kind: 'zone', id: zoneId });
+        s.openGmPanel();
+      },
+      onSelectClear: () => useGridStore.getState().select(null),
       // -- Security cameras (FR9.23) -----------------------------------------
       onCameraPlace: (x, y) => {
         if (!scene || !isGm) return;
@@ -474,14 +484,12 @@ export default function GridPage() {
         const placed = geometry.cameras?.[geometry.cameras.length - 1];
         patchGeometry.mutate({ sceneId: scene.id, geometry });
         const s = useGridStore.getState();
-        if (placed) s.selectCamera(placed.id);
-        s.setGmTab('cameras');
+        if (placed) s.select({ kind: 'camera', id: placed.id });
         s.openGmPanel();
       },
       onCameraSelect: (cameraId) => {
         const s = useGridStore.getState();
-        s.selectCamera(cameraId);
-        s.setGmTab('cameras');
+        s.select({ kind: 'camera', id: cameraId });
         s.openGmPanel();
       },
       // -- GM notes (FR9.25) -------------------------------------------------
@@ -491,14 +499,12 @@ export default function GridPage() {
         const placed = geometry.gmNotes?.[geometry.gmNotes.length - 1];
         patchGeometry.mutate({ sceneId: scene.id, geometry });
         const s = useGridStore.getState();
-        if (placed) s.selectNote(placed.id);
-        s.setGmTab('notes');
+        if (placed) s.select({ kind: 'note', id: placed.id });
         s.openGmPanel();
       },
       onNoteSelect: (noteId) => {
         const s = useGridStore.getState();
-        s.selectNote(noteId);
-        s.setGmTab('notes');
+        s.select({ kind: 'note', id: noteId });
         s.openGmPanel();
       },
     }),

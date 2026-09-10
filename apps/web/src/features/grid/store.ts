@@ -17,6 +17,7 @@ import {
   type FogDraft,
   type GridTool,
   type RulerState,
+  type GeometrySelection,
   type ScatterResult,
   type ViewProjection,
 } from './types.js';
@@ -54,9 +55,8 @@ export {
   type PendingRollMod,
 };
 
-/** GM authoring side-panel tabs (FR9.1/9.2/9.3/9.13/9.11/9.21). */
-export type GmTab = 'scenes' | 'map' | 'tiles' | 'tokens' | 'geo' | 'pins' | 'cameras' | 'notes' | 'fog'
-  | 'env' | 'los' | 'tv';
+/** GM authoring side-panel tabs; which show depends on the mode (hud/modes.ts). */
+export type GmTab = 'scenes' | 'map' | 'tiles' | 'tokens' | 'geo' | 'cameras' | 'fog' | 'env' | 'los' | 'tv';
 
 /** GM steering of the table display (FR9.21) — mirrors the TV's `TvControls`. */
 export interface DisplayControls {
@@ -134,12 +134,12 @@ export interface GridUiState {
   /** GM only: view a non-active scene while staging (FR9.1). */
   viewSceneId: string | null;
   pendingRollMod: PendingRollMod | null;
-  /** Pin open in the pin editor (FR9.3) — also ringed on the canvas. */
-  selectedPinId: string | null;
-  /** Camera open in the camera editor (FR9.23) — ringed on the canvas. */
-  selectedCameraId: string | null;
-  /** GM note open in the notes editor (FR9.25) — ringed on the canvas. */
-  selectedNoteId: string | null;
+  /**
+   * The one thing picked on the map — a wall, door, zone, pin, camera or
+   * note — open in the panel's inspector and ringed on the canvas
+   * (docs/UX_MAP_BUILDER.md §3.2).
+   */
+  selected: GeometrySelection | null;
   /** Name/colour the zone tool will use for its next polygon. */
   zoneName: string;
   /** Last steering state the GM pushed to the TV (FR9.21), optimistic. */
@@ -170,9 +170,7 @@ export interface GridUiState {
   openGmPanel: () => void;
   setViewSceneId: (id: string | null) => void;
   setPendingRollMod: (mod: PendingRollMod | null) => void;
-  selectPin: (id: string | null) => void;
-  selectCamera: (id: string | null) => void;
-  selectNote: (id: string | null) => void;
+  select: (selected: GeometrySelection | null) => void;
   setZoneName: (name: string) => void;
   setDisplay: (patch: Partial<DisplayControls>) => void;
 }
@@ -188,19 +186,16 @@ export interface GridUiState {
 function toolPatch(
   s: GridUiState,
   tool: GridTool,
-): Pick<GridUiState, 'tool' | 'fogDraft' | 'ruler' | 'selectedPinId' | 'selectedCameraId' | 'selectedNoteId'> {
+): Pick<GridUiState, 'tool' | 'fogDraft' | 'ruler' | 'selected'> {
   return {
     tool,
     // Leaving a polygon tool abandons its in-progress draft; fog and zones
     // share one draft, so staying inside that pair keeps the vertices.
     fogDraft: tool === 'fogdef' || tool === 'zone' ? s.fogDraft : null,
     ruler: tool === 'ruler' ? s.ruler : null,
-    // Leaving authoring entirely drops the pin ring off the canvas; the
-    // select tool keeps it, because that is how a pin is opened.
-    selectedPinId: tool === 'select' || GEOMETRY_TOOLS.includes(tool) ? s.selectedPinId : null,
-    selectedCameraId:
-      tool === 'select' || GEOMETRY_TOOLS.includes(tool) ? s.selectedCameraId : null,
-    selectedNoteId: tool === 'select' || GEOMETRY_TOOLS.includes(tool) ? s.selectedNoteId : null,
+    // Leaving authoring entirely closes the inspector and takes the ring off
+    // the canvas; the select tool keeps it, because that is how a thing opens.
+    selected: tool === 'select' || GEOMETRY_TOOLS.includes(tool) ? s.selected : null,
   };
 }
 
@@ -228,9 +223,7 @@ export const useGridStore = create<GridUiState>()((set) => ({
   mode: readStoredMode(),
   viewSceneId: null,
   pendingRollMod: null,
-  selectedPinId: null,
-  selectedCameraId: null,
-  selectedNoteId: null,
+  selected: null,
   zoneName: '',
   display: DEFAULT_DISPLAY_CONTROLS,
 
@@ -247,6 +240,8 @@ export const useGridStore = create<GridUiState>()((set) => ({
         mode,
         gmTab: MODE_TABS[mode].includes(s.gmTab) ? s.gmTab : (MODE_TABS[mode][1] ?? 'scenes'),
         ...(owner !== null && owner !== mode ? toolPatch(s, 'select') : {}),
+        // A new job: whatever was open in the inspector belonged to the old one.
+        selected: null,
       };
     }),
 
@@ -299,8 +294,14 @@ export const useGridStore = create<GridUiState>()((set) => ({
       if (mode !== s.mode) storeMode(mode);
       return { ...toolPatch(s, tool), mode };
     }),
+  // Picking a token closes the inspector: one thing is picked at a time.
   selectToken: (selectedTokenId) =>
-    set({ selectedTokenId, selectedWeapon: null, coverOverride: null }),
+    set((s) => ({
+      selectedTokenId,
+      selectedWeapon: null,
+      coverOverride: null,
+      selected: selectedTokenId === null ? s.selected : null,
+    })),
   selectWeapon: (selectedWeapon) => set({ selectedWeapon }),
   setRuler: (ruler) => set({ ruler }),
   setAoe: (aoe) => set({ aoe, scatter: null }),
@@ -318,9 +319,7 @@ export const useGridStore = create<GridUiState>()((set) => ({
     publishPendingRollMod(pendingRollMod);
     set({ pendingRollMod });
   },
-  selectPin: (selectedPinId) => set({ selectedPinId }),
-  selectCamera: (selectedCameraId) => set({ selectedCameraId }),
-  selectNote: (selectedNoteId) => set({ selectedNoteId }),
+  select: (selected) => set({ selected }),
   setZoneName: (zoneName) => set({ zoneName }),
   setDisplay: (patch) => set((s) => ({ display: { ...s.display, ...patch } })),
 }));

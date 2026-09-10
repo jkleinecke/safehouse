@@ -4,7 +4,7 @@
  */
 import { Container, Graphics, Text } from 'pixi.js';
 import type { Point, Scene } from '@safehouse/contracts';
-import type { CameraCone } from '../types.js';
+import type { CameraCone, GeometrySelection } from '../types.js';
 import { TILE_HEIGHTS } from '@safehouse/rules';
 import {
   cellCorners,
@@ -184,9 +184,19 @@ export function drawFog(
  * GM-layer geometry (FR9.2): walls + zones GM-only; doors render for everyone
  * (they are part of the map) with an open/closed state (toggle is GM-only).
  */
-export function drawGeometry(g: Graphics, scene: Scene, m: SceneMetrics, isGm: boolean): void {
+export function drawGeometry(
+  g: Graphics,
+  scene: Scene,
+  m: SceneMetrics,
+  isGm: boolean,
+  selection: GeometrySelection | null = null,
+): void {
   g.clear();
   const geo = scene.geometry;
+  // The thing open in the inspector is ringed the way a pin is
+  // (docs/UX_MAP_BUILDER.md §3.2) — for the GM, who is the only one with one.
+  const picked = (kind: GeometrySelection['kind'], id: string): boolean =>
+    isGm && selection !== null && selection.kind === kind && selection.id === id;
 
   if (isGm) {
     for (const wall of geo.walls) {
@@ -196,12 +206,20 @@ export function drawGeometry(g: Graphics, scene: Scene, m: SceneMetrics, isGm: b
     }
     g.stroke({ width: 3, color: C.faint, alpha: 0.8 });
 
+    const wall = selection?.kind === 'wall' ? geo.walls.find((w) => w.id === selection.id) : undefined;
+    if (wall) {
+      const a = worldFromGrid(m, wall.a);
+      const b = worldFromGrid(m, wall.b);
+      g.moveTo(a.x, a.y).lineTo(b.x, b.y).stroke({ width: 7, color: C.magenta, alpha: 0.55 });
+    }
+
     for (const zone of geo.zones) {
       const color = parseColor(zone.color, C.cyanDim);
-      g.poly(flatPoly(m, zone.polygon)).fill({ color, alpha: 0.06 }).stroke({
-        width: 1,
-        color,
-        alpha: 0.4,
+      const open = picked('zone', zone.id);
+      g.poly(flatPoly(m, zone.polygon)).fill({ color, alpha: open ? 0.12 : 0.06 }).stroke({
+        width: open ? 2 : 1,
+        color: open ? C.magenta : color,
+        alpha: open ? 0.95 : 0.4,
       });
     }
   }
@@ -227,6 +245,9 @@ export function drawGeometry(g: Graphics, scene: Scene, m: SceneMetrics, isGm: b
     g.circle(midX, midY, 5)
       .fill({ color: door.open ? C.ok : C.danger, alpha: 1 })
       .stroke({ width: 1.5, color: C.ground, alpha: 1 });
+    if (picked('door', door.id)) {
+      g.circle(midX, midY, 11).stroke({ width: 2, color: C.magenta, alpha: 0.95 });
+    }
     // The lock, GM only: a player's payload never says, and a player learns
     // it the way a runner does, by trying the door.
     if (isGm && door.locked) {

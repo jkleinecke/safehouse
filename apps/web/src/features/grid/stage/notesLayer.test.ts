@@ -133,3 +133,34 @@ describe('a locked door on the map (FR9.24)', () => {
     expect(pc.ops).toContain('circle'); // the knob is still the player's target
   });
 });
+
+describe('the inspector’s ring on the map (docs/UX_MAP_BUILDER.md §3.2)', () => {
+  const wall = { id: 'w1', a: { x: 1, y: 1 }, b: { x: 5, y: 1 } };
+  const door = { id: 'd1', a: { x: 2, y: 2 }, b: { x: 2, y: 4 }, open: false, locked: false };
+  const base = scene(undefined, [door]);
+  const sc = { ...base, geometry: { ...base.geometry, walls: [wall] } } as Scene;
+  const count = (ops: string[], op: string) => ops.filter((o) => o === op).length;
+
+  it('strokes the picked wall again and rings the picked door’s knob, for the GM only', () => {
+    const plain = counting();
+    drawGeometry(plain.g, sc, flat, true);
+
+    const wallOn = counting();
+    drawGeometry(wallOn.g, sc, flat, true, { kind: 'wall', id: 'w1' });
+    expect(count(wallOn.ops, 'stroke')).toBe(count(plain.ops, 'stroke') + 1);
+
+    const doorOn = counting();
+    drawGeometry(doorOn.g, sc, flat, true, { kind: 'door', id: 'd1' });
+    expect(count(doorOn.ops, 'circle')).toBe(count(plain.ops, 'circle') + 1);
+
+    // A player's canvas never rings anything, whatever the state says.
+    const pc = counting();
+    drawGeometry(pc.g, sc, flat, false, { kind: 'door', id: 'd1' });
+    expect(count(pc.ops, 'circle')).toBe(1);
+
+    // A selection that points at nothing draws nothing extra.
+    const gone = counting();
+    drawGeometry(gone.g, sc, flat, true, { kind: 'wall', id: 'w9' });
+    expect(gone.ops).toEqual(plain.ops);
+  });
+});

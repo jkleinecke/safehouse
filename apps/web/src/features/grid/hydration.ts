@@ -7,6 +7,7 @@
  * Every one of those now comes from REST on mount, with live events merged on
  * top. These are the pure decisions; `useGridLive`/`api` do the fetching.
  */
+import type { GeometrySelection } from './types.js';
 import type { Encounter, Role, Scene, Token } from '@safehouse/contracts';
 import { hiddenLayerTokenIds, layersOf } from './tokenLayers.js';
 import {
@@ -148,14 +149,10 @@ export interface StageComposeInput {
   scatter: ScatterResult | null;
   /** Shared polygon draft — fog regions and zones both author with it. */
   fogDraft: FogDraft | null;
-  /** Pin open in the GM's editor (FR9.3). */
-  selectedPinId?: string | null;
-  /** Camera open in the GM's editor (FR9.23). */
-  selectedCameraId?: string | null;
+  /** What the GM has picked for the inspector (docs/UX_MAP_BUILDER.md §3.2). */
+  selection?: GeometrySelection | null;
   /** What each camera on this floor covers — GM only (FR9.23). */
   cameraCones?: readonly CameraCone[] | null;
-  /** GM note open in the editor (FR9.25). */
-  selectedNoteId?: string | null;
   /** Cells outside the viewer's sightline, or null to draw no scrim. */
   shroud?: ShroudState | null;
   /** Which floor to draw (FR9.22). */
@@ -218,10 +215,8 @@ export function composeStageState(input: StageComposeInput): StageSceneState | n
     aoe: input.aoe,
     scatter: input.scatter,
     fogDraft: input.fogDraft,
-    selectedPinId: input.selectedPinId ?? null,
-    selectedCameraId: input.selectedCameraId ?? null,
+    selection: input.selection ?? null,
     cameraCones: input.cameraCones ?? null,
-    selectedNoteId: input.selectedNoteId ?? null,
     // A player's scene has no layers, so this is empty for them (FR9.26).
     hiddenLayerTokenIds: hiddenLayerTokenIds(layersOf(scene)),
     shroud: input.shroud ?? null,

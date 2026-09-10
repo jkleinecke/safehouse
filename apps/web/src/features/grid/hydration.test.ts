@@ -274,12 +274,12 @@ describe('composeStageState (hydration with zero WS traffic)', () => {
       aoe: null,
       scatter: null,
       fogDraft: null,
-      selectedPinId: 'pin_1',
+      selection: { kind: 'pin', id: 'pin_1' },
     });
     expect(state?.actingTokenId).toBeNull();
     expect(state?.bars.size).toBe(0);
     expect(state?.scene.geometry.pins[0]?.label).toBe('the safe');
-    expect(state?.selectedPinId).toBe('pin_1');
+    expect(state?.selection).toEqual({ kind: 'pin', id: 'pin_1' });
     // A player may drag their own character's token and nothing else.
     expect([...(state?.draggableIds ?? [])]).toEqual(['t1']);
   });
