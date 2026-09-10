@@ -11,29 +11,20 @@
  * Painting is a delta (`POST /api/scenes/:id/tiles` with `paint`/`erase`), so a
  * drag across a warehouse is one request rather than one per cell, and two
  * rooms painted in sequence do not clobber each other.
+ *
+ * The palette itself (docs/UX_MAP_BUILDER.md §3.5): swatches drawn as the
+ * material, categories with room for their words, Room as the lead for a
+ * fresh scene, Auto explained in its tooltip. The shapes — brush, area, room,
+ * erase — live on the toolbar (R, A, B, E), not here: one place to pick up
+ * a tool.
  */
 import { useEffect, useMemo } from 'react';
 import type { Scene } from '@safehouse/contracts';
 import { sceneLevels } from '@safehouse/rules';
 import { useTilesets, usePaintTiles, type TilesetDef } from '../api.js';
 import { useGridStore } from '../store.js';
-import type { GridTool } from '../types.js';
-
-/**
- * How the chosen tile goes down. Brush is one cell per sample of a drag; the
- * two rectangles are the building tools — an area of floor, or a room with
- * walls around it — and exist because a room is what a GM draws most and the
- * brush made it the slowest thing on the map.
- */
-const SHAPES: ReadonlyArray<{ tool: GridTool; label: string; hint: string }> = [
-  { tool: 'tile', label: 'Brush', hint: 'Drag to paint one cell at a time.' },
-  { tool: 'tile-area', label: 'Area', hint: 'Drag a rectangle; it fills with the chosen floor.' },
-  {
-    tool: 'tile-room',
-    label: 'Room',
-    hint: 'Drag a rectangle; floor inside, this set’s wall on every edge.',
-  },
-];
+import ConfirmButton from './ConfirmButton.js';
+import Swatch from './Swatch.js';
 
 /**
  * Where a stair painted on `level` could lead, in words the panel can show.
@@ -79,7 +70,7 @@ const CATEGORY_LABEL: Record<ToolCategory, string> = {
   stairs: 'Stairs',
 };
 
-/** What each tool does on a single click, in the GM's terms. */
+/** What each category does on a single click, in the GM's terms — the tooltip. */
 const CATEGORY_HINT: Record<ToolCategory, string> = {
   ground: 'What the square is made of — pick a surface and drag.',
   building: 'Click empty ground for a wall; click a wall again for a window, then a door.',
@@ -191,6 +182,8 @@ export default function TilesTab({ scene }: TilesTabProps) {
   if (isLoading) return <p className="p-3 text-sm text-dim">Loading tilesets…</p>;
   if (!tileset) return <p className="p-3 text-sm text-dim">No tilesets available.</p>;
 
+  const tiles = tileset.tiles.filter((t) => (t.category ?? kindCategory(t.kind)) === tileCategory);
+
   return (
     <div className="flex flex-col gap-3 p-3" data-testid="tiles-tab" data-tileset={tileset.id}>
       <div>
@@ -219,163 +212,132 @@ export default function TilesTab({ scene }: TilesTabProps) {
       </div>
 
       {/*
-        The four tools. Each is a different QUESTION a GM is asking — "what is
-        this square made of", "where do the walls go", "what furniture is in
-        here", "what's lying about" — which is why they are tools and not four
-        headings in one long list. Choosing one narrows the palette to tiles
-        that answer that question, and arms auto-placement for it.
+        The lead for a fresh scene: a room is what a GM draws first and most,
+        and the brush made it the slowest thing on the map. One large target,
+        gone once there is something on the floor.
       */}
-      <div>
-        <div className="mono-label text-dim">Tool</div>
-        <div className="mt-1 grid grid-cols-5 gap-1" role="group" aria-label="Tile tool">
-          {CATEGORY_ORDER.map((category) => {
-            const active = tileCategory === category;
-            return (
-              <button
-                key={category}
-                type="button"
-                data-tile-category={category}
-                aria-pressed={active}
-                title={CATEGORY_HINT[category]}
-                onClick={() => setTileCategory(category)}
-                className={
-                  'mono-label rounded border px-1 py-1 text-center text-[10px] ' +
-                  (active ? 'border-cyan text-cyan' : 'border-edge text-dim hover:border-dim')
-                }
-              >
-                {CATEGORY_LABEL[category]}
-              </button>
-            );
-          })}
-        </div>
-        <p className="mt-1 text-xs text-faint" data-testid="tile-auto-hint">
-          {CATEGORY_HINT[tileCategory]}
-        </p>
-      </div>
-
-      {tileCategory === 'ground' && (
-        <div>
-          <div className="mono-label text-dim">Shape</div>
-          <div className="mt-1 grid grid-cols-3 gap-1" role="group" aria-label="Paint shape">
-            {SHAPES.map((s) => {
-              const active = tool === s.tool;
-              return (
-                <button
-                  key={s.tool}
-                  type="button"
-                  data-paint-shape={s.tool}
-                  aria-pressed={active}
-                  title={s.hint}
-                  onClick={() => setTool(s.tool)}
-                  className={
-                    'mono-label rounded border px-1 py-1 text-center text-[10px] ' +
-                    (active ? 'border-cyan text-cyan' : 'border-edge text-dim hover:border-dim')
-                  }
-                >
-                  {s.label}
-                </button>
-              );
-            })}
-          </div>
-          <p className="mt-1 text-xs text-faint" data-testid="tile-shape-hint">
-            {SHAPES.find((s) => s.tool === tool)?.hint ??
-              'Pick Brush, Area or Room to start laying tiles.'}
-          </p>
-        </div>
+      {paintedCount === 0 && (
+        <button
+          type="button"
+          data-testid="draw-room"
+          aria-pressed={tool === 'tile-room'}
+          onClick={() => {
+            setTileCategory('ground');
+            setTool('tile-room');
+          }}
+          className={
+            'rounded-md border px-3 py-2 text-left ' +
+            (tool === 'tile-room' ? 'border-cyan bg-raised/60' : 'border-edge-bright hover:border-cyan')
+          }
+        >
+          <span className="block text-sm text-ink">Draw a room</span>
+          <span className="block text-xs text-faint">
+            drag a rectangle on the map: floor inside, walls around · R
+          </span>
+        </button>
       )}
+
+      {/*
+        The five categories. Each is a different QUESTION a GM is asking —
+        "what is this square made of", "where do the walls go", "what
+        furniture is in here", "what's lying about" — which is why they are a
+        row of choices and not five headings in one long list. Choosing one
+        narrows the palette to tiles that answer that question, and arms
+        auto-placement for it. What each does lives in its tooltip.
+      */}
+      <div className="flex flex-wrap gap-1" role="group" aria-label="Tile category">
+        {CATEGORY_ORDER.map((category) => {
+          const active = tileCategory === category;
+          return (
+            <button
+              key={category}
+              type="button"
+              data-tile-category={category}
+              aria-pressed={active}
+              title={CATEGORY_HINT[category]}
+              onClick={() => setTileCategory(category)}
+              className={
+                'rounded border px-2.5 py-1 text-xs ' +
+                (active ? 'border-cyan bg-raised text-cyan' : 'border-edge text-dim hover:border-dim hover:text-ink')
+              }
+            >
+              {CATEGORY_LABEL[category]}
+            </button>
+          );
+        })}
+      </div>
 
       {tileCategory === 'stairs' && (
         <StairAdvice scene={scene} level={activeLevel} onAddFloor={() => setGmTab('map')} />
       )}
 
-      {[tileCategory].map((category) => {
-        const tiles = tileset.tiles.filter((t) => (t.category ?? kindCategory(t.kind)) === category);
-        if (tiles.length === 0) return null;
-        return (
-          <div key={category}>
-            <div className="mono-label text-dim">{CATEGORY_LABEL[category]}</div>
-            <div className="mt-1 grid grid-cols-2 gap-1">
-              {/*
-                Auto is a first-class choice, and the default. With nothing
-                pinned the engine reads the square — its ground, its walls —
-                and places what belongs; picking a named tile below overrules
-                it for as long as it stays selected.
-              */}
+      {tiles.length > 0 && (
+        <div className="grid grid-cols-2 gap-1.5">
+          {/*
+            Auto is a first-class choice, and the default. With nothing
+            pinned the engine reads the square — its ground, its walls —
+            and places what belongs; picking a named tile below overrules
+            it for as long as it stays selected.
+          */}
+          <button
+            type="button"
+            data-tile-id="__auto__"
+            aria-pressed={tileId === null}
+            title="Auto — let the square decide: reads the ground and the walls around it and places what belongs"
+            onClick={() => {
+              setTileId(null);
+              setTool('tile');
+            }}
+            className={
+              'flex items-center gap-2 rounded border px-1.5 py-1 text-left text-xs ' +
+              (tileId === null ? 'border-cyan text-cyan' : 'border-edge text-ink hover:border-dim')
+            }
+          >
+            <span
+              aria-hidden
+              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-sm border border-dashed border-cyan text-base"
+            >
+              ✦
+            </span>
+            <span className="min-w-0">
+              <span className="block truncate">Auto</span>
+              <span className="block truncate text-[10px] text-faint">reads the square</span>
+            </span>
+          </button>
+          {tiles.map((t) => {
+            const selected = tileId === t.id && tool !== 'tile-erase';
+            return (
               <button
+                key={t.id}
                 type="button"
-                data-tile-id="__auto__"
-                aria-pressed={tileId === null}
-                title="Let the square decide — reads the ground and the walls around it"
-                onClick={() => {
-                  setTileId(null);
-                  setTool('tile');
-                }}
+                data-tile-id={t.id}
+                title={t.hint ?? t.name}
+                aria-pressed={selected}
+                // Picking a tile picks up the brush — one call, because the
+                // store owns that coupling now (see `toolPatch`).
+                onClick={() => setTileId(t.id)}
                 className={
-                  'flex items-center gap-2 rounded border px-2 py-1 text-left text-xs ' +
-                  (tileId === null ? 'border-cyan text-cyan' : 'border-edge text-ink hover:border-dim')
+                  'flex items-center gap-2 rounded border px-1.5 py-1 text-left text-xs ' +
+                  (selected ? 'border-cyan text-cyan' : 'border-edge text-ink hover:border-dim')
                 }
               >
-                <span aria-hidden className="inline-block h-4 w-4 shrink-0 rounded-sm border border-dashed border-cyan" />
-                <span className="truncate">Auto</span>
+                <Swatch set={tileset} tile={t} />
+                <span className="min-w-0 truncate">{t.name}</span>
               </button>
-              {tiles.map((t) => {
-                const selected = tileId === t.id && tool === 'tile';
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    data-tile-id={t.id}
-                    title={t.hint ?? t.name}
-                    aria-pressed={selected}
-                    // Picking a tile picks up the brush — one call, because the
-                    // store owns that coupling now (see `toolPatch`).
-                    onClick={() => setTileId(t.id)}
-                    className={
-                      'flex items-center gap-2 rounded border px-2 py-1 text-left text-xs ' +
-                      (selected ? 'border-cyan text-cyan' : 'border-edge text-ink hover:border-dim')
-                    }
-                  >
-                    <span
-                      aria-hidden
-                      className="inline-block h-4 w-4 shrink-0 rounded-sm border border-edge"
-                      style={{
-                        background: `linear-gradient(135deg, ${t.colors[0]} 0 60%, ${t.colors[1]} 60% 100%)`,
-                      }}
-                    />
-                    <span className="truncate">{t.name}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        );
-      })}
+            );
+          })}
+        </div>
+      )}
 
-      <div className="flex flex-wrap gap-2 border-t border-edge pt-2">
-        <button
-          type="button"
-          aria-pressed={tool === 'tile-erase'}
-          onClick={() => setTool(tool === 'tile-erase' ? 'select' : 'tile-erase')}
-          className={
-            'mono-label rounded border px-2 py-1 ' +
-            (tool === 'tile-erase' ? 'border-magenta text-magenta' : 'border-edge text-dim')
-          }
-        >
-          Erase
-        </button>
-        <button
-          type="button"
-          onClick={() => setTool('select')}
-          className="mono-label rounded border border-edge px-2 py-1 text-dim"
-        >
-          Done painting
-        </button>
-        <button
-          type="button"
-          data-testid="clear-floor"
+      <div className="flex flex-wrap items-center gap-2 border-t border-edge pt-2">
+        <ConfirmButton
+          label="Clear floor"
+          confirmLabel={`Clear ${paintedCount} cells?`}
+          testId="clear-floor"
           disabled={paintedCount === 0 || paint.isPending}
-          onClick={() => {
-            if (!window.confirm(`Clear all ${paintedCount} painted cells?`)) return;
+          title="Erase everything painted on this scene"
+          className="mono-label rounded border border-edge px-2 py-1 disabled:opacity-40"
+          onConfirm={() =>
             // The scene's own set, not the dropdown's: clearing a layer painted
             // with another set must not also change which set it is filed under.
             paint.mutate({
@@ -384,12 +346,9 @@ export default function TilesTab({ scene }: TilesTabProps) {
               paint: {},
               erase: [],
               clear: true,
-            });
-          }}
-          className="mono-label rounded border border-edge px-2 py-1 text-dim disabled:opacity-40"
-        >
-          Clear floor
-        </button>
+            })
+          }
+        />
       </div>
 
       {/*

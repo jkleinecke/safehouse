@@ -255,3 +255,35 @@ describe('paintedTilesetToAdopt opens a painted scene on its own set', () => {
     expect(paintedTilesetToAdopt(SERVED, 'docklands', 'retired-set')).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// A palette you can hit (docs/UX_MAP_BUILDER.md §3.5)
+// ---------------------------------------------------------------------------
+
+describe('a palette you can hit', () => {
+  it('leads a fresh scene with Room, and drops the lead once something is painted', () => {
+    expect(render(scene())).toContain('data-testid="draw-room"');
+    const painted = scene({ tilesetId: DEFAULT_TILESET_ID, cells: {}, ground: cells(2), structure: {}, object: {} });
+    expect(render(painted)).not.toContain('data-testid="draw-room"');
+  });
+
+  it('names the categories in full and keeps their explanation in the tooltip', () => {
+    const html = render(scene());
+    expect(html).toMatch(/data-tile-category="building"[^>]*title="Click empty ground for a wall/);
+    expect(html).toContain('>Building<');
+    expect(html).not.toContain('data-testid="tile-auto-hint"');
+  });
+
+  it('draws every swatch as the material, with its two colours standing in until the render lands', () => {
+    const html = render(scene());
+    expect(html).toContain('data-swatch="colours"');
+    expect(html).toMatch(/data-tile-id="__auto__"[^>]*title="Auto — let the square decide/);
+  });
+
+  it('leaves the shapes and the eraser to the toolbar', () => {
+    const html = render(scene());
+    expect(html).not.toContain('data-paint-shape=');
+    expect(html).not.toMatch(/Done painting/);
+    expect(html).not.toMatch(/>Erase</);
+  });
+});

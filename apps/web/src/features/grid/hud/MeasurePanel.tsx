@@ -99,7 +99,7 @@ export default function MeasurePanel(p: MeasurePanelProps) {
               {p.range.band && (
                 <button
                   type="button"
-                  className="btn btn-accent mt-2 w-full py-1"
+                  className="btn mt-2 w-full py-1"
                   onClick={() => p.onApplyMod(p.range?.value ?? 0, p.range?.label ?? 'range')}
                 >
                   apply {p.range.value === 0 ? '±0' : p.range.value} to next roll
@@ -154,7 +154,7 @@ export default function MeasurePanel(p: MeasurePanelProps) {
             <span className="mono-label text-faint">hits</span>
             <button
               type="button"
-              className="btn btn-accent ml-auto py-1"
+              className="btn ml-auto py-1"
               disabled={!p.aoe}
               onClick={p.onScatter}
             >

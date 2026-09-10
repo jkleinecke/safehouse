@@ -60,7 +60,10 @@ export default function GmPanel(props: GmPanelProps) {
   const tabs = MODE_TABS[mode].map((id) => TABS.find((t) => t.id === id)!).filter(Boolean);
 
   return (
-    <aside className="flex w-full shrink-0 flex-col border-t border-edge bg-panel xl:h-full xl:w-80 xl:border-l xl:border-t-0">
+    <aside
+      data-testid="gm-panel"
+      className="flex w-full shrink-0 flex-col border-t border-edge bg-panel xl:h-full xl:w-80 xl:border-l xl:border-t-0"
+    >
       <div className="flex items-center gap-1 border-b border-edge px-2 py-1.5">
         <div className="flex min-w-0 flex-1 flex-wrap gap-1" role="tablist" aria-label="GM tools">
           {tabs.map((t) => (

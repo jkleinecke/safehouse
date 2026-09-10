@@ -69,7 +69,7 @@ export default function GeometryTab({ scene, selected, tool }: GeometryTabProps)
           <div className="flex gap-2">
             <button
               type="button"
-              className="btn btn-accent flex-1 py-1"
+              className="btn flex-1 py-1"
               disabled={points.length < 3}
               onClick={() => saveZone(points)}
             >

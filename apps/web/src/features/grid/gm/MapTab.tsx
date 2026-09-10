@@ -126,7 +126,7 @@ export default function MapTab({ scene }: { scene: Scene }) {
         />
         <button
           type="button"
-          className="btn btn-accent w-full py-1"
+          className="btn w-full py-1"
           disabled={upload.isPending}
           onClick={() => fileRef.current?.click()}
         >

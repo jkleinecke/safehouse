@@ -239,7 +239,7 @@ different.
 | --- | --- | --- | --- |
 | 1 | **Landed 2026-09-09.** Modes replace tabs; toolbar filtered per mode; view controls out of the tool row; FR ids and repeated footers gone; hint line; keyboard shortcuts | `hud/modes.ts` (new), `hud/useGridShortcuts.ts` (new), `hud/Toolbar.tsx`, `gm/GmPanel.tsx`, `store.ts` (`mode`), `GridPage.tsx`, 43 screen files' titles | 1–2 days, no server change |
 | 2 | **Landed 2026-09-10.** Inspector for the selected wall / door / zone / pin / camera / note; Geo list rewritten as list + inspector; pins/cams/notes tabs folded in | `gm/Inspector.tsx` (new), `gm/GeometryTab.tsx` (Layout), `gm/CamerasTab.tsx` (Cams & notes), `gm/GmPanel.tsx`, `store.ts` (`selected`), `stage/pointer.ts` (walls, zones, click-on-nothing), `stage/layers.ts` (the ring) | 2–3 days |
-| 3 | Build checklist; palette redesign with rendered swatches; floors as a canvas control; accent audit | `gm/BuildProgress.tsx` (new), `gm/TilesTab.tsx`, `GridPage.tsx` | 2–3 days |
+| 3 | **Landed 2026-09-10.** Build checklist; palette redesign with rendered swatches; floors as a canvas control; accent audit; confirm on a second click | `gm/BuildProgress.tsx` (new), `gm/swatches.ts` + `gm/Swatch.tsx` (new), `gm/ConfirmButton.tsx` (new), `gm/TilesTab.tsx`, `GridPage.tsx`, the accent buttons across `gm/*` and `hud/MeasurePanel.tsx` | 2–3 days |
 
 Each phase ships on its own; none needs the next. Every existing test that
 asserts on a control still finds it — the controls move, they do not change
@@ -281,6 +281,39 @@ that had already fitted the map, and put every click on the canvas half a
 cell off — a wall you aimed at was missed by the width of its own line. The
 shell is now exactly one viewport tall and the main column scrolls inside
 it, on every campaign page.
+
+**Phase 3 as built.** The checklist is a strip of chips on the canvas, under
+the scene name, in Build mode only: *Map · Grid · Walls · Fog*, each ticked
+from the scene's own data (an image or paint; a grid that has been touched,
+or no image to line it up with; drawn or painted walls; a fog region or a
+brushed reveal), each opening the tab where it is done — the Map chip opens
+Tiles while there is nothing to show yet — and the finish line after them:
+**activate for the table →**, the accent, which becomes *✓ on the table* with
+the TV a click away. The floor chips already lived on the canvas; they stay.
+The palette draws every swatch as the material — a three-by-three cell scene
+with the tile in the middle, every tile of a set laid out on one sheet a
+cell apart, put through the same renderer as the map and read back from the
+GPU once per set, then cached — with its two colours standing in until the
+sheet lands; the
+categories say their whole word; a fresh scene leads with **Draw a room**
+(the room tool, R) and the lead steps aside once there is a floor; Auto's
+explanation is its tooltip; the shapes and the eraser are the toolbar's.
+The accent now belongs to three buttons — *activate*, *start a fight*,
+*reveal* — and every other button on the panel is plain, including the
+door's *open it* and the roller's *apply to next roll*. Deleting a wall, a
+pin, a floor or the whole painted floor takes two clicks, the second on a
+button that has turned red and asks; the browser's `confirm()` dialog is
+gone from the Grid.
+
+Two more things surfaced while walking it through and are fixed with it. A
+scene the GM was staging that goes away under them — deleted from another
+device, or by hand through the API — used to leave "Scene unavailable" with
+no way out but a reload, because the panel that holds *follow the live
+scene* is not drawn without a scene; the Grid now falls back to the live
+scene by itself. And the canvas being unmounted and mounted again (a scene
+gone, then another live) could hand one more update to a stage that had
+already been torn down, which crashed on a destroyed graphics; a disposed
+stage now ignores updates.
 
 ## 6. What I would measure
 

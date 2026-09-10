@@ -338,6 +338,11 @@ class Stage implements StageApi, PointerHost {
   }
 
   update(next: StageSceneState): void {
+    // A stage that has been torn down draws nothing: the hook's update effect
+    // can fire once more with the old stage in its closure while the host is
+    // unmounted and remounted (a scene gone, then another one live), and a
+    // destroyed Graphics has no context left to clear.
+    if (this.disposed) return;
     this.sceneState = next;
     const m = metricsFor(next.scene.grid);
     this.m = m;

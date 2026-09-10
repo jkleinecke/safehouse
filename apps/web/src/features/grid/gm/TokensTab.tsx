@@ -141,7 +141,7 @@ export default function TokensTab({
         </Row>
         <button
           type="button"
-          className="btn btn-accent w-full py-1"
+          className="btn w-full py-1"
           disabled={place.isPending || (kind !== 'prop' && !sourceId)}
           onClick={doPlace}
         >
@@ -178,7 +178,7 @@ export default function TokensTab({
               <span className="mono-label text-faint">{layer.tokenIds.length}</span>
               <button
                 type="button"
-                className={'btn px-2 py-1 ' + (layer.hidden ? 'btn-accent' : '')}
+                className={'btn px-2 py-1 ' + (layer.hidden ? 'border-warn text-warn' : '')}
                 aria-pressed={layer.hidden}
                 data-testid={`layer-toggle-${layer.id}`}
                 title={layer.hidden ? 'Show every token on this layer' : 'Hide every token on this layer'}

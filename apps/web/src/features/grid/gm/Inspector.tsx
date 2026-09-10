@@ -42,6 +42,7 @@ import {
 import { useGridStore } from '../store.js';
 import type { GeometrySelection } from '../types.js';
 import { cameraLensId } from '../useShroud.js';
+import ConfirmButton from './ConfirmButton.js';
 import { Empty, inputCls, Num, Row } from './ui.js';
 import { metres } from './GeometryTab.js';
 
@@ -231,11 +232,16 @@ function Endpoints({ a, b, onChange }: { a: Point; b: Point; onChange: (p: { a?:
   );
 }
 
+/** Two clicks: the second is the confirmation (docs/UX_MAP_BUILDER.md §3.6). */
 function DeleteButton({ onClick, label = 'delete' }: { onClick: () => void; label?: string }) {
   return (
-    <button type="button" className="btn py-1 text-danger" data-testid="inspector-delete" onClick={onClick}>
-      {label}
-    </button>
+    <ConfirmButton
+      label={label}
+      confirmLabel={`${label} — sure?`}
+      onConfirm={onClick}
+      className="btn py-1"
+      testId="inspector-delete"
+    />
   );
 }
 
@@ -284,7 +290,7 @@ function DoorFields({
       <div className="flex gap-2">
         <button
           type="button"
-          className={'btn flex-1 py-1 ' + (door.open ? '' : 'btn-accent')}
+          className="btn flex-1 py-1"
           aria-pressed={door.open}
           data-testid="door-open"
           onClick={() => doorOp.mutate({ doorId: door.id, op: door.open ? 'close' : 'open' })}

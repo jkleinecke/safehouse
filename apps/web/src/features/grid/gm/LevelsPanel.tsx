@@ -16,6 +16,7 @@
 import { useState } from 'react';
 import type { Scene } from '@safehouse/contracts';
 import { GROUND_LEVEL_NAME } from '@safehouse/rules';
+import ConfirmButton from './ConfirmButton.js';
 import { useSetSceneLevels } from '../api.js';
 import { useGridStore } from '../store.js';
 
@@ -69,23 +70,21 @@ export default function LevelsPanel({ scene }: LevelsPanelProps) {
                 {name}
               </button>
               {i > 0 && (
-                <button
-                  type="button"
-                  data-testid={`remove-level-${i}`}
+                <ConfirmButton
+                  label="×"
+                  confirmLabel="remove?"
+                  testId={`remove-level-${i}`}
                   disabled={busy}
                   title="Remove this floor and everything painted on it"
-                  onClick={() => {
-                    if (!window.confirm(`Remove “${name}” and everything painted on it?`)) return;
+                  className="mono-label rounded border border-edge px-2 py-1 disabled:opacity-40"
+                  onConfirm={() => {
                     // Drop the GM back a floor if they were standing on the one
                     // that just went, rather than leaving them on an index that
                     // no longer exists.
                     if (activeLevel >= i) setActiveLevel(Math.max(0, i - 1));
                     void write(upper.filter((_, j) => j !== i - 1).map((l) => ({ id: l.id, name: l.name })));
                   }}
-                  className="mono-label rounded border border-edge px-2 py-1 text-danger disabled:opacity-40"
-                >
-                  ×
-                </button>
+                />
               )}
             </div>
           );

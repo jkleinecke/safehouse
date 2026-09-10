@@ -99,7 +99,7 @@ export default function FogTab({ scene, commands }: { scene: Scene; commands: Gr
         <div className="flex gap-2">
           <button
             type="button"
-            className="btn btn-accent flex-1 py-1"
+            className="btn flex-1 py-1"
             disabled={points.length < 3}
             onClick={() => save(points)}
             title="Save the clicked vertices as a polygon"

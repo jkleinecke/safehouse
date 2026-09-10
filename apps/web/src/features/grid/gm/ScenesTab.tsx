@@ -80,7 +80,7 @@ export default function ScenesTab({
                 </button>
                 <button
                   type="button"
-                  className="btn py-1"
+                  className={'btn py-1 ' + (isActive ? '' : 'btn-accent')}
                   disabled={isActive || activate.isPending}
                   onClick={() => activate.mutate(s.id)}
                   title="Push this scene to players and the TV"
@@ -170,7 +170,7 @@ export default function ScenesTab({
         />
         <button
           type="button"
-          className="btn btn-accent w-full py-1"
+          className="btn w-full py-1"
           disabled={!name.trim() || create.isPending}
           onClick={() =>
             create.mutate(

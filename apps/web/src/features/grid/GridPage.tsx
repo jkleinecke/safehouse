@@ -26,6 +26,7 @@ import {
   useScenes,
   usePaintTiles,
   useTilesets,
+  useActivateScene,
   tileDefsFrom,
   TileStrokeBuffer,
 } from './api.js';
@@ -35,6 +36,7 @@ import { addCamera, addDoor, addNote, addPin, addWall, tileDoorOpen } from './ge
 import GmPanel from './gm/GmPanel.js';
 import MeasurePanel from './hud/MeasurePanel.js';
 import Toolbar, { ViewControls } from './hud/Toolbar.js';
+import BuildProgress from './gm/BuildProgress.js';
 import { useGridShortcuts } from './hud/useGridShortcuts.js';
 import { composeStageState, resolveSceneId } from './hydration.js';
 import {
@@ -111,6 +113,15 @@ export default function GridPage() {
   );
 
   const sceneQuery = useScene(sceneId);
+  // The scene a GM was staging can go away under them — deleted from another
+  // device, or by hand through the API. Falling back to the live scene beats
+  // "Scene unavailable" with no way out but a reload, because the panel that
+  // holds "follow the live scene" is not drawn without a scene.
+  const viewSceneGone = sceneQuery.isError && store.viewSceneId !== null;
+  const { setViewSceneId } = store;
+  useEffect(() => {
+    if (viewSceneGone) setViewSceneId(null);
+  }, [viewSceneGone, setViewSceneId]);
   const tokensQuery = useSceneTokens(sceneId);
   useGridLiveSync(sceneId);
   useRefetchOnReconnect(campaignId, sceneId);
@@ -326,6 +337,7 @@ export default function GridPage() {
   // -- stage callbacks ------------------------------------------------------
 
   const [focusNotice, setFocusNotice] = useState<string | null>(null);
+  const activateScene = useActivateScene();
   const apiRef = useRef<StageApi | null>(null);
 
   const callbacks: StageCallbacks = useMemo(
@@ -683,6 +695,31 @@ export default function GridPage() {
                   ),
                 )}
               </div>
+            )}
+            {/*
+              The build checklist (docs/UX_MAP_BUILDER.md §3.4), Build mode only:
+              what is done, what is left, and the finish line — activate — where
+              the GM is already looking.
+            */}
+            {isGm && scene && campaignId && store.mode === 'build' && (
+              <BuildProgress
+                scene={scene}
+                campaignId={campaignId}
+                activeSceneId={activeSceneId}
+                activating={activateScene.isPending}
+                onStep={(tab) => {
+                  store.setGmTab(tab);
+                  store.openGmPanel();
+                }}
+                onActivate={() =>
+                  activateScene.mutate(scene.id, {
+                    onSuccess: () => {
+                      setFocusNotice('scene pushed to the table');
+                      window.setTimeout(() => setFocusNotice(null), 2400);
+                    },
+                  })
+                }
+              />
             )}
             {focusNotice && <span className="chip bg-panel/90 text-cyan">{focusNotice}</span>}
             {doorNotice && (
