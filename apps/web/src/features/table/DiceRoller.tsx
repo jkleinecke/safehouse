@@ -189,7 +189,7 @@ export default function DiceRoller({ campaignId }: { campaignId: string }) {
             max={60}
             value={pool}
             onChange={(e) => setPool(Math.max(0, Math.min(60, Number(e.target.value) || 0)))}
-            className={`${inputCls} w-24 font-label text-xl`}
+            className={`${inputCls} h-9 w-24 py-0 font-label text-lg`}
           />
         </label>
 
@@ -203,16 +203,19 @@ export default function DiceRoller({ campaignId }: { campaignId: string }) {
           </select>
         </label>
 
-        <button
-          type="button"
-          className={'chip self-center ' + (unfolded ? 'border-cyan text-cyan' : 'border-edge-bright text-dim')}
-          aria-expanded={unfolded}
-          data-testid="roller-more"
-          onClick={() => setMore((v) => !v)}
-          title="Limit and who sees the roll"
-        >
-          {summary || 'limit · visibility'} {unfolded ? '▴' : '▾'}
-        </button>
+        <div className="flex flex-col gap-1">
+          <span className="mono-label">Options</span>
+          <button
+            type="button"
+            className={'btn px-3 py-1 normal-case tracking-normal ' + (unfolded ? 'border-cyan text-cyan' : 'text-dim')}
+            aria-expanded={unfolded}
+            data-testid="roller-more"
+            onClick={() => setMore((v) => !v)}
+            title="Limit and who sees the roll"
+          >
+            {summary || 'limit · visibility'} {unfolded ? '▴' : '▾'}
+          </button>
+        </div>
 
         <div className="flex gap-2">
           <button

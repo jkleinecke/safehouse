@@ -99,9 +99,14 @@ export default function NewPagePrompt({ campaignId, seedTitle }: NewPagePromptPr
         {ask.isPending && <Spinner label="drafting" />}
       </div>
 
-      <div className="mt-1.5 flex gap-2">
+      {/*
+        The brief on its own line, the kind and the button on the next: three
+        controls in a 300 px column truncated both the placeholder and the
+        kind (docs/UX_SITE.md, Alignment).
+      */}
+      <div className="mt-1.5 flex flex-wrap gap-2">
         <input
-          className={inputClass}
+          className={`${inputClass} basis-full`}
           value={brief}
           onChange={(e) => setBrief(e.target.value)}
           placeholder="a ganger bar on the docks the team keeps returning to"
@@ -115,7 +120,7 @@ export default function NewPagePrompt({ campaignId, seedTitle }: NewPagePromptPr
           }}
         />
         <select
-          className={`${inputClass} w-auto`}
+          className={`${inputClass} w-auto flex-1`}
           value={kind}
           onChange={(e) => setKind(e.target.value)}
           aria-label="Kind for the described page"

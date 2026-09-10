@@ -105,7 +105,7 @@ export default function Toolbar(props: ToolbarProps) {
                   aria-pressed={props.mode === m.id}
                   onClick={() => props.onMode(m.id)}
                   className={
-                    'rounded px-2 py-1 font-label text-[0.7rem] uppercase tracking-wide ' +
+                    'min-h-9 rounded px-2 py-1 font-label text-[0.7rem] uppercase tracking-wide ' +
                     (props.mode === m.id ? 'bg-raised text-cyan' : 'text-faint hover:text-ink')
                   }
                 >

@@ -96,6 +96,29 @@ the hint line broke into one word per line down the left of the map. The
 row wraps now, the toolbar may take the full width, and the hint line is
 for screens with room for it.
 
+### Alignment — twelve input heights, four button heights, and every row its own rule
+
+Looked at closely, most rows were ragged. The app had twelve different
+input heights (`py-0.5` to `py-2`, `text-xs` to `text-sm`), four button
+heights, and chips at a fifth; a row of them was aligned to the bottom on
+one screen, the centre on another, and the baseline on a third. Where a
+label sat above each control — the Generator's *Archetype · This archetype
+· Output* row — the three labels landed at three different heights, because
+the select, the buttons and the pills under them were three different
+sizes and the row aligned their bottoms.
+
+One rule now, in the stylesheet: a field, a select and a button are
+2.25 rem tall (2.5 rem on a touch screen), so a row of them lines up and
+the labels above them line up, on every screen, without each screen
+aligning it by hand. A chip is the other kind of thing — a badge or a
+toggle, the smaller pill — and where a row mixes the two on purpose (the
+tracker's four setting toggles beside *Start the fight*) they are centred
+and a rule stands between them, so the difference reads as deliberate. The
+rows that mixed kinds by accident were made one kind: the Generator's
+*Output* pills are a segmented pair of buttons, the roller's fold is a
+labelled column like *Pool* and *Edge*, the Grid's mode switch is the same
+height as the tools beside it.
+
 ### The landing card
 
 Three tabs — *Pair this device · Start a campaign · Paste a token* — wrapped

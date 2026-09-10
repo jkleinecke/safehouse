@@ -229,16 +229,21 @@ export default function GeneratePanel({
 
           <Field label="Output">
             <span className="flex gap-1.5">
+              {/*
+                A segmented pair of buttons, not two pills: beside a select
+                and two buttons in a labelled row, a pill put this label
+                eight pixels below the others (docs/UX_SITE.md, Alignment).
+              */}
               <button
-                className={`chip cursor-pointer ${mode === 'npc' ? 'border-cyan text-cyan' : 'text-dim'}`}
+                className={`btn px-2.5 py-1.5 ${mode === 'npc' ? 'border-cyan text-cyan' : 'text-dim'}`}
+                aria-pressed={mode === 'npc'}
                 onClick={() => setMode('npc')}
               >
                 one NPC
               </button>
               <button
-                className={`chip cursor-pointer ${
-                  mode === 'gruntGroup' ? 'border-cyan text-cyan' : 'text-dim'
-                }`}
+                className={`btn px-2.5 py-1.5 ${mode === 'gruntGroup' ? 'border-cyan text-cyan' : 'text-dim'}`}
+                aria-pressed={mode === 'gruntGroup'}
                 onClick={() => setMode('gruntGroup')}
               >
                 grunt group

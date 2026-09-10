@@ -156,7 +156,7 @@ export default function Tracker({ campaignId }: TrackerProps) {
             ))}
           </select>
         ) : (
-          <span className="mono-label text-cyan">{encounter?.name ?? 'No encounter'}</span>
+          <span className="mono-label text-cyan">{encounter?.name ?? 'No fight'}</span>
         )}
         <span className="mono-label text-faint">{phaseLabel(phase, passLabel(encounter))}</span>
         {acting && live && (
@@ -166,7 +166,14 @@ export default function Tracker({ campaignId }: TrackerProps) {
           </span>
         )}
         {isGm && (
-          <div className="ml-auto flex flex-wrap items-center gap-1.5">
+          <div className="ml-auto flex flex-wrap items-center gap-3">
+            {/*
+              Two kinds of thing, kept apart (docs/UX_SITE.md, Alignment): the
+              settings are chips, the actions are buttons, and a rule stands
+              between the groups — at the start of the actions' own line when
+              the row wraps, so the split survives a narrow screen.
+            */}
+            <span className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Tracker settings">
             <button
               type="button"
               className={`chip ${manageOpen ? 'border-cyan text-cyan' : 'border-edge-bright text-faint'}`}
@@ -217,6 +224,15 @@ export default function Tracker({ campaignId }: TrackerProps) {
                 hints {hints.enabled ? 'on' : 'off'}
               </button>
             )}
+            </>
+            )}
+            </span>
+            {encounterId && (
+            <span
+              className="flex flex-wrap items-center gap-1.5 border-l border-edge pl-3"
+              role="group"
+              aria-label="Fight actions"
+            >
             {!live && (
               <button
                 type="button"
@@ -285,7 +301,7 @@ export default function Tracker({ campaignId }: TrackerProps) {
                 </button>
               </>
             )}
-            </>
+            </span>
             )}
           </div>
         )}

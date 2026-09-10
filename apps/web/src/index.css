@@ -130,8 +130,35 @@ body {
   a.chip {
     min-height: 1.75rem;
   }
+
+  /*
+    Alignment (docs/UX_SITE.md): one height for the things that sit in a row.
+    A field, a select and a button are 2.25rem tall, so a row of them lines
+    up — and the labels above them line up — without each screen aligning it
+    by hand; before this the app had twelve input heights and four button
+    heights, and every row picked its own rule. A chip is the other kind of
+    thing: a badge or a toggle, the smaller pill. A row that mixes the two
+    centres them and puts a rule between them, so the difference reads as
+    deliberate.
+  */
+  .btn,
+  select,
+  textarea,
+  input:where(
+      :not([type='checkbox']):not([type='radio']):not([type='color']):not([type='file']):not(
+          [type='range']
+        ):not([type='hidden'])
+    ) {
+    min-height: 2.25rem;
+  }
   @media (pointer: coarse) {
-    .btn {
+    .btn,
+    select,
+    input:where(
+        :not([type='checkbox']):not([type='radio']):not([type='color']):not([type='file']):not(
+            [type='range']
+          ):not([type='hidden'])
+      ) {
       min-height: 2.5rem;
     }
     button.chip,
