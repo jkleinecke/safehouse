@@ -92,6 +92,8 @@ export const PIER23_DOORS: Door[] = [
     a: { x: 0, y: 6 },
     b: { x: 0, y: 10 },
     open: false,
+    // Locked (FR9.24): a runner's hand on it from inside gets "that door is locked".
+    locked: true,
     note: 'Cargo roller door onto the pier. Chained on the outside — the chain is the lock.',
   },
   {
@@ -99,6 +101,8 @@ export const PIER23_DOORS: Door[] = [
     a: { x: 8, y: 8 },
     b: { x: 8, y: 11 },
     open: true,
+    // Jammed, not locked: the players can shut it and open it again themselves.
+    locked: false,
     note: 'Sliding freight door between dock and main floor, jammed half open. It screams if forced further.',
   },
   {
@@ -106,6 +110,8 @@ export const PIER23_DOORS: Door[] = [
     a: { x: 24, y: 15 },
     b: { x: 24, y: 16 },
     open: false,
+    // The maglock is engaged until the GM unlocks it (Ratchet's keycard, a decker, a breaching charge).
+    locked: true,
     note: 'Office door, cheap maglock. Ratchet has the only working keycard.',
   },
 ];

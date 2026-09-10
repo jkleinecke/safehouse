@@ -34,7 +34,8 @@
  * `assets/png.ts` (the stdlib PNG writer that map is drawn with).
  */
 import { unlink } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { and, eq, inArray, notExists, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { attachments, campaigns, characters, memberships, users, type Db } from '@safehouse/db';
@@ -57,7 +58,7 @@ import {
 import { demoRun } from './assets/run.js';
 import { PARTY, WHISPERS_DRAMS, WHISPERS_FOCUS, WHISPERS_SPIRIT } from './assets/runners.js';
 
-const CAMPAIGN_NAME = 'Static on the Line';
+export const CAMPAIGN_NAME = 'Static on the Line';
 const INGAME_DATE = '2076-06-12';
 
 /** The run itself (FR5.5) — content and rationale in `assets/run.ts`. */
@@ -128,7 +129,7 @@ function multipart(fields: Record<string, string>, file: Buffer, mime: string, f
  * throwaway users the previous seed minted. FK cascades handle the rest;
  * users are only removed once nothing else references them.
  */
-async function wipe(db: Db): Promise<number> {
+export async function wipe(db: Db): Promise<number> {
   const doomed = await db.select({ id: campaigns.id }).from(campaigns).where(eq(campaigns.name, CAMPAIGN_NAME));
   if (doomed.length === 0) return 0;
   const ids = doomed.map((c) => c.id);
@@ -136,7 +137,14 @@ async function wipe(db: Db): Promise<number> {
   const files = await db.select({ path: attachments.path }).from(attachments).where(inArray(attachments.campaignId, ids));
   const members = await db.select({ userId: memberships.userId }).from(memberships).where(inArray(memberships.campaignId, ids));
 
-  await db.delete(campaigns).where(inArray(campaigns.id, ids));
+  try {
+    await db.delete(campaigns).where(inArray(campaigns.id, ids));
+  } catch (err) {
+    // Every table hangs off campaigns by cascade, so this delete is where a
+    // damaged data directory shows up first — and drizzle's own message is
+    // just the SQL. Keep the cause; `describeFailure` prints the chain.
+    throw new Error(`wiping the previous "${CAMPAIGN_NAME}" campaign failed`, { cause: err });
+  }
 
   for (const f of files) {
     await unlink(join(filesDir(), f.path)).catch(() => undefined);
@@ -172,7 +180,7 @@ interface Joined {
   userId: string;
 }
 
-async function seed(app: FastifyInstance): Promise<void> {
+export async function seed(app: FastifyInstance): Promise<void> {
   const inj = app as unknown as Injectable;
   const wiped = await wipe(app.db);
   if (wiped > 0) console.log(`wiped         ${wiped} previous "${CAMPAIGN_NAME}" campaign(s)`);
@@ -407,22 +415,62 @@ async function seed(app: FastifyInstance): Promise<void> {
   console.log('');
 }
 
-// `getDb()` creates `DATA_DIR` itself now, so a fresh clone (where `data/` is
-// gitignored and therefore absent) boots without a mkdir here.
-const app = await buildApp({ webDist: false, logger: false });
-let exitCode = 0;
-try {
-  await seed(app);
-  console.log('seed:demo complete');
-} catch (err) {
-  console.error(`seed:demo failed — ${(err as Error).message}`);
-  exitCode = 1;
+/**
+ * The failure, all the way down.
+ *
+ * A drizzle error's message is the SQL that failed and nothing else; the
+ * reason — a foreign key, a damaged data directory — is in `cause`, and the
+ * seed used to print only the top line. That reported a wipe on a broken
+ * directory as "Failed query: delete from campaigns", which read as a bug in
+ * the wipe and cost an evening. Print the chain, and name the one failure a
+ * GM can meet at home: a PGlite directory with relation files missing, which
+ * no wipe can fix and a fresh DATA_DIR can.
+ */
+export function describeFailure(err: unknown): string {
+  const lines: string[] = [];
+  let e: unknown = err;
+  for (let depth = 0; e !== undefined && e !== null && depth < 6; depth += 1) {
+    const msg = e instanceof Error ? e.message : String(e);
+    lines.push(depth === 0 ? msg : `  because: ${msg}`);
+    e = e instanceof Error ? e.cause : undefined;
+  }
+  const text = lines.join('\n');
+  if (/could not open file|No such file or directory/i.test(text)) {
+    lines.push(
+      '  This PGlite data directory is damaged (a relation file the database expects is gone).',
+      '  No seed can repair it: point DATA_DIR at a fresh directory, or restore it from a backup.',
+    );
+  }
+  return lines.join('\n');
 }
-await app.close();
-// The whole point of this script is the directory it leaves behind for
-// `pnpm dev:server` to open, and `app.close()` does not touch the database.
-// Checkpoint and close it before exiting — see src/shutdown.ts for what an
-// unclean hand-off actually costs. Failure paths close too: a half-written
-// seed is exactly when the next process most needs a consistent directory.
-await closeDatabase(app.db);
-process.exit(exitCode);
+
+/**
+ * Run only when invoked as a script (`pnpm seed:demo`, `tsx seed/demo.ts`).
+ * Importing this module — the tests do — must not seed anything.
+ */
+const samePath = (a: string, b: string): boolean =>
+  process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+const invokedDirectly =
+  process.argv[1] !== undefined && samePath(resolve(process.argv[1]), fileURLToPath(import.meta.url));
+
+if (invokedDirectly) {
+  // `getDb()` creates `DATA_DIR` itself now, so a fresh clone (where `data/` is
+  // gitignored and therefore absent) boots without a mkdir here.
+  const app = await buildApp({ webDist: false, logger: false });
+  let exitCode = 0;
+  try {
+    await seed(app);
+    console.log('seed:demo complete');
+  } catch (err) {
+    console.error(`seed:demo failed — ${describeFailure(err)}`);
+    exitCode = 1;
+  }
+  await app.close();
+  // The whole point of this script is the directory it leaves behind for
+  // `pnpm dev:server` to open, and `app.close()` does not touch the database.
+  // Checkpoint and close it before exiting — see src/shutdown.ts for what an
+  // unclean hand-off actually costs. Failure paths close too: a half-written
+  // seed is exactly when the next process most needs a consistent directory.
+  await closeDatabase(app.db);
+  process.exit(exitCode);
+}

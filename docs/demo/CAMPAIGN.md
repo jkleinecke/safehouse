@@ -105,8 +105,10 @@ stdlib PNG writer (`node:zlib` supplies the deflate stream `IDAT` wants), and
 wall, door and zone geometry — so the picture and the collision data cannot
 drift apart.
 
-Walls, three doors (the chained roller door, the jammed-open freight door, the
-office maglock), six cover/hazard zones and four map pins ship with it.
+Walls, three doors (the chained roller door and the office maglock, both
+locked until the GM says otherwise; the jammed-open freight door, which the
+runners can shut and open themselves), six cover/hazard zones and four map
+pins ship with it.
 
 **Four named fog regions**, and only the first is revealed:
 
