@@ -408,7 +408,7 @@ export default function GeneratePanel({
               templateId={resultTemplate.id}
               templateName={resultTemplate.name}
               gen={resultTemplate.gen}
-              addLabel="add squad to encounter"
+              addLabel="add squad to the fight"
               onAddToEncounter={() =>
                 onAddEntry(
                   entryFromGroup(group, {

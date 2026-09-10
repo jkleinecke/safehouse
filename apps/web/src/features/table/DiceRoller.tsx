@@ -28,6 +28,30 @@ import { takeLegacyMacros } from './macros.js';
 
 const LIMIT_KINDS: LimitKind[] = ['physical', 'mental', 'social', 'accuracy', 'force'];
 type EdgeChoice = '' | 'push_pre' | 'push_post' | 'second_chance';
+type Visibility = 'public' | 'gm' | 'gm_owner';
+
+const VISIBILITY_WORD: Record<Visibility, string> = {
+  public: 'public',
+  gm: 'GM only',
+  gm_owner: 'behind the screen',
+};
+
+/**
+ * What the folded controls are set to, for the chip that unfolds them — so a
+ * limit or a private roll is never hidden behind "more" without saying so
+ * (docs/UX_SITE.md, Chunking). Empty when everything is at its default.
+ */
+export function moreSummary(
+  limitOn: boolean,
+  limitKind: LimitKind,
+  limitValue: number,
+  visibility: Visibility,
+): string {
+  const parts: string[] = [];
+  if (limitOn) parts.push(`${limitKind} limit ${limitValue}`);
+  if (visibility !== 'public') parts.push(VISIBILITY_WORD[visibility]);
+  return parts.join(' · ');
+}
 
 export default function DiceRoller({ campaignId }: { campaignId: string }) {
   const session = getSession();
@@ -38,8 +62,13 @@ export default function DiceRoller({ campaignId }: { campaignId: string }) {
   const [limitKind, setLimitKind] = useState<LimitKind>('physical');
   const [limitValue, setLimitValue] = useState(4);
   const [edge, setEdge] = useState<EdgeChoice>('');
-  const [visibility, setVisibility] = useState<'public' | 'gm' | 'gm_owner'>('public');
+  const [visibility, setVisibility] = useState<Visibility>('public');
   const [flash, setFlash] = useState<string | null>(null);
+  // Limit and visibility are the two controls a roll rarely needs; they fold
+  // away behind one chip and come out when something is set on them.
+  const [more, setMore] = useState(false);
+  // A macro is named right here, on the strip, not in a browser prompt.
+  const [naming, setNaming] = useState<string | null>(null);
 
   const rack = useMacros(campaignId);
   const saveRack = useMacroMutation(campaignId);
@@ -102,9 +131,9 @@ export default function DiceRoller({ campaignId }: { campaignId: string }) {
     });
   };
 
-  const saveMacro = () => {
-    const name = window.prompt('Macro name?', `Pool ${pool}`);
-    if (!name?.trim()) return;
+  const saveMacro = (name: string) => {
+    setNaming(null);
+    if (!name.trim()) return;
     const macro: DiceMacro = {
       id: newMacroId(),
       name: name.trim(),
@@ -141,9 +170,16 @@ export default function DiceRoller({ campaignId }: { campaignId: string }) {
 
   const inputCls =
     'rounded-md border border-edge bg-deck px-2 py-1.5 text-sm outline-none focus:border-cyan-dim';
+  const summary = moreSummary(limitOn, limitKind, limitValue, visibility);
+  const unfolded = more || summary !== '';
 
   return (
     <section className="border-t border-edge bg-panel/60 p-3" aria-label="Dice roller">
+      {/*
+        Pool and Roll are the whole job, so they are the large things; Edge is
+        a decision made at the table, so it stays in view; limit and visibility
+        are set once in a while and fold away (docs/UX_SITE.md, Chunking).
+      */}
       <div className="flex flex-wrap items-end gap-2">
         <label className="flex flex-col gap-1">
           <span className="mono-label">Pool</span>
@@ -153,43 +189,8 @@ export default function DiceRoller({ campaignId }: { campaignId: string }) {
             max={60}
             value={pool}
             onChange={(e) => setPool(Math.max(0, Math.min(60, Number(e.target.value) || 0)))}
-            className={`${inputCls} w-20 font-label text-lg`}
+            className={`${inputCls} w-24 font-label text-xl`}
           />
-        </label>
-
-        <label className="flex flex-col gap-1">
-          <span className="mono-label">
-            <input
-              type="checkbox"
-              checked={limitOn}
-              onChange={(e) => setLimitOn(e.target.checked)}
-              className="mr-1 accent-[#2fe6ff]"
-            />
-            Limit
-          </span>
-          <div className="flex gap-1">
-            <select
-              value={limitKind}
-              onChange={(e) => setLimitKind(e.target.value as LimitKind)}
-              disabled={!limitOn}
-              className={`${inputCls} disabled:opacity-40`}
-            >
-              {LIMIT_KINDS.map((k) => (
-                <option key={k} value={k}>
-                  {k}
-                </option>
-              ))}
-            </select>
-            <input
-              type="number"
-              min={0}
-              max={30}
-              value={limitValue}
-              onChange={(e) => setLimitValue(Math.max(0, Number(e.target.value) || 0))}
-              disabled={!limitOn}
-              className={`${inputCls} w-16 disabled:opacity-40`}
-            />
-          </div>
         </label>
 
         <label className="flex flex-col gap-1">
@@ -202,31 +203,116 @@ export default function DiceRoller({ campaignId }: { campaignId: string }) {
           </select>
         </label>
 
-        <label className="flex flex-col gap-1">
-          <span className="mono-label">Visibility</span>
-          <select
-            value={visibility}
-            onChange={(e) => setVisibility(e.target.value as typeof visibility)}
-            className={inputCls}
-          >
-            <option value="public">public</option>
-            {isGm && <option value="gm">GM only</option>}
-            <option value="gm_owner">behind the screen</option>
-          </select>
-        </label>
+        <button
+          type="button"
+          className={'chip self-center ' + (unfolded ? 'border-cyan text-cyan' : 'border-edge-bright text-dim')}
+          aria-expanded={unfolded}
+          data-testid="roller-more"
+          onClick={() => setMore((v) => !v)}
+          title="Limit and who sees the roll"
+        >
+          {summary || 'limit · visibility'} {unfolded ? '▴' : '▾'}
+        </button>
 
         <div className="flex gap-2">
-          <button type="button" className="btn btn-accent" onClick={roll} disabled={pool <= 0 && !edge}>
+          <button
+            type="button"
+            className="btn btn-accent px-5"
+            onClick={roll}
+            disabled={pool <= 0 && !edge}
+          >
             Roll {pool}d6
           </button>
           <button type="button" className="btn" onClick={buy} disabled={pool < 4} title="4 dice : 1 hit">
             Buy {buyHits(pool)}
           </button>
-          <button type="button" className="btn" onClick={saveMacro} title="Save as macro">
-            ★
-          </button>
+          {naming === null ? (
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setNaming(`Pool ${pool}`)}
+              title="Save this roll as a macro"
+              aria-label="Save as macro"
+            >
+              ★
+            </button>
+          ) : (
+            <form
+              className="flex items-center gap-1"
+              onSubmit={(e) => {
+                e.preventDefault();
+                saveMacro(naming);
+              }}
+            >
+              <input
+                autoFocus
+                aria-label="Macro name"
+                className={`${inputCls} w-36`}
+                value={naming}
+                onChange={(e) => setNaming(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') setNaming(null);
+                }}
+              />
+              <button type="submit" className="btn" disabled={!naming.trim()}>
+                save
+              </button>
+            </form>
+          )}
         </div>
       </div>
+
+      {unfolded && (
+        <div className="mt-2 flex flex-wrap items-end gap-2" data-testid="roller-more-panel">
+          <label className="flex flex-col gap-1">
+            <span className="mono-label">
+              <input
+                type="checkbox"
+                checked={limitOn}
+                onChange={(e) => setLimitOn(e.target.checked)}
+                className="mr-1 accent-[#2fe6ff]"
+              />
+              Limit
+            </span>
+            <div className="flex gap-1">
+              <select
+                value={limitKind}
+                onChange={(e) => setLimitKind(e.target.value as LimitKind)}
+                disabled={!limitOn}
+                className={`${inputCls} disabled:opacity-40`}
+              >
+                {LIMIT_KINDS.map((k) => (
+                  <option key={k} value={k}>
+                    {k}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="number"
+                min={0}
+                max={30}
+                value={limitValue}
+                onChange={(e) => setLimitValue(Math.max(0, Number(e.target.value) || 0))}
+                disabled={!limitOn}
+                className={`${inputCls} w-16 disabled:opacity-40`}
+              />
+            </div>
+          </label>
+
+          <label className="flex flex-col gap-1">
+            <span className="mono-label">Visibility</span>
+            <select
+              value={visibility}
+              onChange={(e) => setVisibility(e.target.value as Visibility)}
+              className={inputCls}
+            >
+              <option value="public">public</option>
+              {isGm && <option value="gm">GM only</option>}
+              <option value="gm_owner">behind the screen</option>
+            </select>
+          </label>
+        </div>
+      )}
 
       {macros.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">

@@ -85,7 +85,7 @@ export default function GmSidebar({ campaignId, onShowQr, onShowDisplayQr }: GmS
       </nav>
 
       <div className="border-t border-edge p-3">
-        <button className="btn btn-accent w-full" onClick={onShowQr}>
+        <button className="btn w-full" onClick={onShowQr}>
           Show join QR
         </button>
         {/* Which build is running — the answer to "is my change in here?". */}

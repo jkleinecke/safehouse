@@ -172,7 +172,7 @@ export default function BooksPage() {
   return (
     <GmGuard>
       <div className="p-6">
-        <SectionTitle hint="M11 — the table's own PDFs, seeded with pnpm seed:books">
+        <SectionTitle hint="the table's own PDFs, seeded with pnpm seed:books">
           Rules library
         </SectionTitle>
         <h1 className="mt-1 text-lg font-semibold">Books</h1>

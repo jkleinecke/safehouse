@@ -41,7 +41,7 @@ export default function EncounterBuilder({
   const genNpc = useGenerateNpc();
   const genGroup = useGenerateGroup();
 
-  const [name, setName] = useState('New encounter');
+  const [name, setName] = useState('New fight');
   const [sceneId, setSceneId] = useState<string>('');
   const [savedId, setSavedId] = useState<string | null>(null);
 
@@ -132,7 +132,7 @@ export default function EncounterBuilder({
             disabled={entries.length === 0 || create.isPending}
             onClick={save}
           >
-            {create.isPending ? 'saving…' : 'save encounter'}
+            {create.isPending ? 'saving…' : 'save the fight'}
           </button>
           {savedId && (
             <button

@@ -59,7 +59,7 @@ export default function MonitorRow({
             key={i}
             type="button"
             aria-pressed={i < filled}
-            className={`h-4.5 w-4.5 border ${i < filled ? t.filled : t.empty} ${
+            className={`h-4.5 w-4.5 border pointer-coarse:h-6 pointer-coarse:w-6 ${i < filled ? t.filled : t.empty} ${
               (i + 1) % 3 === 0 ? 'mr-1.5' : 'mr-px'
             } rounded-[2px] active:scale-90`}
             onClick={() => onSetFilled(monitorTapTarget(filled, i))}

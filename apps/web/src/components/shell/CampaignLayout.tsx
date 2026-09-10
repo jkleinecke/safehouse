@@ -84,7 +84,7 @@ export default function CampaignLayout() {
           />
           {isGm && (
             <button
-              className="btn btn-accent px-3 py-1.5"
+              className="btn px-3 py-1.5"
               onClick={() => setQr({ open: true, role: 'player' })}
               aria-label="Show join QR"
             >

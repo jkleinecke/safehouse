@@ -257,7 +257,7 @@ export default function Landing() {
 
   return (
     <main className="flex min-h-dvh flex-col items-center justify-center bg-ground p-6 text-ink">
-      <div className="panel w-full max-w-md p-8">
+      <div className="panel w-full max-w-lg p-8">
         <div className="text-center">
           <div className="font-label text-xl tracking-[0.35em] text-cyan">SAFEHOUSE</div>
           <p className="mt-2 text-sm text-dim">The place the team plans the run.</p>

@@ -129,7 +129,7 @@ export default function EdgeControl({
         <div
           className="flex flex-wrap items-center gap-1.5 pl-9"
           role="group"
-          aria-label="Edge actions in this encounter"
+          aria-label="Edge actions in this fight"
         >
           {(['seize_initiative', 'blitz'] as const).map((action) => (
             <button

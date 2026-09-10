@@ -48,7 +48,7 @@ export default function FixerDock({ campaignId, sessionLive }: FixerDockProps) {
   if (!open) {
     return (
       <button
-        className="btn btn-accent fixed bottom-4 right-4 z-40 shadow-glow-cyan"
+        className="btn fixed bottom-4 right-4 z-40"
         onClick={toggle}
         aria-label="Open the Fixer"
       >

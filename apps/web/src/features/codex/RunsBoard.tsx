@@ -283,7 +283,7 @@ function RunCard({ run, campaignId, isGm }: { run: RunRecord; campaignId: string
           <ul className="mt-1 flex flex-wrap gap-1.5">
             {(run.opposition ?? []).map((o, i) => (
               <li key={i} className="chip text-dim">
-                {o.label ?? o.encounterId?.slice(0, 8) ?? 'encounter'}
+                {o.label ?? o.encounterId?.slice(0, 8) ?? 'fight'}
               </li>
             ))}
           </ul>

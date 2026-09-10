@@ -215,6 +215,9 @@ different.
 
 ## 4. Beyond the builder — the same laws elsewhere
 
+*Done on 2026-09-10 — see `docs/UX_SITE.md` for the walk over every other
+screen and what changed.*
+
 - **One word for a fight.** The tracker says *fight*, the Generator says
   *encounter*, the Grid says both. Mental Model: pick one for every label a
   GM reads (this document votes *fight*; *encounter* can stay in code).

@@ -24,10 +24,15 @@ export interface CopilotRackProps {
   onOpenChain: () => void;
 }
 
-/** Short chip label: the first word of the row, upper-cased ("ATK", "DEF"). */
-function chipLabel(entry: RackEntry): string {
-  const head = entry.kind || entry.label;
-  return head.slice(0, 4).toUpperCase();
+/**
+ * Chip label: the row's own name, clipped. It used to be the first four
+ * letters of the KIND, upper-cased — which made six skill rolls six chips
+ * that all said "SKIL", with nothing but the pool to tell Pistols from
+ * Sneaking (docs/UX_SITE.md, Similarity and Cognitive Load).
+ */
+export function chipLabel(entry: RackEntry): string {
+  const name = entry.label.trim() || entry.kind;
+  return name.length > 16 ? `${name.slice(0, 15)}…` : name;
 }
 
 export default function CopilotRack({
@@ -56,7 +61,7 @@ export default function CopilotRack({
         <button
           key={entry.key}
           type="button"
-          className="chip border-edge-bright hover:border-cyan hover:text-cyan disabled:opacity-30"
+          className="chip whitespace-nowrap border-edge-bright hover:border-cyan hover:text-cyan disabled:opacity-30"
           disabled={roll.isPending}
           title={`${entry.label} — pool ${entry.pool}${
             entry.limit ? ` (limit ${entry.limit.kind} ${entry.limit.value})` : ''

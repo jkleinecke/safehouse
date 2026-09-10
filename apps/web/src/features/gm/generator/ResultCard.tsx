@@ -80,7 +80,7 @@ export default function ResultCard({
         <span className="ml-auto flex gap-2">
           {onAddToEncounter && (
             <button className="btn px-3 py-1.5" onClick={onAddToEncounter}>
-              {addLabel ?? 'add to encounter'}
+              {addLabel ?? 'add to the fight'}
             </button>
           )}
           <button

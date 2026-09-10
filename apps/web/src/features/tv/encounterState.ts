@@ -139,7 +139,7 @@ export function normalizeTvEncounter(input: unknown): TvEncounter | null {
 
   return {
     id,
-    name: str(body['name']) ?? 'Encounter',
+    name: str(body['name']) ?? 'Fight',
     state: str(body['state']) ?? 'prep',
     turn: num(body['turn']) ?? 0,
     pass: num(body['pass']) ?? 0,

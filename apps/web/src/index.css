@@ -120,4 +120,24 @@ body {
   .btn-accent:hover {
     box-shadow: var(--shadow-glow-cyan);
   }
+
+  /*
+    Fitts's Law (docs/UX_SITE.md): a chip that is a button is a target, not a
+    label. 28 px tall on a desktop, and on a touch screen 36 px — with buttons
+    at 40 px — so a thumb on a phone lands where the eye did.
+  */
+  button.chip,
+  a.chip {
+    min-height: 1.75rem;
+  }
+  @media (pointer: coarse) {
+    .btn {
+      min-height: 2.5rem;
+    }
+    button.chip,
+    a.chip {
+      min-height: 2.25rem;
+      padding-inline: 0.75rem;
+    }
+  }
 }

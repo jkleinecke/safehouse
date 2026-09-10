@@ -641,7 +641,7 @@ export default function GridPage() {
           and cover the notices. A chip that is visible and unclickable is the
           worst of both: the GM can read the offer and nothing happens.
         */}
-        <div className="pointer-events-none absolute inset-x-3 top-3 z-10 flex items-start justify-between gap-2">
+        <div className="pointer-events-none absolute inset-x-3 top-3 z-10 flex flex-wrap items-start justify-between gap-2">
           <Toolbar isGm={isGm} mode={store.mode} tool={store.tool} onMode={store.setMode} onTool={store.setTool} />
 
           <div className="flex shrink-0 flex-col items-end gap-1.5">

@@ -92,7 +92,7 @@ export default function Toolbar(props: ToolbarProps) {
     // canvas's top-left, and as the tool row grew it silently spread under the
     // notice stack in the top-right corner and swallowed its clicks — the
     // take-the-stairs button was on screen, correct, and unpressable.
-    <div className="pointer-events-auto flex min-w-0 flex-col gap-1 rounded-lg border border-edge bg-panel/92 p-1.5 backdrop-blur">
+    <div className="pointer-events-auto flex min-w-0 max-w-full flex-col gap-1 rounded-lg border border-edge bg-panel/92 p-1.5 backdrop-blur">
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
         {props.isGm && (
           <>
@@ -123,7 +123,7 @@ export default function Toolbar(props: ToolbarProps) {
           </Btn>
         ))}
       </div>
-      <p className="mono-label px-1 text-faint" data-testid="tool-hint">
+      <p className="mono-label hidden px-1 text-faint sm:block" data-testid="tool-hint">
         {TOOL_HINTS[props.tool]}
       </p>
     </div>

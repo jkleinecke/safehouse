@@ -100,7 +100,7 @@ export default function SessionList({ campaignId, selectedId, onSelect }: Sessio
                     className="btn px-2.5 py-1"
                     disabled={start.isPending || session.state === 'done'}
                     onClick={() => start.mutate(session.id)}
-                    title="Live mode: presence, log recording, encounter launching"
+                    title="Live mode: presence, log recording, starting fights"
                   >
                     start session
                   </button>
