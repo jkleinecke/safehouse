@@ -60,7 +60,7 @@ export const GM_NAV: readonly GmNavEntry[] = [
   },
   {
     key: 'grid',
-    label: 'Grid',
+    label: 'Map',
     to: '/grid',
     section: 'table',
     blurb: 'The tactical map: tokens, fog, pings, and the GM panel that authors scenes.',
@@ -70,7 +70,7 @@ export const GM_NAV: readonly GmNavEntry[] = [
     label: 'Scenes',
     to: '/gm/scenes',
     section: 'table',
-    blurb: 'Every scene in the campaign — activate one, or open it on the Grid to author it.',
+    blurb: 'Every scene in the campaign — activate one, or open it on the Map to author it.',
   },
   {
     key: 'codex',
@@ -160,7 +160,7 @@ export const PLAYER_NAV: readonly PlayerNavEntry[] = [
     glyph: '⬡',
     blurb: 'Shared roll log and the initiative tracker.',
   },
-  { key: 'grid', label: 'Grid', to: '/grid', glyph: '▦', blurb: 'The tactical map — tokens, fog, pings.' },
+  { key: 'grid', label: 'Map', to: '/grid', glyph: '▦', blurb: 'The tactical map — tokens, fog, pings.' },
   {
     key: 'codex',
     label: 'Codex',

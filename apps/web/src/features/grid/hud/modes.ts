@@ -125,8 +125,8 @@ export const TOOL_HINTS: Record<GridTool, string> = {
   pin: 'Click to drop a pin; it opens in the panel, where you name and link it.',
   camera: 'Click to mount a camera; it opens in the panel, where you aim it. Only you see it.',
   note: 'Click to drop a note only you ever see; it opens in the panel to write on.',
-  tile: 'Drag to paint with the chosen material; Auto reads the square around it.',
+  tile: 'Drag to paint with the chosen material; Auto reads the square, and a second pass picks the next thing that fits.',
   'tile-area': 'Drag a rectangle of floor.',
   'tile-room': 'Drag a rectangle: floor inside, walls around it.',
-  'tile-erase': 'Drag to clear painted squares.',
+  'tile-erase': 'Drag to take the top thing out of each square — a prop first, then the wall, then the floor.',
 };

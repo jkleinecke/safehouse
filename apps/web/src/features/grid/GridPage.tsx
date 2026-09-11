@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import type { Scene, Token } from '@safehouse/contracts';
-import { GROUND_LEVEL_NAME, deriveCharacter } from '@safehouse/rules';
+import { GROUND_LEVEL_NAME, deriveCharacter, levelTiles } from '@safehouse/rules';
 import { useMyCharacterId } from '../../api/campaigns.js';
 import { ApiError } from '../../api/client.js';
 import { getSession } from '../../api/session.js';
@@ -45,11 +45,12 @@ import {
   rangedWeapons,
   type Viewer,
 } from './projection.js';
-import { autoTileFor } from './autoPlace.js';
+import { autoTileFor, topLayerAt } from './autoPlace.js';
 import { roomPlan, roomTileIds } from './roomFill.js';
 import { useCameraCones } from './useCameraCones.js';
 import { useShroud } from './useShroud.js';
 import { useStairOffer } from './useStairs.js';
+import { historyFor, useHistory } from './history.js';
 import { useGridStore } from './store.js';
 import {
   TILE_TOOLS,
@@ -71,7 +72,7 @@ function EmptyState({ title, body }: { title: string; body: string }) {
   return (
     <div className="flex h-full min-h-[50dvh] items-center justify-center p-6">
       <div className="panel max-w-sm p-6 text-center">
-        <div className="mono-label text-cyan">Grid</div>
+        <div className="mono-label text-cyan">Map</div>
         <h1 className="mt-2 text-base font-semibold">{title}</h1>
         <p className="mt-1 text-sm text-dim">{body}</p>
       </div>
@@ -296,7 +297,18 @@ export default function GridPage() {
   // whose scene carries no cameras to begin with.
   const cameraCones = useCameraCones(scene, isGm, viewLevel);
   // Single-key tools and 1–9 for floors (docs/UX_MAP_BUILDER.md §3.3).
-  useGridShortcuts(isGm, 1 + (scene?.levels?.length ?? 0));
+  useGridShortcuts(isGm, 1 + (scene?.levels?.length ?? 0), scene?.id ?? null);
+  // Undo and redo for the toolbar (`history.ts`): the next step each way, for
+  // the scene on screen, and whether one is in flight.
+  const historyPast = useHistory((s) => s.past);
+  const historyFuture = useHistory((s) => s.future);
+  const historyBusy = useHistory((s) => s.busy);
+  const steps = useMemo(
+    () => historyFor(scene?.id),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [historyPast, historyFuture, scene?.id],
+  );
+  const tilesetName = (tilesets ?? []).find((t) => t.id === store.tilesetId)?.name ?? null;
 
   const stageState: StageSceneState | null = useMemo(
     () =>
@@ -425,7 +437,19 @@ export default function GridPage() {
         }
 
         setTileNotice(null);
-        strokeRef.current?.add(scene.id, st.tilesetId, `${col},${row}`, placing, st.activeLevel);
+        const key = `${col},${row}`;
+        // The eraser takes the top thing out of the square — a prop first,
+        // then the wall, then the floor — one pass per layer, never the lot.
+        const top = erase ? topLayerAt(levelTiles(scene, st.activeLevel), key) : undefined;
+        if (erase && top === null) return;
+        strokeRef.current?.add(
+          scene.id,
+          st.tilesetId,
+          key,
+          placing,
+          st.activeLevel,
+          top === undefined || top === null || top === 'all' ? undefined : top,
+        );
       },
       onTileStrokeEnd: () => strokeRef.current?.flush(),
       // -- room / area rectangles (FR9.2) -----------------------------------
@@ -460,12 +484,18 @@ export default function GridPage() {
             clear: false,
           });
         setTileNotice(null);
+        // One step in the history: a room is two strokes, floor then walls,
+        // and one Ctrl+Z should take the whole room.
+        const history = useHistory.getState();
+        history.beginGroup(sceneId, mode === 'room' ? 'draw a room' : 'fill an area');
         void (async () => {
           try {
             await send(plan.floor, floorId);
             if (plan.walls.length > 0 && wallId !== null) await send(plan.walls, wallId);
           } catch {
             setTileNotice('that room did not save — draw it again');
+          } finally {
+            history.endGroup();
           }
         })();
       },
@@ -600,7 +630,7 @@ export default function GridPage() {
   // -- render ---------------------------------------------------------------
 
   if (!campaignId || !session) {
-    return <EmptyState title="No device token" body="Scan the GM's join QR to reach the Grid." />;
+    return <EmptyState title="No device token" body="Scan the GM's join QR to reach the Map." />;
   }
   if (!sceneId) {
     return (
@@ -642,10 +672,28 @@ export default function GridPage() {
           worst of both: the GM can read the offer and nothing happens.
         */}
         <div className="pointer-events-none absolute inset-x-3 top-3 z-10 flex flex-wrap items-start justify-between gap-2 sm:flex-nowrap">
-          <Toolbar isGm={isGm} mode={store.mode} tool={store.tool} onMode={store.setMode} onTool={store.setTool} />
+          <Toolbar
+            isGm={isGm}
+            mode={store.mode}
+            tool={store.tool}
+            onMode={store.setMode}
+            onTool={store.setTool}
+            history={{
+              undoLabel: steps.undo?.label ?? null,
+              redoLabel: steps.redo?.label ?? null,
+              busy: historyBusy,
+              onUndo: () => void useHistory.getState().undo(),
+              onRedo: () => void useHistory.getState().redo(),
+            }}
+          />
 
-          <div className="flex shrink-0 flex-col items-end gap-1.5">
-            <div className="flex items-center gap-1.5">
+          {/*
+            The right column may take at most six tenths of the row and wraps
+            inside itself, so the toolbar always keeps room for its mode switch
+            and cannot be drawn under the view controls.
+          */}
+          <div className="flex min-w-0 max-w-[62%] shrink flex-col items-end gap-1.5">
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
               <ViewControls
                 isGm={isGm}
                 snapEnabled={store.snapEnabled}
@@ -664,6 +712,25 @@ export default function GridPage() {
                 <span className="text-warn">staging</span>
               )}
               </span>
+              {/*
+                Which set the map draws from, where the GM is looking. It was
+                only on the Tiles tab, and a GM two tabs away had no way to
+                tell. Clicking it opens the tab where it is changed.
+              */}
+              {isGm && store.mode === 'build' && tilesetName && (
+                <button
+                  type="button"
+                  data-testid="tileset-chip"
+                  className="chip pointer-events-auto bg-panel/90 text-dim hover:text-ink"
+                  title="The tileset every floor of this scene draws from — change it on the Tiles tab and the map redraws in the new set"
+                  onClick={() => {
+                    store.setGmTab('tiles');
+                    store.openGmPanel();
+                  }}
+                >
+                  set · {tilesetName}
+                </button>
+              )}
             </div>
             {/*
               Which floor is on screen, right on the canvas. The Map tab has the

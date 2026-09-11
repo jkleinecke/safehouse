@@ -196,7 +196,7 @@ export default function SceneCard(props: SceneCardProps) {
           data-testid="open-in-grid"
           title="Draw walls, paint fog and place tokens on the canvas"
         >
-          open in Grid ↗
+          open on the Map ↗
         </Link>
         <span className="mono-label text-faint">
           walls, fog painting and tokens are canvas work — this screen is the list

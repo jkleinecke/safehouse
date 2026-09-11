@@ -244,6 +244,8 @@ screen and what changed.*
 | 2 | **Landed 2026-09-10.** Inspector for the selected wall / door / zone / pin / camera / note; Geo list rewritten as list + inspector; pins/cams/notes tabs folded in | `gm/Inspector.tsx` (new), `gm/GeometryTab.tsx` (Layout), `gm/CamerasTab.tsx` (Cams & notes), `gm/GmPanel.tsx`, `store.ts` (`selected`), `stage/pointer.ts` (walls, zones, click-on-nothing), `stage/layers.ts` (the ring) | 2–3 days |
 | 3 | **Landed 2026-09-10.** Build checklist; palette redesign with rendered swatches; floors as a canvas control; accent audit; confirm on a second click | `gm/BuildProgress.tsx` (new), `gm/swatches.ts` + `gm/Swatch.tsx` (new), `gm/ConfirmButton.tsx` (new), `gm/TilesTab.tsx`, `GridPage.tsx`, the accent buttons across `gm/*` and `hud/MeasurePanel.tsx` | 2–3 days |
 
+| 4 | **Landed 2026-09-10.** Map not Grid; undo and redo; the eraser peels; a second pass varies; the tileset visible and switchable live (§5a) | `history.ts` (new), `api.ts` (recording hooks, the stroke buffer), `hud/Toolbar.tsx`, `hud/useGridShortcuts.ts`, `gm/TilesTab.tsx`, `packages/rules` (`place.ts`, `restyle.ts`) | 2 days |
+
 Each phase ships on its own; none needs the next. Every existing test that
 asserts on a control still finds it — the controls move, they do not change
 name — and the e2e specs that drive the Grid (`e2e/grid*.spec.ts`,
@@ -317,6 +319,36 @@ scene by itself. And the canvas being unmounted and mounted again (a scene
 gone, then another live) could hand one more update to a stage that had
 already been torn down, which crashed on a destroyed graphics; a disposed
 stage now ignores updates.
+
+## 5a. Asked for at the table — 2026-09-10
+
+Four things the GM asked for after using the builder, built as phase 4.
+
+- **The page is the Map.** The sidebar, the phone's tab, the console cards
+  and every sentence that pointed at "the Grid" now say Map; the panel's
+  old Map tab — image, floors, view, calibration — is **Setup**, so the
+  page and its tab do not share a name. The route is still `/grid`.
+- **Undo and redo.** Every build edit the server accepts — a stroke, a
+  room, a wall, a pin, a calibration — records the request that puts it
+  back, computed from the scene the browser held a moment before, and
+  Ctrl+Z sends it (Ctrl+Shift+Z or Ctrl+Y forward). Undo and Redo sit
+  beside the tools in Build and Prep, each naming its step: *Undo: paint
+  12 squares*. A room is one step, not two. Steps belong to the scene they
+  were made on. Nothing is optimistic: an undo is a request, and the map
+  redraws from the server's answer.
+- **The eraser peels.** It used to take everything out of a square; now it
+  takes the top thing — a prop first, then the wall, then the floor — one
+  pass per layer, the way an eraser is expected to behave.
+- **The same click twice asks for something else.** Building always cycled
+  (wall → window → door). Now Ground advances to the set's next floor, and
+  Interior and Decoration to the next thing that fits the square, read on
+  from the same ranking the first pick came from — so a second pass over a
+  wall-side desk offers the terminal, not the fountain.
+- **The tileset, visible and switchable.** A chip beside the scene name in
+  Build says which set the map draws from and opens the Tiles tab. Choosing
+  another set there redraws the map in it, every floor, every layer — each
+  square keeps what it is and takes the new set's version — as one undoable
+  step, instead of the next stroke silently replacing the floor.
 
 ## 6. What I would measure
 

@@ -45,7 +45,7 @@ export function buildSteps(scene: Scene): BuildStep[] {
       label: 'Map',
       done: map,
       tab: map ? 'map' : 'tiles',
-      hint: map ? 'The map is on the canvas' : 'Upload a floor plan on Map, or paint one on Tiles',
+      hint: map ? 'The map is on the canvas' : 'Upload a floor plan on Setup, or paint one on Tiles',
     },
     {
       id: 'grid',

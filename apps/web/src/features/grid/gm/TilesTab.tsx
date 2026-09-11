@@ -18,10 +18,11 @@
  * erase — live on the toolbar (R, A, B, E), not here: one place to pick up
  * a tool.
  */
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Scene } from '@safehouse/contracts';
-import { sceneLevels } from '@safehouse/rules';
+import { migrateTileLayer, restyleLayers, sceneLevels } from '@safehouse/rules';
 import { useTilesets, usePaintTiles, type TilesetDef } from '../api.js';
+import { useHistory } from '../history.js';
 import { useGridStore } from '../store.js';
 import ConfirmButton from './ConfirmButton.js';
 import Swatch from './Swatch.js';
@@ -44,7 +45,7 @@ export function stairAdvice(
   const here = floors[level]?.name ?? 'this floor';
   let text: string;
   if (!up && !down) {
-    text = `${here} is the only floor, so a stair here has nowhere to go. Add a floor first — Map ▸ Floors — then paint the flight that leads to it.`;
+    text = `${here} is the only floor, so a stair here has nowhere to go. Add a floor first — Setup ▸ Floors — then paint the flight that leads to it.`;
   } else if (up && down) {
     text = `From ${here} a stair can lead up to ${floors[level + 1]?.name ?? 'the floor above'} or down to ${floors[level - 1]?.name ?? 'the floor below'}. Auto picks up.`;
   } else if (up) {
@@ -72,10 +73,10 @@ const CATEGORY_LABEL: Record<ToolCategory, string> = {
 
 /** What each category does on a single click, in the GM's terms — the tooltip. */
 const CATEGORY_HINT: Record<ToolCategory, string> = {
-  ground: 'What the square is made of — pick a surface and drag.',
+  ground: 'What the square is made of — pick a surface and drag. Drag again for the next surface in the set.',
   building: 'Click empty ground for a wall; click a wall again for a window, then a door.',
-  interior: 'Furniture. Against a wall it picks something with a back to it.',
-  decoration: 'Props. It reads the ground — trees on grass, drains on the road.',
+  interior: 'Furniture. Against a wall it picks something with a back to it; drag again for the next thing that fits.',
+  decoration: 'Props. It reads the ground — trees on grass, drains on the road; drag again for another that fits.',
   stairs:
     'Stairs. Which way they lead follows from the floors this scene has — up if there is one above.',
 };
@@ -174,6 +175,65 @@ export default function TilesTab({ scene }: TilesTabProps) {
   }, [adopt, setTilesetId]);
 
   const paintedCount = paintedCells(scene.tiles);
+  const [restyled, setRestyled] = useState<string | null>(null);
+
+  /**
+   * Switching sets redraws the map in the new set — every painted square on
+   * every floor takes the new set's version of what it is (`restyleLayers`)
+   * — as one undoable step. Before this the next stroke replaced the floor,
+   * and a warning was all that stood between the GM and a blank map.
+   */
+  const switchTileset = (nextId: string) => {
+    const to = tilesets.find((t) => t.id === nextId);
+    const from = tileset;
+    setTilesetId(nextId);
+    if (!to || !from || to.id === from.id) return;
+    const jobs: Array<{ level: number; layers: ReturnType<typeof restyleLayers> }> = [];
+    sceneLevels(scene).forEach((floor, level) => {
+      const tiles = floor.tiles;
+      if (!tiles || paintedCells(tiles as unknown as Scene['tiles']) === 0) return;
+      const src = tilesets.find((t) => t.id === tiles.tilesetId) ?? from;
+      const layers = migrateTileLayer(tiles);
+      jobs.push({
+        level,
+        layers: restyleLayers(
+          src as unknown as Parameters<typeof restyleLayers>[0],
+          to as unknown as Parameters<typeof restyleLayers>[1],
+          layers,
+        ),
+      });
+    });
+    if (jobs.length === 0) return;
+    const history = useHistory.getState();
+    history.beginGroup(scene.id, `switch to ${to.name}`);
+    setRestyled(`redrawing in ${to.name}…`);
+    void (async () => {
+      try {
+        for (const job of jobs) {
+          const base = { sceneId: scene.id, tilesetId: to.id, level: job.level };
+          // The first stroke under the new set replaces the floor (one set
+          // per floor, server-side); the next two fill in the other layers.
+          await paint.mutateAsync({ ...base, clear: true, paint: job.layers.ground, erase: [] });
+          if (Object.keys(job.layers.structure).length > 0) {
+            await paint.mutateAsync({ ...base, paint: job.layers.structure, erase: [] });
+          }
+          if (Object.keys(job.layers.object).length > 0) {
+            await paint.mutateAsync({ ...base, paint: job.layers.object, erase: [] });
+          }
+        }
+        const dropped = jobs.reduce((n, j) => n + j.layers.dropped, 0);
+        setRestyled(
+          dropped > 0
+            ? `redrawn in ${to.name} — ${dropped} square${dropped === 1 ? '' : 's'} had no match there and went; undo puts them back`
+            : `redrawn in ${to.name} — undo puts it back`,
+        );
+      } catch {
+        setRestyled(`could not redraw in ${to.name} — undo, then try again`);
+      } finally {
+        history.endGroup();
+      }
+    })();
+  };
   // The server replaces the whole layer when a stroke arrives under another
   // set, so this is a data-loss warning, not a style note. The canvas carries
   // the same sentence (`GridPage`), because the tool outlives this panel.
@@ -193,7 +253,8 @@ export default function TilesTab({ scene }: TilesTabProps) {
         <select
           id="tileset"
           value={tileset.id}
-          onChange={(e) => setTilesetId(e.target.value)}
+          title="Every floor of this scene draws from one set; switching redraws the map in the new one"
+          onChange={(e) => switchTileset(e.target.value)}
           className="mt-1 w-full rounded border border-edge bg-deck px-2 py-1 text-sm"
         >
           {tilesets.map((t) => (
@@ -203,6 +264,11 @@ export default function TilesTab({ scene }: TilesTabProps) {
           ))}
         </select>
         <p className="mt-1 text-xs text-faint">{tileset.blurb}</p>
+        {restyled && (
+          <p className="mt-1 text-xs text-cyan" data-testid="tiles-restyled">
+            {restyled}
+          </p>
+        )}
         {switching && (
           <p data-testid="tiles-switch-warning" className="mt-1 text-xs text-magenta">
             This scene is painted with “{scene.tiles?.tilesetId}”. Painting now replaces those{' '}

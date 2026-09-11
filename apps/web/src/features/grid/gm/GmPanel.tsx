@@ -27,7 +27,7 @@ import TokensTab from './TokensTab.js';
 
 const TABS: Array<{ id: GmTab; label: string }> = [
   { id: 'scenes', label: 'Scenes' },
-  { id: 'map', label: 'Map' },
+  { id: 'map', label: 'Setup' },
   { id: 'tiles', label: 'Tiles' },
   { id: 'geo', label: 'Layout' },
   { id: 'tokens', label: 'Tokens' },

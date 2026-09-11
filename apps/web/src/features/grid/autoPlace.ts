@@ -26,6 +26,23 @@ export interface AutoPlaceInput {
 }
 
 /**
+ * The top thing in a square — what the eraser takes first — or null when the
+ * square is bare. 'all' is a square that only the legacy flat map knows
+ * about: the server sorts it into a layer on first touch, so the eraser
+ * takes the lot rather than guess which.
+ */
+export function topLayerAt(
+  tiles: LayeredTiles | undefined,
+  key: string,
+): 'ground' | 'structure' | 'object' | 'all' | null {
+  if (tiles?.object?.[key] !== undefined) return 'object';
+  if (tiles?.structure?.[key] !== undefined) return 'structure';
+  if (tiles?.ground?.[key] !== undefined) return 'ground';
+  if (tiles?.cells?.[key] !== undefined) return 'all';
+  return null;
+}
+
+/**
  * Which cells count as "a wall is here" when scoring.
  *
  * The STRUCTURE layer only. A desk is not a wall to put a bench against, and

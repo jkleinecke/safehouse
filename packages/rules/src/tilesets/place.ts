@@ -31,6 +31,17 @@
  * would make the map feel broken in a way that is very hard to describe and
  * impossible to ignore.
  *
+ * ## The same click twice asks for something else
+ *
+ * Running a tool over a square it already answered is not a request for the
+ * same answer. Building always worked this way (wall → window → door); now
+ * every tool does: Ground advances to the next floor in the set, Interior and
+ * Decoration to the next thing that FITS the square — the ranking is the
+ * same one the first pick came from, read on from the current tile, so a
+ * second pass over a wall-side desk offers the terminal, not the fountain.
+ * Within one stroke the square is read once, so a wobbling drag does not
+ * cycle a cell it merely crossed twice.
+ *
  * ## This is a suggestion, not a cage
  *
  * Picking a specific tile in the palette always wins. The scorer answers "what
@@ -165,16 +176,37 @@ function score(tile: Tile, ctx: PlacementContext): number {
   return s;
 }
 
-/** Best of the candidates, ties broken by the cell so the answer is stable. */
-function best(candidates: readonly Tile[], ctx: PlacementContext): Tile | null {
+/**
+ * Every candidate that fits, best first — the stable pick leads (ties broken
+ * by the cell), then the rest in score order, catalogue order within a score.
+ * Element 0 is what a first click places; each element after it is what the
+ * next pass over the same square places.
+ */
+export function ranked(candidates: readonly Tile[], ctx: PlacementContext): Tile[] {
   const scored = candidates
     .map((tile) => ({ tile, s: score(tile, ctx) }))
     .filter((c) => c.s >= 0);
-  if (scored.length === 0) return null;
+  if (scored.length === 0) return [];
 
   const top = Math.max(...scored.map((c) => c.s));
   const tied = scored.filter((c) => c.s === top).map((c) => c.tile);
-  return tied[cellSeed(ctx.col, ctx.row) % tied.length]!;
+  const lead = tied[cellSeed(ctx.col, ctx.row) % tied.length]!;
+  // A stable sort: equal scores keep the catalogue's order.
+  const ordered = [...scored].sort((a, b) => b.s - a.s).map((c) => c.tile);
+  const at = ordered.indexOf(lead);
+  return [...ordered.slice(at), ...ordered.slice(0, at)];
+}
+
+/** The tile after `current` in a cycle, or its head when `current` is not in it. */
+function advance(
+  cycle: readonly Tile[],
+  current: string | undefined,
+): { tile: Tile; again: boolean } | null {
+  const first = cycle[0];
+  if (first === undefined) return null;
+  const at = current === undefined ? -1 : cycle.findIndex((t) => t.id === current);
+  if (at === -1) return { tile: first, again: false };
+  return { tile: cycle[(at + 1) % cycle.length]!, again: true };
 }
 
 /**
@@ -199,21 +231,27 @@ export function pickTile(
   if (tool === 'stairs') return pickStairs(ctx);
 
   if (tool === 'ground') {
-    // Deliberately no cleverness: the GM said "ground", and which ground is
-    // the whole content of that decision. With nothing chosen, the set's
-    // first floor is the sane default rather than a guess dressed up as one.
-    const first = tilesFor(ctx.tileset, 'ground')[0];
-    return first === undefined
-      ? null
-      : { tileId: first.id, layer: 'ground', why: first.name };
+    // Deliberately no cleverness on the first pass: the GM said "ground", and
+    // which ground is the whole content of that decision, so the set's first
+    // floor is the default rather than a guess dressed up as one. A pass over
+    // a square already floored advances to the set's next floor.
+    const step = advance(tilesFor(ctx.tileset, 'ground'), ctx.here.ground);
+    if (step === null) return null;
+    return {
+      tileId: step.tile.id,
+      layer: 'ground',
+      why: step.again ? `${step.tile.name} — the next floor in the set` : step.tile.name,
+    };
   }
 
-  const tile = best(tilesFor(ctx.tileset, tool), ctx);
-  if (tile === null) return null;
+  const step = advance(ranked(tilesFor(ctx.tileset, tool), ctx), ctx.here.object);
+  if (step === null) return null;
+  const tile = step.tile;
 
   const p = tile.placement;
-  const why =
-    p?.on !== undefined && p.on.length > 0
+  const why = step.again
+    ? `${tile.name} — the next thing that fits here`
+    : p?.on !== undefined && p.on.length > 0
       ? `${tile.name} — suits this ground`
       : p?.againstWall === true
         ? `${tile.name} — against the wall`

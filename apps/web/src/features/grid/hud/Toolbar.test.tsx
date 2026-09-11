@@ -54,6 +54,36 @@ describe('<Toolbar>', () => {
   });
 });
 
+describe('<Toolbar> undo and redo', () => {
+  const history = (undoLabel: string | null, redoLabel: string | null) => ({
+    undoLabel,
+    redoLabel,
+    busy: false,
+    onUndo: () => undefined,
+    onRedo: () => undefined,
+  });
+  const render = (mode: GridMode, isGm = true, h = history('paint 12 squares', null)) =>
+    renderToStaticMarkup(
+      <Toolbar isGm={isGm} mode={mode} tool="select" onMode={() => undefined} onTool={() => undefined} history={h} />,
+    );
+
+  it('sits beside the build and prep tools, naming the step and the key', () => {
+    const html = render('build');
+    expect(html).toContain('data-testid="undo"');
+    expect(html).toContain('Undo: paint 12 squares (Ctrl+Z)');
+    expect(html).toMatch(/data-testid="redo"[^>]*/);
+    expect(html).toMatch(/Nothing to redo/);
+    expect(render('prep')).toContain('data-testid="undo"');
+  });
+
+  it('is disabled with nothing to take back, and absent in Play and for a player', () => {
+    const empty = render('build', true, history(null, null));
+    expect(empty).toMatch(/aria-label="Nothing to undo"[^>]*disabled=""/);
+    expect(render('play')).not.toContain('data-testid="undo"');
+    expect(render('build', false)).not.toContain('data-testid="undo"');
+  });
+});
+
 describe('<ViewControls>', () => {
   it('holds snap, zoom, fit and — for the GM — the view and the panel', () => {
     const gm = renderToStaticMarkup(

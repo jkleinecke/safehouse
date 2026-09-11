@@ -100,7 +100,7 @@ export function checklistRows(input: {
       detail:
         (input.scenes ?? 0) > 0
           ? 'activate one to push it to the table'
-          : 'a map, a grid calibration, fog — built on the Grid',
+          : 'a map, a grid calibration, fog — built on the Map',
       to: `${c}/gm/scenes`,
       cta: (input.scenes ?? 0) > 0 ? 'scenes' : 'create one',
     },

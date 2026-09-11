@@ -52,6 +52,8 @@ export interface ToolbarProps {
   tool: GridTool;
   onMode: (mode: GridMode) => void;
   onTool: (tool: GridTool) => void;
+  /** Undo and redo, for a GM building or prepping; absent for a player. */
+  history?: ToolbarHistory;
 }
 
 function Btn({
@@ -60,12 +62,14 @@ function Btn({
   onClick,
   children,
   testId,
+  disabled,
 }: {
   active?: boolean;
   title: string;
   onClick: () => void;
   children: React.ReactNode;
   testId?: string;
+  disabled?: boolean;
 }) {
   return (
     <button
@@ -73,16 +77,26 @@ function Btn({
       title={title}
       aria-label={title}
       aria-pressed={active ?? false}
+      disabled={disabled}
       onClick={onClick}
       data-testid={testId}
       className={
-        'btn px-2.5 py-1.5 text-[0.7rem] ' +
+        'btn px-2.5 py-1.5 text-[0.7rem] disabled:opacity-40 ' +
         (active ? 'border-cyan text-cyan shadow-glow-cyan' : 'text-dim')
       }
     >
       {children}
     </button>
   );
+}
+
+/** The next step each way, for the toolbar's Undo and Redo. */
+export interface ToolbarHistory {
+  undoLabel: string | null;
+  redoLabel: string | null;
+  busy: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
 }
 
 export default function Toolbar(props: ToolbarProps) {
@@ -122,6 +136,29 @@ export default function Toolbar(props: ToolbarProps) {
             <span className="hidden sm:inline">{TOOL_DEFS[id].label}</span>
           </Btn>
         ))}
+        {props.isGm && props.mode !== 'play' && props.history && (
+          <>
+            <span className="mx-0.5 h-5 w-px bg-edge" aria-hidden />
+            <Btn
+              title={props.history.undoLabel ? `Undo: ${props.history.undoLabel} (Ctrl+Z)` : 'Nothing to undo'}
+              disabled={props.history.busy || props.history.undoLabel === null}
+              onClick={props.history.onUndo}
+              testId="undo"
+            >
+              <span aria-hidden>↶</span>
+              <span className="hidden sm:inline">Undo</span>
+            </Btn>
+            <Btn
+              title={props.history.redoLabel ? `Redo: ${props.history.redoLabel} (Ctrl+Shift+Z)` : 'Nothing to redo'}
+              disabled={props.history.busy || props.history.redoLabel === null}
+              onClick={props.history.onRedo}
+              testId="redo"
+            >
+              <span aria-hidden>↷</span>
+              <span className="hidden sm:inline">Redo</span>
+            </Btn>
+          </>
+        )}
       </div>
       <p className="mono-label hidden px-1 text-faint sm:block" data-testid="tool-hint">
         {TOOL_HINTS[props.tool]}
@@ -178,7 +215,7 @@ export function ViewControls(props: ViewControlsProps) {
             are laid out — a rectangle is a rectangle — and isometric is what
             the table is shown. This is the GM's OWN view: flipping it never
             touches the scene, so the table does not flip mid-session. What
-            the table sees is set in Map ▸ View.
+            the table sees is set in Setup ▸ View.
           */}
           {props.onView && (
             <ViewToggle
@@ -230,7 +267,7 @@ function ViewToggle({
                 : `${c.label} view on this screen only; the table stays on ${sceneProjection === 'iso' ? 'iso' : 'plan'}`
             }
             // Picking the scene's own projection drops the override rather
-            // than pinning it, so a later change in Map ▸ View is followed.
+            // than pinning it, so a later change in Setup ▸ View is followed.
             onClick={() => onView(c.id === sceneProjection ? 'scene' : c.id)}
           >
             <span aria-hidden>{c.id === 'iso' ? '◈' : '▦'}</span>

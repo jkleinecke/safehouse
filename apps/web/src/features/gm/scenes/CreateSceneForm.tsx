@@ -61,7 +61,7 @@ export default function CreateSceneForm({
           A scene is one map the table plays on — a grid, an optional floor plan or phone photo,
           the light and weather, and the fog you peel back as they explore. Nothing has been
           created for this campaign yet, so the table has no map to look at. Make one here, then
-          draw on it in the Grid.
+          draw on it on the Map.
         </p>
       )}
 
@@ -155,7 +155,7 @@ export default function CreateSceneForm({
           />
           <span className="mono-label mt-1 block text-faint">
             a floor plan, a phone photo of a hand-drawn map, or nothing at all · rotate, crop and
-            contrast live in the Grid&apos;s map tab
+            contrast live on the Map&apos;s Setup tab
           </span>
         </label>
 

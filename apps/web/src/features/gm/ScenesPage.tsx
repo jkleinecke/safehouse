@@ -248,7 +248,7 @@ export default function ScenesPage() {
   return (
     <GmGuard>
       <div className="p-6">
-        <SectionTitle hint="the list; drawing lives in the Grid">Scenes</SectionTitle>
+        <SectionTitle hint="the list; drawing lives on the Map">Scenes</SectionTitle>
         <h1 className="mt-1 text-lg font-semibold">Scene manager</h1>
 
         {/* `isPending` (not `isLoading`) — before the read lands the screen must

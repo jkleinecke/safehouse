@@ -24,6 +24,19 @@ import { apiDelete, apiGet, apiPatch, apiPut, apiPost, queryClient } from '../..
 import { getToken } from '../../api/session.js';
 import { useLiveStore } from '../../live/store.js';
 import { normalizeGeometry } from './geometryEdit.js';
+import { levelTiles } from '@safehouse/rules';
+import {
+  describeGeometry,
+  describePaint,
+  describeScenePatch,
+  restoreBodies,
+  sendGeometry,
+  sendPaint,
+  sendScenePatch,
+  snapshotBefore,
+  useHistory,
+  type TileLayerName,
+} from './history.js';
 import { mapImageId } from './mapImage.js';
 import { tileDefKey, type TileDrawDef, tileDefsFromSets } from './types.js';
 
@@ -156,7 +169,27 @@ export function usePatchScene() {
   return useMutation({
     mutationFn: async ({ sceneId, patch }: { sceneId: string; patch: Partial<SceneInput> }) =>
       (await apiPatch<{ scene: Scene }>(`/api/scenes/${sceneId}`, patch)).scene,
-    onSuccess: (_data, vars) => invalidateScene(vars.sceneId),
+    // What the patched fields held a moment ago — the undo (`history.ts`).
+    onMutate: ({ sceneId, patch }) => {
+      const scene = queryClient.getQueryData<ComposedScene>(['scene', sceneId])?.scene;
+      if (!scene) return { before: null as Record<string, unknown> | null };
+      const before: Record<string, unknown> = {};
+      for (const key of Object.keys(patch)) before[key] = (scene as unknown as Record<string, unknown>)[key];
+      return { before };
+    },
+    onSuccess: (_data, vars, ctx) => {
+      if (ctx?.before) {
+        const before = ctx.before;
+        const after = vars.patch as Record<string, unknown>;
+        useHistory.getState().push({
+          sceneId: vars.sceneId,
+          label: describeScenePatch(after),
+          undo: () => sendScenePatch(vars.sceneId, before),
+          redo: () => sendScenePatch(vars.sceneId, after),
+        });
+      }
+      invalidateScene(vars.sceneId);
+    },
   });
 }
 
@@ -261,7 +294,24 @@ export function usePatchGeometry() {
           geometry: normalizeGeometry(geometry),
         })
       ).scene,
-    onSuccess: (_data, vars) => invalidateScene(vars.sceneId),
+    // The geometry a moment ago — the undo (`history.ts`). Recorded on
+    // success, from the server's answer, so a refused patch is not a step.
+    onMutate: ({ sceneId }) => ({
+      before: queryClient.getQueryData<ComposedScene>(['scene', sceneId])?.scene.geometry ?? null,
+    }),
+    onSuccess: (scene, vars, ctx) => {
+      if (ctx?.before) {
+        const before = ctx.before;
+        const after = scene.geometry;
+        useHistory.getState().push({
+          sceneId: vars.sceneId,
+          label: describeGeometry(before, after),
+          undo: () => sendGeometry(vars.sceneId, before),
+          redo: () => sendGeometry(vars.sceneId, after),
+        });
+      }
+      invalidateScene(vars.sceneId);
+    },
   });
 }
 
@@ -587,8 +637,38 @@ export function usePaintTiles() {
   return useMutation({
     mutationFn: async ({ sceneId, ...body }: TilePaint) =>
       (await apiPost<{ scene: Scene; painted: number }>(`/api/scenes/${sceneId}/tiles`, body)).scene,
-    onSuccess: (scene, vars) => {
-      queryClient.setQueryData<ComposedScene>(['scene', vars.sceneId], (old) =>
+    // What the touched squares held a moment ago — the undo (`history.ts`).
+    // A stroke under another set replaces the whole floor (the server keeps
+    // one set per floor), and so does a clear: the snapshot then covers the
+    // floor and the restore rebuilds it under the set it had.
+    onMutate: ({ sceneId, ...body }) => {
+      const scene = queryClient.getQueryData<ComposedScene>(['scene', sceneId])?.scene;
+      if (!scene) return { before: null, wipe: false, tilesetBefore: body.tilesetId };
+      const had = levelTiles(scene, body.level ?? 0);
+      const painted = had
+        ? Object.keys(had.ground ?? {}).length +
+          Object.keys(had.structure ?? {}).length +
+          Object.keys(had.object ?? {}).length
+        : 0;
+      const switching = had !== undefined && painted > 0 && had.tilesetId !== body.tilesetId;
+      const wipe = switching || (body.clear === true && body.layer === undefined);
+      const before = snapshotBefore(scene, wipe ? { ...body, clear: true, layer: undefined } : body);
+      return { before, wipe, tilesetBefore: had?.tilesetId ?? body.tilesetId };
+    },
+    onSuccess: (scene, vars, ctx) => {
+      const { sceneId, ...body } = vars;
+      if (ctx?.before) {
+        const bodies = restoreBodies(ctx.before, ctx.tilesetBefore, body.level ?? 0, ctx.wipe);
+        useHistory.getState().push({
+          sceneId,
+          label: describePaint(body),
+          undo: async () => {
+            for (const b of bodies) await sendPaint(sceneId, b);
+          },
+          redo: () => sendPaint(sceneId, body),
+        });
+      }
+      queryClient.setQueryData<ComposedScene>(['scene', sceneId], (old) =>
         old ? { ...old, scene } : old,
       );
       void queryClient.invalidateQueries({ queryKey: ['scenes'] });
@@ -635,23 +715,32 @@ export class TileStrokeBuffer {
   /** The floor this stroke belongs to; null until the first cell. */
   private level: number | null = null;
   private readonly paint = new Map<string, string>();
-  private readonly erase = new Set<string>();
+  /**
+   * Squares to erase, by the layer to take them from. '*' is all three — the
+   * eraser as the server understands it; a named layer is the eraser as the
+   * GM understands it, taking the top thing out of the square and leaving
+   * the rest. Each layer goes out as its own request, after the paint.
+   */
+  private readonly erase = new Map<'*' | TileLayerName, Set<string>>();
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly opts: TileStrokeOptions) {}
 
   /** Cells waiting to be sent. */
   get pending(): number {
-    return this.paint.size + this.erase.size;
+    let n = this.paint.size;
+    for (const keys of this.erase.values()) n += keys.size;
+    return n;
   }
 
-  /** Buffer one cell. `tileId` null erases it. */
+  /** Buffer one cell. `tileId` null erases it — from `layer`, or from every layer. */
   add(
     sceneId: string,
     tilesetId: string,
     key: string,
     tileId: string | null,
     level = 0,
+    layer?: TileLayerName,
   ): void {
     // The FLOOR is part of a stroke's identity, exactly like the scene and the
     // tileset. Without it, a GM who changes storey mid-buffer would have the
@@ -667,14 +756,23 @@ export class TileStrokeBuffer {
     this.sceneId = sceneId;
     this.tilesetId = tilesetId;
     this.level = level;
+    for (const keys of this.erase.values()) keys.delete(key);
     if (tileId === null) {
-      this.erase.add(key);
       this.paint.delete(key);
+      this.bucket(layer ?? '*').add(key);
     } else {
       this.paint.set(key, tileId);
-      this.erase.delete(key);
     }
     this.arm();
+  }
+
+  private bucket(name: '*' | TileLayerName): Set<string> {
+    let keys = this.erase.get(name);
+    if (!keys) {
+      keys = new Set();
+      this.erase.set(name, keys);
+    }
+    return keys;
   }
 
   /** Send what is buffered: stroke end, scene/tileset change, unmount. */
@@ -682,26 +780,37 @@ export class TileStrokeBuffer {
     this.cancelTimer();
     const sceneId = this.sceneId;
     const tilesetId = this.tilesetId;
+    const level = this.level ?? 0;
     if (sceneId === null || tilesetId === null || this.pending === 0) return;
-    const body: TilePaint = {
-      sceneId,
-      tilesetId,
-      paint: Object.fromEntries(this.paint),
-      erase: [...this.erase],
-      level: this.level ?? 0,
-    };
+    const bodies: TilePaint[] = [];
+    const all = this.erase.get('*');
+    if (this.paint.size > 0 || (all !== undefined && all.size > 0)) {
+      bodies.push({ sceneId, tilesetId, paint: Object.fromEntries(this.paint), erase: [...(all ?? [])], level });
+    }
+    for (const [name, keys] of this.erase) {
+      if (name === '*' || keys.size === 0) continue;
+      bodies.push({ sceneId, tilesetId, paint: {}, erase: [...keys], level, layer: name });
+    }
     this.paint.clear();
     this.erase.clear();
     this.sceneId = null;
     this.tilesetId = null;
     this.level = null;
-    void this.opts.send(body).catch((error: unknown) => {
-      this.restore(body);
-      this.opts.onError?.(error);
-    });
+    // One after another: each is a read-modify-write of the layer on the
+    // server, and two in flight would lose each other's squares. The first
+    // goes now, not on the next tick: a stroke that ends is sent as it ends.
+    let chain: Promise<unknown> | null = null;
+    for (const body of bodies) {
+      const go = () =>
+        this.opts.send(body).catch((error: unknown) => {
+          this.restore(body);
+          this.opts.onError?.(error);
+        });
+      chain = chain === null ? go() : chain.then(go);
+    }
   }
 
-  /** Flush anything outstanding; the component is going away. */
+  /** Flush, then stop: the unmount path. */
   dispose(): void {
     this.flush();
   }
@@ -718,11 +827,12 @@ export class TileStrokeBuffer {
     }
     this.sceneId = body.sceneId;
     this.tilesetId = body.tilesetId;
+    const held = (key: string) => this.paint.has(key) || [...this.erase.values()].some((keys) => keys.has(key));
     for (const [key, tileId] of Object.entries(body.paint)) {
-      if (!this.erase.has(key) && !this.paint.has(key)) this.paint.set(key, tileId);
+      if (!held(key)) this.paint.set(key, tileId);
     }
     for (const key of body.erase) {
-      if (!this.paint.has(key) && !this.erase.has(key)) this.erase.add(key);
+      if (!held(key)) this.bucket(body.layer ?? '*').add(key);
     }
   }
 
