@@ -101,13 +101,16 @@ describe('hitNote (FR9.25)', () => {
 describe('hitTileDoor (FR9.24)', () => {
   const scene = {
     geometry: { walls: [], zones: [], pins: [], doors: [] },
-    tiles: { tilesetId: 'docklands', structure: { '4,4': 'door', '4,3': 'wall' } },
-    levels: [{ id: 'l2', name: 'Up', tiles: { tilesetId: 'docklands', structure: { '6,6': 'door' } } }],
+    // A square painted before slots existed holds an id; one painted since
+    // holds a slot (rules/tilesets/slots.ts). Both must read as a door.
+    tiles: { tilesetId: 'docklands', structure: { '4,4': 'door', '4,3': 'wall', '5,5': 'building/door' } },
+    levels: [{ id: 'l2', name: 'Up', tiles: { tilesetId: 'corp', structure: { '6,6': 'building/door' } } }],
   } as unknown as Scene;
 
   it('names the cell when it holds a door tile on that floor, and nothing otherwise', () => {
     expect(hitTileDoor(scene, { x: 4.5, y: 4.5 }, 0)).toBe('4,4');
     expect(hitTileDoor(scene, { x: 4.5, y: 3.5 }, 0)).toBeNull(); // a wall
+    expect(hitTileDoor(scene, { x: 5.5, y: 5.5 }, 0)).toBe('5,5'); // stored as a slot
     expect(hitTileDoor(scene, { x: 6.5, y: 6.5 }, 0)).toBeNull(); // upstairs door, ground clicked
     expect(hitTileDoor(scene, { x: 6.5, y: 6.5 }, 1)).toBe('6,6');
     expect(hitTileDoor(scene, { x: 4.5, y: 4.5 }, 1)).toBeNull();

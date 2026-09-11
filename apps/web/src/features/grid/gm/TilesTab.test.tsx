@@ -1,7 +1,8 @@
 /**
  * The tile palette, judged the way the GM meets it: can they see what they can
- * paint with, and are they told — before they click — that the next stroke
- * destroys the floor already on the canvas?
+ * paint with, and can they change the set the map is drawn in without being
+ * warned off it? (Switching is a render decision now — the squares hold slots
+ * — so the old data-loss warning must be gone, not merely quiet.)
  *
  * Two things shape how this is written.
  *
@@ -121,31 +122,22 @@ describe('the palette shows the GM what they can build with', () => {
 });
 
 // ---------------------------------------------------------------------------
-// The warning that stands between the GM and a wiped floor
+// Switching sets is a render decision
 // ---------------------------------------------------------------------------
 
-describe('switching sets is destructive, and says so first', () => {
-  it('warns with the set and the count when the next stroke would replace a floor', () => {
-    // The server keeps no merge across sets: a stroke under another tileset
-    // discards the whole existing layer, with no `clear` flag and no undo.
+describe('switching sets is a render decision, so nothing warns against it', () => {
+  it('shows no data-loss warning when the floor is painted with another set', () => {
+    // Every square holds a slot (rules/tilesets/slots.ts); the server changes
+    // one field per floor and the map redraws with every square as it was.
     const html = render(scene({ tilesetId: 'club', cells: {}, ground: cells(20), structure: {}, object: {} }));
-    expect(html).toContain('data-testid="tiles-switch-warning"');
-    expect(html).toContain('club');
-    expect(html).toContain('20 cells');
+    expect(html).not.toContain('data-testid="tiles-switch-warning"');
+    expect(html).not.toContain('replaces');
+    expect(html).toContain('id="tileset"');
   });
 
-  it('stays quiet when the scene is painted with the set already selected', () => {
-    const html = render(scene({ tilesetId: DEFAULT_TILESET_ID, cells: {}, ground: cells(20), structure: {}, object: {} }));
-    expect(html).not.toContain('data-testid="tiles-switch-warning"');
-  });
-
-  it('stays quiet when another set is filed but nothing is painted with it', () => {
-    // Erasing the last cell leaves `{tilesetId, cells:{}}` behind forever;
-    // that is not work worth warning about losing.
-    const html = render(
-      scene({ tilesetId: 'club', cells: {}, ground: {}, structure: {}, object: {} }),
-    );
-    expect(html).not.toContain('data-testid="tiles-switch-warning"');
+  it('still offers every set while a floor is painted', () => {
+    const html = render(scene({ tilesetId: 'club', cells: {}, ground: cells(20), structure: {}, object: {} }));
+    for (const set of SERVED) expect(html).toContain(`value="${set.id}"`);
   });
 });
 

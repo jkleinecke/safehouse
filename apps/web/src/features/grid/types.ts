@@ -4,6 +4,7 @@
  */
 import type { Point, Role, Scene, Token } from '@safehouse/contracts';
 import type { TileCut, TilePattern, TileProp } from '@safehouse/rules';
+import { slotOf, slotUniverse, tileBySlot } from '@safehouse/rules';
 
 /** Active pointer tool on the canvas. */
 export type GridTool =
@@ -138,6 +139,9 @@ export interface TileSetLike {
   tiles: readonly {
     id: string;
     kind: string;
+    /** Which tool offers it — the slot assignment reads it (rules/tilesets/slots.ts). */
+    category?: string;
+    placement?: { inWall?: boolean | undefined } | undefined;
     pattern: TilePattern;
     colors: readonly [string, string];
     height?: number;
@@ -165,6 +169,12 @@ export interface TileSetLike {
  */
 export function tileDefsFromSets(sets: readonly TileSetLike[]): Record<string, TileDrawDef> {
   const defs: Record<string, TileDrawDef> = {};
+  // A painted square stores a SLOT (rules/tilesets/slots.ts) — the same slot
+  // draws as a different tile in each set, which is what makes a set switch a
+  // render decision. Each def is filed under its id (a square painted before
+  // slots existed) and its slot; and for every slot any served set defines,
+  // a set that lacks it files its nearest, so a switched map has no holes.
+  const universe = slotUniverse(sets);
   for (const set of sets) {
     // What a thin tile stands on. First floor in the set, so a warehouse wall
     // stands on warehouse concrete rather than a hole in the map.
@@ -175,7 +185,7 @@ export function tileDefsFromSets(sets: readonly TileSetLike[]): Record<string, T
       // each one would be a hole in the map with the grid showing through.
       const thin =
         t.footprint !== undefined && t.footprint !== 'fill';
-      defs[tileDefKey(set.id, t.id)] = {
+      const def: TileDrawDef = {
         pattern: t.pattern,
         colors: t.colors,
         // Spread conditionally: an absent field must stay absent rather than
@@ -193,6 +203,16 @@ export function tileDefsFromSets(sets: readonly TileSetLike[]): Record<string, T
           ? { underlay: { pattern: floor.pattern, colors: floor.colors } }
           : {}),
       };
+      defs[tileDefKey(set.id, t.id)] = def;
+      const slot = slotOf(set, t.id);
+      if (slot !== undefined) defs[tileDefKey(set.id, slot)] = def;
+    }
+    for (const slot of universe) {
+      const key = tileDefKey(set.id, slot);
+      if (defs[key] !== undefined) continue;
+      const nearest = tileBySlot(set, slot);
+      const fallback = nearest === null ? undefined : defs[tileDefKey(set.id, nearest.id)];
+      if (fallback !== undefined) defs[key] = fallback;
     }
   }
   return defs;

@@ -262,6 +262,11 @@ export async function sendPaint(sceneId: string, body: PaintBody): Promise<void>
   await apiPost(`/api/scenes/${sceneId}/tiles`, body);
 }
 
+/** Draw the scene, or one floor of it, in another set — a render decision. */
+export async function sendTileset(sceneId: string, tilesetId: string, level?: number): Promise<void> {
+  await apiPost(`/api/scenes/${sceneId}/tileset`, level === undefined ? { tilesetId } : { tilesetId, level });
+}
+
 /** Send one geometry, straight to the server. */
 export async function sendGeometry(sceneId: string, geometry: Scene['geometry']): Promise<void> {
   await apiPatch(`/api/scenes/${sceneId}`, { geometry });

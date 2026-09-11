@@ -244,7 +244,7 @@ screen and what changed.*
 | 2 | **Landed 2026-09-10.** Inspector for the selected wall / door / zone / pin / camera / note; Geo list rewritten as list + inspector; pins/cams/notes tabs folded in | `gm/Inspector.tsx` (new), `gm/GeometryTab.tsx` (Layout), `gm/CamerasTab.tsx` (Cams & notes), `gm/GmPanel.tsx`, `store.ts` (`selected`), `stage/pointer.ts` (walls, zones, click-on-nothing), `stage/layers.ts` (the ring) | 2–3 days |
 | 3 | **Landed 2026-09-10.** Build checklist; palette redesign with rendered swatches; floors as a canvas control; accent audit; confirm on a second click | `gm/BuildProgress.tsx` (new), `gm/swatches.ts` + `gm/Swatch.tsx` (new), `gm/ConfirmButton.tsx` (new), `gm/TilesTab.tsx`, `GridPage.tsx`, the accent buttons across `gm/*` and `hud/MeasurePanel.tsx` | 2–3 days |
 
-| 4 | **Landed 2026-09-10.** Map not Grid; undo and redo; the eraser peels; a second pass varies; the tileset visible and switchable live (§5a) | `history.ts` (new), `api.ts` (recording hooks, the stroke buffer), `hud/Toolbar.tsx`, `hud/useGridShortcuts.ts`, `gm/TilesTab.tsx`, `packages/rules` (`place.ts`, `restyle.ts`) | 2 days |
+| 4 | **Landed 2026-09-10.** Map not Grid; undo and redo; the eraser peels; a second pass varies; the tileset visible and switchable live (§5a) | `history.ts` (new), `api.ts` (recording hooks, the stroke buffer), `hud/Toolbar.tsx`, `hud/useGridShortcuts.ts`, `gm/TilesTab.tsx`, `packages/rules` (`place.ts`, `slots.ts`) | 2 days |
 
 Each phase ships on its own; none needs the next. Every existing test that
 asserts on a control still finds it — the controls move, they do not change
@@ -346,9 +346,15 @@ Four things the GM asked for after using the builder, built as phase 4.
   wall-side desk offers the terminal, not the fountain.
 - **The tileset, visible and switchable.** A chip beside the scene name in
   Build says which set the map draws from and opens the Tiles tab. Choosing
-  another set there redraws the map in it, every floor, every layer — each
-  square keeps what it is and takes the new set's version — as one undoable
-  step, instead of the next stroke silently replacing the floor.
+  another set there is a **render decision**: a painted square does not
+  store a tile, it stores a *slot* — the first ground, the door, the third
+  piece of furniture — and every set answers the same slots, so the server
+  changes one field per floor and the map redraws in the new art with every
+  square exactly as it was. A locked door stays locked, a stair still leads
+  where it led, and undo puts the old set back (one step, every floor).
+  There is nothing to warn about any more, so the old data-loss warning is
+  gone rather than quiet. The vocabulary is in `rules/tilesets/slots.ts`
+  and the contract it puts on the catalogue is in `TILE_ART.md`.
 
 ## 6. What I would measure
 

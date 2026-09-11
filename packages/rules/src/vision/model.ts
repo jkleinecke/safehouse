@@ -9,6 +9,7 @@
  */
 import type { Point } from '@safehouse/contracts';
 import { tilesetById } from '../tilesets/catalogue.js';
+import { resolveTile } from '../tilesets/slots.js';
 import { levelTiles, migrateTileLayer, type LayeredTiles } from '../tilesets/layers.js';
 import { givesCover, parseCellKey, stopsMovement, stopsSight } from '../tilesets/types.js';
 import type { SightCell, SightModel, SightSegment } from './los.js';
@@ -39,7 +40,7 @@ export function sightModelFor(scene: SightSceneInput, level = 0): SightModel {
   if (layer) {
     const set = tilesetById(layer.tilesetId);
     if (set !== null) {
-      const byId = new Map(set.tiles.map((t) => [t.id, t]));
+      const byId = { get: (ref: string) => resolveTile(set, ref) ?? undefined };
       // Read through the migration so a scene painted before layers existed
       // is seen exactly as a migrated one is. Sight must not depend on when
       // the map happened to be drawn.

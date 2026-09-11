@@ -49,6 +49,7 @@
  */
 import type { Tile, TileCategory, Tileset } from './types.js';
 import { categoryOf, layerOf } from './types.js';
+import { resolveTile } from './slots.js';
 
 /** What is already in the cell, per layer. */
 export interface CellContents {
@@ -217,9 +218,17 @@ function advance(
  */
 export function pickTile(
   tool: TileCategory,
-  ctx: PlacementContext,
+  ctxIn: PlacementContext,
   preferred?: string | undefined,
 ): PlacementResult | null {
+  // A painted square stores a slot (`slots.ts`); the ranking below compares
+  // tile ids, so what the square holds is read back as the set's own tile.
+  const asId = (ref: string | undefined): string | undefined =>
+    ref === undefined ? undefined : (resolveTile(ctxIn.tileset, ref)?.id ?? ref);
+  const ctx: PlacementContext = {
+    ...ctxIn,
+    here: { ground: asId(ctxIn.here.ground), structure: asId(ctxIn.here.structure), object: asId(ctxIn.here.object) },
+  };
   if (preferred !== undefined) {
     const tile = ctx.tileset.tiles.find((t) => t.id === preferred);
     if (tile !== undefined) {

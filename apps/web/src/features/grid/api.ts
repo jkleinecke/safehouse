@@ -24,7 +24,7 @@ import { apiDelete, apiGet, apiPatch, apiPut, apiPost, queryClient } from '../..
 import { getToken } from '../../api/session.js';
 import { useLiveStore } from '../../live/store.js';
 import { normalizeGeometry } from './geometryEdit.js';
-import { levelTiles } from '@safehouse/rules';
+import { TILESETS, levelTiles, sceneLevels } from '@safehouse/rules';
 import {
   describeGeometry,
   describePaint,
@@ -33,6 +33,7 @@ import {
   sendGeometry,
   sendPaint,
   sendScenePatch,
+  sendTileset,
   snapshotBefore,
   useHistory,
   type TileLayerName,
@@ -638,20 +639,15 @@ export function usePaintTiles() {
     mutationFn: async ({ sceneId, ...body }: TilePaint) =>
       (await apiPost<{ scene: Scene; painted: number }>(`/api/scenes/${sceneId}/tiles`, body)).scene,
     // What the touched squares held a moment ago — the undo (`history.ts`).
-    // A stroke under another set replaces the whole floor (the server keeps
-    // one set per floor), and so does a clear: the snapshot then covers the
-    // floor and the restore rebuilds it under the set it had.
+    // Only a clear starts the floor over, so only a clear snapshots the whole
+    // floor; a stroke under another set keeps every square (they hold slots —
+    // rules/tilesets/slots.ts) and changes what the floor is drawn in, which
+    // the restore puts back by sending the set the floor had.
     onMutate: ({ sceneId, ...body }) => {
       const scene = queryClient.getQueryData<ComposedScene>(['scene', sceneId])?.scene;
       if (!scene) return { before: null, wipe: false, tilesetBefore: body.tilesetId };
       const had = levelTiles(scene, body.level ?? 0);
-      const painted = had
-        ? Object.keys(had.ground ?? {}).length +
-          Object.keys(had.structure ?? {}).length +
-          Object.keys(had.object ?? {}).length
-        : 0;
-      const switching = had !== undefined && painted > 0 && had.tilesetId !== body.tilesetId;
-      const wipe = switching || (body.clear === true && body.layer === undefined);
+      const wipe = body.clear === true && body.layer === undefined;
       const before = snapshotBefore(scene, wipe ? { ...body, clear: true, layer: undefined } : body);
       return { before, wipe, tilesetBefore: had?.tilesetId ?? body.tilesetId };
     },
@@ -672,6 +668,39 @@ export function usePaintTiles() {
         old ? { ...old, scene } : old,
       );
       void queryClient.invalidateQueries({ queryKey: ['scenes'] });
+    },
+  });
+}
+
+/**
+ * Draw the scene in another set (a render decision — rules/tilesets/slots.ts).
+ * Records its undo: each floor goes back to the set it had.
+ */
+export function useSwitchTileset() {
+  return useMutation({
+    mutationFn: async ({ sceneId, tilesetId }: { sceneId: string; tilesetId: string }) =>
+      (await apiPost<{ scene: Scene }>(`/api/scenes/${sceneId}/tileset`, { tilesetId })).scene,
+    onMutate: ({ sceneId }) => {
+      const scene = queryClient.getQueryData<ComposedScene>(['scene', sceneId])?.scene;
+      if (!scene) return { before: null as Array<{ level: number; tilesetId: string }> | null };
+      const before = sceneLevels(scene)
+        .map((floor, level) => (floor.tiles ? { level, tilesetId: floor.tiles.tilesetId } : null))
+        .filter((x): x is { level: number; tilesetId: string } => x !== null);
+      return { before };
+    },
+    onSuccess: (_scene, vars, ctx) => {
+      if (ctx?.before && ctx.before.length > 0) {
+        const before = ctx.before;
+        useHistory.getState().push({
+          sceneId: vars.sceneId,
+          label: `switch to ${TILESETS.find((t) => t.id === vars.tilesetId)?.name ?? vars.tilesetId}`,
+          undo: async () => {
+            for (const floor of before) await sendTileset(vars.sceneId, floor.tilesetId, floor.level);
+          },
+          redo: () => sendTileset(vars.sceneId, vars.tilesetId),
+        });
+      }
+      invalidateScene(vars.sceneId);
     },
   });
 }

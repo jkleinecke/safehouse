@@ -20,9 +20,8 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import type { Scene } from '@safehouse/contracts';
-import { migrateTileLayer, restyleLayers, sceneLevels } from '@safehouse/rules';
-import { useTilesets, usePaintTiles, type TilesetDef } from '../api.js';
-import { useHistory } from '../history.js';
+import { sceneLevels } from '@safehouse/rules';
+import { useSwitchTileset, useTilesets, usePaintTiles, type TilesetDef } from '../api.js';
 import { useGridStore } from '../store.js';
 import ConfirmButton from './ConfirmButton.js';
 import Swatch from './Swatch.js';
@@ -175,69 +174,31 @@ export default function TilesTab({ scene }: TilesTabProps) {
   }, [adopt, setTilesetId]);
 
   const paintedCount = paintedCells(scene.tiles);
-  const [restyled, setRestyled] = useState<string | null>(null);
+  const switchSet = useSwitchTileset();
+  const [switched, setSwitched] = useState<string | null>(null);
 
   /**
-   * Switching sets redraws the map in the new set — every painted square on
-   * every floor takes the new set's version of what it is (`restyleLayers`)
-   * — as one undoable step. Before this the next stroke replaced the floor,
-   * and a warning was all that stood between the GM and a blank map.
+   * Switching sets is a render decision (rules/tilesets/slots.ts): every
+   * painted square holds a slot that means the same thing in every set, so
+   * the server changes one field per floor and the map redraws — doors keep
+   * their locks, stairs their direction — as one undoable step.
    */
   const switchTileset = (nextId: string) => {
     const to = tilesets.find((t) => t.id === nextId);
-    const from = tileset;
     setTilesetId(nextId);
-    if (!to || !from || to.id === from.id) return;
-    const jobs: Array<{ level: number; layers: ReturnType<typeof restyleLayers> }> = [];
-    sceneLevels(scene).forEach((floor, level) => {
-      const tiles = floor.tiles;
-      if (!tiles || paintedCells(tiles as unknown as Scene['tiles']) === 0) return;
-      const src = tilesets.find((t) => t.id === tiles.tilesetId) ?? from;
-      const layers = migrateTileLayer(tiles);
-      jobs.push({
-        level,
-        layers: restyleLayers(
-          src as unknown as Parameters<typeof restyleLayers>[0],
-          to as unknown as Parameters<typeof restyleLayers>[1],
-          layers,
-        ),
-      });
-    });
-    if (jobs.length === 0) return;
-    const history = useHistory.getState();
-    history.beginGroup(scene.id, `switch to ${to.name}`);
-    setRestyled(`redrawing in ${to.name}…`);
-    void (async () => {
-      try {
-        for (const job of jobs) {
-          const base = { sceneId: scene.id, tilesetId: to.id, level: job.level };
-          // The first stroke under the new set replaces the floor (one set
-          // per floor, server-side); the next two fill in the other layers.
-          await paint.mutateAsync({ ...base, clear: true, paint: job.layers.ground, erase: [] });
-          if (Object.keys(job.layers.structure).length > 0) {
-            await paint.mutateAsync({ ...base, paint: job.layers.structure, erase: [] });
-          }
-          if (Object.keys(job.layers.object).length > 0) {
-            await paint.mutateAsync({ ...base, paint: job.layers.object, erase: [] });
-          }
-        }
-        const dropped = jobs.reduce((n, j) => n + j.layers.dropped, 0);
-        setRestyled(
-          dropped > 0
-            ? `redrawn in ${to.name} — ${dropped} square${dropped === 1 ? '' : 's'} had no match there and went; undo puts them back`
-            : `redrawn in ${to.name} — undo puts it back`,
-        );
-      } catch {
-        setRestyled(`could not redraw in ${to.name} — undo, then try again`);
-      } finally {
-        history.endGroup();
-      }
-    })();
+    if (!to || to.id === tileset?.id) return;
+    const painted = sceneLevels(scene).some(
+      (floor) => floor.tiles !== undefined && paintedCells(floor.tiles as unknown as Scene['tiles']) > 0,
+    );
+    if (!painted) return;
+    switchSet.mutate(
+      { sceneId: scene.id, tilesetId: to.id },
+      {
+        onSuccess: () => setSwitched(`drawn in ${to.name} — undo puts it back`),
+        onError: () => setSwitched(`could not switch to ${to.name} — try again`),
+      },
+    );
   };
-  // The server replaces the whole layer when a stroke arrives under another
-  // set, so this is a data-loss warning, not a style note. The canvas carries
-  // the same sentence (`GridPage`), because the tool outlives this panel.
-  const switching = Boolean(scene.tiles && scene.tiles.tilesetId !== tilesetId && paintedCount > 0);
 
   if (isLoading) return <p className="p-3 text-sm text-dim">Loading tilesets…</p>;
   if (!tileset) return <p className="p-3 text-sm text-dim">No tilesets available.</p>;
@@ -253,7 +214,7 @@ export default function TilesTab({ scene }: TilesTabProps) {
         <select
           id="tileset"
           value={tileset.id}
-          title="Every floor of this scene draws from one set; switching redraws the map in the new one"
+          title="Every floor of this scene draws from one set; switching redraws the map in the new one with every square as it was"
           onChange={(e) => switchTileset(e.target.value)}
           className="mt-1 w-full rounded border border-edge bg-deck px-2 py-1 text-sm"
         >
@@ -264,15 +225,9 @@ export default function TilesTab({ scene }: TilesTabProps) {
           ))}
         </select>
         <p className="mt-1 text-xs text-faint">{tileset.blurb}</p>
-        {restyled && (
-          <p className="mt-1 text-xs text-cyan" data-testid="tiles-restyled">
-            {restyled}
-          </p>
-        )}
-        {switching && (
-          <p data-testid="tiles-switch-warning" className="mt-1 text-xs text-magenta">
-            This scene is painted with “{scene.tiles?.tilesetId}”. Painting now replaces those{' '}
-            {paintedCount} cells.
+        {switched && (
+          <p className="mt-1 text-xs text-cyan" data-testid="tiles-switched">
+            {switched}
           </p>
         )}
       </div>

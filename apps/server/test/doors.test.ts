@@ -124,7 +124,7 @@ describe('painted doors', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ door: { cell: '3,4', level: 0, open: true, locked: false } });
     const gm = await sceneAs(boot.gmToken);
-    expect(gm.tiles?.structure['3,4']).toBe('door');
+    expect(gm.tiles?.structure['3,4']).toBe('building/door'); // stored as a slot; still a door
     expect(gm.tiles?.doors).toEqual({ '3,4': { open: true, locked: false } });
   });
 

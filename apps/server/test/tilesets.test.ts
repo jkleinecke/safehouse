@@ -9,16 +9,16 @@
  * return.
  *
  * Two behaviours are pinned deliberately even though they read as surprises:
- * painting with a different tileset REPLACES the floor (a layer carries one
- * tileset id, so there is nowhere to put the old cells), and players DO receive
- * the tile layer (Principle 4 note in that describe block — read it before
- * "fixing" either).
+ * a stroke under a different tileset keeps every square and only changes what
+ * the floor is drawn in (the squares hold slots — `rules/tilesets/slots.ts` —
+ * so a set switch is a render decision), and players DO receive the tile layer
+ * (Principle 4 note in that describe block — read it before "fixing" either).
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { scenes as scenesTable } from '@safehouse/db';
 import { eq } from 'drizzle-orm';
 import { SceneSchema, type Scene } from '@safehouse/contracts';
-import { TILESETS } from '@safehouse/rules';
+import { TILESETS, tileById } from '@safehouse/rules';
 import { ScenesService, normalizeGrid, serializeScene } from '../src/services/scenes.js';
 import {
   bootstrapCampaign,
@@ -82,11 +82,19 @@ async function sceneAs(sceneId: string, token: string): Promise<Scene> {
  * `tiles.cells` is deliberately NOT consulted: the legacy field drains to
  * empty the moment a scene is touched, so reading it would quietly assert
  * nothing at all.
+ *
+ * What is stored is a SLOT (`ground/1`, `building/door` — see
+ * `rules/tilesets/slots.ts`); this view reads each one back as the tile id it
+ * means in the layer's set, so the suites below can keep speaking in tile
+ * names. The storage itself is pinned in `tileset-switch.test.ts`.
  */
 function cellsOf(scene: Scene): Record<string, string> {
   const t = scene.tiles;
   if (!t) return {};
-  return { ...t.ground, ...t.structure, ...t.object };
+  const flat = { ...t.ground, ...t.structure, ...t.object };
+  return Object.fromEntries(
+    Object.entries(flat).map(([key, ref]) => [key, tileById(t.tilesetId, ref)?.id ?? ref]),
+  );
 }
 
 beforeAll(async () => {
@@ -373,17 +381,15 @@ describe('paint / erase / clear round-trip through the geometry JSONB', () => {
   });
 });
 
-describe('switching tilesets REPLACES the floor (destructive, and deliberate)', () => {
+describe('switching tilesets keeps the floor — a render decision', () => {
   /**
-   * A `TileLayer` carries exactly one `tilesetId` for all its cells, so a
-   * stroke from another set has nowhere to merge: the old cells name tiles the
-   * new set may not have. The palette warns the GM before this happens.
-   *
-   * Pinned so nobody "fixes" it by accident. If the product decision changes —
-   * refuse the stroke, or keep a layer per set — this test is the one to
-   * argue with, not silently delete.
+   * Every painted square holds a slot (`rules/tilesets/slots.ts`) that means
+   * the same thing in every set, so a stroke under another set has nothing to
+   * discard: the floor keeps every square and changes what it is drawn in.
+   * Before slots the same stroke REPLACED the floor. The switch route itself
+   * (`POST /api/scenes/:id/tileset`) is pinned in `tileset-switch.test.ts`.
    */
-  it('drops every cell painted with the previous set', async () => {
+  it('keeps every square painted with the previous set and adds the new stroke', async () => {
     const sceneId = await newScene('Repainted floor');
     await paint(sceneId, boot.gmToken, {
       tilesetId: 'docklands',
@@ -393,22 +399,23 @@ describe('switching tilesets REPLACES the floor (destructive, and deliberate)', 
     expect(res.statusCode).toBe(200);
     const scene = await sceneAs(sceneId, boot.gmToken);
     expect(scene.tiles?.tilesetId).toBe('club');
-    expect(cellsOf(scene)).toEqual({ '9,9': 'bar' });
+    expect(scene.tiles?.ground).toEqual({ '0,0': 'ground/1', '1,0': 'ground/1', '9,9': 'ground/2' });
+    expect(scene.tiles?.structure).toEqual({ '2,0': 'building/wall' });
   });
 
-  it('wipes the floor even when the stroke paints nothing at all', async () => {
-    const sceneId = await newScene('Wiped floor');
+  it('changes what an untouched floor is drawn in when the stroke paints nothing', async () => {
+    const sceneId = await newScene('Redrawn floor');
     await paint(sceneId, boot.gmToken, { tilesetId: 'docklands', paint: { '0,0': 'floor' } });
     const res = await paint(sceneId, boot.gmToken, { tilesetId: 'club' });
     expect(res.statusCode).toBe(200);
-    expect(cellsOf(await sceneAs(sceneId, boot.gmToken))).toEqual({});
+    const scene = await sceneAs(sceneId, boot.gmToken);
+    expect(scene.tiles?.tilesetId).toBe('club');
+    expect(scene.tiles?.ground).toEqual({ '0,0': 'ground/1' });
   });
 
-  it('does NOT resolve a colliding id against the old set', async () => {
-    // `wall` exists in both, so the cell survives the switch by NAME while
-    // meaning a different tile. The layer's tilesetId is the only thing that
-    // disambiguates it — a client keying its palette by tile id alone paints
-    // a warehouse in club colours.
+  it('files a colliding id under its slot, so the square means the same in both sets', async () => {
+    // `wall` exists in both sets. Stored by slot, the square is a wall in
+    // whichever set draws it, and the layer's tilesetId only picks the art.
     const sceneId = await newScene('Colliding ids');
     await paint(sceneId, boot.gmToken, { tilesetId: 'docklands', paint: { '0,0': 'wall' } });
     await paint(sceneId, boot.gmToken, { tilesetId: 'club', paint: { '0,0': 'wall' } });
@@ -419,7 +426,7 @@ describe('switching tilesets REPLACES the floor (destructive, and deliberate)', 
       tilesetId: 'club',
       cells: {},
       ground: {},
-      structure: { '0,0': 'wall' },
+      structure: { '0,0': 'building/wall' },
       object: {},
     });
   });
@@ -541,7 +548,7 @@ describe('concurrent strokes (lost-update guard)', () => {
     const after = serializeScene(await svc.sceneRow(sceneId));
     // Read from the layer it was written to. `cells` is the drained legacy
     // field and asserting on it would pass for any write at all.
-    expect(after.tiles?.ground).toEqual({ '0,0': 'floor' });
+    expect(after.tiles?.ground).toEqual({ '0,0': 'ground/1' }); // read back as a slot
     expect(after.geometry.walls).toEqual([]); // the wall is gone — a tile write undid a wall draw
   });
 
@@ -799,7 +806,7 @@ describe('painting a scene with floors', () => {
     const scene = await sceneAs(sceneId, boot.gmToken);
     // Ground still has its three; the catwalk has only the one.
     expect(Object.keys({ ...scene.tiles?.ground, ...scene.tiles?.structure })).toHaveLength(3);
-    expect(scene.levels?.[0]?.tiles?.ground).toEqual({ '5,5': 'floor' });
+    expect(scene.levels?.[0]?.tiles?.ground).toEqual({ '5,5': 'ground/1' }); // stored as a slot
   });
 
   it('reports the count for the floor it painted, not the ground', async () => {

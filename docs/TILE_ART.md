@@ -247,7 +247,23 @@ anyone comparing this to a screenshot knows exactly which knob was turned.
 7. A piece of furniture or a prop names a `prop` design from `TILE_PROPS`
    — reuse one before adding one; a new design needs a drawing in
    `stage/props.ts`, and the record type will not compile without it.
-8. Run `pnpm --filter @safehouse/rules test`. The failure will name the rule.
+8. **Append it to its category; never insert.** A painted square stores a
+   *slot*, not a tile id — `ground/3`, `building/door`, `interior/2` — and
+   the slot a tile answers is its position among the set's tiles of that
+   category, in catalogue order (`rules/tilesets/slots.ts`). That order is
+   part of the data contract: a tile inserted mid-category renumbers every
+   tile after it, and every map painted with the set silently changes.
+   Building and stairs are roles rather than numbers (the first door is
+   `building/door`, the first see-through in-wall piece the `window`, the
+   first solid one the `wall`; extras count on from 4), so those may be
+   reordered only if the roles come out the same. `slots.test.ts` pins the
+   assignment for every set and fails the moment it moves.
+9. Run `pnpm --filter @safehouse/rules test`. The failure will name the rule.
+
+Every set answers every slot: a number the set lacks wraps onto one it has,
+so a map painted with a seven-floor set still draws in a three-floor one. A
+set switch is therefore a render decision — the map is stored once, in slots,
+and each set is one way of drawing it.
 
 The generator used to build the current catalogue is not checked in — the
 catalogue is the source of truth, and the hexes in it are the authored values.

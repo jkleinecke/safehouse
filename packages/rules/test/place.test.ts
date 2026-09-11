@@ -26,6 +26,7 @@ import {
   pickTile,
   tilesetById,
   type PlacementContext,
+  tileById,
 } from '../src/index.js';
 
 const sprawl = tilesetById('sprawl')!;
@@ -202,11 +203,13 @@ describe('migrating a scene painted before layers existed', () => {
       tilesetId: 'sprawl',
       cells: { '0,0': 'road', '1,0': 'wall', '2,0': 'tree', '3,0': 'car' },
     });
-    expect(out.ground['0,0']).toBe('road');
-    expect(out.structure['1,0']).toBe('wall');
-    expect(out.object['2,0']).toBe('tree');
+    // Every square comes out as a SLOT (slots.ts), read back through the set.
+    expect(tileById('sprawl', out.ground['0,0']!)?.id).toBe('road');
+    expect(tileById('sprawl', out.structure['1,0']!)?.id).toBe('wall');
+    expect(tileById('sprawl', out.object['2,0']!)?.id).toBe('tree');
     // A car is interior, which shares the object layer with decoration.
-    expect(out.object['3,0']).toBe('car');
+    expect(tileById('sprawl', out.object['3,0']!)?.id).toBe('car');
+    expect(out.structure['1,0']).toBe('building/wall');
   });
 
   it('lets already-layered data win, because it is the newer answer', () => {
@@ -215,7 +218,7 @@ describe('migrating a scene painted before layers existed', () => {
       cells: { '0,0': 'road' },
       ground: { '0,0': 'grass' },
     });
-    expect(out.ground['0,0']).toBe('grass');
+    expect(tileById('sprawl', out.ground['0,0']!)?.id).toBe('grass');
   });
 
   it('drops an id the catalogue no longer knows rather than guessing a layer', () => {

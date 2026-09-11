@@ -40,6 +40,7 @@
  * what it paints them, which is also what makes a new set cheap to author.
  */
 import { TILE_HEIGHTS, type Tileset } from './types.js';
+import { resolveTile } from './slots.js';
 
 const { WAIST, FULL } = TILE_HEIGHTS;
 
@@ -287,6 +288,12 @@ export function tilesetById(id: string): Tileset | null {
   return TILESETS.find((t) => t.id === id) ?? null;
 }
 
-export function tileById(tilesetId: string, tileId: string): Tileset['tiles'][number] | null {
-  return tilesetById(tilesetId)?.tiles.find((t) => t.id === tileId) ?? null;
+/**
+ * A tile by id OR by slot (`slots.ts`): a painted square stores a slot, and a
+ * square painted before slots existed stores an id, so every lookup takes
+ * either. A slot the set lacks answers with the set's nearest tile.
+ */
+export function tileById(tilesetId: string, ref: string): Tileset['tiles'][number] | null {
+  const set = tilesetById(tilesetId);
+  return set === null ? null : resolveTile(set, ref);
 }

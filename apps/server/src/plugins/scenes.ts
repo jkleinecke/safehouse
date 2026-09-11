@@ -26,6 +26,7 @@ import {
   sceneLevels,
   tileById,
   tilesetById,
+  toSlot,
 } from '@safehouse/rules';
 import {
   DisplaySetCommandSchema,
@@ -140,6 +141,12 @@ const DoorOpBody = z.object({
   cell: CellKeySchema.optional(),
   level: z.number().int().min(0).max(MAX_LEVELS - 1).default(0),
   op: z.enum(['open', 'close', 'lock', 'unlock']),
+});
+
+const TilesetSwitchBody = z.object({
+  tilesetId: z.string().min(1).max(64),
+  /** One floor only; absent means every floor. */
+  level: z.number().int().min(0).optional(),
 });
 
 const TilePaintBody = z.object({
@@ -361,6 +368,47 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       });
     });
     return { ok: true };
+  });
+
+  /**
+   * Draw the scene in another set (FR9.2). A render decision: every floor's
+   * `tilesetId` changes and nothing else does — the squares hold slots that
+   * mean the same thing in every set, so the doors keep their locks, the
+   * stairs still lead where they led, and switching back is exact. A floor
+   * with nothing painted is left alone; the palette's choice lives on the
+   * client until the first stroke.
+   */
+  app.post('/api/scenes/:id/tileset', async (req) => {
+    const { id } = req.params as { id: string };
+    const { scene } = await openScene(req, id, { gmOnly: true });
+    const body = parseBody(TilesetSwitchBody, req.body);
+    if (tilesetById(body.tilesetId) === null) {
+      throw httpError(400, 'unknown_tileset', `no such tileset: ${body.tilesetId}`);
+    }
+    const updated = await app.hub.atomic(scene.campaignId, async (tx) => {
+      const txSvc = svc.withDb(tx.db);
+      const fresh = await txSvc.sceneRow(id);
+      const scene0 = serializeScene(fresh);
+      const redraw = (tiles: NonNullable<typeof scene0.tiles>) => ({
+        ...migrateTileLayer(tiles),
+        tilesetId: body.tilesetId,
+        cells: {},
+      });
+      // Every floor, or the one named — undo puts floors back one at a time.
+      const only = body.level;
+      const patch: Record<string, unknown> = {};
+      if (scene0.tiles && (only === undefined || only === 0)) patch['tiles'] = redraw(scene0.tiles);
+      if ((scene0.levels ?? []).length > 0 && (only === undefined || only > 0)) {
+        patch['levels'] = (scene0.levels ?? []).map((l, i) =>
+          l.tiles && (only === undefined || only === i + 1) ? { ...l, tiles: redraw(l.tiles) } : l,
+        );
+      }
+      if (Object.keys(patch).length === 0) return scene0;
+      const written = await txSvc.updateScene(fresh, patch);
+      await tx.emit({ type: 'scene.updated', payload: { sceneId: id, changed: written.changed } });
+      return written.scene;
+    });
+    return { scene: updated };
   });
 
   /**
@@ -600,14 +648,15 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         );
       }
       const existing = floors[body.level]?.tiles;
-      // A layer carries exactly one tileset id, so a stroke from a different
-      // set cannot be merged into it — painting with a new set REPLACES the
-      // floor. Destructive and deliberate; the palette warns before it.
-      const keep = !body.clear && existing && existing.tilesetId === body.tilesetId;
-      // Read through the migration, so a scene painted before layers existed
-      // upgrades itself the first time the GM touches it.
+      // Layers hold SLOTS (rules/tilesets/slots.ts), which mean the same thing
+      // in every set, so a stroke under another set keeps every square and
+      // only changes which set the floor is drawn in. Only `clear` starts
+      // the floor over.
+      const keep = !body.clear && existing !== undefined;
+      // Read through the migration, so a scene painted before layers or
+      // slots existed upgrades itself the first time the GM touches it.
       const layers = keep
-        ? migrateTileLayer(existing)
+        ? { ...migrateTileLayer(existing), tilesetId: body.tilesetId }
         : { tilesetId: body.tilesetId, ground: {}, structure: {}, object: {} };
 
       if (body.clear && body.layer !== undefined && keep) {
@@ -619,9 +668,10 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       // Where a tile goes is the tile's business (`layerOf`), never the
       // client's: that is what stops a wall being painted into the layer that
       // line of sight does not read.
-      for (const [key, tileId] of Object.entries(body.paint)) {
-        const tile = tileById(body.tilesetId, tileId)!;
-        layers[layerOf(tile)][key] = tileId;
+      for (const [key, ref] of Object.entries(body.paint)) {
+        const tile = tileById(body.tilesetId, ref)!;
+        // Stored as the slot, so the square reads the same in any set.
+        layers[layerOf(tile)][key] = toSlot(tilesetById(body.tilesetId)!, tile.id) ?? tile.id;
       }
 
       // No layer named means the eraser as a GM understands it: take whatever

@@ -22,7 +22,7 @@
  */
 import { useMemo } from 'react';
 import type { Scene, Token } from '@safehouse/contracts';
-import { sceneLevels, stairTarget } from '@safehouse/rules';
+import { sceneLevels, stairTarget, resolveTile } from '@safehouse/rules';
 import type { TilesetDef } from './api.js';
 
 export interface StairOffer {
@@ -60,7 +60,7 @@ export function stairOfferFor(
   const key = `${Math.floor(token.x)},${Math.floor(token.y)}`;
   const target = stairTarget(scene, level, key, (tilesetId, tileId) => {
     const set = tilesets.find((t) => t.id === tilesetId);
-    return set?.tiles.find((t) => t.id === tileId) ?? null;
+    return set ? resolveTile(set, tileId) : null;
   });
   if (target === null) return null;
 

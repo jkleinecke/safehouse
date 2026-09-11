@@ -53,7 +53,6 @@ import { useStairOffer } from './useStairs.js';
 import { historyFor, useHistory } from './history.js';
 import { useGridStore } from './store.js';
 import {
-  TILE_TOOLS,
   type RulerState,
   type StageApi,
   type StageCallbacks,
@@ -164,25 +163,6 @@ export default function GridPage() {
   // A stroke still buffered when the GM navigates away is work they did.
   useEffect(() => () => strokeRef.current?.dispose(), []);
 
-  /**
-   * The floor-wipe warning, on the canvas rather than in the panel.
-   *
-   * The server replaces the ENTIRE painted layer when a stroke arrives under a
-   * different tileset (`plugins/scenes.ts` — there is no merge across sets and
-   * no confirmation). `TilesTab` says so, but only while the Tiles tab is
-   * open, and both the selected set and the paint tool outlive the panel: a GM
-   * who closes the panel and keeps painting could wipe a scene's floor with one
-   * click and never see the sentence. It follows the tool now, so it is on
-   * screen exactly when the next stroke is the destructive one.
-   */
-  const tileWipeWarning = useMemo(() => {
-    if (!isGm || (!TILE_TOOLS.includes(store.tool) && store.tool !== 'tile-erase')) return null;
-    const painted = scene?.tiles;
-    if (!painted || painted.tilesetId === store.tilesetId) return null;
-    const count = Object.keys(painted.cells).length;
-    if (count === 0) return null;
-    return `painting now replaces ${count} cells painted with “${painted.tilesetId}”`;
-  }, [isGm, store.tool, store.tilesetId, scene?.tiles]);
 
   // -- commands -------------------------------------------------------------
 
@@ -805,11 +785,6 @@ export default function GridPage() {
                 {selectedToken.name} takes the stairs {stairOffer.direction} to{' '}
                 {stairOffer.targetName}
               </button>
-            )}
-            {tileWipeWarning && (
-              <span data-testid="tile-wipe-warning" className="chip bg-panel/90 text-magenta">
-                {tileWipeWarning}
-              </span>
             )}
             {tileNotice && (
               <span data-testid="tile-notice" className="chip bg-panel/90 text-danger">

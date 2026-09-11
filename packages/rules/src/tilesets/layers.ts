@@ -16,6 +16,7 @@
  * a wall the GM can see and line of sight cannot.
  */
 import { tilesetById } from './catalogue.js';
+import { resolveTile, toSlot } from './slots.js';
 import { layerOf } from './types.js';
 
 /** The layered shape, structural so contracts stays the owner of the schema. */
@@ -71,17 +72,28 @@ export function migrateTileLayer(tiles: LayeredTiles): ResolvedTileLayers {
     ...(tiles.doors !== undefined ? { doors: resolveDoors(tiles.doors) } : {}),
   };
 
-  const legacy = tiles.cells;
-  if (legacy === undefined) return out;
   const set = tilesetById(tiles.tilesetId);
   if (set === null) return out; // unknown catalogue — see the header
-  const byId = new Map(set.tiles.map((t) => [t.id, t]));
 
-  for (const [key, tileId] of Object.entries(legacy)) {
-    const tile = byId.get(tileId);
-    if (tile === undefined) continue;
-    const layer = layerOf(tile);
-    if (out[layer][key] === undefined) out[layer][key] = tileId;
+  const legacy = tiles.cells;
+  if (legacy !== undefined) {
+    for (const [key, ref] of Object.entries(legacy)) {
+      const tile = resolveTile(set, ref);
+      if (tile === null) continue;
+      const layer = layerOf(tile);
+      if (out[layer][key] === undefined) out[layer][key] = ref;
+    }
+  }
+
+  // Every value becomes a slot (`slots.ts`): a square painted before slots
+  // existed holds a tile id, and the same square must read the same in any
+  // set. An id the set does not know is left as it is, to be skipped by
+  // whoever draws it, rather than guessed at.
+  for (const layer of ['ground', 'structure', 'object'] as const) {
+    for (const [key, ref] of Object.entries(out[layer])) {
+      const slot = toSlot(set, ref);
+      if (slot !== undefined) out[layer][key] = slot;
+    }
   }
   return out;
 }

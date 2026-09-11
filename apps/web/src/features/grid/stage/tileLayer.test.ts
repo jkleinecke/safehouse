@@ -95,6 +95,45 @@ function catalogueDefs(): Record<string, TileDrawDef> {
 }
 
 // ---------------------------------------------------------------------------
+// Slots: what a painted square holds, drawn by whichever set the floor names
+// ---------------------------------------------------------------------------
+
+describe('the palette answers slots as well as ids', () => {
+  const defs = catalogueDefs();
+
+  it('files each tile under its id and its slot, as the same def', () => {
+    expect(defs[tileDefKey('docklands', 'ground/1')]).toBe(defs[tileDefKey('docklands', 'floor')]);
+    expect(defs[tileDefKey('docklands', 'building/door')]).toBe(defs[tileDefKey('docklands', 'door')]);
+    expect(defs[tileDefKey('corp', 'interior/1')]).toBe(defs[tileDefKey('corp', 'desk')]);
+  });
+
+  it('draws the same slot as a different tile in another set', () => {
+    const dock = defs[tileDefKey('docklands', 'ground/2')];
+    const corp = defs[tileDefKey('corp', 'ground/2')];
+    expect(dock).toBeDefined();
+    expect(corp).toBeDefined();
+    expect(dock).not.toBe(corp);
+    expect(defs[tileDefKey('corp', 'building/door')]?.kind).toBe('door');
+  });
+
+  it('gives every set a def for every slot any set defines, so a switched map has no holes', () => {
+    const slots = new Set(
+      Object.keys(defs)
+        .map((k) => k.split('/').slice(1).join('/'))
+        .filter((ref) => ref.includes('/')),
+    );
+    expect(slots.size).toBeGreaterThan(10);
+    for (const set of TILESETS) {
+      for (const slot of slots) {
+        expect(defs[tileDefKey(set.id, slot)], `${set.id} ${slot}`).toBeDefined();
+      }
+    }
+    // A number the set lacks wraps onto one it has, rather than onto nothing.
+    expect(defs[tileDefKey('corp', 'decoration/4')]).toBe(defs[tileDefKey('corp', 'decoration/1')]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Painted doors standing open (FR9.24)
 // ---------------------------------------------------------------------------
 
