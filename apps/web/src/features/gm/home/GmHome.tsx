@@ -32,6 +32,7 @@ import PairPanel from '../pairing/PairPanel.js';
 import { useCreateInvite, useDevices, useRevokeDevice, useUpdateCampaign, type InviteResult } from './api.js';
 import PartyPanel from './PartyPanel.js';
 import SetupChecklist from './SetupChecklist.js';
+import TransferPanel from './TransferPanel.js';
 
 function SettingsPanel({ campaignId }: { campaignId: string }) {
   const { data: campaign } = useCampaign(campaignId);
@@ -275,6 +276,7 @@ export default function GmHome() {
               onShowQr={() => setQr({ open: true, role: 'player' })}
             />
             <SettingsPanel campaignId={campaignId} />
+            <TransferPanel campaignId={campaignId} />
           </div>
           <div className="space-y-4">
             <InvitePanel campaignId={campaignId} onShowQr={(role) => setQr({ open: true, role })} />

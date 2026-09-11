@@ -4,7 +4,7 @@
  */
 import { useMutation, useQuery } from '@tanstack/react-query';
 import type { Book } from '@safehouse/contracts';
-import { apiGet, apiPatch, apiPost, queryClient } from '../../../api/client.js';
+import { apiDelete, apiGet, apiPatch, apiPost, queryClient } from '../../../api/client.js';
 import { detectionNote, normalizeDetection, type OffsetProposal } from './calibration.js';
 
 export type BookRecord = Book & {
@@ -137,4 +137,135 @@ export function useReadInfo(bookCode: string | undefined, printedPage: number) {
     staleTime: 5 * 60_000,
     retry: 0,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Search (FR12.14) and the library — bookmarks and the recently-opened trail
+// (FR11.6). Routes since M11; `BookSearch` and `LibraryPanel` are their first
+// callers (docs/UX_AUDIT.md).
+// ---------------------------------------------------------------------------
+
+/** One hit of `GET /api/books/search`, already scoped to books this device may open. */
+export interface BookSearchHit {
+  book: string;
+  bookId: string;
+  title: string;
+  /** Printed page — the number on the paper. */
+  page: number;
+  pdfPage: number;
+  /** FTS headline: matches wrapped in `<b>`, otherwise plain text. */
+  snippet: string;
+  rank: number;
+  /** `SR5 p.426`. */
+  ref: string;
+  readUrl: string;
+}
+
+export const SEARCH_LIMIT = 20;
+
+export function useBookSearch(q: string, book?: string) {
+  const query = q.trim();
+  return useQuery({
+    queryKey: ['books', 'search', query, book ?? ''],
+    queryFn: async () => {
+      const params = new URLSearchParams({ q: query, limit: String(SEARCH_LIMIT) });
+      if (book) params.set('book', book);
+      return (await apiGet<{ query: string; hits: BookSearchHit[] }>(`/api/books/search?${params}`)).hits;
+    },
+    enabled: query.length >= 2,
+    staleTime: 60_000,
+    retry: 0,
+  });
+}
+
+/** A named page (`services/bookmarks.ts`), decorated with its open URL. */
+export interface Bookmark {
+  id: string;
+  book: string;
+  page: number;
+  label: string;
+  note?: string;
+  pinned?: boolean;
+  createdAt?: string;
+  ref: string;
+  title: string;
+  pdfPage: number;
+  readUrl: string;
+}
+
+/** One entry of the trail: the last page anyone at the table opened. */
+export interface RecentRef {
+  book: string;
+  page: number;
+  label?: string;
+  at?: string;
+  ref: string;
+  readUrl: string;
+}
+
+export interface LibraryView {
+  bookmarks: Bookmark[];
+  recentRefs: RecentRef[];
+}
+
+export const libraryKey = (campaignId: string) => ['campaign', campaignId, 'library'] as const;
+
+export function useLibrary(campaignId: string) {
+  return useQuery({
+    queryKey: libraryKey(campaignId),
+    queryFn: () => apiGet<LibraryView>(`/api/campaigns/${campaignId}/library`),
+    enabled: Boolean(campaignId),
+  });
+}
+
+export interface NewBookmark {
+  book: string;
+  page: number;
+  label: string;
+  note?: string;
+  pinned?: boolean;
+}
+
+export function useAddBookmark(campaignId: string) {
+  return useMutation({
+    mutationFn: (body: NewBookmark) =>
+      apiPost<Bookmark>(`/api/campaigns/${campaignId}/bookmarks`, body),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: libraryKey(campaignId) });
+    },
+  });
+}
+
+export function useUpdateBookmark(campaignId: string) {
+  return useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: Partial<NewBookmark> }) =>
+      apiPatch<Bookmark>(`/api/campaigns/${campaignId}/bookmarks/${id}`, patch),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: libraryKey(campaignId) });
+    },
+  });
+}
+
+export function useRemoveBookmark(campaignId: string) {
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiDelete<{ deleted: boolean }>(`/api/campaigns/${campaignId}/bookmarks/${id}`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: libraryKey(campaignId) });
+    },
+  });
+}
+
+/**
+ * Put a page on the trail. Fire-and-forget: the trail is a convenience, and
+ * never a reason a book fails to open — a 403 here (a book this device may
+ * not read) is the reader's problem to report, not this call's.
+ */
+export function recordRecentRef(
+  campaignId: string,
+  ref: { book: string; page: number; label?: string },
+): void {
+  void apiPost<{ recentRefs: RecentRef[] }>(`/api/campaigns/${campaignId}/library/recent`, ref)
+    .then(() => queryClient.invalidateQueries({ queryKey: libraryKey(campaignId) }))
+    .catch(() => undefined);
 }

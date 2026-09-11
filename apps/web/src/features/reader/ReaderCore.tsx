@@ -12,8 +12,8 @@
  * page to move as they nudge it.
  */
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
-import { getToken } from '../../api/session.js';
-import { useReadInfo } from '../gm/books/api.js';
+import { getSession, getToken } from '../../api/session.js';
+import { recordRecentRef, useAddBookmark, useReadInfo } from '../gm/books/api.js';
 import NativeBookFrame from './NativeBookFrame.js';
 import ReaderShell, { type ReaderCalibration } from './ReaderShell.js';
 import { nextZoom } from './layout.js';
@@ -91,6 +91,20 @@ export default function ReaderCore({
   // Keying the query on the live page would put a round trip on every tap of
   // "next" — on a phone, on the table's Wi-Fi.
   const [anchorPage] = useState(printedPage);
+
+  // The trail (FR11.6): opening a book puts it on the table's recently-read
+  // list — once per opening, not per page turn, and calibrating is not reading.
+  const session = getSession();
+  const campaignId = session?.campaignId;
+  const calibrating = calibrate !== undefined;
+  useEffect(() => {
+    if (!campaignId || calibrating) return;
+    recordRecentRef(campaignId, { book: code, page: anchorPage });
+  }, [campaignId, calibrating, code, anchorPage]);
+
+  // Naming the page you are on (FR11.6): the GM's, and only inside a campaign.
+  const addBookmark = useAddBookmark(campaignId ?? '');
+  const [marked, setMarked] = useState<string | null>(null);
   // While calibrating, the offset is the GM's live guess, not the stored one.
   const info = useReadInfo(calibrate ? undefined : code, anchorPage);
   const offset = calibrate ? calibrate.offset : (info.data?.pageOffset ?? 0);
@@ -200,6 +214,22 @@ export default function ReaderCore({
           : undefined
       }
       calibrate={calibrate}
+      bookmark={
+        campaignId && session?.role === 'gm' && !calibrating
+          ? {
+              onSave: (label) =>
+                addBookmark.mutate(
+                  { book: code, page, label },
+                  {
+                    onSuccess: (b) => setMarked(`saved as “${b.label}”`),
+                    onError: (err) => setMarked(err instanceof Error ? err.message : 'could not save'),
+                  },
+                ),
+              saving: addBookmark.isPending,
+              saved: marked,
+            }
+          : undefined
+      }
       status={status}
       error={fatal}
       {...(className ? { className } : {})}

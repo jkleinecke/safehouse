@@ -187,3 +187,22 @@ export function useCreateInvite(campaignId: string) {
       apiPost<InviteResult>(`/api/campaigns/${campaignId}/invites`, body),
   });
 }
+
+/**
+ * POST /api/campaigns/:id/transfer-ownership (FR1.2) — the record, the seats
+ * and every device token move in one transaction; this device comes out of
+ * it a player. The caller re-files the browser session to match.
+ */
+export function useTransferOwnership(campaignId: string) {
+  return useMutation({
+    mutationFn: (toUserId: string) =>
+      apiPost<{ campaignId?: string; gmUserId?: string }>(
+        `/api/campaigns/${campaignId}/transfer-ownership`,
+        { toUserId },
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['campaign', campaignId] });
+      void queryClient.invalidateQueries({ queryKey: ['campaigns'] });
+    },
+  });
+}

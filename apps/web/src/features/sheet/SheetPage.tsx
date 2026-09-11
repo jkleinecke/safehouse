@@ -42,6 +42,7 @@ import BackgroundTab from './tabs/BackgroundTab.js';
 import CombatTab from './tabs/CombatTab.js';
 import ContactsTab from './tabs/ContactsTab.js';
 import GearTab from './tabs/GearTab.js';
+import HistoryTab from './tabs/HistoryTab.js';
 import LedgerTab from './tabs/LedgerTab.js';
 import MagicTab from './tabs/MagicTab.js';
 import SkillsTab from './tabs/SkillsTab.js';
@@ -67,6 +68,7 @@ const TAB_VIEWS: Record<SheetTab, (props: TabProps) => ReactElement | null> = {
   contacts: ContactsTab,
   background: BackgroundTab,
   ledger: LedgerTab,
+  history: HistoryTab,
 };
 
 export default function SheetPage() {

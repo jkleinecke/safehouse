@@ -18,6 +18,8 @@ import { Link, useParams } from 'react-router-dom';
 import { getSession } from '../../api/session.js';
 import GmBooksPage from '../gm/BooksPage.js';
 import { useBooks, type BookRecord } from '../gm/books/api.js';
+import BookSearch from '../gm/books/BookSearch.js';
+import LibraryPanel from '../gm/books/LibraryPanel.js';
 import { BookViewerOverlay } from '../gm/books/RefChip.js';
 import { EmptyState, ErrorNote, SectionTitle, Spinner } from '../gm/ui.js';
 
@@ -79,6 +81,12 @@ export function SharedShelf({ campaignId }: { campaignId: string }) {
     <div className="p-4 md:p-6">
       <SectionTitle hint="what the GM shared with the table">Rules library</SectionTitle>
       <h1 className="mt-1 text-lg font-semibold">Books</h1>
+
+      {/* Look it up, and what the table looked up (FR12.14, FR11.6). */}
+      <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-2">
+        <BookSearch books={rows} />
+        <LibraryPanel campaignId={campaignId} canEdit={false} books={rows} />
+      </div>
 
       {books.isLoading && (
         <div className="mt-6">

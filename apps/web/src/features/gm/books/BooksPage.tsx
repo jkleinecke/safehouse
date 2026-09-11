@@ -15,7 +15,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useBooks, useDetectOffset, useUpdateBook, type BookRecord } from './api.js';
+import BookSearch from './BookSearch.js';
 import BookShelfCard, { type DetectPhase } from './BookShelfCard.js';
+import LibraryPanel from './LibraryPanel.js';
 import SeedInstructions from './SeedInstructions.js';
 import { BookViewerOverlay } from './RefChip.js';
 import {
@@ -176,6 +178,12 @@ export default function BooksPage() {
           Rules library
         </SectionTitle>
         <h1 className="mt-1 text-lg font-semibold">Books</h1>
+
+        {/* Look it up, and name the page (FR12.14, FR11.6) — above the calibration work. */}
+        <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-2">
+          <BookSearch books={rows} />
+          <LibraryPanel campaignId={campaignId ?? ''} canEdit books={rows} />
+        </div>
 
         {books.isLoading && (
           <div className="mt-6">

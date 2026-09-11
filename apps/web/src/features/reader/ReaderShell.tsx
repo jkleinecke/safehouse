@@ -28,6 +28,14 @@ export interface ReaderCalibration {
   saving?: boolean;
 }
 
+/** Name this page for the table (FR11.6) — offered to the GM inside a campaign. */
+export interface ReaderBookmark {
+  onSave: (label: string) => void;
+  saving?: boolean | undefined;
+  /** What the last save came to — "saved as …", or why not. */
+  saved?: string | null | undefined;
+}
+
 export interface ReaderShellProps {
   code: string;
   title?: string | undefined;
@@ -43,6 +51,7 @@ export interface ReaderShellProps {
   closeLabel?: string;
   zoom?: ReaderZoomControls | undefined;
   calibrate?: ReaderCalibration | undefined;
+  bookmark?: ReaderBookmark | undefined;
   /** Non-fatal note ("streaming…", "native viewer"), rendered in the top bar. */
   status?: ReactNode;
   /** Fatal-for-this-view message; the surface is replaced by it. */
@@ -67,11 +76,14 @@ export default function ReaderShell({
   closeLabel = 'close',
   zoom,
   calibrate,
+  bookmark,
   status,
   error,
   className,
 }: ReaderShellProps) {
   const [draft, setDraft] = useState(String(mapping.printed));
+  const [marking, setMarking] = useState(false);
+  const [mark, setMark] = useState('');
 
   // The jump box follows the page when it moves for any other reason (stepper,
   // a clamp at the back cover, a new ref chip opening the same reader).
@@ -239,6 +251,49 @@ export default function ReaderShell({
             >
               {calibrate.saving ? 'saving…' : 'save offset'}
             </button>
+          </span>
+        )}
+
+        {bookmark && (
+          <span className="flex flex-wrap items-center gap-1" data-testid="reader-bookmark">
+            {marking ? (
+              <form
+                className="flex items-center gap-1"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const label = mark.trim();
+                  if (!label) return;
+                  bookmark.onSave(label);
+                  setMarking(false);
+                  setMark('');
+                }}
+              >
+                <input
+                  className={`rounded-md border border-edge bg-deck px-2 text-sm text-ink placeholder:text-faint focus:border-cyan focus:outline-none ${TAP}`}
+                  value={mark}
+                  autoFocus
+                  placeholder="what this page is"
+                  aria-label="Bookmark label"
+                  onChange={(e) => setMark(e.target.value)}
+                />
+                <button type="submit" className={`btn btn-accent px-2.5 ${TAP}`} disabled={bookmark.saving}>
+                  {bookmark.saving ? 'saving…' : 'save'}
+                </button>
+                <button type="button" className={`btn px-2.5 ${TAP}`} onClick={() => setMarking(false)}>
+                  cancel
+                </button>
+              </form>
+            ) : (
+              <button
+                type="button"
+                className={`btn px-2.5 ${TAP}`}
+                onClick={() => setMarking(true)}
+                title="Name this page for the table — it lands in the library's bookmarks"
+              >
+                bookmark p.{mapping.printed}
+              </button>
+            )}
+            {bookmark.saved && <span className="mono-label text-ok">{bookmark.saved}</span>}
           </span>
         )}
 

@@ -93,10 +93,10 @@ point of this table:
   is what makes job 5 worse than merely missing**: the picker that does not exist
   would be picking between duplicates the app itself made.
 - **(4) "stage on map" is disabled with no scene linked and says nothing.**
-- **(6) no book search UI.** `GET /api/books/search` (FR12.14's FTS) has exactly
-  one consumer in the repo: the Fixer's `search_books` tool. Without a local
-  model, "look up a rule" is "already know the page number".
-- **(6) FR11.6's bookmarks and recents trail have no UI at all.**
+- ~~**(6) no book search UI.**~~ Closed 2026-09-11 — `features/gm/books/BookSearch.tsx`
+  on both library screens.
+- ~~**(6) FR11.6's bookmarks and recents trail have no UI at all.**~~ Closed
+  2026-09-11 — `features/gm/books/LibraryPanel.tsx`, fed by the reader.
 - **(6/9) two ref-chip implementations.** `features/gm/books/RefChip.tsx` opens
   the reader in place; `features/sheet/components/ui.tsx:167` is a separate
   `<a target="_blank">`, so a chip on a phone sheet leaves the sheet mid-fight.
@@ -135,7 +135,7 @@ server-authoritative resolve chain. The list and the switch landed on
 | FR | Status | Where |
 | --- | --- | --- |
 | FR1.1 QR join, GM at install | done | `services/auth.ts` (`POST /api/campaigns` bootstrap, `GET /api/campaigns/:id/join-qr`, `GET\|POST /api/join/:code`), `plugins/auth.ts` (`POST /api/campaigns/:id/gm-device`, `POST …/gm-pair` — single-use GM pairing code). `web/src/components/shell/Landing.tsx` offers three tabs (start a campaign · pair with a code · paste a token) over `signin.ts` / `signin-api.ts`. `test/auth-gm.test.ts` (18), `e2e/gm-signin.spec.ts` (3). |
-| FR1.2 one GM + players + observers; transfer ownership | **done · thin surface** | Roles and membership in `memberships`/`Role`. Transfer: `POST /api/campaigns/:id/transfer-ownership` and `PATCH /api/characters/:id/owner` in `plugins/campaigns-admin.ts`. **`PATCH …/owner` now has a real control** — the owner picker on each Party roster row (`features/gm/home/PartyPanel.tsx`), which is how a player's phone gets a sheet at all. **`transfer-ownership` still has no caller in `apps/web/src`**: handing the campaign itself to another GM is an API-only act. |
+| FR1.2 one GM + players + observers; transfer ownership | **done** | Roles and membership in `memberships`/`Role`. Transfer: `POST /api/campaigns/:id/transfer-ownership` and `PATCH /api/characters/:id/owner` in `plugins/campaigns-admin.ts`. `PATCH …/owner` has the owner picker on each Party roster row (`features/gm/home/PartyPanel.tsx`); `transfer-ownership` has **`features/gm/home/TransferPanel.tsx`** on the GM console — every joined person but the owner is offered, the button arms on the first click and names the consequence, and the device that clicked becomes a player on the spot. |
 | FR1.3 expiring, role-scoped, revocable invites | done | `createInvite` (`expiresInMinutes`, `maxUses`), `POST /api/devices/:id/revoke`. `join-qr` refuses `role=gm` by construction — GM devices come only from bootstrap / `gm-device` / single-use `gm-pair`. |
 | FR1.4 roles gate everything per §13 | done | `requireAuth`/`requireRole`/`assertCampaign`; hub filters by visibility server-side. Playthrough + `e2e/secrecy.spec.ts` (4). |
 | FR1.5 campaign settings incl. house-rule flags + webhook | done | `PATCH /api/campaigns/:id`. The flag system now carries one real flag — `tacticalHints` (FR10.10) — and otherwise plays RAW per Q4. |
@@ -167,7 +167,7 @@ server-authoritative resolve chain. The list and the switch landed on
 | FR3.5 manual override on any derived value, flagged, with a note | done | `POST/DELETE /api/characters/:id/overrides`. |
 | FR3.6 karma & nuyen ledgers, pending-until-approved | done | `plugins/ledger.ts`; approve/reject, now inside `Hub.atomic`. Run awards post through it (FR5.5). **Awards can now be originated from the Party roster**, not only from `RunsBoard` — still as *pending* rows, so the housekeeping beat is unchanged. They still cannot be originated from the Sessions screen, which is where a GM is standing when they want to give the table karma for turning up. |
 | FR3.7 advancement (guided karma spends) | deferred | Not built. Deliberate — see §6's deferred list. |
-| FR3.8 revisions + rollback | **done · thin surface** | `GET …/revisions`, `POST …/rollback`. Neither route has a caller anywhere in `apps/web/src`: a GM cannot see that a sheet has history, let alone roll one back. |
+| FR3.8 revisions + rollback | **done** | `GET …/revisions`, `POST …/rollback`, and now the sheet's **History** tab (`features/sheet/tabs/HistoryTab.tsx`): every revision newest first, the diff a roll-back would make (field · now · after), a two-click roll-back that is itself a new revision, and a Chummer re-import that previews its diff before it applies. |
 | FR3.9 native priority char-gen | deferred | P6 by design (D5 — Chummer is the builder until then). |
 
 ### M4 — Combat tracker *(P1)*
@@ -235,7 +235,7 @@ server-authoritative resolve chain. The list and the switch landed on
 | FR11.3 one-tap open at the printed page, in-app, on phones | **done** | Self-hosted pdf.js, per §13. `apps/web/scripts/vendor-pdfjs.mjs` copies `pdfjs-dist` into `public/pdfjs/` at `postinstall` and `build`, so the library costs zero bundle bytes and the worker stays a same-origin module worker. `features/reader/` holds the viewer (`pdfjs.ts`, `PdfSurface.tsx`, `ReaderCore/Shell/Route`), the printed-page arithmetic (`pageMath.ts`), byte-range fetching (`range.ts`) and `mode.ts`, which keeps the browser's own viewer as the documented fallback reachable three ways — `?native=1`, a remembered per-device preference, and automatically when pdf.js cannot start. `test/reader-route.test.ts` (9), web `mode`/`pageMath`/`range`/`pdfjs`/`layout`/`ReaderShell` (12)/`refChipViewer` (4), `e2e/reader.spec.ts` (3 — a ref chip opens the printed page over byte ranges, the jump box moves the page under it, pinch and the zoom controls both change scale). |
 | FR11.4 ref autolinking of `SR5 p.426` patterns | done | `web/features/gm/books/refs.ts` + tests; also used by the codex renderer. |
 | FR11.5 shared with the table, per-book GM-only toggle | done | A player's search returns real page provenance. **Players can now reach the shelf**: `/c/:campaignId/books` (`features/library/LibraryPage.tsx`) is role-aware — the GM's calibration shelf, or the shared shelf — and **Books** is on `PLAYER_NAV`, so it is a card on the campaign home and a glyph in the phone's bottom nav. Before this round the shelf existed only behind the GM guard, and a player could reach a rulebook only through a ref chip that happened to be embedded in something they were already reading. |
-| FR11.6 named bookmarks + recently-opened trail | **done · thin surface — nothing renders it** | `services/bookmarks.ts` + routes; `test/books-bookmarks.test.ts` (13). `GET/POST/DELETE /api/campaigns/:id/bookmarks`, `GET …/library` and `GET …/library/recent` have **no caller anywhere in `apps/web/src`**. The whole FR is invisible to a GM. |
+| FR11.6 named bookmarks + recently-opened trail | **done** | `services/bookmarks.ts` + routes; `test/books-bookmarks.test.ts` (13). Rendered at last by **`features/gm/books/LibraryPanel.tsx`** on both library screens (pinned first; the GM adds, renames, pins and removes; everyone opens), and fed by the reader: every book opened lands on the trail, and the GM can name the page they are looking at from inside it (`reader/ReaderShell.tsx`). |
 | FR11.7 `pnpm seed:books` folder import with guessed codes | done | `apps/server/scripts/seed-books.ts`. PDFs stay out of git. |
 
 ### M12 — The Fixer *(assistant core P1)*
@@ -247,7 +247,7 @@ server-authoritative resolve chain. The list and the switch landed on
 | FR12.3 lore and state research | done | `search_codex` over a real codex (`fixer/state-codex.ts`). |
 | FR12.4 planning / brainstorming with "save to codex" | **done** | The draft lands as a `wiki_page` the codex UI can browse and edit — **and, as of this round, on the page it belongs to.** `features/codex/ai/AiPanel.tsx` hydrates the campaign's pending `wiki_page` drafts on mount, so a draft asked for from the Fixer chat two screens away is waiting beside the page rather than in an inbox the GM has to know about. |
 | FR12.5 NPC fiction layer onto procedural stats | done | `generate_npc` + persona; D13 split held. |
-| FR12.6 in-character conversations with knowledge boundary + secrets | **done · thin surface** | `POST /api/npcs/:id/converse`. **No chat surface exists** — the route has no caller in `apps/web/src`, so talking to an NPC in character is an API-only act. |
+| FR12.6 in-character conversations with knowledge boundary + secrets | **done** | `POST /api/npcs/:id/converse`, and now a surface: **`features/gm/fixer/NpcVoice.tsx`** on the Fixer page — pick an archetype (persona first), talk to it, one in-character line a turn, the persona kept in view; goes quiet with the Fixer (NG7). |
 | FR12.7 codex drafting | **done** | `draft_wiki_page` → `wiki_pages` on accept. **This round gave it the door the user asked for.** `features/codex/ai/` puts four actions beside the page — *draft with the Fixer · expand · summarise the log · suggest links* — plus `NewPagePrompt` in the browser for an empty codex. Nothing applies itself: every result is a `ProposalCard` the GM accepts, edits or rejects (P8). Accepting an **expansion** is `PATCH /api/wiki/:id` (`ai/api.ts:240`), which is what makes "flesh out this stub" possible at all — the server's `applyWikiDraft` only ever inserts, and remains correct as the accept-as-new-page path. With `LLM_BASE_URL` unset the buttons stay visible and disabled with the reason (NG7), rather than vanishing as `FixerDock` does. `codex/ai/ai.test.tsx` (29). Before this round, grepping `PageView.tsx` for *fixer*, *draft*, *generate* or *ai* returned nothing at all. |
 | FR12.8 fog NL commands, proximity prompts, region auto-naming | done | `suggest_fog_reveal` + `fog_reveal` draft kind; `fixer/proximity.ts` behind `check_fog_proximity` and `GET /api/fixer/fog-proximity` — GM-only, never written down. |
 | FR12.9 token identification / labelling | done | `fixer/token-id.ts`, `identify_tokens`, `POST /api/fixer/identify-tokens`. |
@@ -255,7 +255,7 @@ server-authoritative resolve chain. The list and the switch landed on
 | FR12.11 map assistance (layout copilot) | **done, both lanes** | Lane 1 unchanged: `fixer/geometry.ts` / `propose_geometry` compiles guided-JSON rectangles to walls / doors / named fog regions as a draft. Lane 2 is new — **map vision**: `fixer/vision.ts` + `vision-probe.ts` probe the configured model once, cache the answer, and offer `read_map_image` **only** when the box actually reads images (`fixer/agent.ts:363` filters it out otherwise). The route distinguishes the two "no" cases honestly: `503 ai_disabled` for no box, `501 vision_unsupported` for a box whose model is text-only. `test/fixer-vision.test.ts` (17). |
 | FR12.12 recap drafts | **done** | `fixer/tools-recap.ts` (`draft_recap`) + `fixer/recap.ts` (`assembleRecap`): the model writes prose only, the server adds tallies, casualties, reveals and awards from the log itself, and the FR12.19 spoiler guard runs **unconditionally** because a recap is player-facing by definition. The deterministic client-side skeleton survives as the no-model path (`web/features/gm/sessions/recap.ts`). `test/fixer-recap.test.ts` (8), `e2e/recap.spec.ts` (3). |
 | FR12.13 OpenAI-compatible local provider; unset base URL hides everything | done | `fixer/llm.ts`, `GET /api/fixer/status`. Nothing touches the internet. |
-| FR12.14 retrieval over extracted book text, Postgres FTS | **done · thin surface** | `book_pages.tsv` generated tsvector, `searchBookPages`. **`GET /api/books/search` has exactly one consumer in the repo — the Fixer's `search_books` tool.** Nothing in `apps/web/src` calls it and the reader has no in-page find, so a GM without a local inference box cannot search the rules at all: "look up a rule" degrades to "already know the page number". |
+| FR12.14 retrieval over extracted book text, Postgres FTS | **done** | `book_pages.tsv` generated tsvector, `searchBookPages`. `GET /api/books/search` now has two consumers: the Fixer's `search_books` tool and **`features/gm/books/BookSearch.tsx`** on both library screens (ranked hits, per-book filter, a tap opens the printed page in place) — so a GM without a local inference box can search the rules. The reader still has no in-page find. |
 | FR12.15 every generation an `ai_generation` draft; usage meter | **done** | `fixer/drafts.ts` for drafts; the meter is now durable — `ai_usage` (`schema.ts:432`, migration `0002_macros_and_usage.sql`) records every chat turn, `fixer/usage.ts` `persistTurnUsage` / `campaignUsage` read it back, and `GET /api/campaigns/:id/fixer/usage` reports both the durable total and the per-process live one. `test/fixer-usage.test.ts` (7) includes "reads the same number back from a fresh server on the same directory"; the playthrough asserts 4 turns / 1261 tokens survive a restart while the per-process half correctly reads zero. |
 | FR12.16 fast/primary slot discipline | done | `fast` defaults to `primary` when unconfigured. |
 | FR12.17 read-only state tool catalog | done | 26 tools registered plus the capability-flagged `read_map_image`: `get_campaign`, `list_characters`, `get_character`, `get_ledger`, `get_encounter`, `get_scene`, `get_session_log`, `search_books`, `get_page`, `search_codex`, `list_contacts`, `list_runs`/`get_run`, `get_calendar`, `list_npcs`, `get_npc`, `get_threat_readout`, `get_magic_state`, `get_matrix_state` — plus `generate_npc`, `draft_wiki_page`, `draft_recap`, `suggest_fog_reveal`, `check_fog_proximity`, `identify_tokens`, `propose_geometry`. `get_magic_state` now returns `spirits: { tracked: true, list }` because the tracker exists (FR8.3); `get_matrix_state` still returns `tracked: false` with a note for Overwatch and marks rather than a misleading zero — honest about M7 not existing. |
@@ -338,7 +338,7 @@ not the strongest.
 | Measurement / ruler | shipped, SR5-native |
 | Dice + macros | **shipped — macros now follow the person, not the handset** (FR2.8) |
 | Initiative tracker | shipped; picks its fight, starts it, rolls or takes the table's dice — see job 5 in §1 |
-| Character sheets | shipped via Chummer import — **and the import finally has a button** (`home/AddCharacter.tsx`); re-import and rollback are still API-only |
+| Character sheets | shipped via Chummer import — **and the import finally has a button** (`home/AddCharacter.tsx`); re-import and rollback have a screen too now: the sheet's **History** tab (`sheet/tabs/HistoryTab.tsx`) |
 | Handouts | shipped — upload, attach, stage, reveal, TV takeover |
 | Journal / notes | shipped (M5 codex, with templates page-referenced) |
 | Rollable tables | shipped |
@@ -1244,9 +1244,13 @@ are written up as UX-1, UX-2 and UX-3 in §3; in short:
 3. **The generator's warts survive** — result card lost on tab switch, save always
    inserting, disabled stage button with no reason. The second of these is what
    manufactures the duplicate encounters job 5 cannot pick between.
-4. **No book search UI** (FR12.14), **no bookmarks UI at all** (FR11.6), and the
-   sheet still ships its own `target="_blank"` ref chip alongside the in-place one.
-5. **Re-import, rollback and transfer-ownership** still have no callers; NPC
+4. ~~**No book search UI** (FR12.14), **no bookmarks UI at all** (FR11.6)~~ — both
+   closed 2026-09-11 (`BookSearch.tsx`, `LibraryPanel.tsx`); the sheet still ships
+   its own `target="_blank"` ref chip alongside the in-place one.
+5. ~~**Re-import, rollback and transfer-ownership** still have no callers; NPC
+   in-character conversation (FR12.6) still has no chat surface.~~ Closed
+   2026-09-11: the sheet's History tab, the console's hand-over panel, and the
+   Fixer page's NPC voice.
    in-character conversation (FR12.6) still has no chat surface.
 
 ### 6.2 The previous gap list, resolved
@@ -1320,14 +1324,13 @@ Ranked by the order in which they would actually matter:
    `wayfinding.spec.ts` — closes UX-1 and UX-2 the way `hydration.spec.ts` closed
    LIVE-1. Note the honest limit while writing it: it will pin the doors that now
    exist and would not have found their absence.
-3. **A search box on the library. (FR12.14 · FR11.6.)** `GET /api/books/search`
-   is full-text over `book_pages`, works, is tested, and has exactly one consumer
-   in the repo: the Fixer's `search_books` tool. So a GM **without** a local
-   inference box cannot search the rules at all, which is the opposite of the
-   dependency order this project chose everywhere else — the AI is meant to be
-   the accelerant, never the only path (NG7). The same screen should render
-   `bookmarks` and `library/recent`, which today have no UI whatsoever. While
-   there: delete the sheet's private `RefChip`
+3. ~~**A search box on the library. (FR12.14 · FR11.6.)**~~ **Done 2026-09-11.**
+   `features/gm/books/BookSearch.tsx` (ranked hits, a per-book filter, a tap opens
+   the printed page in place) and `features/gm/books/LibraryPanel.tsx` (bookmarks —
+   pinned first, GM adds/renames/pins/removes — and the recently-opened trail) sit
+   on both library screens; the reader records the trail on open and offers the GM
+   a bookmark button on the page they are looking at. Still open from this item:
+   delete the sheet's private `RefChip`
    (`features/sheet/components/ui.tsx:167`, an `<a target="_blank">`) and import
    the in-place overlay from `features/gm`, so a chip tapped on a phone mid-fight
    does not throw the player out of their sheet.

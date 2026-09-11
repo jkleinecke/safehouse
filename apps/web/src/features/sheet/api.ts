@@ -558,3 +558,102 @@ export function useActiveSceneEnv(campaignId: string | undefined): SceneEnvInfo 
 
   return data ?? null;
 }
+
+// ---------------------------------------------------------------------------
+// History — GET /revisions, GET /revisions/:seq, POST /rollback (FR3.8), and
+// POST /import (FR3.1 re-import, diff first). Routes as old as the sheet; the
+// History tab is their first caller (docs/UX_AUDIT.md).
+// ---------------------------------------------------------------------------
+
+/** One row of `GET /api/characters/:id/revisions` (`services/characters.ts RevisionSummary`). */
+export interface RevisionSummary {
+  seq: number;
+  cause: string;
+  createdBy: string | null;
+  createdAt: string;
+}
+
+/** One field's change, `services/chummer.ts diffSheets`: arrays keyed by item name. */
+export interface SheetDiffEntry {
+  path: string;
+  op: 'added' | 'removed' | 'changed';
+  from?: unknown;
+  to?: unknown;
+}
+
+/** `GET /revisions/:seq`: that sheet, and what rolling back to it would change. */
+export interface RevisionDetail {
+  characterId: string;
+  seq: number;
+  sheet: SheetV1;
+  diff: SheetDiffEntry[];
+}
+
+/** `POST /import`: the diff, applied or not; the import report either way. */
+export interface ReimportResult {
+  applied: boolean;
+  diff: SheetDiffEntry[];
+  report?: unknown;
+  /** The new revision's seq once applied (`commit()` answers with the number). */
+  revision?: number | null;
+}
+
+export const revisionsKey = (characterId: string) => [...characterKey(characterId), 'revisions'] as const;
+
+export function useRevisions(characterId: string) {
+  return useQuery({
+    queryKey: revisionsKey(characterId),
+    queryFn: async () =>
+      (await apiGet<{ revisions: RevisionSummary[] }>(`/api/characters/${characterId}/revisions`))
+        .revisions,
+    enabled: Boolean(characterId),
+    ...HYDRATE_ON_MOUNT,
+  });
+}
+
+export function useRevision(characterId: string, seq: number | null) {
+  return useQuery({
+    queryKey: [...revisionsKey(characterId), seq ?? 0],
+    queryFn: () => apiGet<RevisionDetail>(`/api/characters/${characterId}/revisions/${seq}`),
+    enabled: Boolean(characterId) && seq !== null,
+    staleTime: 0,
+  });
+}
+
+/** A rollback is a NEW revision (history stays append-only), so everything under the character refetches. */
+export function useRollback(characterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (seq: number) =>
+      apiPost<{ rolledBackTo: number; revision: number | null }>(
+        `/api/characters/${characterId}/rollback`,
+        { seq },
+      ),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: characterKey(characterId) });
+    },
+  });
+}
+
+/**
+ * Re-import a Chummer file over this sheet. Without `confirm` the server
+ * answers with the diff and applies nothing; with it, the merged sheet (manual
+ * overrides kept) becomes the next revision. One hook, two calls.
+ */
+export function useReimport(characterId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ file, confirm }: { file: File; confirm: boolean }) => {
+      const form = new FormData();
+      form.set('file', file, file.name);
+      if (confirm) form.set('confirm', 'true');
+      return api<ReimportResult>(`/api/characters/${characterId}/import`, {
+        method: 'POST',
+        body: form,
+      });
+    },
+    onSuccess: (result) => {
+      if (result.applied) void qc.invalidateQueries({ queryKey: characterKey(characterId) });
+    },
+  });
+}

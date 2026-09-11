@@ -13,7 +13,8 @@ export type SheetTab =
   | 'gear'
   | 'contacts'
   | 'background'
-  | 'ledger';
+  | 'ledger'
+  | 'history';
 
 export const SHEET_TABS: { id: SheetTab; label: string }[] = [
   { id: 'skills', label: 'Skills' },
@@ -24,6 +25,8 @@ export const SHEET_TABS: { id: SheetTab; label: string }[] = [
   { id: 'contacts', label: 'Contacts' },
   { id: 'background', label: 'Background' },
   { id: 'ledger', label: 'Ledger' },
+  // FR3.8 revisions and FR3.1 re-import, reachable from the sheet at last.
+  { id: 'history', label: 'History' },
 ];
 
 export function isSheetTab(value: unknown): value is SheetTab {

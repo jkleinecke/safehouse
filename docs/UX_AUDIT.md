@@ -538,20 +538,25 @@ Verified by diffing every registered route in `apps/server/src/plugins/*` agains
 **re-diffed 2026-08-31**, struck items now have a caller.
 
 - ~~`POST /api/characters`~~ (`home/AddCharacter.tsx`, blank sheet **and** `.chum5`) ·
-  `POST /api/characters/:id/import` (re-import of an existing sheet — still none; creation is
-  covered, re-import is not) · ~~`PATCH /api/characters/:id/owner`~~ (`home/PartyPanel.tsx`) ·
-  `GET /api/characters/:id/revisions` · `POST /api/characters/:id/rollback` — **still none**
-- `POST /api/campaigns/:id/transfer-ownership` — **still none**
+  ~~`POST /api/characters/:id/import`~~ · ~~`PATCH /api/characters/:id/owner`~~ (`home/PartyPanel.tsx`) ·
+  ~~`GET /api/characters/:id/revisions`~~ · ~~`POST /api/characters/:id/rollback`~~ — **closed
+  2026-09-11**: the sheet's History tab (`sheet/tabs/HistoryTab.tsx`) lists every revision, shows
+  the diff a roll-back would make and rolls back, and re-imports a `.chum5` diff-first
+- ~~`POST /api/campaigns/:id/transfer-ownership`~~ — **closed 2026-09-11**: `home/TransferPanel.tsx`
+  on the GM console; two clicks, and the device that clicked is a player
 - `PATCH /api/encounters/:id` · `DELETE /api/encounters/:id` ·
   `POST /api/encounters/:id/combatants` · `POST /api/encounters/:id/roll-initiative` ·
   `POST /api/encounters/:id/threat/recompute` — **still none. This is finding 5, and it is the
   largest hole left in the app.**
-- `GET /api/books/search` — **still none** · ~~`POST /api/books`~~ still none, but the seed
-  instruction card now explains the CLI step properly
-- `GET/POST/DELETE /api/campaigns/:id/bookmarks` · `GET /api/campaigns/:id/library` ·
-  `GET /api/campaigns/:id/library/recent` — **still none** (FR11.6 in full)
-- `POST /api/npcs/:id/converse` — in-character NPC conversation (M10) has no chat surface —
-  **still none**
+- ~~`GET /api/books/search`~~ — **closed 2026-09-11**: `books/BookSearch.tsx` on both library
+  screens · ~~`POST /api/books`~~ still none, but the seed instruction card now explains the CLI
+  step properly
+- ~~`GET/POST/DELETE /api/campaigns/:id/bookmarks`~~ · ~~`GET /api/campaigns/:id/library`~~ ·
+  ~~`POST /api/campaigns/:id/library/recent`~~ — **closed 2026-09-11** (FR11.6 in full):
+  `books/LibraryPanel.tsx` on both library screens; the reader puts every opened book on the
+  trail and offers the GM a bookmark button on the page they are looking at
+- ~~`POST /api/npcs/:id/converse`~~ — **closed 2026-09-11**: `fixer/NpcVoice.tsx` on the Fixer
+  page, an archetype's persona answering in character
 
 ### Finished but unreachable from any menu
 

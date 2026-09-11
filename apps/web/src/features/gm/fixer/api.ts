@@ -207,3 +207,32 @@ export function useSaveAiSettings(campaignId: string) {
     },
   });
 }
+
+/** POST /api/npcs/:id/converse (FR12.6) — one in-character line from an archetype's persona. */
+export interface NpcConverseBody {
+  campaignId: string;
+  message: string;
+  conversationId?: string;
+  slot?: 'primary' | 'fast';
+}
+
+export interface NpcConverseAck {
+  conversationId: string;
+  npcId: string;
+  /** The line, for the GM to read aloud or not. */
+  line: string;
+  usage?: {
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+    latencyMs?: number;
+  };
+  model?: string;
+}
+
+export function useNpcConverse() {
+  return useMutation({
+    mutationFn: ({ npcId, body }: { npcId: string; body: NpcConverseBody }) =>
+      apiPost<NpcConverseAck>(`/api/npcs/${npcId}/converse`, body),
+  });
+}
