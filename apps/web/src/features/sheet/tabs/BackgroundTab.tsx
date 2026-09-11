@@ -40,7 +40,7 @@ export default function BackgroundTab({ character }: TabProps) {
                 </div>
               )}
             </div>
-            <RefChip refInfo={q.ref} />
+            <RefChip refInfo={q.ref} lookup={q.name} />
           </li>
         ))}
       </ul>

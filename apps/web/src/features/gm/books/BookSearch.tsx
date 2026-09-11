@@ -8,47 +8,80 @@
  * Scope is the device's: the server drops hits from books this device may
  * not open (FR11.5), so a player searching sees only what the GM shared.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ErrorNote, Spinner, inputClass } from '../ui.js';
 import { useBookSearch, type BookRecord, type BookSearchHit } from './api.js';
 import { BookViewerOverlay } from './RefChip.js';
 
 export const MIN_QUERY = 2;
 
-/** The one line under the box: why there is nothing, or how much there is. */
+/** What the shelf can answer with: how many books, how many with text in the index. */
+export interface ShelfIndex {
+  total: number;
+  indexed: number;
+}
+
+export function shelfIndex(books: readonly BookRecord[] | undefined): ShelfIndex | undefined {
+  if (!books) return undefined;
+  const withFile = books.filter((b) => b.hasFile !== false);
+  return { total: withFile.length, indexed: withFile.filter((b) => (b.indexedPages ?? 0) > 0).length };
+}
+
+/**
+ * The one line under the box: why there is nothing, or how much there is.
+ * "Nothing" has two very different causes — the words are not in the books,
+ * or the books have no words in the index yet — and only one of them is
+ * fixed by typing something else.
+ */
 export function searchNote(
   q: string,
   hits: readonly BookSearchHit[] | undefined,
   pending: boolean,
+  shelf?: ShelfIndex | undefined,
 ): string | null {
   const query = q.trim();
   if (query.length === 0) return null;
   if (query.length < MIN_QUERY) return 'type a little more';
   if (pending || hits === undefined) return null;
-  if (hits.length === 0) return `nothing for “${query}” in the books this device can open`;
+  if (hits.length === 0) {
+    if (shelf && shelf.total > 0 && shelf.indexed === 0) {
+      return `none of the ${shelf.total} book${shelf.total === 1 ? '' : 's'} on this shelf has searchable text yet — pnpm seed:books indexes them`;
+    }
+    if (shelf && shelf.total === 0) return 'no books on this shelf to search — the GM seeds them with pnpm seed:books';
+    return `nothing for “${query}” in the books this device can open`;
+  }
   return `${hits.length} hit${hits.length === 1 ? '' : 's'}`;
 }
 
 /**
- * FTS headlines mark matches with `<b>…</b>`; those become marks and any
- * other tag is dropped, so page text is never handed to the browser as HTML.
+ * The server's headlines mark matches with `**…**` (`packages/db/src/fts.ts`,
+ * HEADLINE_OPTS); those become marks. A `<b>` pair is read the same way, and
+ * any other tag is dropped, so page text is never handed to the browser as HTML.
  */
 export function snippetParts(snippet: string): Array<{ text: string; hit: boolean }> {
   const out: Array<{ text: string; hit: boolean }> = [];
-  const re = /<b>([\s\S]*?)<\/b>/gi;
+  const re = /\*\*([\s\S]*?)\*\*|<b>([\s\S]*?)<\/b>/gi;
   let cursor = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(snippet)) !== null) {
     if (m.index > cursor) out.push({ text: strip(snippet.slice(cursor, m.index)), hit: false });
-    out.push({ text: strip(m[1] ?? ''), hit: true });
+    out.push({ text: strip(m[1] ?? m[2] ?? ''), hit: true });
     cursor = m.index + m[0].length;
   }
   if (cursor < snippet.length) out.push({ text: strip(snippet.slice(cursor)), hit: false });
   return out.filter((p) => p.text.length > 0);
 }
 
+/**
+ * Tags out, and the PDF's typesetting with them: extracted page text keeps
+ * every line break and end-of-line hyphen ("penal-\nty"), which is how a
+ * snippet ends up reading like a ransom note. Prose again, on one line.
+ */
 function strip(s: string): string {
-  return s.replace(/<[^>]+>/g, '');
+  return s
+    .replace(/<[^>]+>/g, '')
+    .replace(/(\p{Ll})-\r?\n\s*(?=\p{Ll})/gu, '$1')
+    .replace(/\s*\r?\n\s*/g, ' ');
 }
 
 export interface BookSearchProps {
@@ -56,15 +89,32 @@ export interface BookSearchProps {
   books?: readonly BookRecord[] | undefined;
   /** Hits without their snippet — for a narrow column. */
   compact?: boolean;
+  /** What the box opens with — a "find" chip's item name, a `?q=` link — and searches for at once. */
+  initialQuery?: string | undefined;
+  /** Land the cursor in the box (the overlay; never a page that has other work on it). */
+  autoFocus?: boolean | undefined;
+  /** Told when a hit opens or closes the book, so a host can keep Escape for the book first. */
+  onViewerChange?: ((open: boolean) => void) | undefined;
 }
 
-export default function BookSearch({ books, compact }: BookSearchProps) {
-  const [draft, setDraft] = useState('');
-  const [q, setQ] = useState('');
+export default function BookSearch({ books, compact, initialQuery, autoFocus, onViewerChange }: BookSearchProps) {
+  const [draft, setDraft] = useState(initialQuery ?? '');
+  const [q, setQ] = useState(initialQuery ?? '');
+  // A new opening query replaces what was there: the overlay is one box, and
+  // the second chip tapped means the second thing.
+  useEffect(() => {
+    if (initialQuery === undefined) return;
+    setDraft(initialQuery);
+    setQ(initialQuery);
+  }, [initialQuery]);
   const [book, setBook] = useState('');
-  const [open, setOpen] = useState<{ code: string; page: number } | null>(null);
+  const [open, setOpenState] = useState<{ code: string; page: number } | null>(null);
+  const setOpen = (next: { code: string; page: number } | null) => {
+    setOpenState(next);
+    onViewerChange?.(next !== null);
+  };
   const search = useBookSearch(q, book || undefined);
-  const note = searchNote(q, search.data, search.isFetching);
+  const note = searchNote(q, search.data, search.isFetching, shelfIndex(books));
   const shelf = (books ?? []).filter((b) => b.hasFile !== false);
 
   return (
@@ -88,6 +138,7 @@ export default function BookSearch({ books, compact }: BookSearchProps) {
           placeholder="called shot, Matrix perception, wound modifier…"
           aria-label="Search the books"
           type="search"
+          autoFocus={autoFocus}
         />
         {shelf.length > 1 && (
           <select

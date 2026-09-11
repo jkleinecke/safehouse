@@ -23,6 +23,7 @@ import type { Scene } from '@safehouse/contracts';
 import { sceneLevels } from '@safehouse/rules';
 import { useSwitchTileset, useTilesets, usePaintTiles, type TilesetDef } from '../api.js';
 import { useGridStore } from '../store.js';
+import BuildWithAi from './BuildWithAi.js';
 import ConfirmButton from './ConfirmButton.js';
 import Swatch from './Swatch.js';
 
@@ -231,6 +232,9 @@ export default function TilesTab({ scene }: TilesTabProps) {
           </p>
         )}
       </div>
+
+      {/* Or say what the floor is, and let the Fixer draw it (FR12.11). */}
+      <BuildWithAi scene={scene} tilesetId={tileset.id} level={activeLevel} />
 
       {/*
         The lead for a fresh scene: a room is what a GM draws first and most,

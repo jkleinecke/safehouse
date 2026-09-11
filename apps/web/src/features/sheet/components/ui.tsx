@@ -2,7 +2,8 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react';
 import type { Ref } from '@safehouse/contracts';
 import { isDismissKey } from '../a11y.js';
-import { readerHref } from '../lib.js';
+import { RefChip as BookRefChip } from '../../gm/books/RefChip.js';
+import { openBookSearch } from '../../gm/books/searchStore.js';
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -163,20 +164,36 @@ export function Stepper({
   );
 }
 
-/** {book, page} → tappable chip opening the in-app reader (M11, FR11.3). */
-export function RefChip({ refInfo }: { refInfo: Ref | undefined }) {
-  if (!refInfo) return null;
+/**
+ * {book, page} → tappable chip opening the in-app reader OVER the sheet
+ * (M11, FR11.3) — the same overlay every other ref surface uses, so a chip
+ * tapped on a phone mid-fight does not throw the player out of their sheet.
+ * With no page but a name, the chip searches the books for the thing
+ * (FR12.14), so an item Chummer did not source is still one tap from the rule.
+ */
+export function RefChip({ refInfo, lookup }: { refInfo: Ref | undefined; lookup?: string | undefined }) {
+  if (refInfo) {
+    return (
+      <span className="inline-flex" onClick={(e) => e.stopPropagation()} role="presentation">
+        <BookRefChip refValue={refInfo} className="text-faint" />
+      </span>
+    );
+  }
+  if (!lookup) return null;
   return (
-    <a
+    <button
+      type="button"
       className="chip text-faint hover:border-cyan hover:text-cyan"
-      href={readerHref(refInfo)}
-      target="_blank"
-      rel="noreferrer"
-      onClick={(e) => e.stopPropagation()}
-      aria-label={`Open ${refInfo.book} page ${refInfo.page} in the reader`}
+      onClick={(e) => {
+        e.stopPropagation();
+        openBookSearch(lookup);
+      }}
+      aria-label={`Find ${lookup} in the books`}
+      title="No page on the sheet — search the books for it"
+      data-testid="ref-lookup"
     >
-      {refInfo.book} p.{refInfo.page}
-    </a>
+      find ⌕
+    </button>
   );
 }
 

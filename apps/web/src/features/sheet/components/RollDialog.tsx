@@ -29,6 +29,8 @@ import {
   type EdgeChoice,
   type RollConfig,
 } from '../rollDialogState.js';
+import { refsForRoll } from '../rollRefs.js';
+import RollRefs from './RollRefs.js';
 import { Sheet, Stepper } from './ui.js';
 
 export type { RollConfig } from '../rollDialogState.js';
@@ -79,6 +81,9 @@ export default function RollDialog(props: RollDialogProps) {
     () => nonSceneEntries(config?.baseBreakdown ?? []),
     [config],
   );
+
+  // What explains this roll — the skill, the attributes, the test (FR11.2).
+  const refs = useMemo(() => refsForRoll(config), [config]);
 
   // Keyboard path: opening the dialog lands focus on the thing you came for,
   // so Enter twice is a complete roll and the reader announces the dice count.
@@ -141,6 +146,7 @@ export default function RollDialog(props: RollDialogProps) {
 
   return (
     <Sheet open={props.open} onClose={close} title={config.title}>
+      <RollRefs refs={refs} className="mb-2" />
       {/* Pool preview + limit */}
       <div className="flex items-baseline gap-3">
         <span className="font-label text-4xl text-cyan" aria-hidden>

@@ -31,6 +31,8 @@
 import { useMemo, useState, useSyncExternalStore } from 'react';
 import type { Combatant, ProvenanceEntry, RollResult } from '@safehouse/contracts';
 import DiceFaces from './DiceFaces.js';
+import RollRefs from '../sheet/components/RollRefs.js';
+import { CHAIN_STEP_REFS as STEP_REFS, type RuleRef } from '../sheet/rollRefs.js';
 import { useQuickRolls } from './quickRolls.js';
 import {
   chainRequest,
@@ -102,11 +104,13 @@ function StepCard({
   title,
   roll,
   breakdown = [],
+  refs,
   children,
 }: {
   title: string;
   roll?: RollResult | null;
   breakdown?: ProvenanceEntry[];
+  refs?: RuleRef[];
   children?: React.ReactNode;
 }) {
   return (
@@ -116,6 +120,7 @@ function StepCard({
           {title}
         </span>
       </div>
+      {refs && <RollRefs refs={refs} className="mt-1" />}
       {roll && <DiceFaces faces={roll.faces} exploded={roll.exploded ?? []} size={20} className="mt-1.5" />}
       <div className="mt-1.5 text-sm">{children}</div>
     </div>
@@ -172,6 +177,7 @@ export function ChainResultView({ state, onBoxes, onCommit, onDiscard }: ChainRe
           title={`1 · Attack — pool ${view.attack.pool}`}
           roll={view.attack.roll}
           breakdown={view.attack.breakdown}
+          refs={STEP_REFS.attack}
         >
           <span className="font-label text-cyan">{view.attack.roll?.limitedHits ?? 0} hits</span>
           {view.attack.limit && <span className="mono-label ml-2">limit {view.attack.limit.value}</span>}
@@ -186,6 +192,7 @@ export function ChainResultView({ state, onBoxes, onCommit, onDiscard }: ChainRe
           title={`2 · Defense — pool ${view.defense.pool}${view.defense.fullDefense ? ' (full def.)' : ''}`}
           roll={view.defense.roll}
           breakdown={view.defense.breakdown}
+          refs={STEP_REFS.defense}
         >
           <span className="font-label text-cyan">{view.defense.roll?.hits ?? 0} hits</span>
           <span className="ml-3">
@@ -213,7 +220,7 @@ export function ChainResultView({ state, onBoxes, onCommit, onDiscard }: ChainRe
       )}
 
       {view.soak && (
-        <StepCard title={`4 · Soak — pool ${view.soak.pool}`} roll={view.soak.roll} breakdown={view.soak.breakdown}>
+        <StepCard title={`4 · Soak — pool ${view.soak.pool}`} roll={view.soak.roll} breakdown={view.soak.breakdown} refs={STEP_REFS.soak}>
           <span className="font-label text-cyan">{view.soak.roll?.hits ?? 0} hits</span>
           <span className="ml-3">
             → <span className="font-label text-danger">{view.soak.boxes}</span> {view.soak.track} box

@@ -108,7 +108,7 @@ function FocusRowView({ focus, onToggle, onRemove, busy }: { focus: FocusRow } &
             {focus.bonded ? '' : ' · not bonded'}
           </div>
         </div>
-        <RefChip refInfo={focus.ref} />
+        <RefChip refInfo={focus.ref} lookup={focus.name} />
         <button
           type="button"
           className={`chip shrink-0 ${live ? 'border-cyan text-cyan' : 'text-faint'}`}

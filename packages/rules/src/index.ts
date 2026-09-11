@@ -10,3 +10,4 @@ export * from './generator/index.js';
 export * from './magic/index.js';
 export * from './tilesets/index.js';
 export * from './vision/index.js';
+export * from './refs.js';

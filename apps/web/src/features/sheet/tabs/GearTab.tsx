@@ -39,7 +39,7 @@ export default function GearTab({ character, derived, patchSheet, overrideFor }:
                 </div>
               )}
             </div>
-            <RefChip refInfo={item.ref} />
+            <RefChip refInfo={item.ref} lookup={item.name} />
             <div className="flex shrink-0 items-center gap-1">
               <button
                 type="button"
@@ -89,7 +89,7 @@ export default function GearTab({ character, derived, patchSheet, overrideFor }:
                   : ''}
               </div>
             </div>
-            <RefChip refInfo={aug.ref} />
+            <RefChip refInfo={aug.ref} lookup={aug.name} />
           </li>
         ))}
       </ul>

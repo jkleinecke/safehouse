@@ -33,6 +33,7 @@ import {
   combatants,
   encounters,
   scenes,
+  users,
   type Db,
 } from '@safehouse/db';
 import { z } from 'zod';
@@ -162,7 +163,10 @@ export async function saveCharacter(
 export interface RevisionSummary {
   seq: number;
   cause: string;
+  /** The user id, for anything that keys on it. */
   createdBy: string | null;
+  /** The name the table knows them by — what a history row shows. */
+  createdByName: string | null;
   createdAt: string;
 }
 
@@ -187,20 +191,26 @@ export async function recordRevision(
 }
 
 export async function listRevisions(db: Db, characterId: string): Promise<RevisionSummary[]> {
+  // Joined on the way out rather than stored: a user who renames themselves
+  // renames their whole history, and a row written by nobody (a seed, a
+  // migration) simply has no name.
   const rows = await db
     .select({
       seq: characterRevisions.seq,
       cause: characterRevisions.cause,
       createdBy: characterRevisions.createdBy,
+      createdByName: users.displayName,
       createdAt: characterRevisions.createdAt,
     })
     .from(characterRevisions)
+    .leftJoin(users, eq(users.id, characterRevisions.createdBy))
     .where(eq(characterRevisions.characterId, characterId))
     .orderBy(characterRevisions.seq);
   return rows.map((r) => ({
     seq: r.seq,
     cause: r.cause,
     createdBy: r.createdBy,
+    createdByName: r.createdByName ?? null,
     createdAt: r.createdAt.toISOString(),
   }));
 }

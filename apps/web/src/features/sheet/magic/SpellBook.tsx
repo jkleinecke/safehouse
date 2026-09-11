@@ -134,7 +134,7 @@ export default function SpellBook(props: SpellBookProps) {
                   </div>
                 </div>
               </RowButton>
-              <RefChip refInfo={spell.ref} />
+              <RefChip refInfo={spell.ref} lookup={spell.name} />
               {pool && (
                 <BreakdownButton
                   title={`${spell.name} pool`}
@@ -168,7 +168,7 @@ export default function SpellBook(props: SpellBookProps) {
                     : ''}
                 </div>
               </div>
-              <RefChip refInfo={power.ref} />
+              <RefChip refInfo={power.ref} lookup={power.name} />
               {toggleable ? (
                 <button
                   type="button"

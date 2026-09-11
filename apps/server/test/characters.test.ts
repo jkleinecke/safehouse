@@ -162,10 +162,14 @@ describe('PATCH + revisions + rollback (FR3.8)', () => {
       url: `/api/characters/${characterId}/revisions`,
       headers: auth(player.token),
     });
-    const revisions = (list.json() as { revisions: Array<{ seq: number; cause: string }> }).revisions;
+    const revisions = (
+      list.json() as { revisions: Array<{ seq: number; cause: string; createdByName: string | null }> }
+    ).revisions;
     expect(revisions.map((r) => r.seq)).toEqual([1, 2]);
     expect(revisions[0]?.cause).toBe('chummer import');
     expect(revisions[1]?.cause).toBe('karma spend: Automatics 6→7');
+    // Who did it, by the name the table knows — not a user id.
+    expect(revisions.map((r) => r.createdByName)).toEqual(['Whistler', 'Rivet']);
   });
 
   it('rolls back to an earlier revision, appending history rather than erasing it', async () => {

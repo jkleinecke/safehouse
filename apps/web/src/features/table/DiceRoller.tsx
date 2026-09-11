@@ -9,6 +9,8 @@
  * lived on whichever laptop made them, and a player who saved one on the sheet
  * did not see it here. One store, one rack, whichever screen you are on.
  */
+import RollRefs from '../sheet/components/RollRefs.js';
+import { freeRollRefs } from '../sheet/rollRefs.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { LimitKind, RollRequestInput } from '@safehouse/contracts';
 import { buyHits } from '@safehouse/rules';
@@ -172,6 +174,8 @@ export default function DiceRoller({ campaignId }: { campaignId: string }) {
     'rounded-md border border-edge bg-deck px-2 py-1.5 text-sm outline-none focus:border-cyan-dim';
   const summary = moreSummary(limitOn, limitKind, limitValue, visibility);
   const unfolded = more || summary !== '';
+  // A bare pool is still a Success Test; with Edge on it, Edge too (FR11.2).
+  const refs = freeRollRefs(Boolean(edge));
 
   return (
     <section className="border-t border-edge bg-panel/60 p-3" aria-label="Dice roller">
@@ -339,6 +343,7 @@ export default function DiceRoller({ campaignId }: { campaignId: string }) {
       )}
 
       {flash && <div className="mono-label mt-2 text-warn">{flash}</div>}
+      <RollRefs refs={refs} label="rules" className="mt-2" />
     </section>
   );
 }

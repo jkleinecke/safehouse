@@ -879,3 +879,43 @@ export class TileStrokeBuffer {
     this.timer = null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Describe the floor, and the Fixer lays it out (FR12.11 lane 3) —
+// POST /api/fixer/build-floor. The answer is squares, in slots, that
+// `usePaintTiles` already takes; nothing is painted until the GM says so.
+// ---------------------------------------------------------------------------
+
+export interface FloorPlanResult {
+  plan: {
+    title: string;
+    notes: string;
+    tilesetId: string;
+    rooms: Array<{ name: string; kind: string; rect: { x: number; y: number; w: number; h: number } }>;
+    layers: {
+      ground: Record<string, string>;
+      structure: Record<string, string>;
+      object: Record<string, string>;
+    };
+    counts: { floor: number; wall: number; door: number; window: number; prop: number; stair: number };
+    warnings: string[];
+  };
+  level: number;
+  model: string;
+  usage: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
+  latencyMs: number;
+}
+
+export interface BuildFloorBody {
+  sceneId: string;
+  level: number;
+  tilesetId: string;
+  prompt: string;
+  slot?: 'primary' | 'fast';
+}
+
+export function useBuildFloor() {
+  return useMutation({
+    mutationFn: (body: BuildFloorBody) => apiPost<FloorPlanResult>('/api/fixer/build-floor', body),
+  });
+}

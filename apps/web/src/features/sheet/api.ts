@@ -570,6 +570,8 @@ export interface RevisionSummary {
   seq: number;
   cause: string;
   createdBy: string | null;
+  /** The author's display name, joined server-side; null for a row nobody signed. */
+  createdByName?: string | null;
   createdAt: string;
 }
 

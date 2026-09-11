@@ -13,7 +13,7 @@
  * the reader at a printed page so the mapping can be confirmed end to end.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { useBooks, useDetectOffset, useUpdateBook, type BookRecord } from './api.js';
 import BookSearch from './BookSearch.js';
 import BookShelfCard, { type DetectPhase } from './BookShelfCard.js';
@@ -42,6 +42,8 @@ const DEFAULT_PROBE = 50;
 
 export default function BooksPage() {
   const { campaignId } = useParams<{ campaignId: string }>();
+  const [search] = useSearchParams();
+  const q = search.get('q') ?? undefined;
   const books = useBooks(campaignId ?? '');
   const update = useUpdateBook(campaignId ?? '');
   const detect = useDetectOffset();
@@ -181,7 +183,7 @@ export default function BooksPage() {
 
         {/* Look it up, and name the page (FR12.14, FR11.6) — above the calibration work. */}
         <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-2">
-          <BookSearch books={rows} />
+          <BookSearch books={rows} initialQuery={q} />
           <LibraryPanel campaignId={campaignId ?? ''} canEdit books={rows} />
         </div>
 

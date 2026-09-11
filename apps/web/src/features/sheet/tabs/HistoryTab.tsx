@@ -45,7 +45,11 @@ export function formatWhen(iso: string | undefined): string {
  * (`services/characters.ts`), and a UUID in a history row is noise the reader
  * cannot act on — so an id is dropped, and a name, when one arrives, is shown.
  */
-export function formatWho(createdBy: string | null | undefined): string {
+export function formatWho(
+  createdBy: string | null | undefined,
+  createdByName?: string | null | undefined,
+): string {
+  if (createdByName) return createdByName;
   if (!createdBy) return '';
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(createdBy)
     ? ''
@@ -54,7 +58,7 @@ export function formatWho(createdBy: string | null | undefined): string {
 
 /** One line per revision: `r12 · chummer re-import · Whistler · 2076-06-12 21:04`. */
 export function describeRevision(r: RevisionSummary): string {
-  return [`r${r.seq}`, r.cause, formatWho(r.createdBy), formatWhen(r.createdAt)]
+  return [`r${r.seq}`, r.cause, formatWho(r.createdBy, r.createdByName), formatWhen(r.createdAt)]
     .filter((x) => x.length > 0)
     .join(' · ');
 }
@@ -158,7 +162,9 @@ export function HistoryPanel({ characterId, canEdit }: { characterId: string; ca
               </button>
               <span className="text-sm text-ink">{r.cause}</span>
               <span className="mono-label text-faint">
-                {[formatWho(r.createdBy), formatWhen(r.createdAt)].filter((x) => x.length > 0).join(' · ')}
+                {[formatWho(r.createdBy, r.createdByName), formatWhen(r.createdAt)]
+                  .filter((x) => x.length > 0)
+                  .join(' · ')}
               </span>
               {r.seq === current && <span className="chip border-ok/40 text-ok">current</span>}
             </li>

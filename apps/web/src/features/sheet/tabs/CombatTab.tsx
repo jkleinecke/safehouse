@@ -99,7 +99,7 @@ export default function CombatTab(props: TabProps) {
               <span className="text-sm text-ink">{piece.name}</span>
               <span className="ml-2 font-label text-xs text-dim">{piece.rating}</span>
             </div>
-            <RefChip refInfo={piece.ref} />
+            <RefChip refInfo={piece.ref} lookup={piece.name} />
             <button
               type="button"
               aria-pressed={piece.worn}
@@ -195,6 +195,8 @@ function WeaponCard({ weapon, character, derived, roll, patchSheet, overrideFor 
           poolRef: `weapon.${weapon.name}`,
           poolKey: `weapon.${weapon.name}`,
           weapon: weapon.name,
+          // The skill behind the pool, so the dialog can say where to read up.
+          skill: weapon.skillId,
           mode,
           bullets,
           ...(rangeMod ? { distanceM: distM } : {}),
@@ -215,7 +217,7 @@ function WeaponCard({ weapon, character, derived, roll, patchSheet, overrideFor 
     <div className="panel p-3">
       <div className="flex items-center gap-2">
         <div className="min-w-0 flex-1 truncate text-sm font-semibold text-ink">{weapon.name}</div>
-        <RefChip refInfo={weapon.ref} />
+        <RefChip refInfo={weapon.ref} lookup={weapon.name} />
         <BreakdownButton
           title={`${weapon.name} pool`}
           value={pool.total}

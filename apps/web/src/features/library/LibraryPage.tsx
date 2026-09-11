@@ -14,7 +14,7 @@
  * `/c/:id/gm/books` still resolves, so anything already linking there is fine.
  */
 import { useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { getSession } from '../../api/session.js';
 import GmBooksPage from '../gm/BooksPage.js';
 import { useBooks, type BookRecord } from '../gm/books/api.js';
@@ -74,6 +74,8 @@ function ShelfCard({ book, onOpen }: { book: BookRecord; onOpen: (page: number) 
 /** The shared shelf a player, observer or kiosk sees. */
 export function SharedShelf({ campaignId }: { campaignId: string }) {
   const books = useBooks(campaignId);
+  const [search] = useSearchParams();
+  const q = search.get('q') ?? undefined;
   const [open, setOpen] = useState<{ code: string; page: number } | null>(null);
   const rows = books.data ?? [];
 
@@ -84,7 +86,7 @@ export function SharedShelf({ campaignId }: { campaignId: string }) {
 
       {/* Look it up, and what the table looked up (FR12.14, FR11.6). */}
       <div className="mt-4 grid grid-cols-1 gap-3 xl:grid-cols-2">
-        <BookSearch books={rows} />
+        <BookSearch books={rows} initialQuery={q} />
         <LibraryPanel campaignId={campaignId} canEdit={false} books={rows} />
       </div>
 

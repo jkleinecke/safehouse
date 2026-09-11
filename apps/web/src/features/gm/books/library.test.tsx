@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import BookSearch, { MIN_QUERY, searchNote, snippetParts } from './BookSearch.js';
+import BookSearch, { MIN_QUERY, searchNote, shelfIndex, snippetParts } from './BookSearch.js';
 import LibraryPanel, { orderBookmarks } from './LibraryPanel.js';
 import { libraryKey, type BookRecord, type Bookmark, type LibraryView } from './api.js';
 
@@ -57,13 +57,34 @@ describe('search', () => {
     expect(MIN_QUERY).toBe(2);
   });
 
-  it('turns ts_headline marks into marks and drops any other tag', () => {
-    expect(snippetParts('a <b>called</b> shot, <i>never</i> as html')).toEqual([
+  it('turns the server’s **marks** into marks, reads <b> the same way, and drops any other tag', () => {
+    // packages/db/src/fts.ts writes headlines with StartSel=** / StopSel=**.
+    expect(snippetParts('a **called** shot, <i>never</i> as html')).toEqual([
       { text: 'a ', hit: false },
       { text: 'called', hit: true },
       { text: ' shot, never as html', hit: false },
     ]);
+    expect(snippetParts('a <b>called</b> shot')).toEqual([
+      { text: 'a ', hit: false },
+      { text: 'called', hit: true },
+      { text: ' shot', hit: false },
+    ]);
     expect(snippetParts('plain')).toEqual([{ text: 'plain', hit: false }]);
+    // Extracted page text: line breaks become spaces, a hyphen at a line end
+    // rejoins its word, and a real hyphen between words survives.
+    expect(snippetParts('Reduce **Called Shot** penal-\nty by 1 for\nwell-aimed shots')).toEqual([
+      { text: 'Reduce ', hit: false },
+      { text: 'Called Shot', hit: true },
+      { text: ' penalty by 1 for well-aimed shots', hit: false },
+    ]);
+  });
+
+  it('tells a shelf with no indexed text apart from a miss', () => {
+    expect(searchNote('wound', [], false, { total: 3, indexed: 0 })).toContain('has searchable text yet');
+    expect(searchNote('wound', [], false, { total: 0, indexed: 0 })).toContain('no books on this shelf');
+    expect(searchNote('wound', [], false, { total: 3, indexed: 2 })).toContain('nothing for “wound”');
+    expect(shelfIndex(BOOKS)).toEqual({ total: 2, indexed: 0 });
+    expect(shelfIndex(undefined)).toBeUndefined();
   });
 
   it('renders a search box, with a per-book filter once the shelf has more than one book', () => {

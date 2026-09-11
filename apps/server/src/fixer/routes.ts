@@ -26,8 +26,10 @@ import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 import { campaigns, type Db } from '@safehouse/db';
 import { assertCampaign, httpError, requireRole } from '../services/auth.js';
+import { floorPlanJsonSchema, proposeFloor } from './floor-plan.js';
 import { layoutJsonSchema, LayoutDoorSchema, LayoutRoomSchema } from './geometry.js';
 import { resolveLlmConfig } from './providers.js';
+import { persistTurnUsage } from './usage.js';
 import { emitFogProximity, fogProximityState } from './proximity.js';
 import { identifyTokensState } from './token-id.js';
 import { FIXER_TOOLS, TOOLS_BY_NAME, toolParameters } from './tools.js';
@@ -59,6 +61,15 @@ const ReadMapBody = z.object({
   attachmentId: z.string().optional(),
   hint: z.string().max(600).optional(),
   mode: z.enum(['merge', 'replace']).default('merge'),
+  slot: z.enum(['primary', 'fast']).optional(),
+});
+
+const BuildFloorBody = z.object({
+  campaignId: z.string().optional(),
+  sceneId: z.string().min(1),
+  level: z.number().int().min(0).max(9).default(0),
+  tilesetId: z.string().min(1).max(64),
+  prompt: z.string().min(3).max(2000),
   slot: z.enum(['primary', 'fast']).optional(),
 });
 
@@ -211,6 +222,35 @@ export default async function fixerToolRoutes(app: FastifyInstance): Promise<voi
       ...(body.attachmentId !== undefined ? { attachmentId: body.attachmentId } : {}),
       ...(body.hint !== undefined ? { hint: body.hint } : {}),
       ...(body.slot !== undefined ? { slot: body.slot } : {}),
+    });
+    return reply.status(201).send(result);
+  });
+
+  // --- FR12.11 lane 3: build a floor from a description --------------------
+  app.get('/api/fixer/floor-schema', async (req, reply) => {
+    requireRole(req, 'gm');
+    return reply.send({ name: 'build_floor', units: 'whole grid squares; a room includes its walls', plan: floorPlanJsonSchema() });
+  });
+
+  app.post('/api/fixer/build-floor', async (req, reply) => {
+    const body = parse(BuildFloorBody, req.body);
+    const campaignId = gmFor(req, body.campaignId);
+    // The campaign's own configuration, like every other AI route.
+    const config = resolveLlmConfig(await campaignSettings(app.db, campaignId));
+    const result = await proposeFloor(app.db, config, {
+      campaignId,
+      sceneId: body.sceneId,
+      level: body.level,
+      tilesetId: body.tilesetId,
+      prompt: body.prompt,
+      ...(body.slot !== undefined ? { slot: body.slot } : {}),
+    });
+    await persistTurnUsage(app.db, {
+      campaignId,
+      model: result.model,
+      usage: result.usage,
+      latencyMs: result.latencyMs,
+      kind: 'draft',
     });
     return reply.status(201).send(result);
   });

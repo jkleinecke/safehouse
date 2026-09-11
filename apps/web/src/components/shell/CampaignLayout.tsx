@@ -8,6 +8,8 @@ import { Link, Outlet, useParams } from 'react-router-dom';
 import type { Role } from '@safehouse/contracts';
 import { useCampaign, useMyCharacterId } from '../../api/campaigns.js';
 import { getSession } from '../../api/session.js';
+import BookSearchOverlay from '../../features/gm/books/BookSearchOverlay.js';
+import { openBookSearch } from '../../features/gm/books/searchStore.js';
 import FixerDock from '../../features/gm/fixer/FixerDock.js';
 import { useLiveConnection } from '../../live/useLiveConnection.js';
 import BottomNav from './BottomNav.js';
@@ -75,6 +77,17 @@ export default function CampaignLayout() {
               {campaign?.ingameDate ?? '2076-??-??'}
             </div>
           </div>
+          {/* Look it up, from anywhere, for anyone at the table (FR12.14). */}
+          <button
+            type="button"
+            className="btn px-3 py-1.5"
+            onClick={() => openBookSearch('')}
+            aria-label="Search the books"
+            title="Search the rulebooks (/)"
+            data-testid="header-book-search"
+          >
+            ⌕ books
+          </button>
           <ConnectionChip status={status} />
           {/* Which device this tab is, and how to hop to another (FR1.1/1.3). */}
           <SessionMenu
@@ -110,6 +123,8 @@ export default function CampaignLayout() {
         initialRole={qr.role}
         onClose={() => setQr((s) => ({ ...s, open: false }))}
       />
+
+      <BookSearchOverlay campaignId={campaignId} />
 
       {/* Follows the GM across every screen; hides itself when AI is off (NG7). */}
       {isGm && (

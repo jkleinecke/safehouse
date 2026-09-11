@@ -45,6 +45,8 @@ describe('the helpers say what a revision is', () => {
     // A user id is not a name: it is dropped rather than printed.
     expect(formatWho('300dc930-d008-4ce8-8bdc-80ad0ccaf94e')).toBe('');
     expect(formatWho('Whistler')).toBe('Whistler');
+    // The joined name wins over whatever the id column holds.
+    expect(formatWho('300dc930-d008-4ce8-8bdc-80ad0ccaf94e', 'Whistler')).toBe('Whistler');
     expect(
       describeRevision({ ...REVISIONS[0]!, createdBy: '300dc930-d008-4ce8-8bdc-80ad0ccaf94e' }),
     ).toBe('r1 · chummer import · 2076-06-01 20:00');
