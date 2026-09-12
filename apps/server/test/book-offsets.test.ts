@@ -322,8 +322,8 @@ describe('seed:books calibration flags', () => {
     expect(cli.calibrate).toBe(true);
   });
 
-  it('still rejects the pnpm `--` separator loudly rather than silently', () => {
-    expect(() => parseArgs(['--', '--calibrate'])).toThrow(/unknown flag/);
+  it('drops the bare `--` pnpm forwards, so `pnpm seed:books -- --calibrate` means what it says', () => {
+    expect(parseArgs(['--', '--calibrate']).calibrate).toBe(true);
   });
 });
 

@@ -469,3 +469,31 @@ function clampFov(fov: number): number {
 function clampRange(range: number): number {
   return Math.min(200, Math.max(1, Math.round(range * 10) / 10));
 }
+
+/**
+ * The selected thing, gone — whatever kind it is. One function so the Delete
+ * key and the inspector's button remove exactly the same way; the same
+ * geometry back means there was nothing to remove.
+ */
+export function removeSelection(
+  geo: SceneGeometry,
+  selection: { kind: 'wall' | 'door' | 'zone' | 'pin' | 'camera' | 'note'; id: string } | null,
+): SceneGeometry {
+  if (!selection) return geo;
+  switch (selection.kind) {
+    case 'wall':
+      return removeWall(geo, selection.id);
+    case 'door':
+      return removeDoor(geo, selection.id);
+    case 'zone':
+      return removeZone(geo, selection.id);
+    case 'pin':
+      return removePin(geo, selection.id);
+    case 'camera':
+      return removeCamera(geo, selection.id);
+    case 'note':
+      return removeNote(geo, selection.id);
+    default:
+      return geo;
+  }
+}

@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Scene } from '@safehouse/contracts';
 import BuildWithAi, { describePlan } from './BuildWithAi.js';
@@ -40,7 +41,11 @@ const PLAN: FloorPlanResult['plan'] = {
 function render(node: React.ReactElement, seed?: (qc: QueryClient) => void): string {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   seed?.(qc);
-  return renderToStaticMarkup(<QueryClientProvider client={qc}>{node}</QueryClientProvider>);
+  return renderToStaticMarkup(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter>{node}</MemoryRouter>
+    </QueryClientProvider>,
+  );
 }
 
 describe('describePlan', () => {

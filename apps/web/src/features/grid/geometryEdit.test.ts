@@ -35,6 +35,7 @@ import {
   updatePin,
   updateWall,
   updateZone,
+  removeSelection,
 } from './geometryEdit.js';
 
 const square = [
@@ -330,5 +331,21 @@ describe('cameras (FR9.23)', () => {
     expect(camerasOf(removeCamera(geo, 'cam_1'))).toEqual([]);
     // Patching a camera that is not there changes nothing.
     expect(updateCamera(geo, 'cam_2', { fov: 30 })).toEqual(geo);
+  });
+});
+
+describe('removeSelection', () => {
+  it('removes the selected thing whatever its kind, and returns the same geometry when there is nothing to remove', () => {
+    const geo = {
+      walls: [{ id: 'w1', a: { x: 0, y: 0 }, b: { x: 4, y: 0 } }],
+      doors: [{ id: 'd1', a: { x: 1, y: 0 }, b: { x: 2, y: 0 } }],
+      zones: [],
+      pins: [{ id: 'p1', at: { x: 2, y: 2 }, label: 'crate', visibility: 'gm' as const }],
+    } as unknown as Parameters<typeof removeSelection>[0];
+    expect(removeSelection(geo, { kind: 'wall', id: 'w1' }).walls).toEqual([]);
+    expect(removeSelection(geo, { kind: 'door', id: 'd1' }).doors).toEqual([]);
+    expect(removeSelection(geo, { kind: 'pin', id: 'p1' }).pins).toEqual([]);
+    expect(removeSelection(geo, null)).toBe(geo);
+    expect(removeSelection(geo, { kind: 'wall', id: 'nope' }).walls).toHaveLength(1);
   });
 });

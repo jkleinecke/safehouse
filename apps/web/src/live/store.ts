@@ -100,6 +100,15 @@ export interface LiveSnapshot {
   asOfEventId?: number;
 }
 
+/** The server's `ai.activity` ephemeral (fixer/activity.ts): what the AI is doing for this campaign. */
+export interface AiActivityState {
+  state: 'busy' | 'cancelling';
+  runId: string;
+  kind: string;
+  label: string;
+  since: string;
+}
+
 export interface LiveState {
   status: SocketStatus;
   /** Highest persisted event id seen — sent on reconnect for gap replay. */
@@ -115,6 +124,7 @@ export interface LiveState {
   drags: Record<string, DragPosition>;
   lastPing: PingMarker | null;
   fixerStream: FixerChunk[];
+  aiActivity: AiActivityState | null;
 
   /** Live-mode readout from `GET /api/campaigns/:id/live` (FR6.2). */
   activeSessionId: string | null;
@@ -168,6 +178,7 @@ const initialState = {
   drags: {} as Record<string, DragPosition>,
   lastPing: null as PingMarker | null,
   fixerStream: [] as FixerChunk[],
+  aiActivity: null as AiActivityState | null,
   activeSessionId: null as string | null,
   sessionLive: false,
   connectedCount: 0,
@@ -347,6 +358,25 @@ export const useLiveStore = create<LiveState>()((set, get) => ({
             ? 'pointer'
             : 'ping';
       set({ lastPing: { x, y, sceneId, kind, ts } });
+      return;
+    }
+
+    if (msg.type === 'ai.activity') {
+      const p = asRecord(msg.payload);
+      const state = p['state'];
+      if (state === 'busy' || state === 'cancelling') {
+        set({
+          aiActivity: {
+            state,
+            runId: String(p['runId'] ?? ''),
+            kind: String(p['kind'] ?? ''),
+            label: String(p['label'] ?? ''),
+            since: typeof p['since'] === 'string' ? p['since'] : new Date(ts).toISOString(),
+          },
+        });
+      } else {
+        set({ aiActivity: null });
+      }
       return;
     }
 

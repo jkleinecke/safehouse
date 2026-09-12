@@ -17,6 +17,8 @@ import { rollRowLabel } from '../a11y.js';
 import { recoilKey, useSheetPlayStore } from '../playState.js';
 import { BreakdownButton } from '../components/Provenance.js';
 import { Empty, RefChip, SectionLabel } from '../components/ui.js';
+import AddFromBooks from '../catalogue/AddFromBooks.js';
+import { withoutItem } from '../catalogue/toSheet.js';
 import VitalsStrip from '../components/VitalsStrip.js';
 import type { TabProps } from './shared.js';
 
@@ -82,16 +84,22 @@ export default function CombatTab(props: TabProps) {
         )}
       </div>
 
-      <SectionLabel>Weapons</SectionLabel>
-      {sheet.weapons.length === 0 && <Empty>No weapons entered.</Empty>}
+      <div className="flex items-center justify-between gap-2">
+        <SectionLabel>Weapons</SectionLabel>
+        <AddFromBooks characterId={character.id} sheet={sheet} patchSheet={patchSheet} kinds={['weapon']} testId="add-weapon" />
+      </div>
+      {sheet.weapons.length === 0 && <Empty>No weapons entered — add one from the books, write your own, or import the sheet.</Empty>}
       <div className="space-y-3">
         {sheet.weapons.map((weapon) => (
           <WeaponCard key={weapon.name} weapon={weapon} {...props} />
         ))}
       </div>
 
-      <SectionLabel>Armor worn</SectionLabel>
-      {sheet.armor.length === 0 && <Empty>No armor entered.</Empty>}
+      <div className="flex items-center justify-between gap-2">
+        <SectionLabel>Armor worn</SectionLabel>
+        <AddFromBooks characterId={character.id} sheet={sheet} patchSheet={patchSheet} kinds={['armor']} testId="add-armor" />
+      </div>
+      {sheet.armor.length === 0 && <Empty>No armor entered — add some from the books, write your own, or import the sheet.</Empty>}
       <ul className="divide-y divide-edge/60">
         {sheet.armor.map((piece) => (
           <li key={piece.name} className="flex items-center gap-2 py-2">
@@ -117,6 +125,15 @@ export default function CombatTab(props: TabProps) {
               }
             >
               {piece.worn ? 'Worn' : 'Stowed'}
+            </button>
+            <button
+              type="button"
+              className="chip text-faint hover:border-danger hover:text-danger"
+              onClick={() => patchSheet({ ...sheet, armor: sheet.armor.filter((a) => a.name !== piece.name) })}
+              aria-label={`remove ${piece.name}`}
+              title="Removes it — History can put it back"
+            >
+              ×
             </button>
           </li>
         ))}
@@ -218,6 +235,15 @@ function WeaponCard({ weapon, character, derived, roll, patchSheet, overrideFor 
       <div className="flex items-center gap-2">
         <div className="min-w-0 flex-1 truncate text-sm font-semibold text-ink">{weapon.name}</div>
         <RefChip refInfo={weapon.ref} lookup={weapon.name} />
+        <button
+          type="button"
+          className="chip text-faint hover:border-danger hover:text-danger"
+          onClick={() => patchSheet(withoutItem(sheet, 'weapons', weapon.name))}
+          aria-label={`remove ${weapon.name}`}
+          title="Removes it — History can put it back"
+        >
+          ×
+        </button>
         <BreakdownButton
           title={`${weapon.name} pool`}
           value={pool.total}

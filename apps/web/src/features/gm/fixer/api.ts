@@ -4,6 +4,7 @@
  * 503 `ai_disabled` detection (NG7: no LLM_BASE_URL → features hide).
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { create } from 'zustand';
 import type { AiSettingsView, AiSettingsWrite } from '@safehouse/contracts';
 import { ApiError, apiGet, apiPost, apiPut, queryClient } from '../../../api/client.js';
 
@@ -22,6 +23,8 @@ export interface FixerStatus {
   models: { primary: string; fast: string } | null;
   /** Cap on tool rounds per turn (FR12.17). */
   maxToolRounds?: number;
+  /** What the AI is doing right now, if anything (fixer/activity.ts). */
+  activity?: { runId: string; kind: string; label: string; since: string } | null;
 }
 
 export function useFixerStatus() {
@@ -62,6 +65,7 @@ export interface FixerChatAck {
 export function useFixerSend() {
   return useMutation({
     mutationFn: (body: FixerChatBody) => apiPost<FixerChatAck>('/api/fixer/chat', body),
+    ...pendingFor('chat', 'answering the Fixer chat'),
   });
 }
 
@@ -234,5 +238,143 @@ export function useNpcConverse() {
   return useMutation({
     mutationFn: ({ npcId, body }: { npcId: string; body: NpcConverseBody }) =>
       apiPost<NpcConverseAck>(`/api/npcs/${npcId}/converse`, body),
+    ...pendingFor('npc', 'speaking as an NPC'),
+  });
+}
+
+/** GET /api/campaigns/:id/ai/models?baseUrl= — can the server reach that box, and what does it serve? */
+export interface ModelProbe {
+  baseUrl: string;
+  reachable: boolean;
+  models: string[];
+  note: string | null;
+  /** The one fix for the commonest local failure (127.0.0.1 from inside a container). */
+  hint: string | null;
+}
+
+export function useProbeModels(campaignId: string) {
+  return useMutation({
+    mutationFn: (baseUrl: string) =>
+      apiGet<ModelProbe>(`/api/campaigns/${campaignId}/ai/models?baseUrl=${encodeURIComponent(baseUrl)}`),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Cancel, and "it is working" before the server has said so
+// ---------------------------------------------------------------------------
+
+/** POST /api/fixer/cancel — stop whatever the AI is doing for this campaign. */
+export function useCancelAi(campaignId: string) {
+  return useMutation({
+    mutationFn: () => apiPost<{ cancelled: boolean }>('/api/fixer/cancel', { campaignId }),
+  });
+}
+
+/** True when the server said the GM stopped it (499 ai_cancelled). */
+export function isAiCancelled(err: unknown): boolean {
+  return err instanceof ApiError && err.code === 'ai_cancelled';
+}
+
+export interface AiPendingState {
+  pending: { kind: string; label: string; since: string } | null;
+  begin: (kind: string, label: string) => void;
+  end: () => void;
+}
+
+/**
+ * The click's own record of a request in flight: set the moment a mutation
+ * starts, cleared when it settles. The activity bar reads this until the
+ * server's `ai.activity` arrives (and after it, when the socket is down), so
+ * there is never a second where a request is running and nothing says so.
+ */
+export const useAiPending = create<AiPendingState>((set) => ({
+  pending: null,
+  begin: (kind, label) => set({ pending: { kind, label, since: new Date().toISOString() } }),
+  end: () => set({ pending: null }),
+}));
+
+/** Wrap a mutation's lifecycle so the pending store follows it. */
+export function pendingFor(kind: string, label: string) {
+  return {
+    onMutate: () => useAiPending.getState().begin(kind, label),
+    onSettled: () => useAiPending.getState().end(),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The Architect — a whole stretch of a campaign from one brief
+// ---------------------------------------------------------------------------
+
+export interface ArchitectPersona {
+  traits: string[];
+  voice?: string;
+  goals: string[];
+  secrets: string[];
+  knowledge: string[];
+  backstory?: string;
+  mannerisms: string[];
+  hooks: string[];
+}
+
+export interface ArchitectOutline {
+  title: string;
+  premise: string;
+  lore: Array<{ title: string; kind: 'page' | 'location' | 'faction' | 'npc' | 'run'; summary: string }>;
+  npcs: Array<{ name: string; role: string; archetype?: string; persona: ArchitectPersona }>;
+  scenes: Array<{ name: string; purpose: string; floor: string; cols: number; rows: number; tileset?: string }>;
+}
+
+export interface ArchitectOutlineResult {
+  outline: ArchitectOutline;
+  model: string;
+  usage: { promptTokens: number; completionTokens: number; totalTokens: number };
+  latencyMs: number;
+}
+
+export interface ArchitectSelection {
+  lore: number[];
+  npcs: number[];
+  scenes: number[];
+}
+
+export interface ArchitectBuildItem {
+  type: 'lore' | 'npc' | 'scene';
+  index: number;
+  name: string;
+  ok: boolean;
+  id?: string;
+  landed?: 'drafts' | 'scenes';
+  note?: string;
+}
+
+export interface ArchitectBuildResult {
+  results: ArchitectBuildItem[];
+  /** True when the GM stopped it — `results` is what landed before that. */
+  cancelled: boolean;
+  usage: { promptTokens: number; completionTokens: number; totalTokens: number };
+  latencyMs: number;
+}
+
+/** The brief becomes an outline: nothing is written by this. */
+export function useArchitectOutline() {
+  return useMutation({
+    mutationFn: (body: { campaignId: string; brief: string }) =>
+      apiPost<ArchitectOutlineResult>('/api/fixer/architect/outline', body),
+    ...pendingFor('architect', 'roughing out the outline'),
+  });
+}
+
+/** The ticked items become drafts and staged scenes, one at a time. */
+export function useArchitectBuild(campaignId: string) {
+  const pending = pendingFor('architect', 'building the outline');
+  return useMutation({
+    mutationFn: (body: { outline: ArchitectOutline; select: ArchitectSelection }) =>
+      apiPost<ArchitectBuildResult>('/api/fixer/architect/build', { campaignId, ...body }),
+    ...pending,
+    onSuccess: () => {
+      // The inbox and the scene list both have new rows.
+      void queryClient.invalidateQueries({ queryKey: ['campaign', campaignId, 'generations'] });
+      void queryClient.invalidateQueries({ queryKey: ['scenes'] });
+    },
   });
 }

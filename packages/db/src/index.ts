@@ -24,10 +24,14 @@ export {
 } from './errors.js';
 export {
   searchBookPages,
+  searchBookItems,
+  countBookItems,
   searchCodex,
   type BookPageHit,
+  type BookItemHit,
   type CodexHit,
   type SearchBookPagesOpts,
+  type SearchBookItemsOpts,
 } from './fts.js';
 export {
   appendEvent,

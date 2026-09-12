@@ -10,8 +10,8 @@ copy a command out of here:
 
 | You start the app with | The PDFs sit in | You seed with |
 |---|---|---|
-| `pnpm dev:server` — native | any folder; the repo root by default, `--dir` for anywhere else | `pnpm seed:books --calibrate` — **§2** |
-| `docker compose … up -d` | any folder **on the host** — the repo root by default, `BOOKS_DIR` for anywhere else | one `docker compose … run --rm seed` — **§3** |
+| `pnpm dev:server` — native | any folder; `books/` under the repo root by default, `BOOKS_DIR` in `.env` or `--dir` for anywhere else | `pnpm seed:books --calibrate` — **§2** |
+| `docker compose … up -d` | any folder **on the host** — `books/` under the repo root by default, `BOOKS_DIR` in `.env` for anywhere else | one `docker compose … run --rm seed` — **§3** |
 
 Everything else in this file is the same on both: the same seeder, the same
 flags, the same codes, the same offsets, the same shelf. Only the two lines
@@ -23,12 +23,13 @@ above differ.
 
 The books are **your copies**. Nothing about this feature moves them anywhere.
 
-- **They stay in a folder you point the seeder at.** The default is the repo
-  root — the folder `DESIGN.md` sits in — and `--dir` points it anywhere else
-  (`--dir D:/books`). Under the Docker stack the same folder defaults to the
-  same place and is named by `BOOKS_DIR` when it is somewhere else, mounted
-  read-only (§3). The seeder reads `*.pdf` from that folder; it never writes to
-  it, renames anything, or deletes anything.
+- **They stay in a folder you point the seeder at.** The default is `books/`
+  under the repo root — beside `DESIGN.md` — and one line in the repo-root
+  `.env` names anywhere else: `BOOKS_DIR=D:/books`. Both the native seeder and
+  the Docker stack read that line, so it is set once. `--dir D:/books` (or
+  `--dir=D:/books`) on the command line overrides it for one run. Under Docker
+  the folder is mounted read-only (§3). The seeder reads `*.pdf` from that
+  folder; it never writes to it, renames anything, or deletes anything.
 - **They never enter git.** `.gitignore` has excluded `*.pdf` since the first
   commit, which is why the PDFs can sit in the repo root at all.
 - **They never enter a Docker image.** `.dockerignore` excludes `*.pdf` from
@@ -156,7 +157,7 @@ any page whose printed number would be less than 1. With the core rulebook's
 | `--list` | print the filename → code/offset/title guesses and exit; writes nothing |
 | `--calibrate` | measure each book's page offset before indexing, and print the report (§5) |
 | `--recalibrate` | implies `--calibrate`, and also overwrites an offset a human set |
-| `--dir <path>` | folder to scan (default: repo root) |
+| `--dir <path>` | folder to scan (default: `BOOKS_DIR` from `.env`, else `books/` under the repo root, else the repo root) |
 | `--only <CODE>` | just the one book whose guessed code matches |
 | `--max-pages <N>` | extract at most N PDF pages per book (fast test runs) |
 | `--data-dir <path>` | `DATA_DIR` override — file store + database location |
@@ -343,6 +344,81 @@ filename → code/offset guesses for everything it can see and writes nothing.
 Run that first.
 
 ---
+
+## 3b. The catalogue — items, spells and powers, read out of the pages
+
+Seeding does one more thing with every page it indexes: it reads the gear
+tables and the spell stat blocks off the extracted text into `book_items`,
+so a player can pick a weapon, a piece of armor, a spell or a power **by
+name** from a sheet and have the stats the book printed — and its page —
+land on the sheet. That is the whole of "acquiring" in Safehouse: how the
+runner came by it is worked out with the GM at the table; the app keeps the
+inventory and provides the numbers.
+
+Nothing is shipped (§14 / NG2). The catalogue is compiled from *your* PDFs
+into *your* database, sits beside the pages it came from, and goes with the
+book when the book is deleted. A fresh checkout has an empty catalogue until
+`pnpm seed:books` runs.
+
+What the parser reads is **shape, not content**: a header line naming the
+columns (`… ACC DAMAGE AP MODE RC AMMO AVAIL COST`, `… ESSENCE CAPACITY
+AVAIL COST`, `HANDL SPEED ACCEL BODY …`) followed by rows ending in a price;
+a spell's name over its `Type: … Range: … Drain: …` lines; an adept power's
+`Cost: 0.5 PP`; a quality's `Cost: 5 Karma`. Rows are read from the right —
+price, availability, one cell per column — because the name is the only
+cell whose width the table does not fix. A one-row table (a heading, the
+columns, the numbers — how the weapon books print each blade) takes its name
+from the heading. What it does not read: prose ("they have an Availability
+of 4F…"), rows that wrap over two lines, rating tables with one row per
+rating. Those are still on the page, still in search, still a ref away —
+just not pickable by name.
+
+**What the full production set yielded** (2026-09-12, 17 books, 3,542 pages,
+1 s to recompile): 1,840 items. The core book alone: 74 weapons, 11
+ammunition, 16 armor, 69 augmentations, 40 vehicles, 34 electronics, 21
+programs, 151 gear, 84 spells, 24 powers, 12 complex forms. Run & Gun 91
+weapons and 88 armor; Street Lethal 91 weapons; Rigger 5.0 252 vehicles;
+Street Grimoire 101 spells; Chrome Flesh 189 augmentations. The setting
+books (Seattle Sprawl, Serrated Edge, Market Panic) yield nothing, which is
+right — they print no tables. The seeder's log says per book what it read
+and how many priced rows under a recognised header it could not
+(`(11 rows not read)`), so a book that yields 0 items is visible rather
+than silent.
+
+### Recompiling without touching the PDFs
+
+```bash
+pnpm seed:books --catalogue            # every book already indexed
+pnpm seed:books --catalogue --only SR5 # one book
+```
+
+Reads the pages already in the database back into the catalogue — for a
+library indexed before the catalogue existed, or after the parser learns a
+new shape. Seconds, not minutes; nothing is re-extracted. The GM can do the
+same for one book from the API (`POST /api/books/:id/catalogue`).
+
+### Where it shows up
+
+- **On a sheet** — Gear, Combat and Magic tabs each have a **+ from the
+  books** button beside their section. Type part of a name, see the stats
+  the book printed and the page, tap **add**. A weapon lands with its
+  accuracy, damage, AP, modes, ammo and recoil compensation in the sheet's
+  own fields; a spell with its drain code; armor with its rating; 'ware with
+  its Essence cost; anything else as gear with the row in its note. Every
+  item carries the page as its ref chip. With the spend box ticked (the
+  default when the row has a price) the same tap proposes the nuyen on the
+  ledger, **pending until the GM approves it** (FR3.6) — the ledger says
+  what was bought without deciding whether it was (the GM's own spend is
+  recorded outright). **Or write your own**, in the same dialog: the fields
+  the sheet keeps for that kind, a price, a page if there is one — for the
+  thing that is in no table, or in no book. The GM adds to any sheet the
+  same way. **×** removes an item in one tap; History has the revision.
+- **In the search overlay** (`/`, or ⌕ in the header) — items answer above
+  the page hits, with their stats, and the ref opens the page.
+- **For the Fixer** — the `search_catalogue` tool, beside `search_books`,
+  for "what does an Ares Predator cost" without a page of prose.
+- **Visibility is the library's** (FR11.5): a GM-only book's items are not
+  a back door to the book.
 
 ## 4. Codes
 

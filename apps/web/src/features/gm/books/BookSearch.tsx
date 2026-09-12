@@ -12,6 +12,8 @@ import { useEffect, useState } from 'react';
 import { ErrorNote, Spinner, inputClass } from '../ui.js';
 import { useBookSearch, type BookRecord, type BookSearchHit } from './api.js';
 import { BookViewerOverlay } from './RefChip.js';
+import { useCatalogueSearch } from '../../sheet/catalogue/api.js';
+import { statsLine } from '../../sheet/catalogue/toSheet.js';
 
 export const MIN_QUERY = 2;
 
@@ -114,6 +116,9 @@ export default function BookSearch({ books, compact, initialQuery, autoFocus, on
     onViewerChange?.(next !== null);
   };
   const search = useBookSearch(q, book || undefined);
+  // The same words against the catalogue: an item by name answers before a page does.
+  const items = useCatalogueSearch(q);
+  const itemHits = (items.data ?? []).filter((h) => !book || h.bookCode === book).slice(0, 8);
   const note = searchNote(q, search.data, search.isFetching, shelfIndex(books));
   const shelf = (books ?? []).filter((b) => b.hasFile !== false);
 
@@ -176,6 +181,31 @@ export default function BookSearch({ books, compact, initialQuery, autoFocus, on
         </p>
       )}
 
+      {itemHits.length > 0 && (
+        <div className="mt-3" data-testid="book-search-items">
+          <div className="mono-label text-dim">Items &amp; spells</div>
+          <ul className="mt-1 divide-y divide-edge/60">
+            {itemHits.map((hit) => (
+              <li key={hit.id} className="flex items-center gap-2 py-1.5" data-kind={hit.kind}>
+                <div className="min-w-0 flex-1">
+                  <span className="text-sm text-ink">{hit.name}</span>
+                  <span className="mono-label ml-2 text-faint">{hit.category.toLowerCase() || hit.kind}</span>
+                  {!compact && <div className="mono-label truncate text-dim">{statsLine(hit)}</div>}
+                </div>
+                <button
+                  type="button"
+                  className="chip cursor-pointer border-cyan-dim/60 text-cyan hover:border-cyan"
+                  onClick={() => setOpen({ code: hit.bookCode, page: hit.printedPage })}
+                  title={`Open ${hit.title} at printed page ${hit.printedPage}`}
+                >
+                  {hit.bookCode} p.{hit.printedPage}
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p className="mono-label mt-1 text-faint">from the tables the seeder read · add one from a sheet's Gear, Combat or Magic tab</p>
+        </div>
+      )}
       {search.data && search.data.length > 0 && (
         <ol className="mt-2 divide-y divide-edge/60" data-testid="book-search-hits">
           {search.data.map((hit) => (

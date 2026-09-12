@@ -7,6 +7,8 @@ import type { SheetV1 } from '@safehouse/contracts';
 import { signed } from '../lib.js';
 import { BreakdownButton } from '../components/Provenance.js';
 import { Empty, RefChip, SectionLabel } from '../components/ui.js';
+import AddFromBooks from '../catalogue/AddFromBooks.js';
+import { withoutItem } from '../catalogue/toSheet.js';
 import type { TabProps } from './shared.js';
 
 const ASDF = ['Attack', 'Sleaze', 'Data Proc', 'Firewall'] as const;
@@ -24,8 +26,17 @@ export default function GearTab({ character, derived, patchSheet, overrideFor }:
 
   return (
     <div className="p-4">
-      <SectionLabel>Carried</SectionLabel>
-      {sheet.gear.length === 0 && <Empty>No gear entered.</Empty>}
+      <div className="flex items-center justify-between gap-2">
+        <SectionLabel>Carried</SectionLabel>
+        <AddFromBooks
+          characterId={character.id}
+          sheet={sheet}
+          patchSheet={patchSheet}
+          kinds={['gear', 'ammo', 'electronics', 'vehicle', 'program']}
+          testId="add-gear"
+        />
+      </div>
+      {sheet.gear.length === 0 && <Empty>No gear entered — add it from the books, write your own, or import the sheet.</Empty>}
       <ul className="divide-y divide-edge/60">
         {sheet.gear.map((item) => (
           <li key={item.name} className="flex items-center gap-2 py-2">
@@ -40,6 +51,15 @@ export default function GearTab({ character, derived, patchSheet, overrideFor }:
               )}
             </div>
             <RefChip refInfo={item.ref} lookup={item.name} />
+            <button
+              type="button"
+              className="chip text-faint hover:border-danger hover:text-danger"
+              onClick={() => patchSheet(withoutItem(sheet, 'gear', item.name))}
+              aria-label={`remove ${item.name}`}
+              title="Removes it — History can put it back"
+            >
+              ×
+            </button>
             <div className="flex shrink-0 items-center gap-1">
               <button
                 type="button"
@@ -64,7 +84,10 @@ export default function GearTab({ character, derived, patchSheet, overrideFor }:
         ))}
       </ul>
 
-      <SectionLabel>Augmentations</SectionLabel>
+      <div className="flex items-center justify-between gap-2">
+        <SectionLabel>Augmentations</SectionLabel>
+        <AddFromBooks characterId={character.id} sheet={sheet} patchSheet={patchSheet} kinds={['augmentation']} testId="add-augment" />
+      </div>
       <div className="mb-2 flex items-center gap-2">
         <span className="mono-label">Essence</span>
         {essence && (
@@ -90,6 +113,15 @@ export default function GearTab({ character, derived, patchSheet, overrideFor }:
               </div>
             </div>
             <RefChip refInfo={aug.ref} lookup={aug.name} />
+            <button
+              type="button"
+              className="chip text-faint hover:border-danger hover:text-danger"
+              onClick={() => patchSheet(withoutItem(sheet, 'augments', aug.name))}
+              aria-label={`remove ${aug.name}`}
+              title="Removes it — History can put it back"
+            >
+              ×
+            </button>
           </li>
         ))}
       </ul>

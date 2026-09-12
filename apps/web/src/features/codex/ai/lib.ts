@@ -451,6 +451,7 @@ export function askErrorLine(error: unknown): string | null {
   if (error instanceof ApiError) {
     if (error.status === 503 && error.code === 'ai_disabled') return disabledReason({ enabled: false, models: null });
     if (error.code === 'ai_busy') return 'The Fixer is still finishing the previous request. Try again in a moment.';
+    if (error.code === 'ai_cancelled') return 'Cancelled — nothing was drafted.';
     if (error.status >= 500) return `The inference box did not answer: ${error.message}`;
     return error.message;
   }

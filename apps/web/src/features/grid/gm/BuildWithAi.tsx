@@ -7,8 +7,9 @@
  * plan as ONE undoable step, so Ctrl+Z takes the whole floor back.
  */
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import type { Scene } from '@safehouse/contracts';
-import { aiDisabledFrom, useFixerStatus } from '../../gm/fixer/api.js';
+import { aiDisabledFrom, isAiCancelled, useCancelAi, useFixerStatus } from '../../gm/fixer/api.js';
 import { ErrorNote } from '../../gm/ui.js';
 import { useBuildFloor, usePaintTiles, type FloorPlanResult } from '../api.js';
 import { useHistory } from '../history.js';
@@ -36,6 +37,7 @@ export function describePlan(plan: FloorPlanResult['plan']): string {
 export default function BuildWithAi({ scene, tilesetId, level }: BuildWithAiProps) {
   const status = useFixerStatus();
   const build = useBuildFloor();
+  const cancel = useCancelAi(scene.campaignId);
   const paint = usePaintTiles();
   const [prompt, setPrompt] = useState('');
   const [result, setResult] = useState<FloorPlanResult | null>(null);
@@ -91,8 +93,12 @@ export default function BuildWithAi({ scene, tilesetId, level }: BuildWithAiProp
       </summary>
       {disabled ? (
         <p className="mt-2 text-xs text-dim" data-testid="build-with-ai-offline">
-          Comes back with the Fixer: point the AI settings at an inference endpoint and this box turns a
-          sentence into rooms, doors and furniture on this floor.
+          Comes back with the Fixer: point{' '}
+          <Link className="text-cyan underline" to={`/c/${scene.campaignId}/gm/ai`}>
+            AI
+          </Link>{' '}
+          at an inference endpoint and this box turns a sentence into rooms, doors and furniture on
+          this floor.
         </p>
       ) : (
         <div className="mt-2 flex flex-col gap-2">
@@ -120,11 +126,28 @@ export default function BuildWithAi({ scene, tilesetId, level }: BuildWithAiProp
             >
               {build.isPending ? 'laying it out…' : 'draft the floor'}
             </button>
+            {build.isPending && (
+              <button
+                type="button"
+                className="btn px-2.5 py-1 text-danger"
+                onClick={() => cancel.mutate()}
+                disabled={cancel.isPending}
+                data-testid="build-with-ai-cancel"
+              >
+                cancel
+              </button>
+            )}
             <span className="mono-label text-faint">
-              floor {level} · {tilesetId} · nothing is painted until you build it
+              {build.isPending
+                ? 'the model is laying it out — this can take a minute'
+                : `floor ${level} · ${tilesetId} · nothing is painted until you build it`}
             </span>
           </div>
-          <ErrorNote error={build.error} />
+          {isAiCancelled(build.error) ? (
+            <p className="text-xs text-warn">Cancelled — no plan, nothing painted.</p>
+          ) : (
+            <ErrorNote error={build.error} />
+          )}
 
           {result && (
             <div className="rounded-md border border-cyan-dim/50 bg-panel p-2.5" data-testid="build-with-ai-plan">

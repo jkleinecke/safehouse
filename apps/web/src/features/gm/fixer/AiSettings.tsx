@@ -26,7 +26,7 @@ import {
   type AiEffort,
   type AiProvider,
 } from '@safehouse/contracts';
-import { useAiSettings, useSaveAiSettings } from './api.js';
+import { useAiSettings, useProbeModels, useSaveAiSettings } from './api.js';
 
 const inputCls =
   'w-full rounded-md border border-edge bg-deck px-2.5 py-1.5 text-sm text-ink ' +
@@ -35,6 +35,7 @@ const inputCls =
 export default function AiSettings({ campaignId }: { campaignId: string }) {
   const query = useAiSettings(campaignId);
   const save = useSaveAiSettings(campaignId);
+  const probe = useProbeModels(campaignId);
   const saved = query.data;
 
   const [provider, setProvider] = useState<AiProvider>('off');
@@ -167,6 +168,79 @@ export default function AiSettings({ campaignId }: { campaignId: string }) {
                 onChange={(e) => edit(setBaseUrl)(e.target.value)}
               />
             </label>
+          )}
+
+          {isLocal && (
+            <div className="mt-2" data-testid="ai-probe">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  className="btn px-2.5 py-1"
+                  disabled={probe.isPending || !/^https?:\/\//i.test(baseUrl.trim())}
+                  onClick={() => probe.mutate(baseUrl.trim())}
+                  data-testid="ai-probe-check"
+                >
+                  {probe.isPending ? 'checking…' : 'check the box'}
+                </button>
+                <span className="text-[0.7rem] text-dim">
+                  Reaches it from this server and lists the models it serves.
+                </span>
+              </div>
+              {probe.data && (
+                <div
+                  className="mt-2 text-[0.75rem]"
+                  data-testid="ai-probe-result"
+                  data-reachable={probe.data.reachable ? 'yes' : 'no'}
+                >
+                  {probe.data.reachable ? (
+                    probe.data.models.length > 0 ? (
+                      <>
+                        <span className="text-ok">reachable</span>
+                        <span className="text-dim">
+                          {' '}
+                          · {probe.data.models.length} model{probe.data.models.length === 1 ? '' : 's'} — click
+                          one to make it the primary
+                        </span>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {probe.data.models.map((id) => (
+                            <button
+                              key={id}
+                              type="button"
+                              className={`chip cursor-pointer normal-case ${
+                                primaryModel === id ? 'border-cyan text-cyan' : 'text-dim hover:text-cyan'
+                              }`}
+                              onClick={() => {
+                                edit(setPrimary)(id);
+                                // A fast model the box does not serve would 404 mid-session;
+                                // blank means the primary, which it does serve.
+                                if (!probe.data?.models.includes(fastModel)) edit(setFast)('');
+                              }}
+                              data-testid="ai-probe-model"
+                            >
+                              {id}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <span className="text-warn">{probe.data.note}</span>
+                    )
+                  ) : (
+                    <span className="text-warn">{probe.data.note}</span>
+                  )}
+                  {probe.data.hint && (
+                    <p className="mt-1 text-warn" data-testid="ai-probe-hint">
+                      {probe.data.hint}
+                    </p>
+                  )}
+                </div>
+              )}
+              {probe.isError && (
+                <p className="mt-1 text-[0.75rem] text-danger">
+                  {probe.error instanceof Error ? probe.error.message : 'the check failed'}
+                </p>
+              )}
+            </div>
           )}
 
           {info.needsKey && (

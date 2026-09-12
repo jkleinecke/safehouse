@@ -762,6 +762,122 @@ buttons stay on screen **disabled with the reason**, deliberately unlike
 `FixerDock`'s `return null`: a GM should learn that the feature exists and is
 asleep (NG7). `ai.test.tsx` (29).
 
+### UX-4 — the AI could not be found, stopped, or watched *(2026-09-11)*
+
+Six complaints from one evening of real use, all on the AI layer, none of them
+a wrong answer.
+
+**"I can't see where I can configure the AI."** The panel existed — at the top
+of the Fixer page — and nothing in the console said *AI*. Now `GM ▸ AI`
+(`features/gm/AiPage.tsx`, nav key `ai`, a setup-checklist row), and every
+"the Fixer is off" note links there. The panel gained **check the box**:
+`GET /api/campaigns/:id/ai/models?baseUrl=` reaches the URL, lists the model
+ids it serves so the two model fields are picked rather than typed, and says
+`host.docker.internal` out loud when the server is an image and the URL is a
+loopback. `ai-models.test.ts`.
+
+**"`pnpm seed:books` doesn't work to index books in a different folder."** The
+seeder ignored `.env`, rejected `--dir=path`, and rejected the bare `--` pnpm
+forwards. `defaultBooksDir` reads `BOOKS_DIR` / `SAFEHOUSE_BOOKS_DIR` then
+`books/`, `--k=v` parses, the `--` is dropped the way `e2e/run.mjs` drops it,
+and every error names where the path came from. `book-offsets.test.ts`.
+
+**"All of the AI chats should have the ability to cancel a request. It should
+also be more obvious that the request is being processed."** Every AI request
+now runs inside `withRun` (`fixer/activity.ts`): one run per campaign, an
+`AbortSignal` threaded to the model call and checked before every tool round,
+`ai.activity` ephemerals on start / rename / cancelling / idle, `409 ai_busy`
+naming what is in the way, `POST /api/fixer/cancel`, and `499 ai_cancelled`
+to the caller that was waiting. The web shows `AiActivityBar` between the GM
+header and every GM screen — what is running, for how long, whose work, one
+**cancel** — and each surface (Fixer chat, NPC voice, floor builder, codex
+panel, Architect) has the same cancel inline. `fixer-cancel.test.ts`,
+`aiActivityBar.test.tsx`, and `e2e/architect.spec.ts` stops a build from the
+bar in a real browser.
+
+**"An error about the model not returning JSON … on the tool call side."**
+It was. `parseModelJson` (`fixer/vision.ts`) now strips `<think>` blocks,
+takes the first balanced object out of prose, and says which of three things
+happened: the model spent its whole answer thinking (turn Thinking off under
+AI), returned nothing, or answered in words (quoted). The floor builder asks
+for 8 000 tokens and turns a `length` finish into the sentence that fixes it.
+`fixer-json.test.ts`.
+
+**"To delete something on the map, I should be able to select it and hit the
+delete key. Don't bother asking if I'm sure."** `removeSelection`
+(`grid/geometryEdit.ts`) behind both the Delete/Backspace key
+(`hud/useGridShortcuts.ts`) and the inspector's now one-click button; the
+removal is an undo step, so the "— sure?" second click was a tax on something
+Ctrl+Z fixes. UX_MAP_BUILDER §3.3 / §3.6 restated. `e2e/map-delete.spec.ts`
+deletes a wall from the keyboard, checks the server no longer holds it, and
+undoes it.
+
+**"An overarching AI that I can use to rough out large portions of the lore,
+multiple NPCs, multiple scenes with maps."** The Architect
+(`fixer/architect.ts`, `GM ▸ Architect`): one brief becomes an outline —
+codex pages, NPCs with personas, scenes with floors described in words — as a
+checklist that writes nothing; **build** makes each ticked item through the
+lane that already exists for it: a `wiki_page` draft, an `npc` draft rolled off
+the best-matching archetype (the `generate_npc` shape, so the inbox accepts it
+unchanged), a staged scene with its floor laid out by `proposeFloor` and
+painted server-side. The run is renamed per item ("writing “Pier 23” (1 of
+4)"), so the bar is the progress line; a cancel answers 200 with what landed
+and `cancelled: true`, because the GM wants to know which drafts exist and
+every one is deletable on its own. Principle 8 holds: nothing the model wrote
+reaches a played entity until the GM accepts it. `fixer-architect.test.ts` (8),
+`architectView.test.tsx` (7), `e2e/architect.spec.ts` (2).
+
+### UX-5 — a player could not find or acquire anything *(2026-09-12)*
+
+**"Verify that players can find and acquire items, gear, spells, etc."** They
+could not. Every list on a sheet — gear, weapons, armor, spells, powers,
+'ware — was read-only-plus-toggles over whatever the Chummer import brought
+across: quantity steppers, worn/stowed, ammo counters, cast dialogs, and not
+one *add* or *remove* anywhere (`GearTab.tsx` said "No gear entered." and
+offered nothing). The only other path was a whole-array `PATCH
+/api/characters/:id`. There was no catalogue of any kind: the `find ⌕` chip
+searched prose, and NG2/§14 had been read as "no item database at all"
+rather than as "ship none".
+
+**The fix keeps §14 exactly.** The seeder now reads every gear table and
+spell stat block *off the pages it already extracts* into `book_items`
+(`services/catalogue.ts`, migration `0005`): derived from the GM's own PDFs
+into the GM's own database, beside the pages, gone with the book. The parser
+knows shapes, not content — a header line ending `… AVAIL COST`, rows read
+from the right (price, availability, one cell per column), a name over
+`Type: … Drain: …` lines — and its fixtures are invented rows in the real
+layout. Against the full production set it reads **1,840 items across 17
+books** (core: 74 weapons, 11 ammunition, 16 armor, 69 augmentations, 40
+vehicles, 34 electronics, 21 programs, 151 gear, 84 spells, 24 powers, 12
+complex forms), logs per book what it could not read, and recompiles in
+under a second with `pnpm seed:books --catalogue`.
+
+On the sheet: **+ from the books** on the Gear, Combat and Magic tabs
+(`sheet/catalogue/AddFromBooks.tsx`), a search by name with the stats and
+the page, one tap to add. `toSheet.ts` turns the book's columns into the
+sheet's typed fields — "5 (7)" → `acc: 5`, "SA / BF" → two modes, "F – 3" →
+`drain: 'F-3'` — with the page as the ref chip, and the same tap proposes
+the nuyen on the ledger, pending the GM's approval (FR3.6), because the
+GM's rule is that how the runner came by it is worked out at the table and
+the app keeps the inventory and the numbers. The same dialog has **write
+your own** (`CustomItemForm.tsx`): the fields the sheet keeps for that kind,
+a price, a page if there is one, landing through the same mapping — for the
+thing in no table, or in no book. The GM does all of this on any sheet, and
+a GM's spend is recorded outright where a player's is proposed. **×** removes
+in one tap (History has the revision). The search overlay answers with items above
+page hits; the Fixer has `search_catalogue`; a GM-only book's items stay
+GM-only (FR11.5).
+
+`catalogue-parse.test.ts` (16), `catalogue.test.ts` (7), `toSheet.test.ts`
+(8), `addFromBooks.test.tsx` (4), and `e2e/catalogue.spec.ts` — the
+manufactured e2e book now carries a gear table on its first printed page,
+the seeder compiles it, and a player adds the pistol from the Combat tab,
+sees the pending spend on the ledger, and removes it, each checked against
+the server's own sheet.
+
+**FR3.2 moves from `partial` to `done` for acquisition;** the Matrix tab is
+still the gap.
+
 ### What changed structurally
 
 `apps/web/e2e/` exists: Playwright, chromium, 14 spec files, 40 tests, run

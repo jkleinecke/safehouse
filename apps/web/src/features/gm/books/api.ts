@@ -21,6 +21,8 @@ export type BookRecord = Book & {
    * rather than showing a zero that would read as "nothing indexed".
    */
   indexedPages?: number;
+  /** Items the catalogue read off this book's pages — 0 on a rulebook means its tables did not parse. */
+  catalogueItems?: number;
   /**
    * The book's PDF page count. NOT sent by any route: nothing in the schema
    * records it, and the only source is opening the file — too expensive for a

@@ -19,6 +19,7 @@ import { copyFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { and, asc, count, eq, inArray, isNull, or } from 'drizzle-orm';
 import { attachments, bookPages, books, type Db } from '@safehouse/db';
+import { compileCatalogue, describeSummary } from './catalogue.js';
 import {
   buildOffsetProposal,
   detectOffsetFromPdf,
@@ -479,6 +480,8 @@ export interface SeedBookResult {
   bookId: string;
   pagesInserted: number;
   totalPdfPages: number;
+  /** Rows the catalogue read off those pages (services/catalogue.ts). */
+  catalogueItems?: number;
   /** Present only under `--calibrate`. */
   calibration?: SeedCalibration;
 }
@@ -539,6 +542,10 @@ export async function seedBooks(db: Db, opts: SeedBooksOptions): Promise<SeedBoo
     log(
       `[seed:books]   ${extraction.inserted} pages indexed (${extraction.scannedPdfPages}/${extraction.totalPdfPages} pdf pages scanned)`,
     );
+    // The catalogue rides on the pages just written: every gear table and
+    // spell stat line on them becomes a row a sheet can pick (catalogue.ts).
+    const catalogue = await compileCatalogue(db, book.id);
+    log(`[seed:books]   catalogue: ${describeSummary(catalogue)}`);
     results.push({
       file,
       code: book.code,
@@ -547,6 +554,7 @@ export async function seedBooks(db: Db, opts: SeedBooksOptions): Promise<SeedBoo
       bookId: book.id,
       pagesInserted: extraction.inserted,
       totalPdfPages: extraction.totalPdfPages,
+      catalogueItems: catalogue.items,
       ...(calibration !== undefined ? { calibration } : {}),
     });
   }

@@ -18,6 +18,8 @@ import { spellRowLabel } from '../a11y.js';
 import { useSheetPlayStore, type DrainAttr } from '../playState.js';
 import { BreakdownButton } from '../components/Provenance.js';
 import { Empty, RefChip, RowButton, SectionLabel, Sheet, Stepper } from '../components/ui.js';
+import AddFromBooks from '../catalogue/AddFromBooks.js';
+import { withoutItem } from '../catalogue/toSheet.js';
 import type { TabProps } from '../tabs/shared.js';
 import DrainApplyPanel, { type PendingDrain } from '../tabs/DrainApply.js';
 
@@ -114,8 +116,11 @@ export default function SpellBook(props: SpellBookProps) {
         />
       )}
 
-      <SectionLabel>Spells</SectionLabel>
-      {sheet.spells.length === 0 && <Empty>No spells entered.</Empty>}
+      <div className="flex items-center justify-between gap-2">
+        <SectionLabel>Spells</SectionLabel>
+        <AddFromBooks characterId={character.id} sheet={sheet} patchSheet={patchSheet} kinds={['spell']} testId="add-spell" />
+      </div>
+      {sheet.spells.length === 0 && <Empty>No spells entered — add one from the books, write your own, or import the sheet.</Empty>}
       <ul className="divide-y divide-edge/60">
         {sheet.spells.map((spell) => {
           const pool = derived.pools[`spell.${spell.name}`];
@@ -135,6 +140,15 @@ export default function SpellBook(props: SpellBookProps) {
                 </div>
               </RowButton>
               <RefChip refInfo={spell.ref} lookup={spell.name} />
+              <button
+                type="button"
+                className="chip text-faint hover:border-danger hover:text-danger"
+                onClick={() => patchSheet(withoutItem(sheet, 'spells', spell.name))}
+                aria-label={`remove ${spell.name}`}
+                title="Removes it — History can put it back"
+              >
+                ×
+              </button>
               {pool && (
                 <BreakdownButton
                   title={`${spell.name} pool`}
@@ -148,8 +162,11 @@ export default function SpellBook(props: SpellBookProps) {
         })}
       </ul>
 
-      <SectionLabel>Adept powers</SectionLabel>
-      {sheet.powers.length === 0 && <Empty>No powers entered.</Empty>}
+      <div className="flex items-center justify-between gap-2">
+        <SectionLabel>Adept powers</SectionLabel>
+        <AddFromBooks characterId={character.id} sheet={sheet} patchSheet={patchSheet} kinds={['power']} testId="add-power" />
+      </div>
+      {sheet.powers.length === 0 && <Empty>No powers entered — add one from the books, write your own, or import the sheet.</Empty>}
       <ul className="divide-y divide-edge/60">
         {sheet.powers.map((power) => {
           const toggleable = power.mods.length > 0;
@@ -169,6 +186,15 @@ export default function SpellBook(props: SpellBookProps) {
                 </div>
               </div>
               <RefChip refInfo={power.ref} lookup={power.name} />
+              <button
+                type="button"
+                className="chip text-faint hover:border-danger hover:text-danger"
+                onClick={() => patchSheet(withoutItem(sheet, 'powers', power.name))}
+                aria-label={`remove ${power.name}`}
+                title="Removes it — History can put it back"
+              >
+                ×
+              </button>
               {toggleable ? (
                 <button
                   type="button"

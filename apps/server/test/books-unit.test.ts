@@ -130,12 +130,25 @@ describe('parseRangeHeader (FR11.3)', () => {
 });
 
 describe('seed:books CLI flags (FR11.7)', () => {
-  it('defaults to the repo root with no limits', () => {
-    const cli = parseArgs([]);
+  it('defaults to books/ under the repo root (or the root itself) with no limits', () => {
+    const cli = parseArgs([], {});
     expect(cli.only).toBeUndefined();
     expect(cli.maxPages).toBeUndefined();
     expect(cli.list).toBe(false);
     expect(cli.dir.length).toBeGreaterThan(0);
+    expect(cli.dirFrom).toBe('default');
+  });
+
+  it('reads BOOKS_DIR from the environment — the line .env ships — before falling back', () => {
+    expect(parseArgs([], { BOOKS_DIR: 'D:/books' })).toMatchObject({ dir: 'D:/books', dirFrom: 'env' });
+    expect(parseArgs([], { SAFEHOUSE_BOOKS_DIR: 'E:/pdfs' })).toMatchObject({ dir: 'E:/pdfs', dirFrom: 'env' });
+    // --dir wins over the environment.
+    expect(parseArgs(['--dir', 'F:/x'], { BOOKS_DIR: 'D:/books' })).toMatchObject({ dir: 'F:/x', dirFrom: 'flag' });
+  });
+
+  it('takes --dir=path and ignores the bare -- pnpm forwards', () => {
+    expect(parseArgs(['--dir=D:/my books', '--max-pages=3'], {})).toMatchObject({ dir: 'D:/my books', maxPages: 3 });
+    expect(parseArgs(['--', '--dir', 'D:/books', '--list'], {})).toMatchObject({ dir: 'D:/books', list: true });
   });
 
   it('parses --only (upper-cased) and --max-pages', () => {

@@ -18,12 +18,14 @@ import { aiGenerations, campaigns, type Db } from '@safehouse/db';
 import { and, eq } from 'drizzle-orm';
 import { assertCampaign, httpError, requireRole } from '../services/auth.js';
 import { AiSettingsWriteSchema } from '@safehouse/contracts';
-import { LlmClient } from '../fixer/llm.js';
+import { LlmClient, modelsUrl } from '../fixer/llm.js';
+import { buildInfoFrom } from '../version.js';
 import {
   applyAiSettings,
   readAiSettings,
   resolveLlmConfig,
 } from '../fixer/providers.js';
+import { cancelRun, currentRun, withRun } from '../fixer/activity.js';
 import { runFixerChat, runNpcConverse } from '../fixer/agent.js';
 import { listConversations, loadConversation } from '../fixer/conversations.js';
 import { acceptDraft, listDrafts, rejectDraft } from '../fixer/drafts.js';
@@ -142,19 +144,8 @@ function gmFor(req: FastifyRequest, campaignId: string | undefined): string {
 }
 
 /** One turn per campaign at a time — the box has one queue (FR12.16/R11). */
-const inFlight = new Set<string>();
 
-async function exclusive<T>(campaignId: string, run: () => Promise<T>): Promise<T> {
-  if (inFlight.has(campaignId)) {
-    throw httpError(409, 'ai_busy', 'the Fixer is still working on the previous turn');
-  }
-  inFlight.add(campaignId);
-  try {
-    return await run();
-  } finally {
-    inFlight.delete(campaignId);
-  }
-}
+// One AI job per campaign at a time, cancellable, announced — fixer/activity.ts.
 
 /** Persisted draft usage (FR12.15) — the durable half of the meter. */
 async function draftUsage(db: Db, campaignId: string) {
@@ -223,6 +214,53 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
     return { ai: readAiSettings(next) };
   });
 
+  /**
+   * "Check the box" (FR12.13): before a GM saves a local base URL, the server
+   * tries to reach it and lists the model ids it serves, so the two model
+   * fields can be picked rather than typed. Three different answers —
+   * reachable and listing, reachable but empty, unreachable — and the one
+   * hint that fixes the most common local failure: from inside a container,
+   * 127.0.0.1 is the container.
+   */
+  app.get('/api/campaigns/:id/ai/models', async (req) => {
+    gmFor(req, (req.params as { id: string }).id);
+    const raw = (req.query as { baseUrl?: string } | undefined)?.baseUrl ?? '';
+    const baseUrl = raw.trim().replace(/\/+$/, '');
+    if (!/^https?:\/\//i.test(baseUrl)) {
+      throw httpError(400, 'bad_request', 'baseUrl must start with http:// or https://');
+    }
+    const target = modelsUrl(baseUrl);
+    const host = new URL(baseUrl);
+    const loopback = ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(host.hostname);
+    const inContainer = buildInfoFrom(process.env, () => null).source === 'image';
+    const hint =
+      inContainer && loopback
+        ? `this server runs in a container, where ${host.hostname} is the container itself — use http://host.docker.internal:${host.port || '80'}/v1 to reach the machine hosting the box`
+        : null;
+    try {
+      const res = await fetch(target, { signal: AbortSignal.timeout(5_000) });
+      if (!res.ok) {
+        return { baseUrl, reachable: true, models: [], note: `the box answered ${res.status} to ${target}`, hint };
+      }
+      const body = (await res.json().catch(() => ({}))) as { data?: unknown };
+      const models = Array.isArray(body.data)
+        ? body.data
+            .map((m) => (typeof m === 'object' && m !== null ? (m as { id?: unknown }).id : undefined))
+            .filter((id): id is string => typeof id === 'string' && id.length > 0)
+        : [];
+      return {
+        baseUrl,
+        reachable: true,
+        models,
+        note: models.length === 0 ? 'reachable, but it lists no models — type the model id by hand' : null,
+        hint: null,
+      };
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      return { baseUrl, reachable: false, models: [], note: `could not reach ${target} — ${why}`, hint };
+    }
+  });
+
   app.get('/api/fixer/status', async (req) => {
     const campaignId = gmFor(req, (req.query as { campaignId?: string } | undefined)?.campaignId);
     const config = resolveLlmConfig(await settingsOf(app.db, campaignId));
@@ -232,6 +270,8 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
       enabled: config !== null,
       models: config ? { primary: config.primary, fast: config.fast } : null,
       maxToolRounds: 8,
+      /** What the AI is doing for this campaign right now, if anything. */
+      activity: currentRun(campaignId),
       vision: {
         supported: vision.supported,
         via: vision.via,
@@ -242,6 +282,17 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
     };
   });
 
+  /**
+   * Stop whatever the AI is doing for this campaign. The route that was
+   * running answers its own caller with 499 `ai_cancelled`; this one just
+   * says whether there was anything to stop.
+   */
+  app.post('/api/fixer/cancel', async (req) => {
+    const body = parseBody(z.object({ campaignId: z.string().optional() }), req.body);
+    const campaignId = gmFor(req, body.campaignId);
+    return { cancelled: cancelRun(app.hub, campaignId) };
+  });
+
   // --- FR12.1–12.4: the chat turn (streams over WS, returns the result) ----
   app.post('/api/fixer/chat', async (req, reply) => {
     const body = parseBody(ChatBody, req.body);
@@ -250,7 +301,7 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
     if (!llm) return disabled(reply);
     let result: Awaited<ReturnType<typeof runFixerChat>>;
     try {
-      result = await exclusive(campaignId, () =>
+      result = await withRun(app.hub, campaignId, 'chat', 'answering the Fixer chat', (signal) =>
         runFixerChat(
           { db: app.db, llm, hub: app.hub },
           {
@@ -260,6 +311,7 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
             ...(body.slot !== undefined ? { slot: body.slot } : {}),
             ...(body.maxRounds !== undefined ? { maxRounds: body.maxRounds } : {}),
             ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
+            signal,
           },
         ),
       );
@@ -296,7 +348,7 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
     if (!llm) return disabled(reply);
     let result: Awaited<ReturnType<typeof runNpcConverse>>;
     try {
-      result = await exclusive(campaignId, () =>
+      result = await withRun(app.hub, campaignId, 'npc', 'speaking as an NPC', (signal) =>
         runNpcConverse(
           { db: app.db, llm, hub: app.hub },
           {
@@ -306,6 +358,7 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
             ...(body.conversationId !== undefined ? { conversationId: body.conversationId } : {}),
             ...(body.slot !== undefined ? { slot: body.slot } : {}),
             ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
+            signal,
           },
         ),
       );

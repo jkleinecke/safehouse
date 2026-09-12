@@ -166,7 +166,8 @@ Single-key tools on the current mode's toolbar — **V** select, **R** room,
 **A** area, **B** brush, **E** erase, **W** wall, **D** door, **Z** zone,
 **P** pin, **F** fog region, **C** camera, **N** note, **M** measure,
 **O** area of effect, **X** point, **G** focus; **Esc** returns to select,
-**1–9** switch floors — shown in every tool's tooltip. A key only fires when
+**1–9** switch floors, **Delete** (or Backspace) removes whatever is selected
+— shown in every tool's tooltip. A key only fires when
 nobody is typing in a field, never with a modifier held, and a player's keys
 only reach the four tools a player has. One contextual line under the toolbar
 replaces the paragraphs and the repeated footer:
@@ -205,11 +206,12 @@ showing one category at a time with the tileset's five or six materials.
 
 Reserve the accent button for the three actions that reach other people:
 *activate for the table*, *start a fight*, *reveal* (fog). Everything else on
-the panel is the plain button. Destructive actions (delete a wall, clear a
-floor, delete a fight) stay muted and confirm on a second click — the tracker's
-✕ already does this; the Geo list's red *delete* per wall should too. Von
-Restorff: the button that changes what the players see is the one that looks
-different.
+the panel is the plain button. Destructive actions undo cannot take back (clear
+a floor, delete a fight, delete a scene) stay muted and confirm on a second
+click — the tracker's ✕ already does this. Removing a wall, door, zone, pin,
+camera or note is one click, or the Delete key (2026-09-11): it is an undo
+step, and a "sure?" on something Ctrl+Z can fix is a tax. Von Restorff: the
+button that changes what the players see is the one that looks different.
 
 ---
 

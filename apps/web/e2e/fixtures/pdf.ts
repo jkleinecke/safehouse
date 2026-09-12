@@ -63,6 +63,22 @@ export interface TestPdfOptions {
    * pages actually need is one unreferenced ballast object at the end.
    */
   targetBytes?: number;
+  /**
+   * Extra lines of text on given PDF pages (1-based), one `BT … Tj ET` block
+   * per line so pdf.js hands them back as separate lines — the way a gear
+   * table comes out of a real book, which is what the catalogue reads.
+   */
+  text?: Record<number, readonly string[]>;
+}
+
+/** A line as a PDF literal: dashes plain, the yen sign in Latin-1, parentheses escaped. */
+function pdfString(line: string): string {
+  return line
+    .replace(/[—–]/g, '-')
+    .replace(/[^\x20-\xff]/g, '')
+    .replace(/([\\()])/g, '\\$1')
+    // Last, so the escape's own backslash is not escaped in turn.
+    .replace(/¥/g, '\\245');
 }
 
 /**
@@ -143,7 +159,10 @@ export function buildTestPdf(opts: TestPdfOptions): Buffer {
         `${channel(r)} ${channel(g)} ${channel(b)} rg\n` +
           `0 0 ${PAGE_WIDTH} ${PAGE_HEIGHT} re f\n` +
           '0 0 0 rg\nBT /F1 44 Tf 54 96 Td (Safehouse E2E book) Tj ET\n' +
-          `BT /F1 96 Tf 54 ${PAGE_HEIGHT - 220} Td (pdf page ${k}) Tj ET\n`,
+          `BT /F1 96 Tf 54 ${PAGE_HEIGHT - 220} Td (pdf page ${k}) Tj ET\n` +
+          (opts.text?.[k] ?? [])
+            .map((line, i) => `BT /F1 11 Tf 54 ${PAGE_HEIGHT - 300 - i * 16} Td (${pdfString(line)}) Tj ET\n`)
+            .join(''),
         'latin1',
       ),
     );

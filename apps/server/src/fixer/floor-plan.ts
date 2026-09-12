@@ -344,6 +344,7 @@ export interface FloorAsk {
   tilesetId: string;
   prompt: string;
   slot?: ModelSlot | undefined;
+  signal?: AbortSignal | undefined;
 }
 
 export interface FloorResult {
@@ -395,11 +396,19 @@ export async function proposeFloor(db: Db, config: LlmConfig | null, ask: FloorA
         },
       ],
       temperature: 0.2,
-      max_tokens: 6000,
+      max_tokens: 8000,
     },
-    { timeoutMs: FLOOR_TIMEOUT_MS },
+    { timeoutMs: FLOOR_TIMEOUT_MS, ...(ask.signal ? { signal: ask.signal } : {}) },
   );
-  const parsed = parseModelJson(turn.content);
+  if (turn.finishReason === 'length' && !/\}\s*$/.test(turn.content.trim())) {
+    throw httpError(
+      502,
+      'ai_error',
+      'the model hit its token limit before it finished the floor plan — set Thinking to Off under AI, or raise the model\'s output limit',
+      { preview: turn.content.trim().slice(-240), finishReason: turn.finishReason },
+    );
+  }
+  const parsed = parseModelJson(turn.content, 'the floor plan');
   const checked = FloorPlanSchema.safeParse(parsed);
   if (!checked.success) {
     throw httpError(502, 'ai_error', 'the model returned a floor plan the schema rejects', checked.error.issues.slice(0, 8));

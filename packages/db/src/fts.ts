@@ -6,7 +6,7 @@
  */
 import { and, desc, eq, sql, type SQL } from 'drizzle-orm';
 import type { Db } from './client.js';
-import { bookPages, books, wikiPages } from './schema.js';
+import { bookItems, bookPages, books, wikiPages } from './schema.js';
 
 export interface BookPageHit {
   bookId: string;
@@ -84,4 +84,77 @@ export async function searchCodex(
     .orderBy(desc(rank), wikiPages.title)
     .limit(opts.limit ?? 10);
   return rows;
+}
+
+// ---------------------------------------------------------------------------
+// The catalogue — `book_items` (FR11.2 / §14): pick an item by name
+// ---------------------------------------------------------------------------
+
+export interface BookItemHit {
+  id: string;
+  bookId: string;
+  bookCode: string;
+  printedPage: number;
+  kind: string;
+  category: string;
+  name: string;
+  stats: Record<string, string>;
+  avail: string | null;
+  cost: number | null;
+  costText: string | null;
+}
+
+export interface SearchBookItemsOpts {
+  kind?: string;
+  bookCode?: string;
+  limit?: number;
+}
+
+/**
+ * Items by name: a substring match on the name OR a word match on
+ * name + category, exact names first, then names that start with the query,
+ * then the rest by length — so "predator" finds the pistol before the
+ * pistol's ammunition, and "heavy pistol" finds every heavy pistol.
+ */
+export async function searchBookItems(
+  db: Db,
+  query: string,
+  opts: SearchBookItemsOpts = {},
+): Promise<BookItemHit[]> {
+  const q = query.trim();
+  if (q.length === 0) return [];
+  const pattern = `%${q.replace(/[\%_]/g, (c) => `\${c}`)}%`;
+  const tsq = sql`websearch_to_tsquery('simple', ${q})`;
+  const conditions: SQL[] = [sql`(${bookItems.name} ILIKE ${pattern} OR ${bookItems.tsv} @@ ${tsq})`];
+  if (opts.kind !== undefined) conditions.push(eq(bookItems.kind, opts.kind));
+  if (opts.bookCode !== undefined) conditions.push(eq(books.code, opts.bookCode));
+  const tier = sql<number>`CASE WHEN lower(${bookItems.name}) = lower(${q}) THEN 0 WHEN lower(${bookItems.name}) LIKE lower(${q}) || '%' THEN 1 WHEN ${bookItems.name} ILIKE ${pattern} THEN 2 ELSE 3 END`;
+  return db
+    .select({
+      id: bookItems.id,
+      bookId: bookItems.bookId,
+      bookCode: books.code,
+      printedPage: bookItems.printedPage,
+      kind: bookItems.kind,
+      category: bookItems.category,
+      name: bookItems.name,
+      stats: bookItems.stats,
+      avail: bookItems.avail,
+      cost: bookItems.cost,
+      costText: bookItems.costText,
+    })
+    .from(bookItems)
+    .innerJoin(books, eq(bookItems.bookId, books.id))
+    .where(and(...conditions))
+    .orderBy(tier, sql`length(${bookItems.name})`, bookItems.name, books.code)
+    .limit(opts.limit ?? 20);
+}
+
+/** How many items of each kind each book holds — the shelf's "what was read". */
+export async function countBookItems(db: Db): Promise<Array<{ bookId: string; kind: string; items: number }>> {
+  const rows = await db
+    .select({ bookId: bookItems.bookId, kind: bookItems.kind, items: sql<number>`count(*)::int` })
+    .from(bookItems)
+    .groupBy(bookItems.bookId, bookItems.kind);
+  return rows.map((r) => ({ bookId: r.bookId, kind: r.kind, items: Number(r.items) }));
 }

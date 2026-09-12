@@ -16,6 +16,7 @@ import scenesPlugin from './scenes.js';
 import encountersPlugin from './encounters.js';
 import generatorPlugin from './generator.js';
 import booksPlugin from './books.js';
+import cataloguePlugin from './catalogue.js';
 import fixerPlugin from './fixer.js';
 import ledgerPlugin from './ledger.js';
 import sessionsPlugin from './sessions.js';
@@ -34,6 +35,7 @@ const domainPlugins = [
   encountersPlugin,
   generatorPlugin,
   booksPlugin,
+  cataloguePlugin,
   fixerPlugin,
   ledgerPlugin,
   sessionsPlugin,

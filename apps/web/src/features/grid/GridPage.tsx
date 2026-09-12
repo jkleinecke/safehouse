@@ -277,7 +277,7 @@ export default function GridPage() {
   // whose scene carries no cameras to begin with.
   const cameraCones = useCameraCones(scene, isGm, viewLevel);
   // Single-key tools and 1–9 for floors (docs/UX_MAP_BUILDER.md §3.3).
-  useGridShortcuts(isGm, 1 + (scene?.levels?.length ?? 0), scene?.id ?? null);
+  useGridShortcuts(isGm, 1 + (scene?.levels?.length ?? 0), scene?.id ?? null, scene ?? null);
   // Undo and redo for the toolbar (`history.ts`): the next step each way, for
   // the scene on screen, and whether one is in flight.
   const historyPast = useHistory((s) => s.past);

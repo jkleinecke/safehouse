@@ -181,25 +181,105 @@ function userPrompt(scene: { name: string; grid: { cols: number; rows: number; u
   return lines.join('\n');
 }
 
-/** Tolerant JSON read: some servers still wrap constrained output in a fence. */
-export function parseModelJson(raw: string): unknown {
-  const trimmed = raw.trim();
-  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
-  const body = fenced?.[1] ?? trimmed;
-  try {
-    return JSON.parse(body);
-  } catch {
-    const start = body.indexOf('{');
-    const end = body.lastIndexOf('}');
-    if (start >= 0 && end > start) {
-      try {
-        return JSON.parse(body.slice(start, end + 1));
-      } catch {
-        /* fall through to the error below */
+/**
+ * A local model's answer, minus its thinking. Servers without a reasoning
+ * parser (llama.cpp, TabbyAPI) leave `<think>…</think>` in the content; a
+ * model cut off mid-thought leaves an unclosed `<think>` and nothing else.
+ * Returns what is left and whether anything was stripped.
+ */
+export function stripThinking(raw: string): { text: string; thought: boolean; unfinished: boolean } {
+  let text = raw;
+  let thought = false;
+  let unfinished = false;
+  text = text.replace(/<think>[\s\S]*?<\/think>/gi, () => {
+    thought = true;
+    return '';
+  });
+  // A closing tag with no opener: the opener was in the reasoning stream.
+  const closeOnly = text.indexOf('</think>');
+  if (closeOnly >= 0) {
+    thought = true;
+    text = text.slice(closeOnly + '</think>'.length);
+  }
+  const openOnly = text.indexOf('<think>');
+  if (openOnly >= 0) {
+    thought = true;
+    unfinished = true;
+    text = text.slice(0, openOnly);
+  }
+  return { text: text.trim(), thought, unfinished };
+}
+
+/**
+ * The first balanced `{ … }` in `text` that parses as JSON, string-aware, so
+ * a brace inside the model's prose ("the schema {title, rooms}") cannot be
+ * mistaken for the object. Null when there is none.
+ */
+export function extractJsonObject(text: string): unknown {
+  for (let start = text.indexOf('{'); start >= 0; start = text.indexOf('{', start + 1)) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < text.length; i += 1) {
+      const ch = text[i]!;
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === '\\') escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') inString = true;
+      else if (ch === '{') depth += 1;
+      else if (ch === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          try {
+            return JSON.parse(text.slice(start, i + 1));
+          } catch {
+            break; // not this one — try the next opening brace
+          }
+        }
       }
     }
-    throw httpError(502, 'ai_error', 'the model did not return JSON for the map layout');
   }
+  return null;
+}
+
+/**
+ * Tolerant JSON read for a constrained ask. Handles a fence, a `<think>`
+ * block, prose on either side of the object, and says which of those it
+ * found nothing behind — the difference between "set Thinking to Off" and
+ * "the model ignored the instruction" is the GM's next move.
+ */
+export function parseModelJson(raw: string, what = 'the map layout'): unknown {
+  const { text, thought, unfinished } = stripThinking(raw);
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(text);
+  const body = (fenced?.[1] ?? text).trim();
+  if (body.length > 0) {
+    try {
+      return JSON.parse(body);
+    } catch {
+      const found = extractJsonObject(body);
+      if (found !== null) return found;
+    }
+  }
+  const preview = raw.trim().replace(/\s+/g, ' ').slice(0, 240);
+  if (unfinished || (thought && body.length === 0)) {
+    throw httpError(
+      502,
+      'ai_error',
+      `the model spent its whole answer thinking and produced no JSON for ${what} — set Thinking to Off under AI, or give the model a larger token limit`,
+      { preview, thought, unfinished },
+    );
+  }
+  throw httpError(
+    502,
+    'ai_error',
+    body.length === 0
+      ? `the model returned nothing for ${what}`
+      : `the model did not return JSON for ${what} — it answered: “${preview}”`,
+    { preview, thought },
+  );
 }
 
 interface VisionCallResult {
@@ -220,6 +300,7 @@ async function askModel(
   image: MapImage,
   scene: { name: string; grid: { cols: number; rows: number; unitM: number } },
   hint: string,
+  signal?: AbortSignal,
 ): Promise<VisionCallResult> {
   const startedAt = Date.now();
   const body = {
@@ -247,7 +328,7 @@ async function askModel(
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(VISION_TIMEOUT_MS),
+      signal: signal ? AbortSignal.any([AbortSignal.timeout(VISION_TIMEOUT_MS), signal]) : AbortSignal.timeout(VISION_TIMEOUT_MS),
     });
   } catch (err) {
     throw httpError(
@@ -326,6 +407,8 @@ export interface MapVisionInput {
   slot?: ModelSlot;
   /** Recorded on the draft as the prompt that produced it. */
   prompt?: string;
+  /** The GM's cancel (fixer/activity.ts). */
+  signal?: AbortSignal;
 }
 
 export interface MapVisionResult {
@@ -383,7 +466,7 @@ export async function proposeGeometryFromMap(
     ...(input.attachmentId !== undefined ? { attachmentId: input.attachmentId } : {}),
   });
   const model = input.slot === 'fast' ? config.fast : config.primary;
-  const answer = await askModel(config, model, image, scene, input.hint ?? '');
+  const answer = await askModel(config, model, image, scene, input.hint ?? '', input.signal);
   usageMeter.record(input.campaignId, {
     model: answer.model,
     usage: answer.usage,

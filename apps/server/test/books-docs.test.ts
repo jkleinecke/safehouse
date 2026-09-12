@@ -115,10 +115,12 @@ describe('documented seed:books commands', () => {
     expect(argvOf(commands[2]!)).toEqual(['--only', 'SR5', '--max-pages', '40']);
   });
 
-  it('catches the broken form the header used to print', () => {
+  it('tolerates the bare -- pnpm forwards, which the header used to print as broken', () => {
+    // pnpm hands the separator to the script; rejecting it turned the most
+    // common way of typing a pnpm script's flags into "unknown flag: --".
     const argv = argvOf('pnpm --filter @safehouse/server seed:books -- --list');
     expect(argv).toContain('--');
-    expect(() => parseArgs(argv)).toThrow(/unknown flag: --/);
+    expect(parseArgs(argv, {})).toMatchObject({ list: true });
   });
 
   it('no source still prints the `--` separator form', () => {

@@ -28,7 +28,7 @@
 import { createReadStream, statSync } from 'node:fs';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { searchBookPages, type BookPageHit } from '@safehouse/db';
+import { countBookItems, searchBookPages, type BookPageHit } from '@safehouse/db';
 import { assertCampaign, httpError, requireAuth, requireRole } from '../services/auth.js';
 import {
   buildOffsetProposal,
@@ -151,9 +151,11 @@ interface BookDto {
    * worse than the honest "unknown" the shelf already renders.
    */
   indexedPages?: number;
+  /** Items the catalogue read off this book's pages (services/catalogue.ts). */
+  catalogueItems?: number;
 }
 
-function toDto(row: BookRow, indexedPages?: number): BookDto {
+function toDto(row: BookRow, indexedPages?: number, catalogueItems?: number): BookDto {
   return {
     id: row.id,
     code: row.code,
@@ -166,6 +168,7 @@ function toDto(row: BookRow, indexedPages?: number): BookDto {
     fileUrl: `/files/books/${encodeURIComponent(row.code)}`,
     readUrl: `/read/${encodeURIComponent(row.code)}`,
     ...(indexedPages !== undefined ? { indexedPages } : {}),
+    ...(catalogueItems !== undefined ? { catalogueItems } : {}),
   };
 }
 
@@ -274,7 +277,11 @@ export default async function booksPlugin(app: FastifyInstance): Promise<void> {
     // `book_pages` reports 0 rather than being left silent: "0 indexed" is the
     // answer to "why does search never find anything in this book".
     const indexed = await svc.indexedPageCounts(rows.map((r) => r.id));
-    return reply.send({ books: rows.map((r) => toDto(r, indexed.get(r.id) ?? 0)) });
+    // And how many items the catalogue read off those pages — "0 items" on a
+    // rulebook is the answer to "why can nobody add anything from it".
+    const items = new Map<string, number>();
+    for (const c of await countBookItems(app.db)) items.set(c.bookId, (items.get(c.bookId) ?? 0) + c.items);
+    return reply.send({ books: rows.map((r) => toDto(r, indexed.get(r.id) ?? 0, items.get(r.id) ?? 0)) });
   });
 
   app.post('/api/books', async (req, reply) => {

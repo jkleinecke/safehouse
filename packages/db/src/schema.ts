@@ -388,6 +388,50 @@ export const bookPages = pgTable(
   ],
 );
 
+/**
+ * The catalogue: every item, spell, power and quality the seeder could read
+ * OUT of the GM's own book pages — the gear tables' rows, the spell stat
+ * lines — so a sheet can pick one by name and carry its stats and its page.
+ *
+ * Derived data, never shipped (§14): it is compiled from `book_pages.text`
+ * at seed time and lives only in the GM's own database beside the pages it
+ * came from. Deleting the book deletes it. `stats` holds the table's own
+ * columns as the book printed them (`{ ACC: "5 (7)", DAMAGE: "8P", … }`);
+ * `cost` is the price as a number when the table gave one, `cost_text` the
+ * formula when it did not ("Rating x 500¥").
+ */
+export const bookItems = pgTable(
+  'book_items',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    bookId: uuid('book_id')
+      .notNull()
+      .references(() => books.id, { onDelete: 'cascade' }),
+    /** Where the row was read from — the ref a sheet item carries. */
+    printedPage: integer('printed_page').notNull(),
+    /** weapon | ammo | armor | augmentation | vehicle | electronics | program | gear | spell | power | quality | complex_form */
+    kind: text('kind').notNull(),
+    /** The table's own heading: "HEAVY PISTOLS", "COMBAT SPELLS". */
+    category: text('category').notNull().default(''),
+    name: text('name').notNull(),
+    stats: jsonb('stats').$type<Record<string, string>>().notNull().default({}),
+    avail: text('avail'),
+    cost: integer('cost'),
+    costText: text('cost_text'),
+    /**
+     * GENERATED ALWAYS AS (to_tsvector('simple', name || ' ' || category))
+     * STORED — raw SQL in the migration; never insert into this column.
+     * `simple`, not `english`: an item's name is a name, not prose to stem.
+     */
+    tsv: tsvector('tsv').generatedAlwaysAs(sql`to_tsvector('simple', "name" || ' ' || "category")`),
+  },
+  (t) => [
+    index('book_items_book_idx').on(t.bookId),
+    index('book_items_kind_idx').on(t.kind),
+    index('book_items_tsv_idx').using('gin', t.tsv),
+  ],
+);
+
 // ---------------------------------------------------------------------------
 // AI (M12)
 // ---------------------------------------------------------------------------

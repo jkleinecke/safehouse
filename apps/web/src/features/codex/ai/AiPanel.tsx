@@ -24,6 +24,7 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useCampaign } from '../../../api/campaigns.js';
 import { ErrorNote, Spinner } from '../../gm/ui.js';
+import { useCancelAi } from '../../gm/fixer/api.js';
 import { useFixerStatus } from '../../gm/fixer/api.js';
 import { usePages, type CodexPage } from '../api.js';
 import { normalizeTitle } from '../md.js';
@@ -102,6 +103,7 @@ export default function AiPanel({ campaignId, page, sessionLive }: AiPanelProps)
   const offReason = disabledReason(status.data, status.error, ask.error);
   const askError = offReason ? null : askErrorLine(ask.error);
   const busy = ask.isPending;
+  const cancelAi = useCancelAi(campaignId);
 
   /**
    * Pending drafts for THIS page, matched by title, minus the one in hand.
@@ -191,7 +193,20 @@ export default function AiPanel({ campaignId, page, sessionLive }: AiPanelProps)
     <section className="panel p-3">
       <div className="flex flex-wrap items-center gap-2">
         <div className="mono-label text-magenta">Fixer · fill this page in</div>
-        {busy && <Spinner label={running ?? 'working'} />}
+        {busy && (
+            <span className="inline-flex items-center gap-2" data-testid="codex-ai-working">
+              <Spinner label={running ?? 'working'} />
+              <button
+                type="button"
+                className="btn px-2 py-0 text-danger"
+                onClick={() => cancelAi.mutate()}
+                disabled={cancelAi.isPending}
+                data-testid="codex-ai-cancel"
+              >
+                cancel
+              </button>
+            </span>
+          )}
       </div>
 
       {offReason ? (

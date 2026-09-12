@@ -7,18 +7,21 @@
  *   pnpm seed:books
  *   pnpm seed:books --list
  *   pnpm seed:books --only SR5 --max-pages 40
- *   pnpm --filter @safehouse/server seed:books --dir D:/books
+ *   pnpm seed:books --dir D:/books --calibrate
+ *   pnpm seed:books --dir=D:/books
  *
- * Pass the flags directly, as above. A bare `--` separator between the script
- * name and the flags does NOT work: pnpm forwards it to the script and the
- * parser below rejects it with "unknown flag". Every form printed here has
- * been run.
+ * Where the PDFs are, in order: `--dir` on the command line; `BOOKS_DIR` in
+ * the repo-root `.env` (the same line the Docker stack reads — this script
+ * loads `.env` the way the server does, so `DATA_DIR` there is honoured too);
+ * `books/` under the repo root if it exists; the repo root itself. A bare
+ * `--` between the script name and the flags is ignored, since pnpm forwards
+ * it. Every form printed here has been run.
  *
  * The GM-facing version of all this is `docs/BOOKS.md` — where the PDFs live,
  * what the page counts mean, and how page offsets get calibrated.
  *
  * Flags:
- *   --dir <path>       folder to scan (default: repo root)
+ *   --dir <path>       folder to scan (default: BOOKS_DIR from .env, else books/, else the repo root)
  *   --only <CODE>      just one guessed code — fast targeted runs and tests
  *   --max-pages <N>    extract at most N PDF pages per book
  *   --data-dir <path>  DATA_DIR override (file store + PGlite location)
@@ -38,19 +41,25 @@ import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ensureMigrations, getDb } from '@safehouse/db';
+import type { Db } from '@safehouse/db';
+import { loadEnvFile } from '../src/dotenv.js';
 import { closeDatabase } from '../src/shutdown.js';
 import {
+  BooksService,
   guessBookFromFilename,
   seedBooks,
   type SeedBookResult,
   type SeedBooksOptions,
 } from '../src/services/books.js';
+import { compileCatalogue, describeSummary } from '../src/services/catalogue.js';
 
 /** Repo root — three levels up from apps/server/scripts. */
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
 export interface Cli {
   dir: string;
+  /** Where `dir` came from, so "no such folder" can say which setting to fix. */
+  dirFrom: 'flag' | 'env' | 'default';
   only?: string;
   maxPages?: number;
   dataDir?: string;
@@ -65,16 +74,58 @@ export interface Cli {
    * unconfigured or empty library never blocks the stack from starting.
    */
   ifNeeded: boolean;
+  /**
+   * `--catalogue`: do not touch the PDFs — re-read the pages already in the
+   * database into the catalogue (items, spells, powers). For a library
+   * indexed before the catalogue existed, or after the parser learns a shape.
+   */
+  catalogue: boolean;
 }
 
-export function parseArgs(argv: string[]): Cli {
+/**
+ * Where to look when `--dir` is not given: `BOOKS_DIR` (the line `.env.example`
+ * ships and the Docker stack reads), then `books/` under the repo root, then
+ * the repo root itself — so the native and the container forms agree.
+ */
+export function defaultBooksDir(
+  env: Record<string, string | undefined> = process.env,
+): { dir: string; from: 'env' | 'default' } {
+  const fromEnv = (env['BOOKS_DIR'] ?? env['SAFEHOUSE_BOOKS_DIR'] ?? '').trim();
+  if (fromEnv.length > 0) return { dir: fromEnv, from: 'env' };
+  const books = resolve(REPO_ROOT, 'books');
+  return { dir: existsSync(books) ? books : REPO_ROOT, from: 'default' };
+}
+
+/** `--dir=D:/books` reads as `--dir D:/books`; a bare `--` (pnpm forwards it) is dropped. */
+function normalizeArgv(argv: string[]): string[] {
+  const out: string[] = [];
+  for (const arg of argv) {
+    if (arg === '--') continue;
+    const eq = arg.startsWith('--') ? arg.indexOf('=') : -1;
+    if (eq > 2) {
+      out.push(arg.slice(0, eq), arg.slice(eq + 1));
+    } else {
+      out.push(arg);
+    }
+  }
+  return out;
+}
+
+export function parseArgs(
+  rawArgv: string[],
+  env: Record<string, string | undefined> = process.env,
+): Cli {
+  const initial = defaultBooksDir(env);
   const cli: Cli = {
-    dir: REPO_ROOT,
+    dir: initial.dir,
+    dirFrom: initial.from,
     calibrate: false,
     recalibrate: false,
     list: false,
     ifNeeded: false,
+    catalogue: false,
   };
+  const argv = normalizeArgv(rawArgv);
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     const next = (): string => {
@@ -85,6 +136,7 @@ export function parseArgs(argv: string[]): Cli {
     switch (arg) {
       case '--dir':
         cli.dir = next();
+        cli.dirFrom = 'flag';
         break;
       case '--only':
         cli.only = next().toUpperCase();
@@ -106,6 +158,10 @@ export function parseArgs(argv: string[]): Cli {
         break;
       case '--if-needed':
         cli.ifNeeded = true;
+        break;
+      case '--catalogue':
+      case '--catalog':
+        cli.catalogue = true;
         break;
       case '--list':
         cli.list = true;
@@ -190,7 +246,43 @@ export function resolveBooksDir(dir: string): string | null {
   return null;
 }
 
+/** Which setting the folder came from, for the messages below. */
+function dirSource(cli: Cli): string {
+  if (cli.dirFrom === 'flag') return '--dir';
+  if (cli.dirFrom === 'env') return 'BOOKS_DIR in .env';
+  return 'the default';
+}
+
+
+/**
+ * `--catalogue`: the pages are already in the database; read them again into
+ * `book_items`. Says what each book yielded, so a book that yields nothing
+ * is visible ("0 items" means its tables did not parse, not that it has none).
+ */
+async function recompileCatalogue(db: Db, cli: Cli): Promise<number> {
+  const svc = new BooksService(db, cli.dataDir);
+  const rows = (await svc.listBooks()).filter((b) => cli.only === undefined || b.code === cli.only);
+  if (rows.length === 0) {
+    console.error(`[seed:books] no books in the library${cli.only ? ` matching --only ${cli.only}` : ''} — seed the PDFs first`);
+    return 1;
+  }
+  const started = Date.now();
+  let total = 0;
+  for (const book of rows) {
+    const summary = await compileCatalogue(db, book.id);
+    total += summary.items;
+    console.log(`[seed:books] ${book.code.padEnd(5)} ${describeSummary(summary)} (${summary.pagesRead} pages read)`);
+  }
+  console.log(`[seed:books] catalogue: ${total} item(s) across ${rows.length} book(s) in ${Math.round((Date.now() - started) / 1000)}s`);
+  return 0;
+}
+
 export async function main(): Promise<number> {
+  // The same .env the server reads, for the same reason: BOOKS_DIR and
+  // DATA_DIR set there must mean the same thing to the seeder and the app.
+  // Only fills in what the shell has not set, so --data-dir and an exported
+  // variable still win.
+  loadEnvFile();
   const cli = parseArgs(process.argv.slice(2));
   const dir = resolveBooksDir(cli.dir);
   if (dir === null && cli.ifNeeded) {
@@ -201,7 +293,8 @@ export async function main(): Promise<number> {
   }
   if (dir === null) {
     console.error(
-      `[seed:books] no such folder: ${cli.dir} (looked there and under ${REPO_ROOT})`,
+      `[seed:books] no such folder: ${cli.dir} — from ${dirSource(cli)}; looked there and under ${REPO_ROOT}. ` +
+        'Pass --dir <folder>, or set BOOKS_DIR in the repo-root .env.',
     );
     return 1;
   }
@@ -215,7 +308,10 @@ export async function main(): Promise<number> {
       console.log(`[seed:books] no *.pdf in ${cli.dir} — nothing to seed`);
       return 0;
     }
-    console.error(`[seed:books] no *.pdf found in ${cli.dir}`);
+    console.error(
+      `[seed:books] no *.pdf found in ${cli.dir} (from ${dirSource(cli)}). ` +
+        'Pass --dir <folder>, or set BOOKS_DIR in the repo-root .env.',
+    );
     return 1;
   }
 
@@ -239,6 +335,8 @@ export async function main(): Promise<number> {
   // src/shutdown.ts has the measurements.
   try {
     await ensureMigrations(db);
+
+    if (cli.catalogue) return await recompileCatalogue(db, cli);
 
     const opts: SeedBooksOptions = { dir: cli.dir, log: (line) => console.log(line) };
     if (cli.only !== undefined) opts.only = cli.only;

@@ -26,6 +26,8 @@ import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 import { campaigns, type Db } from '@safehouse/db';
 import { assertCampaign, httpError, requireRole } from '../services/auth.js';
+import { withRun } from './activity.js';
+import { ArchitectOutlineSchema, BuildSelectionSchema, buildArchitect, outlineArchitect } from './architect.js';
 import { floorPlanJsonSchema, proposeFloor } from './floor-plan.js';
 import { layoutJsonSchema, LayoutDoorSchema, LayoutRoomSchema } from './geometry.js';
 import { resolveLlmConfig } from './providers.js';
@@ -70,6 +72,19 @@ const BuildFloorBody = z.object({
   level: z.number().int().min(0).max(9).default(0),
   tilesetId: z.string().min(1).max(64),
   prompt: z.string().min(3).max(2000),
+  slot: z.enum(['primary', 'fast']).optional(),
+});
+
+const ArchitectOutlineBody = z.object({
+  campaignId: z.string().optional(),
+  brief: z.string().min(10).max(4000),
+  slot: z.enum(['primary', 'fast']).optional(),
+});
+
+const ArchitectBuildBody = z.object({
+  campaignId: z.string().optional(),
+  outline: ArchitectOutlineSchema,
+  select: BuildSelectionSchema,
   slot: z.enum(['primary', 'fast']).optional(),
 });
 
@@ -156,12 +171,14 @@ export default async function fixerToolRoutes(app: FastifyInstance): Promise<voi
       );
     }
     const tool = TOOLS_BY_NAME.get('identify_tokens')!;
-    const result = await tool.run(
-      {
-        ...(body.sceneId !== undefined ? { sceneId: body.sceneId } : {}),
-        ...(body.note !== undefined ? { note: body.note } : {}),
-      },
-      ctxFor(campaignId, 'GM asked the app to identify the tokens on this scene'),
+    const result = await withRun(app.hub, campaignId, 'tokens', 'identifying the tokens on the scene', () =>
+      tool.run(
+        {
+          ...(body.sceneId !== undefined ? { sceneId: body.sceneId } : {}),
+          ...(body.note !== undefined ? { note: body.note } : {}),
+        },
+        ctxFor(campaignId, 'GM asked the app to identify the tokens on this scene'),
+      ),
     );
     return reply.send(result);
   });
@@ -171,16 +188,18 @@ export default async function fixerToolRoutes(app: FastifyInstance): Promise<voi
     const body = parse(GeometryBody, req.body);
     const campaignId = gmFor(req, body.campaignId);
     const tool = TOOLS_BY_NAME.get('propose_geometry')!;
-    const result = await tool.run(
-      {
-        title: body.title,
-        rooms: body.rooms,
-        doors: body.doors,
-        notes: body.notes,
-        mode: body.mode,
-        ...(body.sceneId !== undefined ? { sceneId: body.sceneId } : {}),
-      },
-      ctxFor(campaignId, `GM asked for a layout: ${body.title}`),
+    const result = await withRun(app.hub, campaignId, 'geometry', `laying out ${body.title}`, () =>
+      tool.run(
+        {
+          title: body.title,
+          rooms: body.rooms,
+          doors: body.doors,
+          notes: body.notes,
+          mode: body.mode,
+          ...(body.sceneId !== undefined ? { sceneId: body.sceneId } : {}),
+        },
+        ctxFor(campaignId, `GM asked for a layout: ${body.title}`),
+      ),
     );
     return reply.status(201).send(result);
   });
@@ -214,15 +233,18 @@ export default async function fixerToolRoutes(app: FastifyInstance): Promise<voi
     // Fixer at a vision model on their own screen still got whatever
     // LLM_BASE_URL happened to say, or nothing at all.
     const config = resolveLlmConfig(await campaignSettings(app.db, campaignId));
-    const result = await proposeGeometryFromMap(app.db, config, {
-      campaignId,
-      mode: body.mode,
-      prompt: 'GM asked the Fixer to read the scene map image',
-      ...(body.sceneId !== undefined ? { sceneId: body.sceneId } : {}),
-      ...(body.attachmentId !== undefined ? { attachmentId: body.attachmentId } : {}),
-      ...(body.hint !== undefined ? { hint: body.hint } : {}),
-      ...(body.slot !== undefined ? { slot: body.slot } : {}),
-    });
+    const result = await withRun(app.hub, campaignId, 'map', 'reading the scene map image', (signal) =>
+      proposeGeometryFromMap(app.db, config, {
+        campaignId,
+        mode: body.mode,
+        prompt: 'GM asked the Fixer to read the scene map image',
+        ...(body.sceneId !== undefined ? { sceneId: body.sceneId } : {}),
+        ...(body.attachmentId !== undefined ? { attachmentId: body.attachmentId } : {}),
+        ...(body.hint !== undefined ? { hint: body.hint } : {}),
+        ...(body.slot !== undefined ? { slot: body.slot } : {}),
+        signal,
+      }),
+    );
     return reply.status(201).send(result);
   });
 
@@ -237,14 +259,17 @@ export default async function fixerToolRoutes(app: FastifyInstance): Promise<voi
     const campaignId = gmFor(req, body.campaignId);
     // The campaign's own configuration, like every other AI route.
     const config = resolveLlmConfig(await campaignSettings(app.db, campaignId));
-    const result = await proposeFloor(app.db, config, {
-      campaignId,
-      sceneId: body.sceneId,
-      level: body.level,
-      tilesetId: body.tilesetId,
-      prompt: body.prompt,
-      ...(body.slot !== undefined ? { slot: body.slot } : {}),
-    });
+    const result = await withRun(app.hub, campaignId, 'floor', 'drafting a floor from the description', (signal) =>
+      proposeFloor(app.db, config, {
+        campaignId,
+        sceneId: body.sceneId,
+        level: body.level,
+        tilesetId: body.tilesetId,
+        prompt: body.prompt,
+        ...(body.slot !== undefined ? { slot: body.slot } : {}),
+        signal,
+      }),
+    );
     await persistTurnUsage(app.db, {
       campaignId,
       model: result.model,
@@ -252,6 +277,66 @@ export default async function fixerToolRoutes(app: FastifyInstance): Promise<voi
       latencyMs: result.latencyMs,
       kind: 'draft',
     });
+    return reply.status(201).send(result);
+  });
+
+  // --- The Architect: a whole stretch of a campaign from one brief -----------
+  app.post('/api/fixer/architect/outline', async (req, reply) => {
+    const body = parse(ArchitectOutlineBody, req.body);
+    const campaignId = gmFor(req, body.campaignId);
+    const config = resolveLlmConfig(await campaignSettings(app.db, campaignId));
+    const result = await withRun(app.hub, campaignId, 'architect', 'roughing out the outline', (signal) =>
+      outlineArchitect(app.db, config, {
+        campaignId,
+        brief: body.brief,
+        ...(body.slot !== undefined ? { slot: body.slot } : {}),
+        signal,
+      }),
+    );
+    await persistTurnUsage(app.db, {
+      campaignId,
+      model: result.model,
+      usage: result.usage,
+      latencyMs: result.latencyMs,
+      kind: 'draft',
+    });
+    return reply.status(201).send(result);
+  });
+
+  // Builds the ticked items one at a time. A cancel mid-way answers 200 with
+  // what landed and `cancelled: true`, not 499 — the GM wants to know which
+  // drafts and scenes exist, and every one of them is deletable on its own.
+  app.post('/api/fixer/architect/build', async (req, reply) => {
+    const body = parse(ArchitectBuildBody, req.body);
+    const campaignId = gmFor(req, body.campaignId);
+    const config = resolveLlmConfig(await campaignSettings(app.db, campaignId));
+    const count = body.select.lore.length + body.select.npcs.length + body.select.scenes.length;
+    const result = await withRun(
+      app.hub,
+      campaignId,
+      'architect',
+      `building ${count} item${count === 1 ? '' : 's'} from the outline`,
+      (signal, run) =>
+        buildArchitect(app.db, config, {
+          campaignId,
+          outline: body.outline,
+          select: body.select,
+          ...(body.slot !== undefined ? { slot: body.slot } : {}),
+          signal,
+          hub: app.hub,
+          run,
+          atomic: (cid, fn) => app.hub.atomic(cid, fn),
+        }),
+    );
+    if (result.usage.totalTokens > 0) {
+      await persistTurnUsage(app.db, {
+        campaignId,
+        model: config?.primary ?? 'unknown',
+        usage: result.usage,
+        latencyMs: result.latencyMs,
+        kind: 'draft',
+      });
+    }
     return reply.status(201).send(result);
   });
 

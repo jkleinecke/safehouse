@@ -52,6 +52,13 @@ export const GM_NAV: readonly GmNavEntry[] = [
     blurb: 'Every player character: open a sheet, hand one to a phone, add a new runner.',
   },
   {
+    key: 'ai',
+    label: 'AI',
+    to: '/gm/ai',
+    section: 'campaign',
+    blurb: 'Which model the Fixer talks to — a box on your own machine or a provider — and whether it is reachable.',
+  },
+  {
     key: 'table',
     label: 'Table',
     to: '/table',
@@ -106,6 +113,13 @@ export const GM_NAV: readonly GmNavEntry[] = [
     to: '/gm/fixer',
     section: 'prep',
     blurb: 'The AI copilot. Everything it writes arrives as a draft you accept or bin.',
+  },
+  {
+    key: 'architect',
+    label: 'Architect',
+    to: '/gm/architect',
+    section: 'prep',
+    blurb: 'One brief becomes an outline — codex pages, NPCs, mapped scenes — and each item you tick is built as a draft.',
   },
   {
     key: 'books',

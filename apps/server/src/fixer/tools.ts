@@ -10,6 +10,7 @@
  * drafts for the GM to accept (Principle 8).
  */
 import { z } from 'zod';
+import { searchBookItems } from '@safehouse/db';
 import { GeneratorService, genOf } from '../services/generator.js';
 import { httpError } from '../services/auth.js';
 import type { ToolDefinition } from './llm.js';
@@ -133,6 +134,40 @@ const CORE_TOOLS: readonly FixerTool[] = [
         ...(args.bookCode !== undefined ? { bookCode: args.bookCode } : {}),
         limit: args.limit,
       }),
+  }),
+
+  tool({
+    name: 'search_catalogue',
+    description:
+      "Items, weapons, armor, 'ware, vehicles, spells, adept powers and qualities by NAME, read out of the GM's own rulebooks at seed time — each with the stats the book printed and the page it came from. Use this for \"what does X cost / do\"; use search_books for rules text.",
+    kind: 'read',
+    schema: z.object({
+      query: z.string().min(2).describe('Part of the name, e.g. "predator" or "armor jacket"'),
+      kind: z
+        .enum(['weapon', 'ammo', 'armor', 'augmentation', 'vehicle', 'electronics', 'program', 'gear', 'spell', 'power', 'quality', 'complex_form'])
+        .optional(),
+      limit: Limit(10, 8),
+    }),
+    run: async (args, ctx) => {
+      const hits = await searchBookItems(ctx.db, args.query, {
+        ...(args.kind !== undefined ? { kind: args.kind } : {}),
+        limit: args.limit,
+      });
+      return {
+        query: args.query,
+        hits: hits.map((h) => ({
+          name: h.name,
+          kind: h.kind,
+          category: h.category,
+          stats: h.stats,
+          avail: h.avail,
+          cost: h.cost ?? h.costText,
+          ref: { book: h.bookCode, page: h.printedPage },
+        })),
+        provenance: hits.map((h) => ({ book: h.bookCode, page: h.printedPage })),
+        note: hits.length === 0 ? 'Nothing by that name in the catalogue — try search_books, or a shorter query.' : 'Cite the ref beside each hit; never a page from memory.',
+      };
+    },
   }),
 
   tool({

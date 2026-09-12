@@ -42,7 +42,6 @@ import {
 import { useGridStore } from '../store.js';
 import type { GeometrySelection } from '../types.js';
 import { cameraLensId } from '../useShroud.js';
-import ConfirmButton from './ConfirmButton.js';
 import { Empty, inputCls, Num, Row } from './ui.js';
 import { metres } from './GeometryTab.js';
 
@@ -232,16 +231,22 @@ function Endpoints({ a, b, onChange }: { a: Point; b: Point; onChange: (p: { a?:
   );
 }
 
-/** Two clicks: the second is the confirmation (docs/UX_MAP_BUILDER.md §3.6). */
+/**
+ * One click. Removing a wall, door, zone, pin, camera or note is an undo step
+ * (history.ts), so a second "sure?" click is a tax on something the GM can
+ * take back with Ctrl+Z — the Delete key does the same (docs/UX_MAP_BUILDER.md §3.6).
+ */
 function DeleteButton({ onClick, label = 'delete' }: { onClick: () => void; label?: string }) {
   return (
-    <ConfirmButton
-      label={label}
-      confirmLabel={`${label} — sure?`}
-      onConfirm={onClick}
-      className="btn py-1"
-      testId="inspector-delete"
-    />
+    <button
+      type="button"
+      className="btn py-1 text-danger"
+      onClick={onClick}
+      data-testid="inspector-delete"
+      title="Removes it — Ctrl+Z puts it back"
+    >
+      {label}
+    </button>
   );
 }
 

@@ -6,10 +6,11 @@
  * (FR12.16). No LLM configured → the panel says so and stays quiet (NG7).
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useLiveStore } from '../../../live/store.js';
 import { fmtLatency, fmtTokens } from '../common.js';
 import { ErrorNote, SectionTitle, Spinner } from '../ui.js';
-import { aiDisabledFrom, useFixerSend, useFixerStatus } from './api.js';
+import { aiDisabledFrom, isAiCancelled, useCancelAi, useFixerSend, useFixerStatus } from './api.js';
 import { reduceFixerStream, type FixerUsage, type ToolChip } from './stream.js';
 
 const SUGGESTIONS = [
@@ -63,6 +64,7 @@ export default function FixerChat({ campaignId, sessionLive, dense }: FixerChatP
   const clearStream = useLiveStore((s) => s.clearFixerStream);
   const send = useFixerSend();
   const status = useFixerStatus();
+  const cancel = useCancelAi(campaignId);
 
   const [draft, setDraft] = useState('');
   const [slot, setSlot] = useState<'primary' | 'fast'>(sessionLive ? 'fast' : 'primary');
@@ -94,10 +96,13 @@ export default function FixerChat({ campaignId, sessionLive, dense }: FixerChatP
       <div className="panel p-5">
         <SectionTitle hint="NG7 — the app plays fine without it">The Fixer is offline</SectionTitle>
         <p className="mt-2 text-sm text-dim">
-          No inference endpoint configured. Point <code className="text-cyan">LLM_BASE_URL</code> at
-          the inference box on the table's LAN (and set{' '}
-          <code className="text-cyan">LLM_MODEL_PRIMARY</code> /{' '}
-          <code className="text-cyan">LLM_MODEL_FAST</code>) and the panel comes back.
+          Nothing is chosen yet. Pick a provider under{' '}
+          <Link className="text-cyan underline" to={`/c/${campaignId}/gm/ai`}>
+            AI
+          </Link>{' '}
+          — a box on your own machine, or Anthropic, OpenAI, xAI — and the panel comes back on the
+          next message. <code className="text-cyan">LLM_BASE_URL</code> in{' '}
+          <code className="text-cyan">.env</code> only sets the default until then.
         </p>
         {status.data?.models && (
           <p className="mono-label mt-2 text-faint">
@@ -227,8 +232,25 @@ export default function FixerChat({ campaignId, sessionLive, dense }: FixerChatP
         </button>
       </div>
       <p className="mono-label mt-1 text-faint">ctrl+enter sends</p>
-      {view.streaming && <Spinner label="thinking" />}
-      <ErrorNote error={send.error} />
+      {(view.streaming || send.isPending) && (
+        <div className="mt-1 flex flex-wrap items-center gap-2" data-testid="fixer-working">
+          <Spinner label="the Fixer is thinking" />
+          <button
+            type="button"
+            className="btn px-2.5 py-0.5 text-danger"
+            onClick={() => cancel.mutate()}
+            disabled={cancel.isPending}
+            data-testid="fixer-cancel"
+          >
+            cancel
+          </button>
+        </div>
+      )}
+      {isAiCancelled(send.error) ? (
+        <p className="mt-2 text-xs text-warn">Cancelled — nothing from that turn was kept.</p>
+      ) : (
+        <ErrorNote error={send.error} />
+      )}
 
       <div className="mt-2">
         <UsageMeter last={view.lastUsage} total={view.totalUsage} />

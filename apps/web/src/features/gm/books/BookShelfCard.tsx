@@ -85,10 +85,17 @@ function PageStat({ book }: { book: BookRecord }) {
     );
   }
   const gap = pdf !== undefined && indexed !== undefined ? pdf - indexed : 0;
+  const items = book.catalogueItems;
   return (
     <span className="mono-label text-faint">
       {pdf !== undefined && <>{pdf} pdf pages · </>}
       {indexed ?? '?'} pages indexed
+      {items !== undefined && (
+        <span title="Rows the catalogue read off the tables — what a sheet's “+ from the books” can find" data-testid="book-catalogue-count">
+          {' '}
+          · {items} item{items === 1 ? '' : 's'} catalogued
+        </span>
+      )}
       {gap > 0 && (
         <span className="text-warn" title="Image-only pages index no text — invisible to search.">
           {' '}

@@ -170,6 +170,16 @@ interface LoopOptions {
   maxRounds: number;
   temperature?: number;
   mode: 'fixer' | 'npc';
+  /** The GM's cancel (fixer/activity.ts): aborts the model call, and the loop between calls. */
+  signal?: AbortSignal;
+}
+
+function throwIfCancelled(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    const err = new Error('cancelled by the GM');
+    err.name = 'AbortError';
+    throw err;
+  }
 }
 
 async function runLoop(deps: FixerDeps, opts: LoopOptions): Promise<FixerTurnResult> {
@@ -213,6 +223,7 @@ async function runLoop(deps: FixerDeps, opts: LoopOptions): Promise<FixerTurnRes
   let truncated = true;
 
   for (let round = 1; round <= opts.maxRounds; round++) {
+    throwIfCancelled(opts.signal);
     rounds = round;
     let buffer = '';
     const flush = (force: boolean): void => {
@@ -233,6 +244,7 @@ async function runLoop(deps: FixerDeps, opts: LoopOptions): Promise<FixerTurnRes
           buffer += delta;
           flush(false);
         },
+        ...(opts.signal ? { signal: opts.signal } : {}),
       },
     );
     flush(true);
@@ -262,6 +274,7 @@ async function runLoop(deps: FixerDeps, opts: LoopOptions): Promise<FixerTurnRes
     }
 
     for (const call of turn.toolCalls) {
+      throwIfCancelled(opts.signal);
       const startedAt = Date.now();
       // Two frames per call, not one: the panel's chip needs to say "running"
       // while a `search_books` grinds through the library, then settle. A
@@ -343,6 +356,7 @@ export interface FixerChatInput {
   maxRounds?: number;
   tools?: readonly FixerTool[];
   temperature?: number;
+  signal?: AbortSignal;
 }
 
 /**
@@ -384,6 +398,7 @@ export async function runFixerChat(
     slot,
     maxRounds: Math.min(Math.max(input.maxRounds ?? MAX_TOOL_ROUNDS, 1), MAX_TOOL_ROUNDS),
     ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+    ...(input.signal ? { signal: input.signal } : {}),
     mode: 'fixer',
   });
 }
@@ -395,6 +410,7 @@ export interface NpcConverseInput {
   conversationId?: string;
   slot?: ModelSlot;
   temperature?: number;
+  signal?: AbortSignal;
 }
 
 /**
@@ -427,6 +443,7 @@ export async function runNpcConverse(
     slot: input.slot ?? 'primary',
     maxRounds: 1,
     ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+    ...(input.signal ? { signal: input.signal } : {}),
     mode: 'npc',
   });
 }

@@ -36,6 +36,13 @@
       "when": 1787905795855,
       "tag": "0004_token_level",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787905795856,
+      "tag": "0005_book_items",
+      "breakpoints": true
     }
   ]
 }

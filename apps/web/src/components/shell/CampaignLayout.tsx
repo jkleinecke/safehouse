@@ -10,6 +10,7 @@ import { useCampaign, useMyCharacterId } from '../../api/campaigns.js';
 import { getSession } from '../../api/session.js';
 import BookSearchOverlay from '../../features/gm/books/BookSearchOverlay.js';
 import { openBookSearch } from '../../features/gm/books/searchStore.js';
+import AiActivityBar from '../../features/gm/fixer/AiActivityBar.js';
 import FixerDock from '../../features/gm/fixer/FixerDock.js';
 import { useLiveConnection } from '../../live/useLiveConnection.js';
 import BottomNav from './BottomNav.js';
@@ -105,6 +106,9 @@ export default function CampaignLayout() {
             </button>
           )}
         </header>
+
+        {/* What the AI is doing, and the button that stops it — every GM screen. */}
+        {isGm && <AiActivityBar campaignId={campaignId} />}
 
         <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           <Outlet />

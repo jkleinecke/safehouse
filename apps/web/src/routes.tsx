@@ -20,6 +20,8 @@ import JoinPage from './components/shell/JoinPage.js';
 import Landing from './components/shell/Landing.js';
 import NotFound from './components/shell/NotFound.js';
 import BooksPage from './features/gm/BooksPage.js';
+import AiPage from './features/gm/AiPage.js';
+import ArchitectPage from './features/gm/ArchitectPage.js';
 import FixerPage from './features/gm/FixerPage.js';
 import GeneratorPage from './features/gm/GeneratorPage.js';
 import GmHome from './features/gm/GmHome.js';
@@ -100,11 +102,15 @@ export const routes: RouteObject[] = [
           { index: true, element: <GmHome /> },
           // Who is at the table — the first thing the console lists.
           { path: 'party', element: <PartyPage /> },
+          // Which AI the Fixer talks to — its own screen, so it can be found.
+          { path: 'ai', element: <AiPage /> },
           // RunsBoard lives under features/codex/, so it rides that chunk.
           { path: 'runs', element: <Chunk><RunsBoard /></Chunk> },
           { path: 'scenes', element: <ScenesPage /> },
           { path: 'generator', element: <GeneratorPage /> },
           { path: 'fixer', element: <FixerPage /> },
+          // The overarching AI: one brief → pages, NPCs, mapped scenes, as drafts.
+          { path: 'architect', element: <ArchitectPage /> },
           // Alias of `/c/:id/books` for anything already pointing here.
           { path: 'books', element: <BooksPage /> },
           { path: 'sessions', element: <SessionsPage /> },

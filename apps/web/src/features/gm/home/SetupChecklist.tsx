@@ -150,7 +150,7 @@ export function checklistRows(input: {
       count: undefined,
       done: input.ai?.ready === true,
       detail: aiDetail(input.ai),
-      to: `${c}/gm/fixer`,
+      to: `${c}/gm/ai`,
       cta: input.ai?.ready ? 'change' : 'choose',
     },
   ];

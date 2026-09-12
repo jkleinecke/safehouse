@@ -113,7 +113,7 @@ export function isTypingTarget(target: EventTarget | null): boolean {
 
 /** One line under the toolbar: what the tool in hand wants from the GM. */
 export const TOOL_HINTS: Record<GridTool, string> = {
-  select: 'Drag a token to move it. Click a wall, door, zone, pin, camera or note to edit it in the panel. Double-tap to ping.',
+  select: 'Drag a token to move it. Click a wall, door, zone, pin, camera or note to edit it in the panel. Double-tap to ping. Delete removes what is selected.',
   ruler: 'Drag to measure in metres; start on a token to see its walk and run.',
   aoe: 'Click to place the circle; set its radius in the measure panel.',
   pointer: 'Drag to draw a pointer trail everyone sees.',

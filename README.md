@@ -33,8 +33,9 @@ image.
 
 Where they go depends on how you launch:
 
-- **native** (`pnpm dev:server`) — leave the PDFs in the repo root (or point
-  `--dir` elsewhere), stop the server, then `pnpm seed:books --calibrate`;
+- **native** (`pnpm dev:server`) — put the PDFs in `books/` at the repo root
+  (or name the folder once as `BOOKS_DIR` in `.env`, or pass `--dir D:/books`),
+  stop the server, then `pnpm seed:books --calibrate`;
 - **Docker stack** — put the PDFs in `books/` (or name the folder once as
   `BOOKS_DIR` in `.env`), then `pnpm docker:seed` —
   [docs/BOOKS.md §3](docs/BOOKS.md).
@@ -47,16 +48,38 @@ against PDF pages and the seeder's `+0` guess is wrong for 15 of the 17
 production books, so an uncalibrated chip for `RG p.104` opens the wrong leaf —
 silently. **[docs/BOOKS.md](docs/BOOKS.md)** is the whole story.
 
+Seeding also reads every gear table and spell block off the pages into a
+**catalogue**: from a sheet's Gear, Combat or Magic tab, **+ from the books**
+finds a weapon, armor, 'ware, a spell or a power by name and adds it with the
+stats the book printed and its page as the ref — optionally proposing the
+nuyen on the ledger for the GM to approve — or **write your own** for a thing
+in no book. Player or GM, on any sheet they may edit. How the runner got it is the
+table's business; the app keeps the inventory and the numbers. Nothing is
+shipped: the catalogue is compiled from your PDFs into your database
+([docs/BOOKS.md §3b](docs/BOOKS.md)). `pnpm seed:books --catalogue` recompiles
+it without touching the PDFs.
+
 Players join by scanning the QR on the GM screen. The TV joins as a `display`
 device at `/tv`.
 
-**Which AI** is chosen in the app — GM console ▸ Fixer ▸ **Which AI** (the
-console's setup checklist has a row for it) — saved per campaign, and it takes
-effect on the next message. Local box (llama.cpp / vLLM, any OpenAI-compatible
-URL), Anthropic, OpenAI or xAI; keys are stored server-side and never sent back
-to a browser. `LLM_BASE_URL` in `.env` only sets what a campaign uses until a
+**Which AI** is chosen in the app — GM console ▸ **AI** (the same panel sits at
+the top of the Fixer page, and the console's setup checklist has a row for it)
+— saved per campaign, and it takes effect on the next message. Local box
+(llama.cpp / vLLM / TabbyAPI, any OpenAI-compatible URL ending in `/v1`;
+**check the box** lists the model ids it serves, and from inside Docker the
+address is `http://host.docker.internal:<port>/v1`, never `127.0.0.1`),
+Anthropic, OpenAI or xAI; keys are stored server-side and never sent back to a
+browser. `LLM_BASE_URL` in `.env` only sets what a campaign uses until a
 choice is made there. With neither, every AI feature degrades to its manual path
 and nothing else changes.
+
+Every AI request — the Fixer chat, an NPC voice, a floor from a description, a
+page from the codex — shows on an activity bar across the GM console while it
+runs, and the bar's **cancel** stops it. For a whole stretch of play at once, GM
+console ▸ **Architect**: one brief becomes an outline of codex pages, NPCs and
+scenes; tick what you want and each item is built the way the Fixer's drafts
+are — pages and NPCs in the drafts inbox, scenes staged with a floor laid out
+by the floor builder, never active until you say.
 
 ## Coming back next session
 
@@ -148,7 +171,7 @@ around, the server says so at boot and ignores it.
 
 Env vars are **starting points**, not the live configuration. In particular
 the AI: `LLM_BASE_URL` / `LLM_MODEL_*` only decide what a campaign uses until
-a GM picks one in the app (GM console ▸ Fixer ▸ Which AI), and that choice is
+a GM picks one in the app (GM console ▸ AI), and that choice is
 saved in the database and wins from then on. Changing `.env` after that changes
 nothing — the panel tells you which it is using.
 

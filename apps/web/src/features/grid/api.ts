@@ -25,6 +25,7 @@ import { getToken } from '../../api/session.js';
 import { useLiveStore } from '../../live/store.js';
 import { normalizeGeometry } from './geometryEdit.js';
 import { TILESETS, levelTiles, sceneLevels } from '@safehouse/rules';
+import { pendingFor } from '../gm/fixer/api.js';
 import {
   describeGeometry,
   describePaint,
@@ -917,5 +918,6 @@ export interface BuildFloorBody {
 export function useBuildFloor() {
   return useMutation({
     mutationFn: (body: BuildFloorBody) => apiPost<FloorPlanResult>('/api/fixer/build-floor', body),
+    ...pendingFor('floor', 'drafting a floor from the description'),
   });
 }

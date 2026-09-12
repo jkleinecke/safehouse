@@ -12,7 +12,14 @@ import type { NpcTemplate } from '@safehouse/contracts';
 import { fmtLatency, fmtTokens } from '../common.js';
 import { useNpcTemplates } from '../generator/api.js';
 import { ErrorNote, SectionTitle, inputClass } from '../ui.js';
-import { aiDisabledFrom, useFixerStatus, useNpcConverse, type NpcConverseAck } from './api.js';
+import {
+  aiDisabledFrom,
+  isAiCancelled,
+  useCancelAi,
+  useFixerStatus,
+  useNpcConverse,
+  type NpcConverseAck,
+} from './api.js';
 
 export interface VoiceLine {
   who: 'gm' | 'npc';
@@ -53,6 +60,7 @@ export default function NpcVoice({ campaignId, sessionLive }: NpcVoiceProps) {
   const templates = useNpcTemplates(campaignId);
   const status = useFixerStatus();
   const send = useNpcConverse();
+  const cancel = useCancelAi(campaignId);
   const list = voiceOrder(templates.data ?? []);
 
   const [npcId, setNpcId] = useState('');
@@ -106,8 +114,11 @@ export default function NpcVoice({ campaignId, sessionLive }: NpcVoiceProps) {
       <div className="panel p-4" data-testid="npc-voice-offline">
         <SectionTitle hint="NG7 — needs the Fixer's inference endpoint">Speak as an NPC</SectionTitle>
         <p className="mt-2 text-sm text-dim">
-          Comes back with the Fixer: once the AI settings above point at an inference endpoint, any
-          archetype with a persona can be talked to in character.
+          Comes back with the Fixer: point{' '}
+          <Link className="text-cyan underline" to={`/c/${campaignId}/gm/ai`}>
+            AI
+          </Link>{' '}
+          at an inference endpoint and any archetype with a persona can be talked to in character.
         </p>
       </div>
     );
@@ -193,7 +204,18 @@ export default function NpcVoice({ campaignId, sessionLive }: NpcVoiceProps) {
           ),
         )}
         {send.isPending && (
-          <p className="mono-label animate-pulse text-cyan">{picked?.name ?? 'npc'} is thinking…</p>
+          <p className="flex items-center gap-2 mono-label text-cyan" data-testid="npc-working">
+            <span className="animate-pulse">{picked?.name ?? 'npc'} is thinking…</span>
+            <button
+              type="button"
+              className="btn px-2 py-0 text-danger"
+              onClick={() => cancel.mutate()}
+              disabled={cancel.isPending}
+              data-testid="npc-cancel"
+            >
+              cancel
+            </button>
+          </p>
         )}
       </div>
 
@@ -224,7 +246,11 @@ export default function NpcVoice({ campaignId, sessionLive }: NpcVoiceProps) {
         </button>
       </div>
       <p className="mono-label mt-1 text-faint">ctrl+enter speaks</p>
-      <ErrorNote error={send.error} />
+      {isAiCancelled(send.error) ? (
+        <p className="mt-2 text-xs text-warn">Cancelled — {picked?.name ?? 'the NPC'} said nothing.</p>
+      ) : (
+        <ErrorNote error={send.error} />
+      )}
 
       {last && (
         <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-edge pt-2">

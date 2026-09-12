@@ -241,6 +241,21 @@ export async function seedDemo(dataDir: string): Promise<{ campaignId: string; g
   return { campaignId, gmToken };
 }
 
+/** What the manufactured book's first printed page says — a table and a spell, all invented. */
+export const CATALOGUE_PAGE: readonly string[] = [
+  'HEAVY PISTOLS',
+  'HEAVY PISTOLS ACC DAMAGE AP MODE RC AMMO AVAIL COST',
+  'Zap Gun 5 (7) 8P -1 SA - 15 (c) 5R 725¥',
+  'Burst Gun 6 6P - SA / BF (1) 21 (c) 7R 210¥',
+  'ARMOR ARMOR RATING AVAIL COST',
+  'Crate Coat 9 2 900¥',
+  'COMBAT SPELLS',
+  'STONE FIST',
+  '(INDIRECT)',
+  'Type: P Range: LOS Damage: S',
+  'Duration: I Drain: F - 3',
+];
+
 /**
  * Put one book in the library, through the REAL seeding path (FR11.7).
  *
@@ -268,7 +283,10 @@ async function seedBook(
 ): Promise<{ code: string; pages: number; bytes: number }> {
   const dir = mkdtempSync(join(tmpdir(), 'safehouse-e2e-book-'));
   const file = join(dir, 'Shadowrun Fifth Edition Core Rulebook.pdf');
-  const pdf = buildTestPdf({ pages: opts.pages });
+  // A gear table and a spell on the first PRINTED page (pdf page 6 under the
+  // +5 offset), so the catalogue the seeder compiles has rows a sheet can add
+  // (catalogue.spec.ts). Invented names, real layout (§14).
+  const pdf = buildTestPdf({ pages: opts.pages, text: { 6: CATALOGUE_PAGE } });
   writeFileSync(file, pdf);
   try {
     await run(
@@ -283,10 +301,11 @@ async function seedBook(
         'SR5',
         '--data-dir',
         dataDir,
-        // Text extraction is FR12.14's business, not the reader's; two pages is
-        // enough to prove the seeder ran and keeps a 440-page file cheap.
+        // Text extraction is FR12.14's business, not the reader's; six pages
+        // reaches the first printed page (the catalogue's) and keeps a
+        // 440-page file cheap.
         '--max-pages',
-        '2',
+        '6',
       ],
       { env: childEnv(dataDir) },
     );
