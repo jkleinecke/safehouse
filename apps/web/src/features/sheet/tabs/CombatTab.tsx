@@ -86,7 +86,7 @@ export default function CombatTab(props: TabProps) {
 
       <div className="flex items-center justify-between gap-2">
         <SectionLabel>Weapons</SectionLabel>
-        <AddFromBooks characterId={character.id} sheet={sheet} patchSheet={patchSheet} kinds={['weapon']} testId="add-weapon" />
+        <AddFromBooks characterId={character.id} sheet={sheet} patchSheet={patchSheet} kinds={['weapon']} derived={derived} characterName={character.name} testId="add-weapon" />
       </div>
       {sheet.weapons.length === 0 && <Empty>No weapons entered — add one from the books, write your own, or import the sheet.</Empty>}
       <div className="space-y-3">
@@ -97,7 +97,7 @@ export default function CombatTab(props: TabProps) {
 
       <div className="flex items-center justify-between gap-2">
         <SectionLabel>Armor worn</SectionLabel>
-        <AddFromBooks characterId={character.id} sheet={sheet} patchSheet={patchSheet} kinds={['armor']} testId="add-armor" />
+        <AddFromBooks characterId={character.id} sheet={sheet} patchSheet={patchSheet} kinds={['armor']} derived={derived} characterName={character.name} testId="add-armor" />
       </div>
       {sheet.armor.length === 0 && <Empty>No armor entered — add some from the books, write your own, or import the sheet.</Empty>}
       <ul className="divide-y divide-edge/60">

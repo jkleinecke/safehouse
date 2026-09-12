@@ -33,7 +33,7 @@ export default function GearTab({ character, derived, patchSheet, overrideFor }:
           sheet={sheet}
           patchSheet={patchSheet}
           kinds={['gear', 'ammo', 'electronics', 'vehicle', 'program']}
-          testId="add-gear"
+          derived={derived} characterName={character.name} testId="add-gear"
         />
       </div>
       {sheet.gear.length === 0 && <Empty>No gear entered — add it from the books, write your own, or import the sheet.</Empty>}
@@ -86,7 +86,7 @@ export default function GearTab({ character, derived, patchSheet, overrideFor }:
 
       <div className="flex items-center justify-between gap-2">
         <SectionLabel>Augmentations</SectionLabel>
-        <AddFromBooks characterId={character.id} sheet={sheet} patchSheet={patchSheet} kinds={['augmentation']} testId="add-augment" />
+        <AddFromBooks characterId={character.id} sheet={sheet} patchSheet={patchSheet} kinds={['augmentation']} derived={derived} characterName={character.name} testId="add-augment" />
       </div>
       <div className="mb-2 flex items-center gap-2">
         <span className="mono-label">Essence</span>

@@ -53,7 +53,10 @@ Seeding also reads every gear table and spell block off the pages into a
 finds a weapon, armor, 'ware, a spell or a power by name and adds it with the
 stats the book printed and its page as the ref — optionally proposing the
 nuyen on the ledger for the GM to approve — or **write your own** for a thing
-in no book. Player or GM, on any sheet they may edit. How the runner got it is the
+in no book. The price is the table's: type over the book's, or **find &
+negotiate** — the core book's Availability test, run by the runner or one of
+their contacts with both rolls on the record, and a price of the GM's choosing.
+Player or GM, on any sheet they may edit. How the runner got it is the
 table's business; the app keeps the inventory and the numbers. Nothing is
 shipped: the catalogue is compiled from your PDFs into your database
 ([docs/BOOKS.md §3b](docs/BOOKS.md)). `pnpm seed:books --catalogue` recompiles

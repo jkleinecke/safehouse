@@ -14,6 +14,8 @@ export interface CustomItemFormProps {
   kind: CatalogueKind;
   onKind: (k: CatalogueKind) => void;
   onAdd: (hit: CatalogueHit) => void;
+  /** Take it through the Availability test and a negotiated price instead of adding outright. */
+  onFind?: ((hit: CatalogueHit) => void) | undefined;
   testId: string;
 }
 
@@ -78,7 +80,7 @@ export function fieldsFor(kind: CatalogueKind): FieldDef[] {
   }
 }
 
-export default function CustomItemForm({ kinds, kind, onKind, onAdd, testId }: CustomItemFormProps) {
+export default function CustomItemForm({ kinds, kind, onKind, onAdd, onFind, testId }: CustomItemFormProps) {
   const [name, setName] = useState('');
   const [values, setValues] = useState<Record<string, string>>({});
   const [cost, setCost] = useState('');
@@ -89,27 +91,31 @@ export default function CustomItemForm({ kinds, kind, onKind, onAdd, testId }: C
   const set = (k: string, v: string) => setValues((s) => ({ ...s, [k]: v }));
   const ready = name.trim().length > 0;
 
-  const submit = () => {
-    if (!ready) return;
+  const build = () => {
     const stats: Record<string, string> = {};
     for (const f of fields) if (f.stat && values[f.key]) stats[f.stat] = values[f.key]!;
     const category = kind === 'spell' ? `${(values['category'] ?? '').trim()} spells`.trim() : (values['category'] ?? '');
     const priced = Number(cost.replace(/[,¥\s]/g, ''));
-    onAdd(
-      customHit({
-        kind,
-        name,
-        category: kind === 'spell' && !values['category'] ? '' : category,
-        stats,
-        avail,
-        cost: Number.isFinite(priced) && priced > 0 ? priced : null,
-        ref: book.trim() && Number(page) >= 1 ? { book: book.trim(), page: Number(page) } : null,
-      }),
-    );
+    return customHit({
+      kind,
+      name,
+      category: kind === 'spell' && !values['category'] ? '' : category,
+      stats,
+      avail,
+      cost: Number.isFinite(priced) && priced > 0 ? priced : null,
+      ref: book.trim() && Number(page) >= 1 ? { book: book.trim(), page: Number(page) } : null,
+    });
+  };
+  const reset = () => {
     setName('');
     setValues({});
     setCost('');
     setAvail('');
+  };
+  const submit = () => {
+    if (!ready) return;
+    onAdd(build());
+    reset();
   };
 
   return (
@@ -171,9 +177,25 @@ export default function CustomItemForm({ kinds, kind, onKind, onAdd, testId }: C
           </span>
         </label>
       </div>
-      <button type="submit" className="btn btn-accent mt-3 px-3 py-1.5" disabled={!ready} data-testid={`${testId}-custom-add`}>
-        add {name.trim() || 'it'} to the sheet
-      </button>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button type="submit" className="btn btn-accent px-3 py-1.5" disabled={!ready} data-testid={`${testId}-custom-add`}>
+          add {name.trim() || 'it'} to the sheet
+        </button>
+        {onFind && (
+          <button
+            type="button"
+            className="btn px-3 py-1.5"
+            disabled={!ready}
+            onClick={() => {
+              onFind(build());
+              reset();
+            }}
+            data-testid={`${testId}-custom-find`}
+          >
+            find &amp; negotiate
+          </button>
+        )}
+      </div>
     </form>
   );
 }

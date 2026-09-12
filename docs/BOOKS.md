@@ -412,7 +412,19 @@ same for one book from the API (`POST /api/books/:id/catalogue`).
   recorded outright). **Or write your own**, in the same dialog: the fields
   the sheet keeps for that kind, a price, a page if there is one — for the
   thing that is in no table, or in no book. The GM adds to any sheet the
-  same way. **×** removes an item in one tap; History has the revision.
+  same way. **The price is the table's:** every hit carries the book's price
+  in a box either role can type over, so a street price, a favour or a
+  rip-off is one edit. **Find & negotiate** takes an item through the core
+  book's Availability test as printed (SR5 p.418): who negotiates — the
+  runner with Negotiation + Charisma [Social], one of their contacts with
+  dice the GM types and their Connection on the limit, or someone the GM
+  names — what they offer (every extra quarter of list is one more die, up
+  to twelve), one Opposed Test against the item's Availability rating with
+  both rolls on the table's record, the delivery time from the price band
+  divided by the net hits (a tie doubles it, a loss says when to try again,
+  a glitch is the GM's to read), and then the price actually paid, which is
+  whatever the table says. **×** removes an item in one tap; History has
+  the revision.
 - **In the search overlay** (`/`, or ⌕ in the header) — items answer above
   the page hits, with their stats, and the ref opens the page.
 - **For the Fixer** — the `search_catalogue` tool, beside `search_books`,

@@ -19,6 +19,7 @@
  *  4. **Removing is one tap**, and the server no longer holds it.
  */
 import { expect, signInWithToken, test } from './fixtures/test';
+import type { PersistedRoll } from './fixtures/api';
 
 interface SheetDto {
   weapons: Array<{ name: string; acc?: number; dv?: string; ap: number; modes: string[]; ammo?: { cap: number }; ref?: { book: string; page: number } }>;
@@ -189,5 +190,76 @@ test.describe('creating items', () => {
     await expect(page.getByText('Lockpick set', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'remove Lockpick set' }).click();
     await expect.poll(async () => (await api.get<{ sheet: { gear: Array<{ name: string }> } }>(sheetUrl, world.player.token)).sheet.gear.some((g) => g.name === 'Lockpick set')).toBe(false);
+  });
+});
+
+test.describe('the price is the table\'s', () => {
+  test('a player types a street price over the book\'s, and the proposal carries it', async ({ page, api, world }) => {
+    const sheetUrl = `/api/characters/${world.playerCharacterId}`;
+    await signInWithToken(page, world.player);
+    await page.goto(`/c/${world.campaignId}/sheet/${world.playerCharacterId}`);
+    await page.getByRole('tab', { name: 'Combat' }).click();
+    await page.getByTestId('add-weapon-open').click();
+    await page.getByLabel('Search the books for weapons').fill('zap');
+    await expect(page.getByTestId('add-weapon-hit').first()).toContainText('Zap Gun', { timeout: 10_000 });
+    const price = page.getByLabel('Price paid for Zap Gun');
+    await expect(price).toHaveValue('725');
+    await price.fill('600');
+    await page.getByRole('button', { name: 'Add Zap Gun to the sheet' }).click();
+    await expect(page.getByTestId('add-weapon-note')).toContainText('600¥ proposed on the ledger');
+    await expect
+      .poll(async () => (await api.get<{ entries: LedgerEntry[] }>(`${sheetUrl}/ledger`, world.player.token)).entries.find((e) => e.reason.includes('Zap Gun') && e.delta === -600) ?? null)
+      .toMatchObject({ state: 'pending', reason: expect.stringContaining('83% of list (725¥)') });
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'remove Zap Gun' }).click();
+    await expect.poll(async () => (await api.get<{ sheet: SheetDto }>(sheetUrl, world.player.token)).sheet.weapons.some((w) => w.name === 'Zap Gun')).toBe(false);
+  });
+
+  test('the GM runs the Availability test for a runner, offering above list, and sets the price paid', async ({ page, api, world }) => {
+    const sheetUrl = `/api/characters/${world.playerCharacterId}`;
+    const rollsUrl = `/api/campaigns/${world.campaignId}/rolls?limit=50`;
+    const rollsBefore = (await api.get<{ rolls: PersistedRoll[] }>(rollsUrl, world.gm.token)).rolls.map((r) => r.id);
+
+    await signInWithToken(page, world.gm);
+    await page.goto(`/c/${world.campaignId}/sheet/${world.playerCharacterId}`);
+    await page.getByRole('tab', { name: 'Combat' }).click();
+    await page.getByTestId('add-armor-open').click();
+    await page.getByLabel('Search the books for armor').fill('crate');
+    await expect(page.getByTestId('add-armor-hit').first()).toContainText('Crate Coat', { timeout: 10_000 });
+    await page.getByRole('button', { name: 'Find and negotiate Crate Coat' }).click();
+    const panel = page.getByTestId('add-armor-acquire');
+    await expect(panel).toBeVisible();
+    await expect(panel).toContainText('availability 2');
+
+    // Offering 125% of the 900¥ list buys one more die (SR5 p.418).
+    await panel.getByLabel('Price offered').fill('1125');
+    await expect(page.getByTestId('add-armor-extra')).toContainText('+1 die');
+
+    // The runner negotiates: both rolls land on the table's record.
+    await page.getByTestId('add-armor-roll').click();
+    await expect(page.getByTestId('add-armor-result')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('add-armor-result')).toContainText(/found|not found/);
+    await expect
+      .poll(async () => (await api.get<{ rolls: PersistedRoll[] }>(rollsUrl, world.gm.token)).rolls.filter((r) => !rollsBefore.includes(r.id)).length, {
+        message: 'the item and the buyer each roll once, on the record',
+      })
+      .toBe(2);
+    const landed = (await api.get<{ rolls: PersistedRoll[] }>(rollsUrl, world.gm.token)).rolls.filter((r) => !rollsBefore.includes(r.id));
+    expect(landed.map((r) => String(r.request.meta?.['label'])).sort()).toEqual(['Availability test — Crate Coat', 'Availability — Crate Coat (the item)']);
+
+    // The price paid is the GM's call, whatever the dice said.
+    await panel.getByLabel('Price paid').fill('800');
+    await page.getByTestId('add-armor-acquire-add').click();
+    await expect(page.getByTestId('add-armor-note')).toContainText('800¥ recorded on the ledger');
+    await expect
+      .poll(async () => (await api.get<{ sheet: SheetDto }>(sheetUrl, world.gm.token)).sheet.armor.find((a) => a.name === 'Crate Coat') ?? null)
+      .toMatchObject({ rating: 9 });
+    await expect
+      .poll(async () => (await api.get<{ entries: LedgerEntry[] }>(`${sheetUrl}/ledger`, world.gm.token)).entries.find((e) => e.reason.includes('Crate Coat') && e.delta === -800) ?? null)
+      .toMatchObject({ state: 'approved', reason: expect.stringContaining('89% of list (900¥)') });
+
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'remove Crate Coat' }).click();
+    await expect.poll(async () => (await api.get<{ sheet: SheetDto }>(sheetUrl, world.gm.token)).sheet.armor.some((a) => a.name === 'Crate Coat')).toBe(false);
   });
 });

@@ -118,7 +118,7 @@ export default function SpellBook(props: SpellBookProps) {
 
       <div className="flex items-center justify-between gap-2">
         <SectionLabel>Spells</SectionLabel>
-        <AddFromBooks characterId={character.id} sheet={sheet} patchSheet={patchSheet} kinds={['spell']} testId="add-spell" />
+        <AddFromBooks characterId={character.id} sheet={sheet} patchSheet={patchSheet} kinds={['spell']} derived={derived} characterName={character.name} testId="add-spell" />
       </div>
       {sheet.spells.length === 0 && <Empty>No spells entered — add one from the books, write your own, or import the sheet.</Empty>}
       <ul className="divide-y divide-edge/60">
@@ -164,7 +164,7 @@ export default function SpellBook(props: SpellBookProps) {
 
       <div className="flex items-center justify-between gap-2">
         <SectionLabel>Adept powers</SectionLabel>
-        <AddFromBooks characterId={character.id} sheet={sheet} patchSheet={patchSheet} kinds={['power']} testId="add-power" />
+        <AddFromBooks characterId={character.id} sheet={sheet} patchSheet={patchSheet} kinds={['power']} derived={derived} characterName={character.name} testId="add-power" />
       </div>
       {sheet.powers.length === 0 && <Empty>No powers entered — add one from the books, write your own, or import the sheet.</Empty>}
       <ul className="divide-y divide-edge/60">

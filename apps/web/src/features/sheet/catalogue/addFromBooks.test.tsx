@@ -42,7 +42,10 @@ const base: AddFromBooksViewProps = {
   gm: false,
   custom: false,
   onCustom: noop,
+  prices: {},
+  onPrice: noop,
   onAdd: noop,
+  onFind: noop,
   note: null,
   testId: 'add-weapon',
 };
@@ -59,6 +62,18 @@ describe('the add-from-books dialog', () => {
     expect(html).toContain('aria-label="Add Zap Gun to the sheet"');
     expect(html).toContain('data-testid="add-weapon-spend"');
     expect(html).toContain('pending until the GM approves');
+  });
+
+  it('offers the price to type over — the book\'s by default — and a way to find and negotiate', () => {
+    const html = renderToStaticMarkup(<AddFromBooksView {...base} />);
+    expect(html).toContain('aria-label="Price paid for Zap Gun"');
+    expect(html).toContain('value="725"');
+    expect(html).toContain('aria-label="Find and negotiate Zap Gun"');
+    const typed = renderToStaticMarkup(<AddFromBooksView {...base} prices={{ i1: '600' }} />);
+    expect(typed).toContain('value="600"');
+    // A formula price has no number to prefill; the formula is the placeholder.
+    const formula = renderToStaticMarkup(<AddFromBooksView {...base} hits={[{ ...hit, cost: null, costText: 'Rating x 500¥' }]} />);
+    expect(formula).toContain('placeholder="Rating x 500¥"');
   });
 
   it('offers a kind filter only when the button covers more than one kind', () => {

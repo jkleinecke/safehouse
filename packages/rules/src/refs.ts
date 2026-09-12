@@ -79,6 +79,8 @@ export const RULE_REFS = {
   drain: SR5(282, 'Drain'),
   summoning: SR5(300, 'Summoning'),
   matrix: SR5(237, 'Matrix Actions'),
+  /** Finding and buying gear: the Availability test and haggling over the price. */
+  buyingGear: SR5(418, 'Buying Gear'),
 } as const;
 
 export type RuleTopic = keyof typeof RULE_REFS;

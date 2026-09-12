@@ -863,8 +863,17 @@ the app keeps the inventory and the numbers. The same dialog has **write
 your own** (`CustomItemForm.tsx`): the fields the sheet keeps for that kind,
 a price, a page if there is one, landing through the same mapping — for the
 thing in no table, or in no book. The GM does all of this on any sheet, and
-a GM's spend is recorded outright where a player's is proposed. **×** removes
-in one tap (History has the revision). The search overlay answers with items above
+a GM's spend is recorded outright where a player's is proposed. **The cost is
+the table's to set** ("this will let the GM better run the game with
+variable costs"): every hit carries the book's price in a box either role
+types over, and **find & negotiate** (`AcquirePanel.tsx`, `acquire.ts`)
+runs the Availability test exactly as the core book prints it — checked
+against p.418 of the GM's own copy rather than from memory: an Opposed Test
+of Negotiation + Charisma [Social] against the item's rating, extra dice for
+offering above list, delivery from the price band divided by net hits, a
+contact rolling their own dice with Connection on their limit — with both
+rolls on the table's record and the price paid whatever the table says.
+**×** removes in one tap (History has the revision). The search overlay answers with items above
 page hits; the Fixer has `search_catalogue`; a GM-only book's items stay
 GM-only (FR11.5).
 

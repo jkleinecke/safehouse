@@ -1,21 +1,26 @@
 /**
- * "Add from the books" — a player (or the GM on their sheet) finds an item,
- * spell or power by name in the catalogue the seeder read out of the GM's
- * books, and it lands on the sheet with the stats the book printed and the
- * page it came from (`toSheet.ts`). Or writes their own, for the thing that
- * is in no table, or in no book (`CustomItemForm.tsx`).
+ * "Add" on a sheet section — a player (or the GM on their sheet) finds an
+ * item, spell or power by name in the catalogue the seeder read out of the
+ * GM's books, and it lands on the sheet with the stats the book printed and
+ * the page it came from (`toSheet.ts`). Or writes their own, for the thing
+ * that is in no table, or in no book (`CustomItemForm.tsx`). Or takes it
+ * through the Availability test and a price of the table's choosing
+ * (`AcquirePanel.tsx`, SR5 p.418).
  *
  * How the runner came by it is worked out with the GM, out loud; this keeps
- * the inventory and the numbers. When the row has a price, the same tap can
- * put the nuyen on the ledger — as a proposal pending the GM's approval when
- * a player does it (FR3.6), as a recorded spend when the GM does — so the
- * ledger says what was bought without the app deciding whether it was.
+ * the inventory and the numbers. The price is whatever the table says — the
+ * book's by default, typed over by either role — and the same tap can put
+ * the nuyen on the ledger: as a proposal pending the GM's approval when a
+ * player does it (FR3.6), as a recorded spend when the GM does.
  */
 import { useEffect, useState } from 'react';
-import type { SheetV1 } from '@safehouse/contracts';
+import type { DerivedCharacter, SheetV1 } from '@safehouse/contracts';
 import { getSession } from '../../../api/session.js';
 import { useProposeSpend } from '../api.js';
 import { RefChip, Sheet } from '../components/ui.js';
+import { useContacts } from '../contacts.js';
+import { acquisitionReason } from './acquire.js';
+import AcquirePanel from './AcquirePanel.js';
 import { KIND_LABEL, useCatalogueSearch, type CatalogueKind } from './api.js';
 import CustomItemForm from './CustomItemForm.js';
 import { statsLine, withCatalogueItem, type CatalogueHit } from './toSheet.js';
@@ -26,6 +31,9 @@ export interface AddFromBooksProps {
   patchSheet: (next: SheetV1) => void;
   /** Which kinds this button is for: the Weapons section asks for weapons. */
   kinds: readonly CatalogueKind[];
+  /** The derived sheet, for the runner's Negotiation dice and Social limit. */
+  derived?: DerivedCharacter | undefined;
+  characterName?: string | undefined;
   /** The button's label. */
   label?: string;
   /** Test handle prefix. */
@@ -50,13 +58,23 @@ export interface AddFromBooksViewProps {
   /** The write-your-own form is open. */
   custom: boolean;
   onCustom: (v: boolean) => void;
-  onAdd: (hit: CatalogueHit) => void;
+  /** The price typed over a hit's list price, by hit id. */
+  prices: Readonly<Record<string, string>>;
+  onPrice: (id: string, value: string) => void;
+  onAdd: (hit: CatalogueHit, price?: number) => void;
+  /** Take the item through the Availability test and a negotiated price. */
+  onFind: (hit: CatalogueHit) => void;
   /** The last thing that happened: "added Zap Gun", "already on the sheet". */
   note: string | null;
   testId: string;
 }
 
 const inputClass = 'w-full rounded border border-edge bg-ground px-2 py-2 text-sm text-ink placeholder:text-faint focus:border-cyan focus:outline-none';
+const priceNumber = (raw: string | undefined, fallback: number | null): number | null => {
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const n = Number(raw.replace(/[,¥\s]/g, ''));
+  return Number.isFinite(n) && n >= 0 ? Math.round(n) : fallback;
+};
 
 /** The dialog, given its state — the half a static render can see. */
 export function AddFromBooksView(p: AddFromBooksViewProps) {
@@ -92,7 +110,7 @@ export function AddFromBooksView(p: AddFromBooksViewProps) {
           )}
         </form>
         <p className="mono-label mt-1 text-faint">
-          {p.searching ? 'searching…' : 'from the books the GM seeded · the stats the book printed, and its page'}
+          {p.searching ? 'searching…' : 'from the books the GM seeded · the stats the book printed, its page, and its price — type over the price if the street says otherwise'}
         </p>
         {p.error !== null && p.error !== undefined && (
           <p className="mt-2 rounded border border-danger/40 bg-danger/10 px-2 py-1 text-xs text-danger">
@@ -117,8 +135,8 @@ export function AddFromBooksView(p: AddFromBooksViewProps) {
         {p.hits && p.hits.length > 0 && (
           <ul className="mt-3 divide-y divide-edge/60" data-testid={`${p.testId}-hits`}>
             {p.hits.map((hit) => (
-              <li key={hit.id} className="flex items-center gap-2 py-2" data-testid={`${p.testId}-hit`} data-kind={hit.kind}>
-                <div className="min-w-0 flex-1">
+              <li key={hit.id} className="flex flex-wrap items-center gap-2 py-2" data-testid={`${p.testId}-hit`} data-kind={hit.kind}>
+                <div className="min-w-0 flex-1 basis-40">
                   <div className="flex flex-wrap items-baseline gap-x-2">
                     <span className="text-sm text-ink">{hit.name}</span>
                     <span className="mono-label text-faint">{hit.category.toLowerCase() || KIND_LABEL[hit.kind as CatalogueKind] || hit.kind}</span>
@@ -126,8 +144,36 @@ export function AddFromBooksView(p: AddFromBooksViewProps) {
                   <div className="mono-label truncate text-dim">{statsLine(hit)}</div>
                 </div>
                 <RefChip refInfo={hit.ref} />
-                <button type="button" className="btn btn-accent px-2.5 py-1" onClick={() => p.onAdd(hit)} aria-label={`Add ${hit.name} to the sheet`} data-testid={`${p.testId}-add`}>
+                <label className="flex items-center gap-1">
+                  <span className="mono-label text-faint">¥</span>
+                  <input
+                    className={`${inputClass} w-24 py-1`}
+                    inputMode="numeric"
+                    value={p.prices[hit.id] ?? (hit.cost !== null ? String(hit.cost) : '')}
+                    placeholder={hit.costText ?? 'price'}
+                    onChange={(e) => p.onPrice(hit.id, e.target.value)}
+                    aria-label={`Price paid for ${hit.name}`}
+                    data-testid={`${p.testId}-price`}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="btn btn-accent px-2.5 py-1"
+                  onClick={() => p.onAdd(hit, priceNumber(p.prices[hit.id], hit.cost) ?? undefined)}
+                  aria-label={`Add ${hit.name} to the sheet`}
+                  data-testid={`${p.testId}-add`}
+                >
                   add
+                </button>
+                <button
+                  type="button"
+                  className="btn px-2.5 py-1"
+                  onClick={() => p.onFind(hit)}
+                  aria-label={`Find and negotiate ${hit.name}`}
+                  title="The Availability test and a price of the table's choosing (SR5 p.418)"
+                  data-testid={`${p.testId}-find`}
+                >
+                  find &amp; negotiate
                 </button>
               </li>
             ))}
@@ -142,7 +188,8 @@ export function AddFromBooksView(p: AddFromBooksViewProps) {
               kinds={p.kinds}
               kind={(p.kind || p.kinds[0] || 'gear') as CatalogueKind}
               onKind={(k) => p.onKind(k)}
-              onAdd={p.onAdd}
+              onAdd={(hit) => p.onAdd(hit)}
+              onFind={p.onFind}
               testId={p.testId}
             />
           )}
@@ -174,6 +221,8 @@ function AddFromBooksDialog({
   sheet,
   patchSheet,
   kinds,
+  derived,
+  characterName,
   testId,
   onClose,
 }: Omit<AddFromBooksProps, 'label' | 'testId'> & { testId: string; onClose: () => void }) {
@@ -182,8 +231,11 @@ function AddFromBooksDialog({
   const [kind, setKind] = useState<CatalogueKind | ''>(kinds.length === 1 ? kinds[0]! : '');
   const [recordSpend, setRecordSpend] = useState(true);
   const [custom, setCustom] = useState(false);
+  const [prices, setPrices] = useState<Record<string, string>>({});
+  const [acquiring, setAcquiring] = useState<CatalogueHit | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const spend = useProposeSpend(characterId);
+  const contacts = useContacts(characterId);
   const gm = getSession()?.role === 'gm';
 
   // A short pause after typing, so the server sees words rather than letters.
@@ -195,21 +247,50 @@ function AddFromBooksDialog({
   const search = useCatalogueSearch(query, kind);
   const hits = search.data?.filter((h) => kinds.length === 0 || kinds.includes(h.kind as CatalogueKind) || kind === h.kind);
 
-  const add = (hit: CatalogueHit) => {
+  /** Onto the sheet, and the spend onto the ledger — at the price given, or the book's. */
+  const add = (hit: CatalogueHit, price?: number, reason?: string) => {
     const result = withCatalogueItem(sheet, hit);
     if (!result.added) {
       setNote(`${hit.name} is already on the sheet`);
       return;
     }
     patchSheet(result.sheet);
-    if (recordSpend && hit.cost !== null && hit.cost > 0) {
-      const where = hit.bookCode ? ` (${hit.bookCode} p.${hit.printedPage})` : '';
-      spend.mutate({ currency: 'nuyen', amount: hit.cost, reason: `bought ${hit.name}${where}` });
-      setNote(`added ${hit.name} · ${hit.cost.toLocaleString('en-US')}¥ ${gm ? 'recorded' : 'proposed'} on the ledger`);
+    const paid = price ?? hit.cost ?? 0;
+    if (recordSpend && paid > 0) {
+      spend.mutate({ currency: 'nuyen', amount: paid, reason: reason ?? acquisitionReason(hit, { listPrice: hit.cost, price: paid }) });
+      setNote(`added ${hit.name} · ${paid.toLocaleString('en-US')}¥ ${gm ? 'recorded' : 'proposed'} on the ledger`);
     } else {
       setNote(`added ${hit.name}`);
     }
+    setAcquiring(null);
   };
+
+  if (acquiring) {
+    return (
+      <Sheet open onClose={onClose} title={`Find & negotiate — ${acquiring.name}`}>
+        <div data-testid={`${testId}-dialog`}>
+          {note && (
+            <p className="mb-2 text-xs text-cyan" role="status" data-testid={`${testId}-note`}>
+              {note}
+            </p>
+          )}
+          <AcquirePanel
+            hit={acquiring}
+            characterId={characterId}
+            characterName={characterName ?? 'the runner'}
+            negotiationPool={derived?.pools['skill.negotiation']?.total}
+            charisma={derived?.attributes['cha']?.value}
+            socialLimit={derived?.limits?.['social']?.value}
+            contacts={contacts.data ?? []}
+            gm={gm}
+            onAcquire={(hit, price, reason) => add(hit, price, reason)}
+            onBack={() => setAcquiring(null)}
+            testId={testId}
+          />
+        </div>
+      </Sheet>
+    );
+  }
 
   return (
     <AddFromBooksView
@@ -228,7 +309,13 @@ function AddFromBooksDialog({
       gm={gm}
       custom={custom}
       onCustom={setCustom}
-      onAdd={add}
+      prices={prices}
+      onPrice={(id, value) => setPrices((s) => ({ ...s, [id]: value }))}
+      onAdd={(hit, price) => add(hit, price)}
+      onFind={(hit) => {
+        setNote(null);
+        setAcquiring(hit);
+      }}
       note={note}
       testId={testId}
     />
