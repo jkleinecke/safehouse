@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/vendor-pdfjs.mjs && vite build",
+    "build": "node scripts/vendor-pdfjs.mjs && vite build && node scripts/precompress.mjs",
     "postinstall": "node scripts/vendor-pdfjs.mjs",
     "vendor:pdfjs": "node scripts/vendor-pdfjs.mjs",
     "typecheck": "tsc --noEmit",

@@ -26,6 +26,15 @@ import type { TileCut, TilePattern } from '@safehouse/rules';
 import { C, FACE_FOOT, FACE_SHADE, parseColor, shade } from './colors.js';
 import { drawCut, type CutRun } from './cuts.js';
 import { drawProp, propFootprint } from './props.js';
+import {
+  drawShoreTop,
+  drawWaterCell,
+  mapWater,
+  waterSignature,
+  waterSink,
+  type WaterEntry,
+  type WaterMap,
+} from './water.js';
 
 // Type-only pixi import: every draw here is a call on a Graphics-shaped object,
 // so the module stays runnable (and testable) without a renderer.
@@ -680,6 +689,9 @@ function drawPattern(
       break;
     }
     case 'water': {
+      // A liquid is drawn as a body by `water.ts`; this is the printed kind —
+      // a puddle, an oil slick, a fountain's bowl.
+      if (def.liquid !== undefined) break;
       uvRect(g, P, 0, 0, 1, 1, { color: dark, alpha: 0.25 });
       for (let i = 0; i < 3; i += 1) {
         const v = 0.2 + i * 0.28 + rnd(seed, i) * 0.08;
@@ -952,7 +964,8 @@ function drawPattern(
     }
     case 'reeds': {
       // Dark water, then standing stalks leaning together, a seed head on some.
-      uvRect(g, P, 0, 0, 1, 1, { color: dark, alpha: 0.3 });
+      // In a liquid the water is the body underneath, so only the stalks.
+      if (def.liquid === undefined) uvRect(g, P, 0, 0, 1, 1, { color: dark, alpha: 0.3 });
       for (let i = 0; i < 12; i += 1) {
         const u = 0.05 + rnd(seed, i) * 0.9;
         const v = 0.25 + rnd(seed, 20 + i) * 0.7;
@@ -1364,6 +1377,8 @@ function drawPropTile(
   m: SceneMetrics,
   col: number,
   row: number,
+  /** Cells below the land it stands at: a boat floats `WATER_LEVEL` down. */
+  sink = 0,
 ): void {
   if (def.prop === undefined) return;
   const base = parseColor(def.colors[0], 0x3b3f45);
@@ -1380,6 +1395,7 @@ function drawPropTile(
     tonesOf(base, accent),
     cellSeed(col, row),
     glow,
+    sink,
   );
   if (face !== null) drawGlow(g, m, def, accent, face);
 }
@@ -1496,6 +1512,8 @@ export interface TilePlan {
   standing: TileCell[];
   /** `"col,row"` of every painted door standing open (FR9.24). */
   openDoors: Set<string>;
+  /** The floor's water, resolved as bodies, and the shores around them (`water.ts`). */
+  water: WaterMap;
 }
 
 export function planTiles(m: SceneMetrics, input: TileDrawInput): TilePlan {
@@ -1555,7 +1573,8 @@ export function planTiles(m: SceneMetrics, input: TileDrawInput): TilePlan {
   const standing = cells.filter((c) => isStanding(c.def) || c.def.footprint === 'wall');
   const openDoors = new Set<string>();
   for (const [key, d] of Object.entries(input.doors ?? {})) if (d.open) openDoors.add(key);
-  return { cells, walls, grounded, occupied, structure, standing, openDoors };
+  const water = waterOf(input);
+  return { cells, walls, grounded, occupied, structure, standing, openDoors, water };
 }
 
 /**
@@ -1746,7 +1765,7 @@ export function drawFloorCell(
   g: Graphics,
   m: SceneMetrics,
   cell: TileCell,
-  plan: Pick<TilePlan, 'grounded' | 'occupied'>,
+  plan: Pick<TilePlan, 'grounded' | 'occupied'> & Partial<Pick<TilePlan, 'water'>>,
 ): void {
   const key = `${cell.col},${cell.row}`;
   if (isStanding(cell.def) || cell.def.footprint === 'wall') {
@@ -1765,11 +1784,19 @@ export function drawFloorCell(
     // A flat designed prop — a pallet, a mattress — lies on the floor rather
     // than being the floor, so it wants ground under it like a thin tile.
     if (!plan.grounded.has(key)) drawUnderlay(g, cell.def, m, cell.col, cell.row);
-    drawPropTile(g, cell.def, m, cell.col, cell.row);
+    drawPropTile(g, cell.def, m, cell.col, cell.row, plan.water?.water.has(key) ? waterSink(m) : 0);
     if (cell.layer === 0 || !plan.grounded.has(key)) drawFloorEdge(g, m, cell, plan.occupied);
     return;
   }
+  if (cell.layer === 0 && cell.def.liquid !== undefined && plan.water !== undefined) {
+    // Water is one body, drawn knowing its neighbours (reed beds included).
+    drawWaterCell(g, m, cell.col, cell.row, plan.water);
+    drawFloorEdge(g, m, cell, plan.occupied);
+    return;
+  }
   drawFillTile(g, cell.def, m, cell.col, cell.row);
+  // Ground beside water shows how it meets it: wet sand, a coping, a beam.
+  if (cell.layer === 0 && plan.water !== undefined) drawShoreTop(g, m, cell.col, cell.row, plan.water);
   // The edge is drawn by whichever flat thing sits lowest in the square: the
   // ground when there is one, otherwise the flat prop standing in for it.
   if (cell.layer === 0 || !plan.grounded.has(key)) drawFloorEdge(g, m, cell, plan.occupied);
@@ -1803,14 +1830,17 @@ export function drawShadowFor(
   g: Graphics,
   m: SceneMetrics,
   cell: TileCell,
-  plan: Pick<TilePlan, 'walls'>,
+  plan: Pick<TilePlan, 'walls'> & Partial<Pick<TilePlan, 'water'>>,
 ): void {
   const h = cell.def.height ?? (cell.def.footprint === 'stair' ? 0.5 : 0);
   const shape = cell.def.footprint;
   if (cell.def.prop !== undefined) {
     // A flat designed prop lies on the floor and casts nothing; a standing
-    // one casts from the footprint its design declares.
-    if (h > 0) drawGroundShadow(g, m, objectRect(cell.def, cell.col, cell.row), h);
+    // one casts from the footprint its design declares — on the water, where
+    // it floats, when it floats.
+    const sink = plan.water?.water.has(`${cell.col},${cell.row}`) ? waterSink(m) : 0;
+    const [x0, y0, x1, y1] = objectRect(cell.def, cell.col, cell.row);
+    if (h > 0) drawGroundShadow(g, m, [x0 + sink, y0 + sink, x1 + sink, y1 + sink], h);
   } else if (shape === 'wall') {
     for (const r of wallRects(cell.col, cell.row, joinsOf(plan.walls, cell.col, cell.row))) {
       drawGroundShadow(g, m, r, h);
@@ -1832,13 +1862,14 @@ export function drawStandingCell(
   g: Graphics,
   m: SceneMetrics,
   cell: TileCell,
-  plan: Pick<TilePlan, 'walls' | 'structure'> & Partial<Pick<TilePlan, 'openDoors'>>,
+  plan: Pick<TilePlan, 'walls' | 'structure'> & Partial<Pick<TilePlan, 'openDoors' | 'water'>>,
 ): void {
   const shape = cell.def.footprint;
   if (cell.def.prop !== undefined) {
     // A design beats a footprint: the footprint still says where the shadow
     // falls, but the thing itself is built by its design.
-    drawPropTile(g, cell.def, m, cell.col, cell.row);
+    const sink = plan.water?.water.has(`${cell.col},${cell.row}`) ? waterSink(m) : 0;
+    drawPropTile(g, cell.def, m, cell.col, cell.row, sink);
   } else if (shape === 'stair') {
     drawStairTile(g, cell.def, m, cell.col, cell.row);
   } else if (shape === 'post' || shape === 'canopy' || shape === 'round') {
@@ -1930,7 +1961,45 @@ export function cellSignatures(input: TileDrawInput): Map<string, string> {
   for (const [key, d] of Object.entries(input.doors ?? {})) {
     if (out.has(key)) out.set(key, `${out.get(key)}d=${d.open ? 1 : 0};`);
   }
+  // Water reaches further than a wall run: a square's depth colour moves when
+  // land is painted three squares off, and its foam when a neighbour's shore
+  // changes. Folding what it depends on into its signature makes those real
+  // changes to the diff, so the one-square dirty rule still holds.
+  const water = waterOf(input);
+  if (water.water.size > 0) {
+    for (const [key, sig] of out) {
+      const at = parseKey(key);
+      const w = at === null ? '' : waterSignature(water, at.col, at.row);
+      if (w !== '') out.set(key, `${sig}${w};`);
+    }
+  }
   return out;
+}
+
+/**
+ * The floor's water, resolved once per input.
+ *
+ * A stroke asks twice — the signatures to find what changed, then the plan to
+ * draw it — with the same input, and on a harbour the resolve is the larger
+ * share of the stroke's fixed cost. Keyed weakly by the input object, so a
+ * new layer is a new resolve and an old one is collected with its input.
+ */
+const WATER_BY_INPUT = new WeakMap<TileDrawInput, WaterMap>();
+
+function waterOf(input: TileDrawInput): WaterMap {
+  const hit = WATER_BY_INPUT.get(input);
+  if (hit !== undefined) return hit;
+  const entries: WaterEntry[] = [];
+  for (const [map, layer] of [[input.cells, 0], [input.ground, 0], [input.structure, 1], [input.object, 2]] as const) {
+    for (const [key, tileId] of Object.entries(map ?? {})) {
+      const at = parseKey(key);
+      const def = input.defs[tileDefKey(input.tilesetId, tileId)];
+      if (at !== null && def !== undefined) entries.push({ col: at.col, row: at.row, def, layer });
+    }
+  }
+  const water = mapWater(entries);
+  WATER_BY_INPUT.set(input, water);
+  return water;
 }
 
 /**

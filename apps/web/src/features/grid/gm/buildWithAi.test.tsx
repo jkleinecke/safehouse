@@ -54,6 +54,10 @@ describe('describePlan', () => {
     expect(describePlan({ ...PLAN, rooms: PLAN.rooms.slice(0, 1), counts: { floor: 1, wall: 0, door: 1, window: 0, prop: 0, stair: 1 } })).toBe(
       '1 room · 1 floor square · 0 wall · 1 door · 1 stair',
     );
+    // Areas of other ground — the harbour, the pier — are named with the outside.
+    expect(
+      describePlan({ ...PLAN, rooms: PLAN.rooms.slice(0, 1), counts: { floor: 600, wall: 18, door: 1, window: 0, prop: 0, stair: 0, outside: 570, areas: 3 } }),
+    ).toBe('1 room · 600 floor squares · 18 wall · 1 door · 570 outside · 3 areas');
   });
 });
 

@@ -8,8 +8,10 @@
  * src/plugins/index.ts. Pino stays quiet under vitest.
  */
 import { existsSync } from 'node:fs';
+import { relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
+import fastifyCompress from '@fastify/compress';
 import fastifyCookie from '@fastify/cookie';
 import fastifyMultipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
@@ -42,6 +44,35 @@ export interface BuildAppOptions {
   logger?: FastifyServerOptions['logger'];
   /** Web build dir to serve; `false` disables, default apps/web/dist if present. */
   webDist?: string | false;
+}
+
+/**
+ * What gets compressed on the way out: text, JSON, XML/SVG, JavaScript, wasm.
+ *
+ * The plugin's default also compresses `application/octet-stream`, which is
+ * the one type this server must never touch: a book attachment stored without
+ * a better mime is streamed in byte ranges (FR11.3), and a gzipped 206 is a
+ * corrupt PDF. Event streams stay out too — compression buffers them.
+ */
+export const COMPRESSIBLE =
+  /^text\/(?!event-stream)|[/+]json(?:;|$)|[/+]xml(?:;|$)|^application\/(?:javascript|wasm)(?:;|$)/u;
+
+/**
+ * How long a browser may keep a file of the web build, by its path inside
+ * the build.
+ *
+ * Vite content-hashes everything it emits into `assets/`, so a changed file
+ * is a new NAME: those are cached for a year and never revalidated. Every
+ * other file keeps its name across builds — `index.html`, which is what names
+ * the current hashes, and the vendored pdf.js, whose main module and worker
+ * must stay the same version as each other — so those are always revalidated.
+ * Revalidation is an ETag round trip that answers 304, cheap on a LAN, and it
+ * is what makes a new build reach a table on the next reload rather than on
+ * some browser's idea of "stale".
+ */
+export function webCacheControl(pathInBuild: string): string {
+  const p = pathInBuild.split(sep).join('/');
+  return p.startsWith('assets/') ? 'public, max-age=31536000, immutable' : 'no-cache';
 }
 
 /** Paths where a bearer token is also accepted as `?token=` (WS/files/read). */
@@ -77,6 +108,11 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   app.decorate('authService', authService);
 
   // --- core fastify plugins -----------------------------------------------
+  // First, so every route registered after it is covered (the plugin hooks
+  // routes as they are added). Brotli for browsers, gzip for the rest; a
+  // response under 1 KB goes out as it is. The web build's own files arrive
+  // already compressed (`preCompressed` below) and pass through untouched.
+  await app.register(fastifyCompress, { customTypes: COMPRESSIBLE, threshold: 1024 });
   const secret = process.env.SESSION_SECRET;
   await app.register(fastifyCookie, secret ? { secret } : {});
   // 25 MB a file. The default is Fastify's 1 MiB `bodyLimit`, which silently
@@ -179,16 +215,36 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<FastifyInsta
   const webRoot =
     opts.webDist === false ? null : (opts.webDist ?? (existsSync(defaultWebDist) ? defaultWebDist : null));
   if (webRoot && existsSync(webRoot)) {
-    await app.register(fastifyStatic, { root: webRoot, prefix: '/', wildcard: true });
+    await app.register(fastifyStatic, {
+      root: webRoot,
+      prefix: '/',
+      wildcard: true,
+      // `pnpm --filter @safehouse/web build` writes a `.br` and a `.gz` beside
+      // every text file (scripts/precompress.mjs): maximum-quality brotli,
+      // paid once at build time instead of on every request.
+      preCompressed: true,
+      cacheControl: false,
+      setHeaders: (reply, path) => {
+        // `path` may be the `.br`/`.gz` sibling; the policy is the source file's.
+        const inBuild = relative(webRoot, path).replace(/\.(?:br|gz)$/u, '');
+        reply.header('cache-control', webCacheControl(inBuild));
+      },
+    });
   }
   // `/join/:code` is deliberately absent: it is an SPA route (the QR target),
   // and the token-minting endpoint moved to `/api/join/:code` (LIVE-3). Keeping
   // `/join` here would 404 the join screen in production instead of serving it.
   const API_PREFIXES = ['/api', '/ws', '/files', '/read', '/healthz'];
+  // Build files that are not there are a 404, never the SPA shell. A tab left
+  // open across a deploy asks for chunks under their OLD hashes; answering with
+  // index.html turns that into a MIME error the app cannot recognise, while a
+  // 404 fails the import cleanly and the app reloads onto the new build.
+  const BUILD_PREFIXES = ['/assets/', '/pdfjs/'];
   app.setNotFoundHandler((req, reply) => {
     const spaEligible =
       webRoot !== null &&
       req.method === 'GET' &&
+      !BUILD_PREFIXES.some((p) => req.url.startsWith(p)) &&
       !API_PREFIXES.some((p) => req.url === p || req.url.startsWith(`${p}/`) || req.url.startsWith(`${p}?`));
     if (spaEligible) {
       return reply.type('text/html').sendFile('index.html');

@@ -8,8 +8,8 @@
  * the usage meter ticks, and without a model the lane says so.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { tilesetById } from '@safehouse/rules';
-import { compileFloorPlan, outsideGroundFor, type FloorPlanInput } from '../src/fixer/floor-plan.js';
+import { toSlot, tilesetById } from '@safehouse/rules';
+import { compileFloorPlan, floorPalette, outsideGroundFor, type FloorPlanInput } from '../src/fixer/floor-plan.js';
 import { MockLlmServer } from '../src/fixer/mock-llm.js';
 import { bootstrapCampaign, makeTestApp, type BootstrapResult, type TestApp } from './core-helpers.js';
 import { disableAi, enableAi } from './fixer-helpers.js';
@@ -118,6 +118,21 @@ describe('compileFloorPlan', () => {
     expect(out.counts.floor).toBe(GRID.cols * GRID.rows);
   });
 
+  it('tells the model which ground is water and how the land beside it meets it', () => {
+    // The renderer draws painted water as one body and drops the land to the
+    // waterline by its shore; a model that cannot see that paints a beach
+    // where a pier wall belongs.
+    const marina = floorPalette(tilesetById('marina')!);
+    expect(marina).toContain('harbour — Harbour water (deep water');
+    expect(marina).toContain('shallows — Shallows (shallow water)');
+    expect(marina).toContain('pierwall — Pier wall (meets water as a pier wall)');
+    expect(marina).toContain('beach — Beach front (runs into water as a beach)');
+    expect(marina).toContain('quay — Concrete quay (meets water as a quay wall)');
+    expect(floorPalette(tilesetById('lake')!)).toContain('reeds — Reed bed (shallow water)');
+    // A dry set says nothing about water.
+    expect(floorPalette(tilesetById('corp')!)).not.toMatch(/water/u);
+  });
+
   it('honours a named outside ground and scatters decoration on it, clear of doors', () => {
     const plan: FloorPlanInput = {
       ...PLAN,
@@ -165,6 +180,163 @@ describe('compileFloorPlan', () => {
     }
     // The clinic's rooms already carry a prop each for their size: untouched.
     expect(out.counts.dressed).toBe(0);
+  });
+});
+
+describe('areas: the ground outside the rooms is not one ground', () => {
+  // "A dock with a pier out into the harbour" is three grounds at least, and
+  // the renderer only draws a quay wall, a pier's pilings or a beach running
+  // under when water and land are painted side by side.
+  const marina = tilesetById('marina')!;
+  const WATERFRONT = { cols: 30, rows: 20 };
+  const slot = (id: string) => toSlot(marina, id)!;
+  const office = { name: 'harbour office', x: 2, y: 2, w: 6, h: 5 };
+  const HARBOUR: FloorPlanInput = {
+    title: 'Pier 23',
+    rooms: [office],
+    outside: {
+      ground: 'quay',
+      areas: [
+        { ground: 'harbour', x: 0, y: 12, w: 30, h: 8 },
+        { ground: 'pierwall', x: 0, y: 11, w: 30, h: 1 },
+        { ground: 'planking', x: 13, y: 11, w: 3, h: 6 },
+      ],
+    },
+  };
+  const built = compileFloorPlan(HARBOUR, WATERFRONT, marina);
+
+  it('paints the areas in order, so a later one lies on top of an earlier one', () => {
+    expect(built.warnings).toEqual([]);
+    expect(built.counts.areas).toBe(3);
+    expect(built.layers.ground['20,5']).toBe(slot('quay')); // the outside ground
+    expect(built.layers.ground['5,15']).toBe(slot('harbour'));
+    expect(built.layers.ground['5,11']).toBe(slot('pierwall')); // one square wide is a legal area
+    // The pier comes after the water AND after the pier wall: it wins both.
+    expect(built.layers.ground['14,14']).toBe(slot('planking'));
+    expect(built.layers.ground['14,11']).toBe(slot('planking'));
+    expect(built.layers.ground['14,17']).toBe(slot('harbour')); // past the pier's end
+    expect(Object.keys(built.layers.ground)).toHaveLength(WATERFRONT.cols * WATERFRONT.rows);
+    expect(built.counts.outside).toBe(WATERFRONT.cols * WATERFRONT.rows - office.w * office.h);
+  });
+
+  it('builds rooms over the areas: a room keeps its own squares', () => {
+    const plan: FloorPlanInput = {
+      ...HARBOUR,
+      rooms: [{ ...office, floor: 'planking' }],
+      outside: { ground: 'quay', areas: [{ ground: 'harbour', x: 0, y: 0, w: 12, h: 12 }] },
+    };
+    const b = compileFloorPlan(plan, WATERFRONT, marina);
+    expect(b.layers.ground['4,4']).toBe(slot('planking')); // inside the room
+    expect(b.layers.ground['2,2']).toBe(slot('planking')); // the room's own wall square
+    expect(b.layers.structure['2,2']).toBe('building/wall');
+    expect(b.layers.ground['10,10']).toBe(slot('harbour')); // the area around it
+  });
+
+  it('warns about an area whose ground is not a ground tile, and shows the outside there', () => {
+    const plan: FloorPlanInput = {
+      ...HARBOUR,
+      outside: {
+        ground: 'quay',
+        areas: [
+          { ground: 'boat', x: 20, y: 0, w: 5, h: 5 },
+          { ground: 'nonesuch', x: 20, y: 6, w: 5, h: 5 },
+        ],
+      },
+    };
+    const b = compileFloorPlan(plan, WATERFRONT, marina);
+    expect(b.warnings.join('\n')).toMatch(/area 1 \(boat\): "boat" is not a ground tile/);
+    expect(b.warnings.join('\n')).toMatch(/area 2 \(nonesuch\): "nonesuch" is not a ground tile/);
+    expect(b.counts.areas).toBe(0);
+    expect(b.layers.ground['22,2']).toBe(slot('quay'));
+    expect(b.layers.ground['22,8']).toBe(slot('quay'));
+  });
+
+  it('clamps an area that hangs off the grid, and drops one that is wholly off it', () => {
+    const plan: FloorPlanInput = {
+      ...HARBOUR,
+      outside: {
+        ground: 'quay',
+        areas: [
+          { ground: 'harbour', x: 25, y: 15, w: 10, h: 10 },
+          { ground: 'harbour', x: 30, y: 0, w: 4, h: 4 },
+          { ground: 'harbour', x: 0, y: 20, w: 4, h: 4 },
+        ],
+      },
+    };
+    const b = compileFloorPlan(plan, WATERFRONT, marina);
+    const said = b.warnings.join('\n');
+    expect(said).toMatch(/area 1 \(harbour\) clamped to the grid: 10x10 at 25,15 → 5x5 at 25,15/);
+    expect(said).toMatch(/area 2 \(harbour\) falls outside the 30x20 grid — dropped/);
+    expect(said).toMatch(/area 3 \(harbour\) falls outside the 30x20 grid — dropped/);
+    expect(b.counts.areas).toBe(1);
+    expect(b.layers.ground['29,19']).toBe(slot('harbour')); // painted to the corner
+    expect(b.layers.ground['24,19']).toBe(slot('quay'));
+  });
+
+  /** Every object the scatter put on water, with the water it is on. */
+  const onWater = (b: ReturnType<typeof compileFloorPlan>) =>
+    Object.entries(b.layers.object)
+      .map(([k, s]) => ({ k, tile: marina.tiles.find((t) => toSlot(marina, t.id) === s)!, ground: marina.tiles.find((t) => toSlot(marina, t.id) === b.layers.ground[k])! }))
+      .filter((x) => x.ground.liquid !== undefined);
+
+  it('scatters nothing on the water that does not float there', () => {
+    // The set's own decoration: none of it floats but the buoy, and the buoy
+    // is a light, which the default pool never scatters.
+    expect(built.counts.scatter).toBeGreaterThan(0);
+    expect(onWater(built)).toEqual([]);
+    // How much comes from the land something can stand on (the quay, the pier
+    // wall, the pier), not from a grid that is mostly harbour.
+    const standable = built.counts.outside - 30 * 8 + 3 * 5; // the harbour squares, minus the pier over them
+    expect(built.counts.scatter).toBeLessThanOrEqual(Math.floor(standable / 16));
+  });
+
+  it('puts a floating thing on the water it is meant for, and land things on the land', () => {
+    const plan: FloorPlanInput = { ...HARBOUR, outside: { ...HARBOUR.outside, scatter: ['boat', 'barrel', 'bollard'] } };
+    const b = compileFloorPlan(plan, WATERFRONT, marina);
+    expect(b.counts.scatter).toBeGreaterThan(0);
+    for (const x of onWater(b)) {
+      expect(x.tile.id, `${x.tile.id} on ${x.ground.id} at ${x.k}`).toBe('boat');
+      expect(x.tile.placement?.on).toContain(x.ground.id);
+    }
+    for (const [k, s] of Object.entries(b.layers.object)) {
+      const g = marina.tiles.find((t) => toSlot(marina, t.id) === b.layers.ground[k])!;
+      if (s === slot('bollard')) expect(g.id, `bollard at ${k}`).toBe('quay');
+      if (s === slot('barrel')) expect(g.liquid, `barrel at ${k}`).toBeUndefined();
+    }
+    expect(onWater(b).length).toBeGreaterThan(0);
+    // Deterministic, areas and all.
+    expect(compileFloorPlan(plan, WATERFRONT, marina).layers.object).toEqual(b.layers.object);
+  });
+
+  it('says so when a named decoration fits none of the ground outside', () => {
+    const dry: FloorPlanInput = { ...HARBOUR, outside: { ground: 'quay', scatter: ['buoy', 'barrel'] } };
+    const b = compileFloorPlan(dry, WATERFRONT, marina);
+    expect(b.warnings.join('\n')).toMatch(/Channel buoy fits none of the ground outside \(it stands on harbour\)/);
+    expect(Object.values(b.layers.object)).not.toContain(slot('buoy'));
+  });
+
+  it('says nothing about fit when the rooms fill the grid and there is no outside', () => {
+    const indoors: FloorPlanInput = {
+      title: 'Boathouse',
+      rooms: [{ name: 'boathouse', x: 0, y: 0, w: 30, h: 20 }],
+      openings: [{ room: 'boathouse', wall: 's', offset: 5, kind: 'door' }],
+      outside: { ground: 'quay', scatter: ['barrel', 'cleat', 'cleat', 'buoy'] },
+    };
+    const b = compileFloorPlan(indoors, WATERFRONT, marina);
+    expect(b.counts.outside).toBe(0);
+    expect(b.warnings).toEqual([]);
+  });
+
+  it('names a mismatch once, however often the model repeated the id', () => {
+    const dry: FloorPlanInput = { ...HARBOUR, outside: { ground: 'quay', scatter: ['buoy', 'buoy'] } };
+    const said = compileFloorPlan(dry, WATERFRONT, marina).warnings.filter((w) => w.includes('Channel buoy'));
+    expect(said).toHaveLength(1);
+  });
+
+  // The rule 7 example is the HARBOUR plan above, id for id, so a renamed
+  // marina tile fails the areas tests; this pins the heading the model reads.
+  it('tells the model an area takes a ground tile from the palette', () => {
+    expect(floorPalette(marina)).toContain('Ground tiles (a room\'s "floor", "outside.ground", and an area\'s "ground"):');
   });
 });
 
@@ -236,6 +408,7 @@ describe('POST /api/fixer/build-floor', () => {
     // The palette went to the model, in the set's own ids.
     const sent = mock.requests[0]!.messages.map((m) => String(m.content)).join('\n');
     expect(sent).toContain('crates —');
+    expect(sent).toContain('"outside.areas" are rectangles of OTHER ground');
     expect(sent).toContain('a two-room clinic');
     // Still an empty scene: the GM has not built it.
     const scene = await t.app.inject({ method: 'GET', url: `/api/scenes/${sceneId}`, headers: { authorization: `Bearer ${boot.gmToken}` } });

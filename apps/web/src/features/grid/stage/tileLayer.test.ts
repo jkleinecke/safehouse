@@ -678,29 +678,22 @@ describe('tileDrawInput forwards every layer to the renderer', () => {
 
   it('draws the ground under the things standing on it', () => {
     // Order is the depth buffer: ground first, then structure, then objects.
-    const { g, calls } = fakeGraphics();
-    drawTiles(
-      g,
-      M,
-      tileDrawInput(
-        { tilesetId: 'sprawl', cells: {}, ground: { '0,0': 'grass' }, structure: {}, object: { '0,0': 'tree' } },
-        catalogueDefs(),
-      ),
-    );
-    const fills = calls
-      .filter((c) => c.op === 'fill')
-      .map((c) => (c.args[0] as { color?: number }).color);
-    const colourOf = (id: string): number => {
-      const hex = TILESETS.find((s) => s.id === 'sprawl')!.tiles.find((t) => t.id === id)!.colors[0];
-      return Number.parseInt(hex.slice(1), 16);
+    // Compared against the same ground drawn alone rather than by colour: a
+    // designed prop shades its own tones, so no fill of the tree need be the
+    // tile's base colour exactly.
+    const input = (object: Record<string, string>) =>
+      tileDrawInput({ tilesetId: 'sprawl', cells: {}, ground: { '0,0': 'grass' }, structure: {}, object }, catalogueDefs());
+    const fillsOf = (object: Record<string, string>) => {
+      const { g, calls } = fakeGraphics();
+      drawTiles(g, M, input(object));
+      return calls.filter((c) => c.op === 'fill').map((c) => (c.args[0] as { color?: number }).color);
     };
-    // The floor carries per-cell grain, so it is matched within that grain
-    // rather than exactly; the tree is one object and keeps its own colour.
-    const near = (a: number | undefined, b: number): boolean =>
-      a !== undefined &&
-      [16, 8, 0].every((s) => Math.abs(((a >> s) & 0xff) - ((b >> s) & 0xff)) <= 6);
-    const grassAt = fills.findIndex((c) => near(c, colourOf('grass')));
-    expect(grassAt).toBeGreaterThanOrEqual(0);
-    expect(grassAt).toBeLessThan(fills.lastIndexOf(colourOf('tree')));
+    const groundOnly = fillsOf({});
+    const withTree = fillsOf({ '0,0': 'tree' });
+    expect(groundOnly.length).toBeGreaterThan(0);
+    // The ground comes first, exactly as it draws with nothing on it…
+    expect(withTree.slice(0, groundOnly.length)).toEqual(groundOnly);
+    // …and the tree after it (with its shadow), never before.
+    expect(withTree.length).toBeGreaterThan(groundOnly.length + 2);
   });
 });

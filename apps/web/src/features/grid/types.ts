@@ -3,7 +3,7 @@
  * so the main bundle stays lean; the stage subtree is loaded lazily.
  */
 import type { Point, Role, Scene, Token } from '@safehouse/contracts';
-import type { TileCut, TilePattern, TileProp, VisionMode } from '@safehouse/rules';
+import type { TileCut, TileLiquid, TilePattern, TileProp, TileShore, VisionMode } from '@safehouse/rules';
 import { slotOf, slotUniverse, tileBySlot } from '@safehouse/rules';
 
 /** Active pointer tool on the canvas. */
@@ -108,6 +108,10 @@ export interface TileDrawDef {
   blocksSight?: boolean;
   /** Reflected light washed over the top face — see `Tile.sheen`. */
   sheen?: string;
+  /** This ground is water, drawn as one body with its neighbours — see `Tile.liquid`. */
+  liquid?: TileLiquid;
+  /** How this ground meets water beside it: a beach, a bank, a quay, a pier — see `Tile.shore`. */
+  shore?: TileShore;
   /**
    * The floor to draw UNDER a thin tile, from the same set.
    *
@@ -147,6 +151,8 @@ export interface TileSetLike {
     height?: number;
     emissive?: string;
     sheen?: string;
+    liquid?: TileLiquid;
+    shore?: TileShore;
     blocksSight?: boolean;
     footprint?: 'fill' | 'wall' | 'post' | 'canopy' | 'round' | 'stair';
     connects?: 'up' | 'down';
@@ -193,6 +199,8 @@ export function tileDefsFromSets(sets: readonly TileSetLike[]): Record<string, T
         ...(t.height !== undefined ? { height: t.height } : {}),
         ...(t.emissive !== undefined ? { emissive: t.emissive } : {}),
         ...(t.sheen !== undefined ? { sheen: t.sheen } : {}),
+        ...(t.liquid !== undefined ? { liquid: t.liquid } : {}),
+        ...(t.shore !== undefined ? { shore: t.shore } : {}),
         ...(t.blocksSight !== undefined ? { blocksSight: t.blocksSight } : {}),
         ...(t.footprint !== undefined ? { footprint: t.footprint } : {}),
         ...(t.connects !== undefined ? { connects: t.connects } : {}),

@@ -1045,6 +1045,95 @@ restyles per mode (thermal: cold violet floor, hot amber bodies; low-light
 lift; ultrasound grey). Light rows, heat per tile and per-mode shrouds
 remain VISION.md §4.
 
+**TILES-3 — true water, beach fronts and pier walls** *(2026-09-13)*.
+"There needs to be true water tiles for the dock & pier, park, and lakeside
+tile sets. In addition to the water tiles, tile sets will need beach fronts
+and pier walls." Ground tiles now say whether they are water
+(`liquid: 'deep' | 'shallow'`) and how they meet it
+(`shore: 'beach' | 'bank' | 'quay' | 'pier'`), carried through the palette to
+`stage/water.ts`, which draws painted water as one body: a shore-distance
+colour field sampled per square in quads as fine as the shelf needs (one on
+open water, up to 4×4 at the shore), ripples placed in world space
+so they cross borders, foam along the shoreline, reed beds standing in the
+water beside them — and, in isometric, the land's walls dropping to the
+waterline in the water square (quay courses and coping, pier boards and
+pilings, an earth bank with its turf lip; a beach runs under). Boats and buoys
+float a fifth of a cell down. Marina, park and lake each gained a **Beach
+front** and a **Pier wall** at the end of their ground slots (the park also
+gained shallows); every board and concrete ground at the waterside names its
+shore; the plaza basin and the farm pond are true water too. The Fixer's
+floor palette tells the model which tiles are water and how their neighbours
+meet it. See `docs/TILE_ART.md`, "Water is a body of water", for the geometry
+and the cost (about two fifths more draw calls on a water-heavy map; the water is
+resolved once per stroke and folded into the chunk signatures so a change
+three squares away still redraws the water it moved). Pinned by
+`stage/water.test.ts` (15) and the rules' "water is a body" block (6).
+
+The floor builder can lay a waterfront out too. A plan's outside now carries
+`areas` — rectangles of other ground painted in order, later on top, with the
+rooms built over them — so "a dock with a pier out into the harbour" is a quay
+outside with a harbour area, a one-square row of pier wall along it and a thin
+area of pier boards reaching in. Rule 7 of the prompt says so with a marina
+example; a bad id, a clamp or an area off the grid is a warning, never a
+silent fix; `coerceFloorPlan` reads areas as `regions` or `zones`, inside the
+outside or at the top of the plan. The scatter asks each square about its own
+ground: a tile with `placement.on` lands only on the grounds it names, anything
+else never on water, the quota comes from the squares something can stand on
+(a grid that is mostly harbour does not pack its decoration onto the quay), and
+a named decoration that fits nowhere outside is a warning. `fixer-floor.test.ts`
+(+9), `fixer-repair.test.ts` (+1).
+
+**LIVE-5 — the GM could not open a player's sheet** *(2026-09-13)*. Found when
+the e2e suite went red on four specs at HEAD. The Grid (`grid/api.ts`) and the
+GM's assistant dock read `['character', id]` through a second `useCharacter`
+with its own `queryFn` returning the raw character DTO. TanStack Query keeps
+one entry per key and refetches it with whichever observer set its options
+last; the dock mounts in the layout after the sheet, so the first
+`useSheetLive` invalidation wrote the raw DTO (no `condition`) over the
+sheet's record and the identity strip crashed into the router's error page.
+There is one definition of that query now (`characterQuery` in
+`sheet/api.ts`), and `characterQuery.test.tsx` replays the GM's mount order on
+real observers. The recap e2e asks through the dock, where the chat moved.
+
+**TILES-4 — the props, drawn in detail** *(2026-09-13)*. "Put more detail
+into the props." All eighty designs in `stage/props.ts` were redrawn to one
+hierarchy — silhouette, secondary forms, then only the tertiary accents that
+read at table zoom — with per-cell variety through `k.rnd` and plan symbols
+kept clean. The work was done as patch modules rendered through the real
+renderer headlessly (an SVG stand-in for pixi's `Graphics` and a headless
+browser), ten designers by theme, three art-director reviews and a
+consistency pass across all eighty, then spliced into `props.ts`. Every
+design stays inside a per-prop budget checked over hundreds of seeds at every
+catalogue height, lit and unlit (≤ 110 draw calls in isometric, ≤ 30 in plan;
+the average went from about 33 to 52, and from 7 to 15), keeps the invariants
+`props.test.ts` pins (a fixture face only when lit, plan inside the cell,
+deterministic per cell), and holds rule 7 for every hard-coded colour. The
+laptop-canvas frame budget in `e2e/perf.spec.ts` still passes with no long
+frames. Two judgement calls for the GM to overrule: the café's waist-height
+`vending` tiles are now a counter with a display case and an espresso
+machine rather than a half-height vending box, and lit props moved their
+fixture face onto the lamp itself (the strip over a vending window, a work
+light's head), so their pools sit a little differently. `tileLayer.test.ts`'s
+"ground under the things standing on it" now compares against the ground
+drawn alone instead of hunting for the tree's base colour, which a shaded
+design no longer paints exactly.
+
+**WIRE-1 — compression and cache headers** *(2026-09-13)*. The 1.2 MB entry
+bundle and the 1.4 MB pdf.js worker went out uncompressed on every load, with
+no statement of how long a browser could keep them. `pnpm --filter
+@safehouse/web build` now ends with `scripts/precompress.mjs` (brotli 11 and
+gzip 9 beside every text file of the build — 4.8 MB → 1.4 MB), served by
+`@fastify/static` with `preCompressed`; `@fastify/compress` covers everything
+else (API JSON, pdf.js if unprecompressed) with a type list that excludes
+`application/octet-stream` and event streams, and the byte-range PDF route
+opts out outright, because a compressed 206 is not the bytes the Range header
+asked for. Hashed `assets/` are `public, max-age=31536000, immutable`;
+`index.html` and pdf.js are `no-cache` (an ETag round trip that answers 304).
+A build asset that is not there is a 404 rather than the SPA shell passed off
+as JavaScript, and the web app reloads once on `vite:preloadError`, so a tab
+left open across a deploy lands on the new build instead of a blank route.
+`test/web-delivery.test.ts` (9), `staleChunks.test.ts` (2).
+
 ### What changed structurally
 
 `apps/web/e2e/` exists: Playwright, chromium, 14 spec files, 40 tests, run

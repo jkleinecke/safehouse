@@ -4,7 +4,7 @@
  * with the shared rules engine as a local fallback so the sheet stays usable
  * while the server characters plugin is still landing (Principle 5).
  */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   DerivedCharacter,
   LedgerEntry,
@@ -94,13 +94,30 @@ export const HYDRATE_ON_MOUNT = {
   refetchOnReconnect: 'always',
 } as const;
 
-export function useCharacter(characterId: string | undefined) {
-  return useQuery({
+/**
+ * THE query for `['character', id]` — every screen that reads a character
+ * reads it through this, so the cache entry is always a `CharacterRecord`.
+ *
+ * A second definition of the same key with its own `queryFn` is not a
+ * harmless duplicate: TanStack Query keeps one entry per key and refetches it
+ * (on invalidation) with whichever observer set its options LAST. The Grid
+ * and the GM's assistant dock once read this key with a plain `apiGet`, so a
+ * GM opening a sheet had the dock's raw DTO — no `condition` — written over
+ * the sheet's record by the first `useSheetLive` invalidation, and the
+ * identity strip died on `condition.physical`. A player coming from the Grid
+ * met the same raw record in the cache.
+ */
+export function characterQuery(characterId: string | null | undefined) {
+  return queryOptions({
     queryKey: characterKey(characterId ?? ''),
     queryFn: async () => normalizeCharacter(await apiGet<unknown>(`/api/characters/${characterId}`)),
     enabled: Boolean(characterId),
     ...HYDRATE_ON_MOUNT,
   });
+}
+
+export function useCharacter(characterId: string | null | undefined) {
+  return useQuery(characterQuery(characterId));
 }
 
 // ---------------------------------------------------------------------------

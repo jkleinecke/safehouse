@@ -42,7 +42,7 @@ describe('visionModesFor', () => {
 
   it('collapses a troll with thermographic cybereyes to one thermographic', () => {
     const modes = visionModesFor(
-      sheet({ metatype: 'troll', augments: [{ name: 'Cybereyes with thermographic vision', essence: 0.3, mods: [] }] }),
+      sheet({ metatype: 'troll', augments: [{ name: 'Cybereyes with thermographic vision' }] }),
     );
     expect(modes).toEqual(['normal', 'thermographic']);
   });
@@ -51,8 +51,8 @@ describe('visionModesFor', () => {
     const modes = visionModesFor(
       sheet({
         metatype: 'elf',
-        gear: [{ name: 'Ultrasound goggles', qty: 1 }],
-        qualities: [{ name: 'Astral Perception', mods: [] }],
+        gear: [{ name: 'Ultrasound goggles' }],
+        qualities: [{ name: 'Astral Perception' }],
       }),
     );
     expect(modes).toEqual(['normal', 'lowlight', 'ultrasound', 'astral']);

@@ -15,7 +15,6 @@ import type {
   Scene,
   SceneGeometry,
   SceneInput,
-  SheetV1,
   Token,
   TokenInput,
 } from '@safehouse/contracts';
@@ -115,20 +114,10 @@ export function useCharacters(campaignId: string | undefined, enabled = true) {
   });
 }
 
-/** Full character — the ruler derives movement/range data from `sheet`. */
-export interface CharacterRecord {
-  id: string;
-  name?: string;
-  sheet?: SheetV1;
-}
-
-export function useCharacter(characterId: string | null | undefined) {
-  return useQuery({
-    queryKey: ['character', characterId],
-    queryFn: () => apiGet<CharacterRecord>(`/api/characters/${characterId}`),
-    enabled: Boolean(characterId),
-  });
-}
+// The full character (the ruler's movement/range data, a player's eyes) is
+// NOT read here: `['character', id]` belongs to the sheet's `useCharacter`,
+// and a second definition of that key overwrites the sheet's record with a
+// different shape (see `characterQuery` in `features/sheet/api.ts`).
 
 /** NPC template list for token placement (GM-only prep material, FR10.1). */
 export interface NpcTemplateSummary {
@@ -540,6 +529,10 @@ export interface TileDef {
   height?: number;
   /** Colour the tile gives off — neon, sodium light, a barrel fire. */
   emissive?: string;
+  /** This ground is water: neighbouring squares of it draw as one body (see `Tile.liquid`). */
+  liquid?: 'deep' | 'shallow';
+  /** How this ground meets water beside it (see `Tile.shore`). Absent is an earth bank. */
+  shore?: 'beach' | 'bank' | 'quay' | 'pier';
   /**
    * Which of the four tools offers it — Ground, Building, Interior, Decor —
    * and so which layer it lands on. Absent on a set that predates the tools;
@@ -905,8 +898,10 @@ export interface FloorPlanResult {
       window: number;
       prop: number;
       stair: number;
-      /** Squares outside every room, painted with the outside ground. */
+      /** Squares outside every room, painted with the outside ground or an area's. */
       outside?: number;
+      /** Areas of other ground the builder painted: water, a beach, a pier. */
+      areas?: number;
       /** Decoration the builder scattered across the outside. */
       scatter?: number;
       /** Furniture the builder added to rooms the plan left bare. */

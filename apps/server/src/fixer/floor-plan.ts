@@ -74,11 +74,37 @@ export const FloorStairSchema = z.object({
 });
 
 /**
+ * A patch of other ground outside the rooms: the harbour below a quay, the
+ * pond in a park, the row of beach front along it, a pier of boards reaching
+ * into the water, a lawn, a road.
+ *
+ * One ground tile for the whole outside was enough for a warehouse in a car
+ * park and useless at the water's edge — "a dock with a pier out into the
+ * harbour" is at least three grounds, and the renderer only draws a quay wall,
+ * a pier's pilings or a beach running under when the water and the land are
+ * painted side by side (`stage/water.ts`). Areas are the plan's way to say so.
+ * Unlike a room an area has no walls, so one square wide is a legal area: that
+ * is exactly what a row of pier wall along the water is.
+ */
+export const FloorAreaSchema = z.object({
+  ground: z
+    .string()
+    .min(1)
+    .max(60)
+    .describe('A ground tile id from the palette for this patch: water, a beach front or pier wall along it, pier boards, a lawn, a road'),
+  x: Square.describe('Left edge, in grid squares'),
+  y: Square.describe('Top edge, in grid squares'),
+  w: z.number().int().min(1).max(999).describe('Width in squares; 1 is a single row or column'),
+  h: z.number().int().min(1).max(999).describe('Height in squares; 1 is a single row or column'),
+});
+export type FloorArea = z.infer<typeof FloorAreaSchema>;
+
+/**
  * Everything that is not a room. A first draft used to leave the rest of the
  * grid unpainted — a building floating in black — so the GM's second job was
  * always "fill in the outside by hand". Now the plan says what the outside
- * is made of and what lies about on it, and the compiler paints every
- * square of the grid on the first pass.
+ * is made of, where it changes, and what lies about on it, and the compiler
+ * paints every square of the grid on the first pass.
  */
 export const FloorOutsideSchema = z.object({
   ground: z
@@ -86,12 +112,17 @@ export const FloorOutsideSchema = z.object({
     .min(1)
     .max(60)
     .optional()
-    .describe('A ground tile id from the palette for every square that is not inside a room: asphalt, grass, water, pier boards'),
+    .describe('A ground tile id from the palette for the land everything outside the rooms and areas stands on: asphalt, a quay, grass, a gravel path'),
+  areas: z
+    .array(FloorAreaSchema)
+    .max(40)
+    .default([])
+    .describe('Patches of other ground outside the rooms, painted in order so a later area lies on top of an earlier one: water, a row of beach front or pier wall along it, a pier into it. Rooms are built over areas'),
   scatter: z
     .array(z.string().min(1).max(60))
     .max(12)
     .default([])
-    .describe('Decoration tile ids that belong on that ground; the builder scatters a few across the outside'),
+    .describe('Decoration tile ids that belong outside; the builder scatters a few on the ground each one fits, and puts nothing on water that does not float there'),
 });
 
 export const FloorPlanSchema = z.object({
@@ -99,7 +130,9 @@ export const FloorPlanSchema = z.object({
   rooms: z.array(FloorRoomSchema).min(1).max(60),
   openings: z.array(FloorOpeningSchema).max(200).default([]),
   stairs: z.array(FloorStairSchema).max(20).default([]),
-  outside: FloorOutsideSchema.default({ scatter: [] }),
+  // Zod 4: a default is the OUTPUT and is not parsed, so it spells out every
+  // defaulted field of the outside.
+  outside: FloorOutsideSchema.default({ areas: [], scatter: [] }),
   notes: z.string().max(2000).default(''),
 });
 export type FloorPlan = z.infer<typeof FloorPlanSchema>;
@@ -134,8 +167,10 @@ export interface CompiledFloor {
     /** Props the plan placed by hand, inside rooms. */
     prop: number;
     stair: number;
-    /** Squares outside every room, painted with the outside ground. */
+    /** Squares outside every room, painted with the outside ground or an area's. */
     outside: number;
+    /** Areas of other ground that were painted (dropped ones are warnings). */
+    areas: number;
     /** Decoration the compiler scattered across the outside. */
     scatter: number;
     /** Furniture the compiler added to rooms the plan left bare. */
@@ -208,7 +243,7 @@ export function compileFloorPlan(
   const ground: Record<string, string> = {};
   const structure: Record<string, string> = {};
   const object: Record<string, string> = {};
-  const counts = { floor: 0, wall: 0, door: 0, window: 0, prop: 0, stair: 0, outside: 0, scatter: 0, dressed: 0 };
+  const counts = { floor: 0, wall: 0, door: 0, window: 0, prop: 0, stair: 0, outside: 0, areas: 0, scatter: 0, dressed: 0 };
 
   const grounds = set.tiles.filter((t) => categoryOf(t) === 'ground');
   const defaultFloor = (grounds[0] && toSlot(set, grounds[0].id)) ?? 'ground/1';
@@ -349,9 +384,10 @@ export function compileFloorPlan(
 
   // --- The outside: every square not inside a room is painted too ------------
   // A first draft used to stop at the walls and leave the rest of the grid
-  // black. The plan names the outside ground (or the set's best guess), the
-  // compiler paints it edge to edge, then scatters the decoration that belongs
-  // on it — clear of doors, so nothing blocks a way in.
+  // black. The plan names the outside ground (or the set's best guess) and
+  // the areas of other ground on it; the compiler paints them edge to edge,
+  // then scatters the decoration that belongs on each — clear of doors, so
+  // nothing blocks a way in.
   const outsideCells: string[] = [];
   let outsideTile: Tile | null = null;
   if (plan.outside.ground) {
@@ -360,12 +396,42 @@ export function compileFloorPlan(
     else warnings.push(`"${plan.outside.ground}" is not a ground tile in ${set.name} — the outside uses the set's own`);
   }
   outsideTile ??= outsideGroundFor(set);
-  const outsideSlot = outsideTile ? (toSlot(set, outsideTile.id) ?? defaultFloor) : defaultFloor;
+
+  // Areas, in order, so a later one lies on top: a pier over the water it
+  // reaches into. Rooms were painted first and keep their squares, which is
+  // the same thing as building them over the areas.
+  const areaAt = new Map<string, Tile>();
+  plan.outside.areas.forEach((area, i) => {
+    const label = `area ${i + 1} (${area.ground})`;
+    const tile = resolveTile(set, area.ground);
+    if (!tile || categoryOf(tile) !== 'ground') {
+      warnings.push(`${label}: "${area.ground}" is not a ground tile in ${set.name} — dropped, the outside ground shows there`);
+      return;
+    }
+    if (area.x >= grid.cols || area.y >= grid.rows) {
+      warnings.push(`${label} falls outside the ${grid.cols}x${grid.rows} grid — dropped`);
+      return;
+    }
+    const w = Math.min(area.w, grid.cols - area.x);
+    const h = Math.min(area.h, grid.rows - area.y);
+    if (w !== area.w || h !== area.h) {
+      warnings.push(`${label} clamped to the grid: ${area.w}x${area.h} at ${area.x},${area.y} → ${w}x${h} at ${area.x},${area.y}`);
+    }
+    for (let c = area.x; c < area.x + w; c += 1) {
+      for (let r = area.y; r < area.y + h; r += 1) areaAt.set(key(c, r), tile);
+    }
+    counts.areas += 1;
+  });
+
+  /** The ground tile of each outside square — what the scatter asks of it. */
+  const outsideGround = new Map<string, Tile | null>();
   for (let c = 0; c < grid.cols; c += 1) {
     for (let r = 0; r < grid.rows; r += 1) {
       const k = key(c, r);
       if (ground[k] !== undefined) continue;
-      ground[k] = outsideSlot;
+      const tile = areaAt.get(k) ?? outsideTile;
+      ground[k] = tile ? (toSlot(set, tile.id) ?? defaultFloor) : defaultFloor;
+      outsideGround.set(k, tile);
       outsideCells.push(k);
     }
   }
@@ -383,26 +449,45 @@ export function compileFloorPlan(
   };
 
   // What may lie about outside: the plan's list, else every decoration the
-  // set says belongs on that ground (or on anything), never a light.
-  const named = plan.outside.scatter
+  // set has that is not a light and does not want a wall at its back. Each
+  // square is asked about its OWN ground — the outside is not one ground any
+  // more — so a bench lands on the quay, a buoy only on the harbour it is
+  // meant for, and nothing that does not float goes in the water.
+  const named = [...new Set(plan.outside.scatter)]
     .map((id) => resolveTile(set, id))
     .filter((t): t is Tile => t !== null && (categoryOf(t) === 'decoration' || categoryOf(t) === 'interior'));
   for (const id of plan.outside.scatter) {
     if (!resolveTile(set, id)) warnings.push(`"${id}" is not a tile in ${set.name} — left out of the scatter`);
   }
-  const fits = (t: Tile): boolean => !t.placement?.on || (outsideTile !== null && t.placement.on.includes(outsideTile.id));
-  const scatterPool =
+  const fits = (t: Tile, g: Tile | null): boolean =>
+    t.placement?.on && t.placement.on.length > 0 ? g !== null && t.placement.on.includes(g.id) : g?.liquid === undefined;
+  const fitsSomewhere = (t: Tile): boolean => [...outsideGround.values()].some((g) => fits(t, g));
+  // Only a real mismatch is worth the GM's attention: a floor whose rooms
+  // fill the grid has no outside at all, and every tile "fits nowhere" there.
+  for (const t of outsideCells.length > 0 ? named : []) {
+    if (!fitsSomewhere(t)) {
+      warnings.push(`${t.name} fits none of the ground outside (it stands on ${t.placement?.on?.join('/') ?? 'dry ground'}) — left out of the scatter`);
+    }
+  }
+  const scatterPool = (
     named.length > 0
       ? named
-      : set.tiles.filter((t) => categoryOf(t) === 'decoration' && t.emissive === undefined && !t.placement?.againstWall && fits(t));
-  if (scatterPool.length > 0 && outsideCells.length > 0) {
-    const want = Math.min(SCATTER_MAX, Math.floor(outsideCells.length / SCATTER_PER_SQUARES));
-    const order = [...outsideCells].sort(() => rand() - 0.5);
+      : set.tiles.filter((t) => categoryOf(t) === 'decoration' && t.emissive === undefined && !t.placement?.againstWall)
+  ).filter(fitsSomewhere);
+  // How much to scatter comes from the squares something can stand on, not
+  // from the whole outside: a grid that is mostly harbour must not pack all
+  // of its decoration onto the strip of quay that is left.
+  const standable = outsideCells.filter((k) => scatterPool.some((t) => fits(t, outsideGround.get(k) ?? null)));
+  if (scatterPool.length > 0 && standable.length > 0) {
+    const want = Math.min(SCATTER_MAX, Math.floor(standable.length / SCATTER_PER_SQUARES));
+    const order = [...standable].sort(() => rand() - 0.5);
     for (const k of order) {
       if (counts.scatter >= want) break;
       const [c, r] = k.split(',').map(Number) as [number, number];
       if (object[k] !== undefined || structure[k] !== undefined || nearDoor(c, r)) continue;
-      const tile = scatterPool[Math.floor(rand() * scatterPool.length)]!;
+      const g = outsideGround.get(k) ?? null;
+      const fitting = scatterPool.filter((t) => fits(t, g));
+      const tile = fitting[Math.floor(rand() * fitting.length)]!;
       object[k] = toSlot(set, tile.id) ?? tile.id;
       counts.scatter += 1;
     }
@@ -482,12 +567,14 @@ const SYSTEM_PROMPT = [
   "4. Doors and windows are openings in a named room's wall: which wall (n, s, e, w), how many squares along from that wall's top or left end, how wide. Never at a corner (offset 0). Every room the runners are meant to enter needs a door, and two rooms that share a wall need a door in it.",
   '5. Floor and prop tiles come ONLY from the palette in the request — use the ids exactly as written. Props stand on floor squares inside a room, never on a wall, one per square, and only where the description calls for furniture or dressing.',
   '6. Stairs go on a floor square inside a room, only if the description asks for another floor.',
-  '7. Prefer fewer, larger, correct rooms — and EVERY square of the grid ends up painted. Rooms cover what is built; "outside.ground" names the ground tile for everything else (asphalt, grass, water, pier boards — whatever the description implies), and "outside.scatter" lists a few decoration ids that belong on that ground, which the builder scatters across it.',
+  '7. Prefer fewer, larger, correct rooms — and EVERY square of the grid ends up painted. Rooms cover what is built. "outside.ground" names the land everything else stands on (asphalt, a quay, grass — whatever the description implies). "outside.areas" are rectangles of OTHER ground outside the rooms, painted in order so a later area lies on top of an earlier one: the water of a harbour or a pond, a one-square row of beach front or pier wall along the water\'s edge, a pier as a thin area of pier boards reaching into the water, a lawn, a road. Rooms are built over areas. "outside.scatter" lists a few decoration ids that belong outside; the builder scatters each on ground it fits and never puts anything on water that does not float there.',
+  '   Example of areas (these ids are from a marina palette — always use the ids in YOUR palette): a 30x20 grid with the harbour to the south is outside.ground "quay" with areas [{"ground":"harbour","x":0,"y":12,"w":30,"h":8},{"ground":"pierwall","x":0,"y":11,"w":30,"h":1},{"ground":"planking","x":13,"y":11,"w":3,"h":6}] — the pier comes after the water, so it lies on top of it and stops short of the far edge.',
   '8. Dress every room: at least one prop per ten floor squares, chosen for what the room is — furniture against the walls, the rest in the open, nothing in front of a door. A bare room is a mistake.',
   '9. Name rooms the way a GM says them out loud ("loading dock", "break room"); the GM reads those names back.',
 ].join('\n');
 
-function palette(set: Tileset): string {
+/** The palette as the model reads it — exported so what it is told can be pinned. */
+export function floorPalette(set: Tileset): string {
   // Each tile with the one fact the model needs to place it: what it stands
   // on, whether it wants a wall at its back.
   const where = (t: Tile): string => {
@@ -495,6 +582,13 @@ function palette(set: Tileset): string {
     if (t.placement?.on && t.placement.on.length > 0) bits.push(`on ${t.placement.on.join('/')}`);
     if (t.placement?.againstWall) bits.push('against a wall');
     if (t.emissive) bits.push('a light');
+    // Water and the edges of it: the renderer draws painted water as one body
+    // and drops the land beside it to the waterline, so the model should know
+    // which squares are water and which ground makes a beach or a pier wall.
+    if (t.liquid) bits.push(`${t.liquid} water`);
+    if (t.shore === 'beach') bits.push('runs into water as a beach');
+    if (t.shore === 'pier') bits.push('meets water as a pier wall');
+    if (t.shore === 'quay') bits.push('meets water as a quay wall');
     return bits.length > 0 ? ` (${bits.join(', ')})` : '';
   };
   const list = (category: string) =>
@@ -506,7 +600,7 @@ function palette(set: Tileset): string {
   const outside = outsideGroundFor(set);
   return [
     `Tileset: ${set.name}.`,
-    'Ground tiles (a room\'s "floor", and "outside.ground"):',
+    'Ground tiles (a room\'s "floor", "outside.ground", and an area\'s "ground"):',
     list('ground'),
     'Interior tiles (furniture — a prop\'s "tile"):',
     list('interior'),
@@ -531,7 +625,7 @@ function userPrompt(
       ? `This floor already has ${painted} painted squares; your plan is laid on top of them, so leave room or say what you replace.`
       : 'This floor is empty.',
     '',
-    palette(set),
+    floorPalette(set),
     '',
     `The GM describes the floor: ${description.trim()}`,
     '',

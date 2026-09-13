@@ -485,7 +485,9 @@ export default async function booksPlugin(app: FastifyInstance): Promise<void> {
 
   // --- byte-range PDF streaming (FR11.3) ----------------------------------
 
-  app.get('/files/books/:code', async (req, reply) => {
+  // Never compressed, whatever the stored mime says: a compressed 206 is not
+  // the bytes the Range header asked for.
+  app.get('/files/books/:code', { compress: false }, async (req, reply) => {
     const { code } = req.params as { code: string };
     const book = await readableBook(req, { code });
     if (!book.attachmentId) throw httpError(404, 'not_found', 'book has no file');

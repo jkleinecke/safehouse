@@ -432,7 +432,7 @@ for a hole.
 An object used to be one of four blobs — a box, a post, a squat cylinder,
 a post with a crown — and a desk, a car and a pallet stack were the same
 box in three browns. Every object tile now names a **prop** design
-(`TILE_PROPS`, forty-eight of them) and `stage/props.ts` builds it from
+(`TILE_PROPS`, eighty of them) and `stage/props.ts` builds it from
 small solids placed in cell space: a slab on two pedestals with a monitor;
 a seat with a back and four legs; a low body with a glazed cabin, headlights
 and wheels; a cargo box with a cab; a trunk under a jittered crown; a pole
@@ -471,6 +471,101 @@ a face: the lamp head's pool on the ground, the screen of a terminal, the
 rim of a fire drum. The pool and bloom are then drawn by the same unlit pass
 as every other light, so a street lamp lights the pavement the way a neon
 sign lights a wall.
+
+**Detail comes in three tiers, like everything else.** The second pass
+(2026-09-13) gave every design the same hierarchy an environment artist
+works to at small size: a silhouette first; then secondary forms — plinths,
+lids, rims, bevels, frames, cushions, hinges, wheels with hubs, windows with
+frames; then only the tertiary accents that still read at table zoom —
+seams, rivets, vents, stencils, a mug on a desk, papers, a sticker on a
+locker, rust runs, a folded blanket. Material detail stays inside the tier-2
+budget of its surface (shades of the tile's own tones, ink only for
+hairlines); hard-coded colours are glass, foliage or small fixed materials
+held to rule 7. Every design varies per cell through `k.rnd` — a turned
+monitor, a jacket over a chair, a cloth on one table in four, crates stacked
+three ways, a pitchfork in one hay bale — so neighbouring copies are two
+things rather than one stamp. The lit designs moved their fixture face to
+the part that is actually the lamp (a strip across the top of a vending
+window, the head of a work light) so the glow no longer washes out the
+object under it.
+
+The budget is a per-prop draw-call ceiling, checked over hundreds of cell
+seeds at every height the catalogue uses, lit and unlit: at most 110 calls
+in isometric (the forklift's pallet-and-crate variant, the busiest, is 103)
+and 30 in plan. On average a prop went from about 33 calls to about 52 in
+isometric and from 7 to 15 in plan. On a laptop canvas the grid still holds
+its frame budget with no frame over 50 ms while panning, zooming or
+dragging (`e2e/perf.spec.ts`).
+
+A prop afloat — a boat, a skiff, a buoy — is drawn by the same design with a
+`sink`, so it sits in the recessed water rather than on it.
+
+## Water is a body of water
+
+A water tile used to be a floor with three wavy lines printed on it, and a
+harbour painted forty squares wide was forty framed pictures of water sitting
+flush with the quay — the grid was the most visible thing on its surface. A
+ground tile marked `liquid` (`TILE_LIQUIDS`: `deep`, `shallow`) is drawn by
+`stage/water.ts` instead, and every square of it knows its neighbours:
+
+- **One surface.** Each square's colour is a field: distance from the
+  nearest land, known at the centre and estimated at the corners and edge
+  midpoints from the squares that meet there, with each point's palette the
+  blend of the water around it. A deep tile beside a shallows tile shelves
+  across two squares. The square is cut into quads by how far that colour
+  moves across it — one fill for open water, up to 4×4 on a steep shelf —
+  because at three a side the steps read as bands parallel to the shore on a
+  dark surface, and at four each step is under a value point and a half.
+- **Depth from the shore.** Water is the tile's `deep` colour out past about
+  three squares and lightens linearly toward its accent at the shore; where a
+  beach runs under it the sand shows through. A reed bed is painted in its
+  plants' colours but stands in the water beside it.
+- **Ripples in world space.** A lit crest and a darker trough as dashes along
+  lines of constant screen height, placed by world position, so they cross
+  square borders unbroken. None in the first square off the shore, where the
+  foam is.
+- **Foam follows the shoreline**, wobbling as a function of position along it
+  (so it joins square to square), wrapping round corners, lacier on a beach.
+
+**The land drops to the water.** In isometric the water sits below the ground,
+so the land's two faces turned toward the viewer show between its edge and the
+waterline. Seen from the iso camera a pool sunk `d` cells shows its surface as
+its footprint slid down the screen by `d`, and whatever fills the footprint
+above the slid surface is the far wall — and sliding down the screen is exactly
+a step of `(d, d)` in grid space. So a far wall is a band `d` wide along the
+water square's two far edges, drawn in the water square after the land behind
+it, with nothing to sort. What the wall is made of comes from the land's
+`shore` (`TILE_SHORES`):
+
+| Shore | Drop | Wall | On the land's top |
+| --- | --- | --- | --- |
+| `quay` | 0.30 | coursed blocks, staggered joints, weed at the waterline, a lit coping | pale jointed coping stones |
+| `pier` | 0.30 | vertical boards, a waler, slime at the waterline, round pilings every half square with a ring of water at their feet | a bolted capping beam |
+| `bank` (default) | 0.14 | dark earth with a stone and a root, the turf's thickness and ragged tongues of grass over the lip | a damp rim |
+| `beach` | 0 | none — it runs under | wet sand in three bands and a swash line with wrack |
+
+Plan view has no drop (`heightRise` is zero) and gets the architect's symbols
+instead: a quay's heavy line and wall-thickness line, a pier's line and its
+posts, a bank's hand-drawn line; a beach is its wet band and swash line.
+
+Floating things — a boat, a skiff, a buoy — sit `WATER_LEVEL` (0.2 cells) below
+the land in isometric: the prop kit takes a `sink`, and the contact shadow falls
+on the water where the hull is, not on the floor it would have been on.
+
+Every waterside set has true water (`deep` and `shallow`), a **Beach front**
+(`beach`) and a **Pier wall** (`pierwall`), and every board and concrete ground
+there says how it meets the water — boards are piers, concrete is a quay, sand
+is a beach, only earth is left to `bank`. The plaza's fountain basin is water
+in a stone kerb; the farm pond is water in earth.
+
+**Cost.** A water-heavy 40×30 waterfront is about two fifths more draw calls
+than the printed water was (11.7k → 16.2k in isometric, most of it the shelf's
+quads). The water is resolved once
+per stroke and cached on the stroke's input (about 2.6ms on that map); the
+signatures fold in what a square's drawing depends on — its distance from
+land, its neighbours' shores and palettes — so a quay painted three squares
+away still redraws the water it changed while the dirty rule stays one square
+wide.
 
 ## What it costs, and how the stage pays for it
 

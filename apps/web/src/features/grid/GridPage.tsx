@@ -15,7 +15,6 @@ import { getSession } from '../../api/session.js';
 import { getLiveSocket } from '../../live/socket.js';
 import {
   fileUrl,
-  useCharacter,
   useDeleteToken,
   useDoorOp,
   useGridLiveSync,
@@ -54,6 +53,7 @@ import Toolbar, { ViewControls } from './hud/Toolbar.js';
 import BuildProgress from './gm/BuildProgress.js';
 import { useGridShortcuts } from './hud/useGridShortcuts.js';
 import { composeStageState, resolveSceneId } from './hydration.js';
+import { useCharacter } from '../sheet/api.js';
 import {
   movementFrom,
   rangeReadout,

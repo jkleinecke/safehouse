@@ -15,9 +15,10 @@ import { useQuery } from '@tanstack/react-query';
 import { useLocation } from 'react-router-dom';
 import { apiGet } from '../../../api/client.js';
 import type { CodexPage } from '../../codex/api.js';
-import { useCharacter, useScene, useSceneTokens } from '../../grid/api.js';
+import { useScene, useSceneTokens } from '../../grid/api.js';
 import { useGridStore } from '../../grid/store.js';
 import { useActiveSceneId } from '../../grid/useGridLive.js';
+import { useCharacter } from '../../sheet/api.js';
 
 /**
  * The codex page under the dock, read directly. The codex feature is a lazy

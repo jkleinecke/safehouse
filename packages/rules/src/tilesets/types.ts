@@ -424,6 +424,49 @@ export const TILE_PROPS = [
 export type TileProp = (typeof TILE_PROPS)[number];
 
 /**
+ * What a ground tile of WATER is.
+ *
+ * Water used to be a floor with waves printed on it: a harbour painted forty
+ * squares wide was forty framed pictures of water, each with its own three
+ * ripples, sitting flush with the quay beside it. Marking a tile as a liquid
+ * is what makes the renderer draw painted water as ONE body — ripples running
+ * across square borders, the colour deepening away from the shore, foam
+ * following the shoreline, and the land around it dropping to the waterline
+ * (see `TILE_SHORES`). Boats and buoys float in it, a little below the land.
+ *
+ * `deep` is a harbour or the middle of a lake — dark, no bottom. `shallow` is
+ * a margin, a reed bed or a fountain basin: lighter, with the bottom showing
+ * through. Either way the square is still a floor to the rules; swimming is a
+ * test the GM calls, not a wall.
+ *
+ * A VALUE, not just a type, for the same reason as `TILE_PATTERNS`.
+ */
+export const TILE_LIQUIDS = ['deep', 'shallow'] as const;
+
+export type TileLiquid = (typeof TILE_LIQUIDS)[number];
+
+/**
+ * How a piece of ground meets water painted beside it — what the renderer
+ * draws where the land stops.
+ *
+ *  - `beach`  sand running down under the water: no wall, a dark band of wet
+ *             sand, a swash line of foam and wrack, the bottom showing through
+ *             the shallows.
+ *  - `bank`   earth: a low drop to the waterline with the grass hanging over
+ *             the lip. What any ground that says nothing gets, because most
+ *             land meets water that way.
+ *  - `quay`   a stone or concrete wall down to the water: coursed blocks, a
+ *             pale coping along the top, weed at the waterline.
+ *  - `pier`   a timber wall on pilings: vertical boards, a waler, round posts
+ *             standing out of the water, a capping beam along the deck edge.
+ *
+ * Only meaningful on ground that is not itself a liquid.
+ */
+export const TILE_SHORES = ['beach', 'bank', 'quay', 'pier'] as const;
+
+export type TileShore = (typeof TILE_SHORES)[number];
+
+/**
  * Footprints that occupy only part of their cell and therefore need floor
  * drawn underneath them — otherwise every one is a hole in the map.
  */
@@ -506,6 +549,16 @@ export interface Tile {
    * which is a light and is rationed like one (`SET_EMISSIVE_MAX`).
    */
   sheen?: string;
+  /**
+   * This ground is water — see `TILE_LIQUIDS`. Neighbouring liquid squares
+   * draw as one body of water, whichever liquid tiles they are.
+   */
+  liquid?: TileLiquid;
+  /**
+   * How this ground meets water painted beside it — see `TILE_SHORES`.
+   * Absent is `bank`.
+   */
+  shore?: TileShore;
   /** A wall stops a token; a floor does not. Doors block until opened. */
   blocksMovement?: boolean;
   /**

@@ -73,6 +73,44 @@ describe('coerceFloorPlan', () => {
     expect(checked.data.openings[0]).toMatchObject({ room: 'Yard', wall: 'n', offset: 1, width: 20, kind: 'door' });
     expect(checked.data.stairs[0]!.direction).toBe('up');
   });
+
+  it('reads the areas of other ground however they are spelled, and drops the ones it cannot place', () => {
+    const inOutside = coerceFloorPlan(
+      {
+        title: 'Pier',
+        rooms: [{ name: 'Shed', x: 0, y: 0, w: 4, h: 4 }],
+        outside: {
+          tile: 'quay',
+          regions: [
+            { tile: 'harbour', left: 0, top: '12', width: 30.4, height: 8 },
+            { ground: 'pierwall', x: 0, y: 11, w: 0, h: 1 }, // a zero width is still a row
+            { ground: 'planking', x: 13 }, // no size: dropped
+          ],
+        },
+      },
+      ROOM_KINDS,
+    );
+    const a = FloorPlanSchema.safeParse(inOutside);
+    expect(a.success).toBe(true);
+    if (!a.success) return;
+    expect(a.data.outside.ground).toBe('quay');
+    expect(a.data.outside.areas).toEqual([
+      { ground: 'harbour', x: 0, y: 12, w: 30, h: 8 },
+      { ground: 'pierwall', x: 0, y: 11, w: 1, h: 1 },
+    ]);
+    // At the top of the plan, as "zones", with the outside a bare string.
+    const top = FloorPlanSchema.safeParse(
+      coerceFloorPlan(
+        { title: 'Pond', rooms: [{ name: 'Hut', x: 0, y: 0, w: 3, h: 3 }], outside: 'grass', zones: [{ floor: 'pond', x: 4, y: 4, w: 5, h: 3 }] },
+        ROOM_KINDS,
+      ),
+    );
+    expect(top.success).toBe(true);
+    if (top.success) expect(top.data.outside).toMatchObject({ ground: 'grass', areas: [{ ground: 'pond', x: 4, y: 4, w: 5, h: 3 }] });
+    // And a plan that never mentions areas still parses, with none.
+    const none = FloorPlanSchema.safeParse(coerceFloorPlan({ title: 'T', rooms: [{ name: 'R', x: 0, y: 0, w: 3, h: 3 }] }, ROOM_KINDS));
+    expect(none.success && none.data.outside.areas).toEqual([]);
+  });
 });
 
 describe('issueLines', () => {
@@ -96,7 +134,7 @@ describe('repairJson', () => {
   });
 
   it('sends the bad answer and the issues back on the same thread at temperature 0, and parses the fix', async () => {
-    const chat = vi.fn(async () => turn('```json\n{"title":"T","premise":"P","lore":[],"npcs":[],"scenes":[]}\n```'));
+    const chat = vi.fn(async (_req: unknown) => turn('```json\n{"title":"T","premise":"P","lore":[],"npcs":[],"scenes":[]}\n```'));
     const r = ArchitectOutlineSchema.safeParse({ title: 'T', premise: 'P', lore: [{ title: 'L', kind: 'nope', summary: 'S' }] });
     if (r.success) throw new Error('fixture should fail');
     const out = await repairJson(

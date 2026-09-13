@@ -229,10 +229,13 @@ export function coerceFloorPlan(raw: unknown, roomKinds: readonly string[]): unk
   const notes = str(raw['notes'] ?? raw['description'], 2000);
   out['notes'] = notes ?? '';
 
-  // The outside: a ground id and a scatter list, however the model spelled
-  // them ("exterior", "ground", a bare string for the whole thing).
+  // The outside: a ground id, the areas of other ground on it, and a scatter
+  // list, however the model spelled them ("exterior", "ground", a bare string
+  // for the whole thing; "regions" or "zones" for the areas, inside the
+  // outside or at the top of the plan).
   const rawOutside = raw['outside'] ?? raw['exterior'] ?? raw['ground'];
-  const outside: Rec = { scatter: [] };
+  const outside: Rec = { areas: [], scatter: [] };
+  let rawAreas: unknown = raw['areas'] ?? raw['regions'] ?? raw['zones'];
   if (typeof rawOutside === 'string') {
     const g = str(rawOutside, 60);
     if (g) outside['ground'] = g;
@@ -240,7 +243,26 @@ export function coerceFloorPlan(raw: unknown, roomKinds: readonly string[]): unk
     const g = str(rawOutside['ground'] ?? rawOutside['tile'] ?? rawOutside['floor'], 60);
     if (g) outside['ground'] = g;
     outside['scatter'] = strList(rawOutside['scatter'] ?? rawOutside['props'] ?? rawOutside['decoration'], 12, 60);
+    rawAreas = rawOutside['areas'] ?? rawOutside['regions'] ?? rawOutside['zones'] ?? rawAreas;
   }
+  outside['areas'] = (Array.isArray(rawAreas) ? rawAreas : [])
+    .filter(isRec)
+    .map((a) => {
+      const area: Rec = {};
+      const g = str(a['ground'] ?? a['tile'] ?? a['floor'], 60);
+      const x = int(a['x'] ?? a['left'], 0, 999);
+      const y = int(a['y'] ?? a['top'], 0, 999);
+      const w = int(a['w'] ?? a['width'], 1, 999);
+      const h = int(a['h'] ?? a['height'], 1, 999);
+      if (g) area['ground'] = g;
+      if (x !== undefined) area['x'] = x;
+      if (y !== undefined) area['y'] = y;
+      if (w !== undefined) area['w'] = w;
+      if (h !== undefined) area['h'] = h;
+      return area;
+    })
+    .filter((a) => a['ground'] && a['x'] !== undefined && a['y'] !== undefined && a['w'] !== undefined && a['h'] !== undefined)
+    .slice(0, 40);
   out['outside'] = outside;
 
   const rooms = Array.isArray(raw['rooms']) ? raw['rooms'] : [];

@@ -19,8 +19,10 @@ import {
   TILESETS,
   TILE_HEIGHTS,
   TILE_KINDS,
+  TILE_LIQUIDS,
   TILE_PATTERNS,
   TILE_PROPS,
+  TILE_SHORES,
   cellKey,
   layerOf,
   parseCellKey,
@@ -335,5 +337,78 @@ describe('props are designs the renderer draws', () => {
       // …and a set is a world, so its designs must not all be one thing.
       expect(new Set(designed.map((t) => t.prop)).size, set.id).toBeGreaterThanOrEqual(6);
     }
+  });
+});
+
+describe('water is a body, and the land knows how it meets it', () => {
+  /** The three places a campaign goes to the water. */
+  const WATERSIDE = ['marina', 'park', 'lake'];
+
+  it('lists each liquid and each shore once', () => {
+    expect(new Set(TILE_LIQUIDS).size).toBe(TILE_LIQUIDS.length);
+    expect(new Set(TILE_SHORES).size).toBe(TILE_SHORES.length);
+  });
+
+  it('marks water only on the ground, and shores only on dry ground', () => {
+    // The renderer reads `liquid` and `shore` off the ground layer and nowhere
+    // else: a liquid prop would be drawn as a floor, and a shore on water
+    // would be a quay wall standing in the harbour.
+    for (const { setId, tile } of ALL_TILES) {
+      if (tile.liquid !== undefined) {
+        expect(layerOf(tile), `${setId}/${tile.id}`).toBe('ground');
+        expect(TILE_LIQUIDS).toContain(tile.liquid);
+        expect(tile.shore, `${setId}/${tile.id} is water with a shore`).toBeUndefined();
+      }
+      if (tile.shore !== undefined) {
+        expect(layerOf(tile), `${setId}/${tile.id}`).toBe('ground');
+        expect(TILE_SHORES).toContain(tile.shore);
+      }
+    }
+  });
+
+  it('keeps water a floor you can wade into — swimming is a test, not a wall', () => {
+    for (const { setId, tile } of ALL_TILES) {
+      if (tile.liquid === undefined) continue;
+      expect(stopsMovement(tile), `${setId}/${tile.id}`).toBe(false);
+      expect(stopsSight(tile), `${setId}/${tile.id}`).toBe(false);
+    }
+  });
+
+  it('makes every stretch of water at the waterside a true body of water', () => {
+    for (const id of WATERSIDE) {
+      const set = tilesetById(id)!;
+      const water = set.tiles.filter((t) => layerOf(t) === 'ground' && (t.pattern === 'water' || t.pattern === 'reeds'));
+      expect(water.length, id).toBeGreaterThanOrEqual(2);
+      for (const t of water) expect(t.liquid, `${id}/${t.id} is painted water that is not a liquid`).toBeDefined();
+      // Deep and shallow both, so a GM can shelve a shore by hand.
+      expect(new Set(water.map((t) => t.liquid)), id).toEqual(new Set(['deep', 'shallow']));
+    }
+  });
+
+  it('gives every waterside set a beach front and a pier wall', () => {
+    for (const id of WATERSIDE) {
+      const set = tilesetById(id)!;
+      const beach = set.tiles.find((t) => t.id === 'beach');
+      const pier = set.tiles.find((t) => t.id === 'pierwall');
+      expect(beach?.name, id).toBe('Beach front');
+      expect(beach?.shore, id).toBe('beach');
+      expect(pier?.name, id).toBe('Pier wall');
+      expect(pier?.shore, id).toBe('pier');
+      // Built from: the sets' own boards and sand, not a new material.
+      expect(beach?.pattern, id).toBe('sand');
+      expect(pier?.pattern, id).toBe('planks');
+    }
+  });
+
+  it('says how the made ground at the waterside meets the water', () => {
+    // Boards are piers and concrete is a quay; only earth is left to `bank`.
+    for (const id of WATERSIDE) {
+      for (const t of tilesetById(id)!.tiles) {
+        if (layerOf(t) !== 'ground' || t.liquid !== undefined || t.emissive !== undefined) continue;
+        if (t.pattern === 'planks') expect(t.shore, `${id}/${t.id}`).toBe('pier');
+        if (t.pattern === 'sand') expect(t.shore, `${id}/${t.id}`).toBe('beach');
+      }
+    }
+    expect(tileById('marina', 'quay')?.shore).toBe('quay');
   });
 });

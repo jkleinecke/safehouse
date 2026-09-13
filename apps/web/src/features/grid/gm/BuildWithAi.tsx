@@ -34,6 +34,7 @@ export function describePlan(plan: FloorPlanResult['plan']): string {
   if (c.stair > 0) parts.push(plural(c.stair, 'stair'));
   // The outside is painted too (every square, first pass), and dressed.
   if ((c.outside ?? 0) > 0) parts.push(`${c.outside} outside`);
+  if ((c.areas ?? 0) > 0) parts.push(plural(c.areas ?? 0, 'area'));
   if ((c.scatter ?? 0) > 0) parts.push(`${c.scatter} scattered`);
   return parts.join(' · ');
 }

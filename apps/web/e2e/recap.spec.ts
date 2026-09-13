@@ -96,19 +96,31 @@ async function signIn(page: Page): Promise<void> {
   await page.waitForURL(`**/c/${stack.campaignId}/gm`);
 }
 
-/** Ask the Fixer for a recap from its own panel and wait for the turn. */
+/**
+ * Ask the Fixer for a recap and wait for the turn.
+ *
+ * The chat is the dock now, the one assistant over every GM screen, so this
+ * asks where a GM would: the Fixer's own room (settings and drafts), with the
+ * dock opened by backtick. The dock hides entirely when no model is set up
+ * (NG7), so its corner chip showing is also the check that the stack has one.
+ */
 async function askForARecap(page: Page): Promise<void> {
   await page.goto(`${stack.baseUrl}/c/${stack.campaignId}/gm/fixer`);
   await expect(
-    page.getByText('The Fixer is offline'),
+    page.getByRole('button', { name: 'Open the Fixer' }),
     'the AI stack booted without a model — check LLM_BASE_URL reached the server',
-  ).toHaveCount(0);
+  ).toBeVisible();
 
-  await page.getByPlaceholder('ask the Fixer…').fill(ASK);
-  await page.getByRole('button', { name: 'send' }).click();
+  await page.keyboard.press('`');
+  const dock = page.getByTestId('fixer-dock');
+  await expect(dock, 'backtick did not open the dock').toBeVisible();
+  await expect(dock.getByText('The Fixer is offline')).toHaveCount(0);
+
+  await dock.getByPlaceholder('ask the Fixer…').fill(ASK);
+  await dock.getByRole('button', { name: 'send' }).click();
 
   // The tool chip is the Fixer saying what it reached for (FR12.17).
-  await expect(page.getByText('draft_recap').first()).toBeVisible({ timeout: 30_000 });
+  await expect(dock.getByText('draft_recap').first()).toBeVisible({ timeout: 30_000 });
 }
 
 test.describe.configure({ mode: 'serial' });
