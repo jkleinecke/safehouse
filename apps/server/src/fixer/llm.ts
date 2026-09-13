@@ -179,6 +179,13 @@ export interface ToolDefinition {
 export interface ChatRequest {
   model: string;
   messages: ChatMessage[];
+  /**
+   * A per-request thinking setting, over the campaign's. The constrained
+   * lanes (a floor plan, an outline, a map read) set it to 'off' when the
+   * GM has chosen nothing: a Qwen-style box left to think spends its whole
+   * output budget on the reasoning and cuts the JSON off mid-object.
+   */
+  effort?: AiEffort;
   tools?: ToolDefinition[];
   tool_choice?: 'auto' | 'none' | 'required';
   temperature?: number;
@@ -348,6 +355,18 @@ export function openAiEffort(config: LlmConfig): Record<string, unknown> {
 }
 
 /**
+ * The thinking setting a constrained lane sends: the GM's own when they
+ * chose one, otherwise off. A floor plan, an outline or a map read is a
+ * JSON answer against a schema — there is nothing to think about out loud,
+ * and a local model left to think spends the output budget on it and cuts
+ * the object off mid-field (seen on a fresh campaign with no AI settings).
+ */
+export function constrainedEffort(config: Pick<LlmConfig, 'effort'>): AiEffort {
+  const e = config.effort;
+  return e === undefined || e === 'default' ? 'off' : e;
+}
+
+/**
  * Exactly one system message, at the front.
  *
  * The agent builds its instructions in pieces — the standing prompt, then the
@@ -410,7 +429,7 @@ export class LlmClient {
         {
           apiKey: this.config.apiKey ?? '',
           baseUrl: this.config.baseUrl,
-          effort: this.config.effort,
+          effort: req.effort ?? this.config.effort,
         },
         req,
         opts,
@@ -424,10 +443,13 @@ export class LlmClient {
     const startedAt = Date.now();
     const signals: AbortSignal[] = [AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS)];
     if (opts.signal) signals.push(opts.signal);
+    // `effort` is ours, not the API's: it picks the reasoning fields below
+    // and must not reach the wire as an unknown key.
+    const { effort, ...wire } = req;
     const body = JSON.stringify({
-      ...req,
+      ...wire,
       messages: foldSystemMessages(req.messages),
-      ...openAiEffort(this.config),
+      ...openAiEffort({ ...this.config, effort: effort ?? this.config.effort }),
       stream: true,
       stream_options: { include_usage: true },
     });

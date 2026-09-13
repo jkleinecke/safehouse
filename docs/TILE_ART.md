@@ -158,6 +158,47 @@ Getting this backwards is the most common way to make Shadowrun look like
 generic sci-fi, because the gleaming corporate tower is the memorable image and
 the wrong default.
 
+### 10. The second catalogue (2026-09-13): sixteen sets, one style
+
+`catalogue-places.ts` adds the places a campaign spends the evenings that are
+not a heist: a tenement and a condo tower (two kinds of home), a corner café,
+a fine-dining room and a noodle counter (three ways to eat), a civic plaza, a
+city park, a marina, the countryside and the lake. Every one is held to the
+rules above by the same test, so the sixteen still read as one game:
+
+- **Two more polished sets.** The condo and the dining room are the same
+  money as the corporate tower and pale for the same reason; `style.test.ts`
+  names all three. Rule 2 still holds inside the polished tier — their lit
+  greys lean warm (R > B) and their dark greys lean cool — which is what
+  separates a pale room in this world from a grey one.
+- **Water is cool, so it is rationed.** A set that was mostly water would be
+  a cool set, and the catalogue allows about one room in five to run cool.
+  The marina, the park and the lake keep water to a few tiles against warm
+  wood, sand and stone, and stay warm-dominant (rule 5).
+- **The light budget held by hue, not by count.** Thirty-odd new practicals
+  came in amber first and pushed the catalogue past the 62% amber ceiling.
+  Downlights, chandeliers, porch lights and lanterns are gold now
+  (`#e6d58a`, hue ≈ 49°); `#ffd27a` looks gold and is amber (hue ≈ 40°).
+  Check the family, not the name.
+- **New vocabulary, forced through the renderer.** Five ground patterns
+  (cobble, marble, sand, field, reeds), two cuts (a picket fence, a railing)
+  and thirty-one prop designs (bed, counter, stove, fridge, sink, bookshelf,
+  screen, umbrella, grill, bar, menu board, chandelier, statue, hedge, bench,
+  picnic table, signpost, swings, flag, bike, rocks, fire pit, boat, canoe,
+  buoy, cleat, hay bale, tractor, well, trough, log pile). Each is a member
+  of a `Record` the painter must fill, so a missing drawing is a compile
+  error; each prop is used by at least one tile, so none is dead weight.
+- **Fences are building fabric, not walls.** A waist-high picket, railing or
+  balustrade sits in the building category with `footprint: 'wall'` and
+  `kind: 'feature'`, so it orients with its neighbours and grants cover
+  without pretending to stop sight — the wall-semantics test keeps every
+  `kind: 'wall'` tile full height.
+
+What this is not: hand-painted texture art. Every tile is still drawn from a
+palette and a pattern, which is what keeps the catalogue a few kilobytes,
+crisp at any zoom, and ours. The road to painted tiles is an image pipeline
+(an atlas per set, imported like a map image), and nothing here blocks it.
+
 ---
 
 ## The lighting model

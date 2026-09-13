@@ -64,6 +64,10 @@ export default function TokensTab({
   const templates = useNpcTemplates(campaignId, kind === 'npc_template');
 
   const center = { x: scene.grid.cols / 2, y: scene.grid.rows / 2 };
+  // "Place a token here" on the map's context menu fills this in; it is read
+  // once and cleared by the placement, so the next token goes to the centre.
+  const placeAt = useGridStore((s) => s.placeAt);
+  const dropAt = placeAt ?? center;
   const layers = layersOf(scene);
   const layerHidden = hiddenLayerTokenIds(layers);
   const saveLayers = (next: TokenLayers) =>
@@ -85,8 +89,8 @@ export default function TokensTab({
         source: kind,
         sourceId: kind === 'prop' ? null : sourceId,
         name,
-        x: center.x,
-        y: center.y,
+        x: dropAt.x,
+        y: dropAt.y,
         size,
         hidden: kind !== 'character',
         level: activeLevel,
@@ -94,6 +98,7 @@ export default function TokensTab({
       },
     });
     setPropName('');
+    if (placeAt) useGridStore.getState().setPlaceAt(null);
   };
 
   const selected = tokens.find((t) => t.id === selectedTokenId) ?? null;
@@ -145,7 +150,7 @@ export default function TokensTab({
           disabled={place.isPending || (kind !== 'prop' && !sourceId)}
           onClick={doPlace}
         >
-          place at centre
+          {placeAt ? `place at ${Math.round(placeAt.x)}, ${Math.round(placeAt.y)}` : 'place at centre'}
         </button>
         {kind === 'npc_template' && templates.isError && (
           <Empty>no NPC template endpoint yet — place a prop instead</Empty>

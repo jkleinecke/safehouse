@@ -31,22 +31,39 @@ import {
 } from '../geometry.js';
 import { inNoteFrame, noteFrame } from './notes.js';
 
-/** Never make a token harder to hit than a fingertip, however small it draws. */
+/**
+ * Never make a token harder to hit than a fingertip, however small it draws.
+ * World px, so this is the floor at 1:1; callers pass a screen-derived slop
+ * (`touchHitSlop`) that scales it up as the camera zooms out.
+ */
 const MIN_TOKEN_HIT_PX = 12;
+
+/**
+ * The hit radius a pointer needs, in world px, from what it is: a mouse
+ * lands within a few screen pixels of what it means, a finger is a smear
+ * about 22 px across. Converted through the camera scale, so a zoomed-out
+ * map — the phone's default — does not shrink the target under the finger.
+ */
+export function touchHitSlop(scale: number, pointerType: string | undefined): number {
+  const screenPx = pointerType === 'touch' ? 22 : 12;
+  return Math.max(MIN_TOKEN_HIT_PX, worldTolerance(scale, screenPx));
+}
 
 /** Topmost token whose drawn disc contains `at` (grid units). Later = on top. */
 export function hitToken(
   m: SceneMetrics,
   tokens: readonly Token[],
   at: Point,
-  opts: { onlyIds?: ReadonlySet<string> } = {},
+  opts: { onlyIds?: ReadonlySet<string>; minHitPx?: number } = {},
 ): Token | null {
   let best: Token | null = null;
   let bestDist = Infinity;
+  const floor = Math.max(MIN_TOKEN_HIT_PX, opts.minHitPx ?? 0);
   for (const token of tokens) {
     if (opts.onlyIds && !opts.onlyIds.has(token.id)) continue;
-    // The disc the renderer actually draws — not a second guess at its size.
-    const radius = Math.max(MIN_TOKEN_HIT_PX, tokenRadiusPx(m, token.size));
+    // The disc the renderer actually draws — not a second guess at its size —
+    // or the pointer's own slop, whichever is the more forgiving.
+    const radius = Math.max(floor, tokenRadiusPx(m, token.size));
     const d = worldGap(m, at, { x: token.x, y: token.y });
     if (d > radius) continue;
     // Prefer the smaller/closer token when they overlap; ties go to the later

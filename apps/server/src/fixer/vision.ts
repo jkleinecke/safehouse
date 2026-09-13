@@ -34,7 +34,7 @@ import {
   type CompiledLayout,
   type LayoutProposal,
 } from './geometry.js';
-import { chatCompletionsUrl, type LlmConfig, type ModelSlot } from './llm.js';
+import { chatCompletionsUrl, constrainedEffort, openAiEffort, type LlmConfig, type ModelSlot } from './llm.js';
 import { activeSceneRow } from './state-core.js';
 import { usageMeter } from './usage.js';
 import { visionCapability } from './vision-probe.js';
@@ -178,6 +178,11 @@ function userPrompt(scene: { name: string; grid: { cols: number; rows: number; u
   ];
   if (hint.trim().length > 0) lines.push(`The GM adds: ${hint.trim()}`);
   lines.push('Read the map image and return the layout as JSON.');
+  // The schema goes in the prompt as well as in `response_format`: a local
+  // server that does not enforce json_schema (TabbyAPI, most llama.cpp
+  // builds) otherwise gets "match the supplied schema" with nothing supplied,
+  // and answers with its own field names — x2/y2, width/height, no title.
+  lines.push('', `Schema:\n${JSON.stringify(mapVisionJsonSchema())}`);
   return lines.join('\n');
 }
 
@@ -251,6 +256,29 @@ export function extractJsonObject(text: string): unknown {
  * found nothing behind — the difference between "set Thinking to Off" and
  * "the model ignored the instruction" is the GM's next move.
  */
+/**
+ * A model that wraps its answer — `{ "floorPlan": { …the plan… } }`,
+ * `{ "result": { … } }` — is answering, not misbehaving. When the object
+ * lacks `mustHave` but has exactly one object-valued key whose value has it,
+ * that value is the answer.
+ */
+export function unwrapEnvelope(value: unknown, mustHave: string): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return value;
+  const obj = value as Record<string, unknown>;
+  if (mustHave in obj) return value;
+  const objectKeys = Object.keys(obj).filter((k) => typeof obj[k] === 'object' && obj[k] !== null && !Array.isArray(obj[k]));
+  if (objectKeys.length !== 1) return value;
+  const inner = obj[objectKeys[0]!] as Record<string, unknown>;
+  return mustHave in inner ? inner : value;
+}
+
+/** The top-level keys a rejected answer had — the one line that explains a schema miss. */
+export function describeKeys(value: unknown): string {
+  if (typeof value !== 'object' || value === null) return `a ${Array.isArray(value) ? 'list' : typeof value}`;
+  const keys = Object.keys(value as Record<string, unknown>);
+  return keys.length === 0 ? 'an empty object' : `an object with keys ${keys.slice(0, 8).join(', ')}`;
+}
+
 export function parseModelJson(raw: string, what = 'the map layout'): unknown {
   const { text, thought, unfinished } = stripThinking(raw);
   const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(text);
@@ -307,6 +335,11 @@ async function askModel(
     model,
     stream: false,
     temperature: 0,
+    // The GM's Thinking setting rides along exactly as it does on the chat
+    // path: a Qwen-style local model left to think will narrate the grid
+    // arithmetic in `content` and never reach the JSON, and the Fixer then
+    // burns every tool round retrying it.
+    ...openAiEffort({ ...config, effort: constrainedEffort(config) }),
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       {

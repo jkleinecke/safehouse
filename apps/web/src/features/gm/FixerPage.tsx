@@ -1,16 +1,16 @@
 /**
- * /c/:campaignId/gm/fixer — the Fixer's own room (M12): the streaming chat
- * with tool-call chips and the live situation snapshot on the left (with
- * the in-character NPC voice under it, FR12.6), the drafts inbox (accept /
- * edit / reject, spoiler-guard flags) on the right.
- * The same chat docks over every other screen via FixerDock.
+ * /c/:campaignId/gm/fixer — the Fixer's own room (M12): which model it talks
+ * to, and the drafts inbox (accept / edit / reject, spoiler-guard flags).
+ *
+ * The chat is not here any more. It is the dock — one assistant that follows
+ * the GM to every screen and knows what that screen shows (UX proposal 4.2)
+ * — opened with the corner chip or a backtick. The NPC voice went with it:
+ * it opens under "speak as" whenever an NPC token is selected on the map.
  */
 import { useParams } from 'react-router-dom';
 import { useCampaign } from '../../api/campaigns.js';
 import AiSettings from './fixer/AiSettings.js';
 import DraftsInbox from './fixer/DraftsInbox.js';
-import FixerChat from './fixer/FixerChat.js';
-import NpcVoice from './fixer/NpcVoice.js';
 import { GmGuard, SectionTitle } from './ui.js';
 
 export default function FixerPage() {
@@ -32,16 +32,18 @@ export default function FixerPage() {
             </span>
           )}
         </div>
+        <p className="mt-2 max-w-prose text-sm text-dim">
+          To talk to it, press <kbd className="rounded border border-edge px-1 text-ink">`</kbd> or
+          tap <span className="text-ink">ask the fixer</span> in the corner of any screen — it
+          knows which scene, page or sheet you have open. Everything it writes arrives here as a
+          draft for you to accept or bin.
+        </p>
 
         <div className="mt-4">
           <AiSettings campaignId={campaignId} />
         </div>
 
-        <div className="mt-4 grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
-          <div className="flex min-h-[28rem] flex-col gap-4">
-            <FixerChat campaignId={campaignId} sessionLive={sessionLive} />
-            <NpcVoice campaignId={campaignId} sessionLive={sessionLive} />
-          </div>
+        <div className="mt-4">
           <DraftsInbox campaignId={campaignId} />
         </div>
       </div>

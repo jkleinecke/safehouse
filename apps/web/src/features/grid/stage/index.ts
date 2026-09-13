@@ -7,7 +7,8 @@
  * so a pan/zoom or a token move never re-tessellates the grid, fog or geometry.
  */
 import type { GeometrySelection } from '../types.js';
-import { Application, Assets, Container, Graphics, Text, type Texture } from 'pixi.js';
+import { Application, Assets, ColorMatrixFilter, Container, Graphics, Text, type Texture } from 'pixi.js';
+import type { VisionMode } from '@safehouse/rules';
 import type { Point, Token } from '@safehouse/contracts';
 import { TILESETS, levelTiles } from '@safehouse/rules';
 import type { TileLayer } from '@safehouse/contracts';
@@ -140,6 +141,8 @@ class Stage implements StageApi, PointerHost {
 
   private readonly app = new Application();
   private readonly world = new Container();
+  /** The eyes the canvas is currently drawn for (`setViewMode`). */
+  private viewMode: VisionMode = 'normal';
   /** Painted floor (FR9.2) — under the grid, above the map image. */
   private readonly tiles = new ChunkedTileLayer();
   private lastTileKey = '';
@@ -254,6 +257,11 @@ class Stage implements StageApi, PointerHost {
       this.resizeObserver = new ResizeObserver(() => {
         this.pointer?.invalidateRect();
         this.camera.dirty = true;
+        // The mount-time fit measured whatever size the host had before the
+        // page's layout settled — on a phone that left the whole map ninety
+        // pixels wide in a corner, and a token four pixels across. Until the
+        // viewer frames the map themselves, every resize fits it again.
+        if (!this.camera.touched) this.fitScene();
       });
       this.resizeObserver.observe(host);
     }
@@ -335,6 +343,65 @@ class Stage implements StageApi, PointerHost {
     // A new palette changes what every cell looks like without changing any
     // cell's id, which is the one edit the chunk diff cannot see.
     this.tiles.invalidate();
+  }
+
+  /**
+   * Restyle the canvas for a pair of eyes (docs/VISION.md §4.4–4.5). Filters
+   * on the floor (map image and tiles) and on the tokens, nothing on the fx
+   * or the labels; a ColorMatrixFilter each way, so the cost is one pass
+   * over the scene, not a second renderer.
+   *
+   * Thermal is pixi's own "predator" matrix — a false-colour heat ramp —
+   * with warm bodies lifted to amber on the token layer. Low-light is a lift
+   * with the colour drained, ultrasound a hard grey. Normal removes it all.
+   */
+  setViewMode(mode: VisionMode): void {
+    if (this.disposed || mode === this.viewMode) return;
+    this.viewMode = mode;
+    const floor = [this.map.root, this.tiles.root];
+    const clear = (c: Container) => {
+      c.filters = [];
+    };
+    if (mode === 'normal' || mode === 'astral') {
+      for (const c of floor) clear(c);
+      clear(this.tokenLayer);
+      return;
+    }
+    const floorFilter = new ColorMatrixFilter();
+    const tokenFilter = new ColorMatrixFilter();
+    if (mode === 'thermographic') {
+      // Heat, not light: the floor drops to a cold violet with its detail
+      // flattened (concrete, crates and water all read about the same to
+      // thermal eyes), and every body on it comes up hot amber. Per-tile
+      // heat (VISION.md §4.4) will vary the floor later; the split between
+      // cold ground and warm bodies is the part that makes thermal useful.
+      // Explicit matrices (row = [r, g, b, a, offset], offsets in 0..1): a
+      // multiply tint on a dark disc only makes a darker disc, and a body
+      // has to glow. Luminance drives both ramps; the offsets set the floor.
+      const L = [0.2126, 0.7152, 0.0722];
+      const ramp = (r: number, g: number, b: number, ro: number, go: number, bo: number) => [
+        L[0]! * r, L[1]! * r, L[2]! * r, 0, ro,
+        L[0]! * g, L[1]! * g, L[2]! * g, 0, go,
+        L[0]! * b, L[1]! * b, L[2]! * b, 0, bo,
+        0, 0, 0, 1, 0,
+      ];
+      // Floor: cold violet, detail kept.
+      floorFilter.matrix = ramp(0.35, 0.25, 0.6, 0.1, 0.05, 0.25) as typeof floorFilter.matrix;
+      // Bodies: hot amber, brighter at the core.
+      tokenFilter.matrix = ramp(0.55, 0.45, 0.15, 0.45, 0.3, 0.05) as typeof tokenFilter.matrix;
+    } else if (mode === 'lowlight') {
+      floorFilter.brightness(1.3, false);
+      floorFilter.saturate(-0.65, true);
+      floorFilter.tint(0xcfe8d5, true);
+      tokenFilter.saturate(-0.4, false);
+    } else {
+      // ultrasound: shape without colour, edges up.
+      floorFilter.desaturate();
+      floorFilter.contrast(0.45, true);
+      tokenFilter.desaturate();
+    }
+    for (const c of floor) c.filters = [floorFilter];
+    this.tokenLayer.filters = [tokenFilter];
   }
 
   update(next: StageSceneState): void {

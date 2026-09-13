@@ -898,7 +898,20 @@ export interface FloorPlanResult {
       structure: Record<string, string>;
       object: Record<string, string>;
     };
-    counts: { floor: number; wall: number; door: number; window: number; prop: number; stair: number };
+    counts: {
+      floor: number;
+      wall: number;
+      door: number;
+      window: number;
+      prop: number;
+      stair: number;
+      /** Squares outside every room, painted with the outside ground. */
+      outside?: number;
+      /** Decoration the builder scattered across the outside. */
+      scatter?: number;
+      /** Furniture the builder added to rooms the plan left bare. */
+      dressed?: number;
+    };
     warnings: string[];
   };
   level: number;

@@ -941,6 +941,110 @@ Not automated, on purpose: the GM's 1D6 on an extended-test glitch, the
 Physical if its Force beats Magic — p.300), which the magic workbench leaves
 to the caster's own roll.
 
+### PLAYTEST-1 — the AI campaign tools driven against the owner's own model *(2026-09-13)*
+
+"Update the env to use this model and then run a full play test that
+utilizes AI to help build the campaign. Report back all the bugs you find."
+The model is a Qwen 27B on TabbyAPI at 127.0.0.1:8888; the playtest ran
+the built server on a scratch data dir with the demo campaign and the
+seeded books. Sixteen bugs (B1–B16) and the owner's ten findings (F1–F10)
+are in the debrief; the ones fixed in this round:
+
+- **B1–B3, map vision.** The probe sent a 2×2 PNG, which Qwen-style vision
+  processors reject, so every such model looked blind (now 64×64). The
+  vision call never sent the Thinking setting, so the model narrated the
+  grid arithmetic instead of answering in JSON (`openAiEffort` rides along
+  now). And the prompt said "match the supplied schema" while supplying it
+  only as `response_format`, which TabbyAPI ignores — the schema is pasted
+  into the prompt as the floor lane already did. `read_map_image` went from
+  four failed rounds to a 7 s draft.
+- **B4, envelopes and near-misses.** A model that wraps its answer in one
+  extra key no longer fails the Architect outline or a floor draft
+  (`unwrapEnvelope`). The owner's own brief ("hiding out in the Barrens…")
+  then failed with the keys right and a field wrong, which the error did
+  not say. `fixer/repair.ts` now sits between the parse and the schema in
+  both lanes: `coerceOutline` / `coerceFloorPlan` bend what carries no
+  meaning (an "encounter" lore kind → run, a 3.0 → 3, a 120-column grid →
+  80, twelve traits → eight, a summary a line too long → cut) and, if the
+  schema still refuses, `repairJson` spends one turn at temperature 0 with
+  the bad answer and the issues by path ("lore[2].kind: Invalid option")
+  asking for the corrected JSON only. The error that remains lists those
+  issues instead of the top-level keys.
+- **B5, codex.** A "describe it" that ran the tool budget dry used to come
+  back as a proposal card with an accept button. The chat route already
+  reported `truncated`; the codex ask now sends one rescue turn on the same
+  thread ("draft now with what you have", two rounds) and, if that drafts
+  nothing, throws a plain error. Never a card.
+- **B6, the phone.** A player could not tap their own runner: the mount-time
+  fit measured the host before the phone layout settled (the map sat ninety
+  pixels wide in a corner), the token hit radius was 12 world px (four
+  screen px at that zoom), and a second try was a double-tap ping. The
+  camera now re-fits on resize until the viewer frames the map themselves,
+  the hit slop is 22 screen px for a finger and scales with the zoom, and
+  a double-tap on or after a token selects instead of pinging.
+- **B7, attendance.** Two chips tapped a second apart raced: each computed
+  its list from the cache and the second PATCH erased the first. The
+  session update is optimistic now.
+
+**UX proposal 4.1 — the map as the centre.** A right-click (or a half-second
+press on a touch screen) opens a context menu about what is under the
+pointer: a token (range from the selected one, centre, sheet, hide/reveal,
+remove), the floor (ping, focus, reveal or re-fog the region here, place a
+token here, pin, note, camera), a door (open/close, lock, remove) or a wall
+(make it a door, remove). `hud/contextMenuItems.ts` decides the list per
+role and is unit-tested; the verbs are the panel's own mutations. The fight
+rail (`hud/PlayRail.tsx`) puts the Table's tracker and log beside the canvas
+in Play mode and on every player screen, so running a fight is no longer a
+screen change; the Table page stays for the TV.
+
+**UX proposal 4.2 — one assistant, everywhere.** The dock stamps what the
+GM is looking at on every message (`gm/fixer/aiContext.ts` →
+`fixer/context.ts`, one snapshot line with ids), offers chips for that
+screen's verbs, and hosts the floor drafter, the codex page workshop and
+the NPC voice as tabs when the screen calls for them. Removed: the Fixer
+page's chat and NPC voice (the page is settings and drafts now), the Tiles
+tab's "describe this floor", and the codex page's AI panel. Backtick opens
+the dock anywhere.
+
+**UX proposal 4.3 — the NPC manager** (`/gm/npcs`): every template as a
+card, one NPC in detail with the GM's private notes (`persona.notes`, never
+in a prompt), a dialect from a palette of original registers
+(`DIALECTS` in contracts; the converse prompt quotes the register and three
+sample lines), talk in character, place on the live scene.
+
+**TILES-2 — the second catalogue, and floors that fill the grid** *(2026-09-13)*.
+"Iterate on the tile sets to create more variety … apartment buildings,
+cafes, fancy restaurants, plazas, take out, parks, docks, country side, out on
+the lake." Ten sets in `rules/tilesets/catalogue-places.ts` (tenement, condo,
+café, fine dining, noodle counter, plaza, park, marina, countryside, lake),
+each 24–31 tiles, all held to `style.ts` by the same test as the first six
+(two joined the polished tier; the lights were rebalanced to gold so the
+catalogue stays under the amber ceiling). Five ground patterns, two wall cuts
+and thirty-one prop designs were added to the vocabulary and drawn in the
+painter — every one a `Record` member, so the compiler enforces the drawing.
+See `docs/TILE_ART.md` §10 for what that is and is not: procedural art, not
+painted texture; the road to painted tiles is an atlas pipeline this does
+not block.
+
+"When AI is supposed to help build a scene map, the first iteration should
+make sure that all the cells get assigned something." The floor plan now
+carries `outside: { ground, scatter }`; the compiler paints every square of
+the grid (rooms, then the named outside ground or the set's best guess —
+whole-word matched, so a catwalk is not a walk), scatters decoration that
+belongs on that ground clear of every door, and dresses any room the model
+left bare at one prop per twelve floor squares, wall-hugging furniture along
+the walls. All of it deterministic from the plan's title, so a rebuild does
+not reshuffle. The prompt asks for the same: full coverage, one prop per ten
+squares, nothing in front of a door. `fixer-floor.test.ts` pins the fill,
+the scatter and the dressing.
+
+**F5, first slice of vision:** `rules/vision/modes.ts` derives a runner's
+modes from the sheet (metatype, augments, gear by name); the map's eyes
+switch lets a player pick from theirs and the GM from all; the canvas
+restyles per mode (thermal: cold violet floor, hot amber bodies; low-light
+lift; ultrasound grey). Light rows, heat per tile and per-mode shrouds
+remain VISION.md §4.
+
 ### What changed structurally
 
 `apps/web/e2e/` exists: Playwright, chromium, 14 spec files, 40 tests, run

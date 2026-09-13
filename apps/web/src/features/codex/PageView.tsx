@@ -18,7 +18,6 @@ import { ErrorNote } from '../gm/ui.js';
 import Markdown from './Markdown.js';
 import HandoutsPanel from './HandoutsPanel.js';
 import TemplatePanel from './TemplatePanel.js';
-import { AiPanel } from './ai/index.js';
 import {
   useDeletePage,
   usePage,
@@ -334,11 +333,11 @@ export default function PageView({ campaignId, pageId, isGm, onCreatePrompt }: P
         </div>
 
         <aside className="space-y-4">
-          {/* The Fixer, where the writing happens (FR12.2). GM-only, and every
-              result is a draft the GM accepts or throws away (Principle 8).
-              Keyed by page: a proposal is written FOR one page, so it must not
-              survive a jump to the next one and be accepted onto it. */}
-          {isGm && <AiPanel key={page.id} campaignId={campaignId} page={page} />}
+          {/*
+            The Fixer's page workshop (FR12.2) lives in the dock now, under
+            "this page" whenever a codex page is open — one assistant that
+            knows what the GM is reading, not a panel per screen.
+          */}
 
           {isGm && (
             <section className="panel p-3">

@@ -29,8 +29,12 @@ export function describePlan(plan: FloorPlanResult['plan']): string {
   const c = plan.counts;
   const parts = [plural(plan.rooms.length, 'room'), plural(c.floor, 'floor square'), `${c.wall} wall`, plural(c.door, 'door')];
   if (c.window > 0) parts.push(plural(c.window, 'window'));
-  if (c.prop > 0) parts.push(plural(c.prop, 'prop'));
+  const props = c.prop + (c.dressed ?? 0);
+  if (props > 0) parts.push(plural(props, 'prop'));
   if (c.stair > 0) parts.push(plural(c.stair, 'stair'));
+  // The outside is painted too (every square, first pass), and dressed.
+  if ((c.outside ?? 0) > 0) parts.push(`${c.outside} outside`);
+  if ((c.scatter ?? 0) > 0) parts.push(`${c.scatter} scattered`);
   return parts.join(' · ');
 }
 

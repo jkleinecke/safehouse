@@ -397,7 +397,16 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       // Every floor, or the one named — undo puts floors back one at a time.
       const only = body.level;
       const patch: Record<string, unknown> = {};
-      if (scene0.tiles && (only === undefined || only === 0)) patch['tiles'] = redraw(scene0.tiles);
+      if (only === undefined || only === 0) {
+        // An unpainted ground floor still remembers the choice: an empty layer
+        // in the new set, so the palette, the floor builder and the next
+        // reload all agree on what this scene is drawn in. It used to be a
+        // no-op, and a scene switched to the lake before anything was painted
+        // came back as the docklands.
+        patch['tiles'] = scene0.tiles
+          ? redraw(scene0.tiles)
+          : { tilesetId: body.tilesetId, cells: {}, ground: {}, structure: {}, object: {} };
+      }
       if ((scene0.levels ?? []).length > 0 && (only === undefined || only > 0)) {
         patch['levels'] = (scene0.levels ?? []).map((l, i) =>
           l.tiles && (only === undefined || only === i + 1) ? { ...l, tiles: redraw(l.tiles) } : l,

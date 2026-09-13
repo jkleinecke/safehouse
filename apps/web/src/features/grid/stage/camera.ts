@@ -25,6 +25,13 @@ export class Camera {
   scale = 1;
   /** Set whenever x/y/scale changed since the last frame flush. */
   dirty = true;
+  /**
+   * True once the viewer has panned, zoomed or focused since the last `fit`.
+   * The stage re-fits on a resize only while this is false: a phone whose
+   * layout settles after mount gets the scene fitted to the real canvas, and
+   * a GM who has framed a room keeps their framing when a panel opens.
+   */
+  touched = false;
 
   /** Screen px → world px. */
   toWorld(sx: number, sy: number): Point {
@@ -41,6 +48,7 @@ export class Camera {
     this.x += dx;
     this.y += dy;
     this.dirty = true;
+    this.touched = true;
   }
 
   /** Zoom keeping the world point under `(sx, sy)` pinned to that screen px. */
@@ -52,6 +60,7 @@ export class Camera {
     this.y = sy - (sy - this.y) * ratio;
     this.scale = next;
     this.dirty = true;
+    this.touched = true;
   }
 
   /** Put a world point at the centre of the viewport (focus here / open). */
@@ -59,6 +68,7 @@ export class Camera {
     this.x = view.width / 2 - wx * this.scale;
     this.y = view.height / 2 - wy * this.scale;
     this.dirty = true;
+    this.touched = true;
   }
 
   /** Fit a world-space rect into the viewport with a small margin. */
@@ -69,6 +79,8 @@ export class Camera {
     );
     this.scale = s;
     this.centerOn(width / 2, height / 2, view);
+    // A fit is the resting state, not a viewer's framing.
+    this.touched = false;
   }
 
   set(x: number, y: number, scale: number): void {
@@ -76,6 +88,7 @@ export class Camera {
     this.y = y;
     this.scale = clampScale(scale);
     this.dirty = true;
+    this.touched = true;
   }
 }
 

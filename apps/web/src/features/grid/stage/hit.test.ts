@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import type { Scene, Token } from '@safehouse/contracts';
 import { gridFromWorld, metricsFor, pinHeadRise, worldFromGrid } from '../geometry.js';
-import { hitDoor, hitNote, hitPin, hitTileDoor, hitToken, hitWall, isDoubleTap, worldTolerance } from './hit.js';
+import {
+  hitDoor,
+  hitNote,
+  hitPin,
+  hitTileDoor,
+  hitToken,
+  hitWall,
+  isDoubleTap,
+  touchHitSlop,
+  worldTolerance,
+} from './hit.js';
 import { noteFrame } from './notes.js';
 
 /**
@@ -57,6 +67,26 @@ describe('hitToken', () => {
   it('respects an id allow-list', () => {
     expect(hitToken(m, tokens, { x: 2.5, y: 2.5 }, { onlyIds: new Set(['b']) })).toBeNull();
     expect(hitToken(m, tokens, { x: 2.5, y: 2.5 }, { onlyIds: new Set(['a']) })?.id).toBe('a');
+  });
+
+  it('grows the target for a finger and for a zoomed-out camera (B6)', () => {
+    // A mouse at 1:1 keeps the 12 px floor; a finger gets 22 px.
+    expect(touchHitSlop(1, 'mouse')).toBe(12);
+    expect(touchHitSlop(1, 'touch')).toBe(22);
+    // Zoomed out to a tenth, both are ten times bigger in world px.
+    expect(touchHitSlop(0.1, 'touch')).toBeCloseTo(220);
+    expect(touchHitSlop(0.1, undefined)).toBeCloseTo(120);
+    // The floor never shrinks a target below the drawn disc.
+    expect(touchHitSlop(6, 'touch')).toBe(12);
+  });
+
+  it('passes the pointer slop through to the hit test', () => {
+    // 'a' sits at (2.5, 2.5) with a 64 px cell: the disc is 30 px, so a tap
+    // 0.7 cells (45 px) away misses with mouse slop and lands with a
+    // zoomed-out finger's (22 px / 0.4 = 55 px).
+    const at = { x: 3.2, y: 2.5 };
+    expect(hitToken(m, tokens, at)).toBeNull();
+    expect(hitToken(m, tokens, at, { minHitPx: touchHitSlop(0.4, 'touch') })?.id).toBe('a');
   });
 
   it('prefers the last token when circles overlap', () => {

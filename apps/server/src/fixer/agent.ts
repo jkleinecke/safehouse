@@ -12,7 +12,7 @@
  * persisted — it is rebuilt every turn so it can never go stale.
  */
 import type { Visibility } from '@safehouse/contracts';
-import { PersonaSchema } from '@safehouse/contracts';
+import { DIALECTS, PersonaSchema } from '@safehouse/contracts';
 import type { Db } from '@safehouse/db';
 import { httpError } from '../services/auth.js';
 import type { ChatMessage, ChatToolCall, LlmClient, LlmUsage, ModelSlot } from './llm.js';
@@ -33,6 +33,7 @@ import {
   type ToolContext,
 } from './tools.js';
 import { cachedVisionCapability } from './vision.js';
+import { joinSnapshot, whereTheGmIs, type AiContext } from './context.js';
 import { getNpcState, getSessionLogState, isSessionLive, liveEncounterRow } from './state.js';
 import { getEncounterState, getSceneState, listCharactersState } from './state.js';
 import { usageMeter } from './usage.js';
@@ -357,6 +358,8 @@ export interface FixerChatInput {
   tools?: readonly FixerTool[];
   temperature?: number;
   signal?: AbortSignal;
+  /** What the GM is looking at, stamped by the dock (fixer/context.ts). */
+  context?: AiContext;
 }
 
 /**
@@ -386,7 +389,12 @@ export async function runFixerChat(
     kind: 'fixer',
     ...(input.conversationId !== undefined ? { conversationId: input.conversationId } : {}),
   });
-  const snapshot = await buildSituationSnapshot(deps.db, input.campaignId);
+  // The live snapshot, plus where the GM is looking — the second exists with
+  // or without a session, because "draft this floor" is a prep-time ask.
+  const snapshot = joinSnapshot(
+    await buildSituationSnapshot(deps.db, input.campaignId),
+    whereTheGmIs(input.context),
+  );
   const slot = input.slot ?? 'primary';
   return runLoop(deps, {
     campaignId: input.campaignId,
@@ -448,6 +456,22 @@ export async function runNpcConverse(
   });
 }
 
+/**
+ * The register the NPC speaks in (the NPC manager's dialect field). A known
+ * palette id becomes its description plus three sample lines — a model
+ * imitates an example far better than it obeys an adjective; a free string
+ * is passed through as the GM wrote it.
+ */
+export function dialectLines(dialect: string | undefined): string[] {
+  if (!dialect || dialect.trim().length === 0) return [];
+  const known = DIALECTS.find((d) => d.id === dialect);
+  if (!known) return [`Dialect: ${dialect.trim()} — keep every line in that register.`];
+  return [
+    `Dialect: ${known.label} — ${known.register}.`,
+    `Sound like these (register, not content): ${known.samples.map((s) => `"${s}"`).join(' / ')}`,
+  ];
+}
+
 /** Persona + knowledge boundary + secrets, as a system prompt (FR12.5/12.6). */
 export function npcSystemPrompt(name: string, rawPersona: unknown, recentEvents: string[]): string {
   const parsed = PersonaSchema.safeParse(rawPersona ?? {});
@@ -460,6 +484,7 @@ export function npcSystemPrompt(name: string, rawPersona: unknown, recentEvents:
     '',
     `Traits: ${persona.traits.length > 0 ? persona.traits.join(', ') : 'unspecified'}`,
     `Voice: ${persona.voice ?? 'unspecified'}`,
+    ...dialectLines(persona.dialect),
     `Mannerisms: ${persona.mannerisms.length > 0 ? persona.mannerisms.join('; ') : 'unspecified'}`,
     `Goals: ${persona.goals.length > 0 ? persona.goals.join('; ') : 'unspecified'}`,
   ];

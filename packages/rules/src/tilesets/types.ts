@@ -45,6 +45,16 @@ export const TILE_PATTERNS = [
   'grass',
   /** Packed earth: mottled, cracked, a few stones. */
   'dirt',
+  /** Rounded setts in offset courses with dark joints — a plaza, an old street. */
+  'cobble',
+  /** Large polished slabs, faint veining, a hairline joint — a lobby, a dining room. */
+  'marble',
+  /** Fine grain, a ripple line, a few pebbles — a shore, a beach path. */
+  'sand',
+  /** Crop rows: parallel furrows with the odd break — a field, a market garden. */
+  'field',
+  /** Standing reeds over dark water — a lake margin, a ditch. */
+  'reeds',
 ] as const;
 
 export type TilePattern = (typeof TILE_PATTERNS)[number];
@@ -208,6 +218,10 @@ export const TILE_CUTS = [
   'sign',
   /** Chain-link: diamond mesh you can see through. */
   'mesh',
+  /** A wooden fence: pales on two rails, waist-high, open above. */
+  'picket',
+  /** A dock or balcony railing: posts and two rails, everything visible through it. */
+  'railing',
 ] as const;
 
 export type TileCut = (typeof TILE_CUTS)[number];
@@ -338,6 +352,73 @@ export const TILE_PROPS = [
   'lantern',
   /** A wire basket on wheels with a handle. */
   'cart',
+  // --- home ---------------------------------------------------------------
+  /** A mattress on a frame with a headboard and a pillow. */
+  'bed',
+  /** A worktop on a run of cupboards, a splashback behind. */
+  'counter',
+  /** A cooker: four rings on top, an oven door in front. */
+  'stove',
+  /** A tall white box with a door seam and a handle. */
+  'fridge',
+  /** A basin on a cupboard with a tap. */
+  'sink',
+  /** A case of shelves with books stood along them. */
+  'bookshelf',
+  /** A screen on a low stand, lit when it is a light. */
+  'tv',
+  // --- eating and drinking -------------------------------------------------
+  /** A pole with a wide canopy: a café table's shade. */
+  'umbrella',
+  /** A kettle grill on legs, a lid, a rack of coals. */
+  'grill',
+  /** A slab of a bar counter with a rail and bottles behind. */
+  'bar',
+  /** A standing board with lines of chalk. */
+  'menu',
+  /** A hanging fixture: an arm of lamps that throws its pool below. */
+  'chandelier',
+  // --- outside -------------------------------------------------------------
+  /** A figure on a plinth. */
+  'statue',
+  /** A clipped block of foliage, waist-high, running with its neighbours. */
+  'hedge',
+  /** A slatted seat on two end frames. */
+  'bench',
+  /** A table with a bench either side, all one frame. */
+  'picnic',
+  /** A post with two boards pointing different ways. */
+  'signpost',
+  /** A frame with two seats hung on chains. */
+  'swing',
+  /** A pole with a flag. */
+  'flag',
+  /** A two-wheeler leaning on its stand. */
+  'bike',
+  /** Boulders, two or three, one bigger. */
+  'rocks',
+  /** A ring of stones with a fire in it. */
+  'firepit',
+  // --- water ---------------------------------------------------------------
+  /** A hull with a cabin, moored bow to stern along the cell. */
+  'boat',
+  /** An open hull with two thwarts, no cabin. */
+  'canoe',
+  /** A float with a post and a light on top. */
+  'buoy',
+  /** A mooring cleat on a base, a rope looped over it. */
+  'cleat',
+  // --- country -------------------------------------------------------------
+  /** A round bale on its side, banded. */
+  'haybale',
+  /** A tractor: big rear wheels, a cab, an exhaust stack. */
+  'tractor',
+  /** A round well with a roof on two posts. */
+  'well',
+  /** A long trough on legs, water in it. */
+  'trough',
+  /** A stack of split logs. */
+  'logs',
 ] as const;
 
 export type TileProp = (typeof TILE_PROPS)[number];

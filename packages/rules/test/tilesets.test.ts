@@ -38,8 +38,8 @@ const ALL_TILES: Array<{ setId: string; tile: Tile }> = TILESETS.flatMap((set) =
 const HEX = /^#[0-9a-f]{6}$/;
 
 describe('catalogue shape', () => {
-  it('ships the six sets, each with tiles', () => {
-    expect(TILESETS.length).toBe(6);
+  it('ships the sixteen sets, each with tiles', () => {
+    expect(TILESETS.length).toBe(16);
     expect(TILESETS.map((s) => s.id)).toEqual([
       'docklands',
       'corp',
@@ -47,6 +47,16 @@ describe('catalogue shape', () => {
       'maintenance',
       'barrens',
       'club',
+      'tenement',
+      'condo',
+      'cafe',
+      'restaurant',
+      'takeout',
+      'plaza',
+      'park',
+      'marina',
+      'countryside',
+      'lake',
     ]);
     for (const set of TILESETS) {
       expect(set.tiles.length, `${set.id} has no tiles`).toBeGreaterThan(0);
@@ -125,7 +135,7 @@ describe('every tile is drawable', () => {
 
   it('lists each pattern once, so a consumer can switch on the array', () => {
     expect(new Set(TILE_PATTERNS).size).toBe(TILE_PATTERNS.length);
-    expect(TILE_PATTERNS.length).toBe(14);
+    expect(TILE_PATTERNS.length).toBe(19);
   });
 
   it('pins the pattern list the web painter must handle', () => {
@@ -134,15 +144,20 @@ describe('every tile is drawable', () => {
     expect([...TILE_PATTERNS].sort()).toEqual([
       'brick',
       'carpet',
+      'cobble',
       'concrete',
       'dirt',
+      'field',
       'grass',
       'grating',
       'gravel',
       'hatch',
+      'marble',
       'panel',
       'planks',
+      'reeds',
       'rubble',
+      'sand',
       'solid',
       'tile',
       'water',

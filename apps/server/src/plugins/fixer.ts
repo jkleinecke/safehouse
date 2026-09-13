@@ -31,6 +31,7 @@ import { listConversations, loadConversation } from '../fixer/conversations.js';
 import { acceptDraft, listDrafts, rejectDraft } from '../fixer/drafts.js';
 import { campaignUsage, persistTurnUsage, usageMeter } from '../fixer/usage.js';
 import { visionCapability } from '../fixer/vision.js';
+import { AiContextSchema } from '../fixer/context.js';
 import fixerToolRoutes from '../fixer/routes.js';
 
 const ChatBody = z.object({
@@ -40,6 +41,8 @@ const ChatBody = z.object({
   slot: z.enum(['primary', 'fast']).optional(),
   maxRounds: z.number().int().min(1).max(8).optional(),
   temperature: z.number().min(0).max(2).optional(),
+  /** What the GM is looking at (fixer/context.ts) — the dock stamps it on every turn. */
+  context: AiContextSchema.optional(),
 });
 
 const ConverseBody = z.object({
@@ -311,6 +314,7 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
             ...(body.slot !== undefined ? { slot: body.slot } : {}),
             ...(body.maxRounds !== undefined ? { maxRounds: body.maxRounds } : {}),
             ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
+            ...(body.context !== undefined ? { context: body.context } : {}),
             signal,
           },
         ),

@@ -41,6 +41,9 @@
  */
 import { TILE_HEIGHTS, type Tileset } from './types.js';
 import { resolveTile } from './slots.js';
+import { PLACE_SETS } from './catalogue-places.js';
+
+export * from './catalogue-places.js';
 
 const { WAIST, FULL } = TILE_HEIGHTS;
 
@@ -282,6 +285,9 @@ export const TILESETS: readonly Tileset[] = [
   MAINTENANCE,
   BARRENS,
   CLUB,
+  // The second catalogue (`catalogue-places.ts`): homes, places to eat, a
+  // plaza, a park, a marina, the country and the lake.
+  ...PLACE_SETS,
 ];
 
 export function tilesetById(id: string): Tileset | null {

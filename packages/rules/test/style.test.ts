@@ -31,8 +31,12 @@ import {
   type StyleSubject,
 } from '../src/tilesets/style.js';
 
-/** The corporate set is the one polished tier — see AFFLUENCE in style.ts. */
-const POLISHED = new Set(['corp']);
+/**
+ * The polished tier — see AFFLUENCE in style.ts. The corporate set was the
+ * only one; the condo tower and the dining room are the same money, and
+ * pale for the same reason.
+ */
+const POLISHED = new Set(['corp', 'condo', 'restaurant']);
 
 function subjectsOf(setId: string): StyleSubject[] {
   const set = TILESETS.find((t) => t.id === setId);

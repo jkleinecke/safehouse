@@ -54,16 +54,18 @@ export interface NpcVoiceProps {
   campaignId: string;
   /** Live session → default to the fast slot so inference never starves the table. */
   sessionLive?: boolean | undefined;
+  /** Start on this NPC — the token the GM has selected on the map (aiContext.ts). */
+  npcId?: string | undefined;
 }
 
-export default function NpcVoice({ campaignId, sessionLive }: NpcVoiceProps) {
+export default function NpcVoice({ campaignId, sessionLive, npcId: initialNpcId }: NpcVoiceProps) {
   const templates = useNpcTemplates(campaignId);
   const status = useFixerStatus();
   const send = useNpcConverse();
   const cancel = useCancelAi(campaignId);
   const list = voiceOrder(templates.data ?? []);
 
-  const [npcId, setNpcId] = useState('');
+  const [npcId, setNpcId] = useState(initialNpcId ?? '');
   const [draft, setDraft] = useState('');
   const [slot, setSlot] = useState<'primary' | 'fast'>(sessionLive ? 'fast' : 'primary');
   const [lines, setLines] = useState<VoiceLine[]>([]);

@@ -88,6 +88,7 @@ export function useStage(params: UseStageParams): UseStageResult {
       onTilePaint: (col, row, erase) => cbRef.current.onTilePaint?.(col, row, erase),
       onTileStrokeEnd: () => cbRef.current.onTileStrokeEnd?.(),
       onTileRect: (c0, r0, c1, r1, mode) => cbRef.current.onTileRect?.(c0, r0, c1, r1, mode),
+      onContextMenu: (request) => cbRef.current.onContextMenu?.(request),
     };
 
     void import('./stage/index.js')

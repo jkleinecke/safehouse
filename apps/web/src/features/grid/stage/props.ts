@@ -325,6 +325,37 @@ const FOOTPRINTS: Readonly<Record<TileProp, readonly [number, number, number, nu
   mattress: [0.1, 0.15, 0.9, 0.85],
   lantern: [0.3, 0.3, 0.7, 0.7],
   cart: [0.18, 0.28, 0.82, 0.82],
+  bed: [0.08, 0.05, 0.92, 0.95],
+  counter: [0.05, 0.3, 0.95, 0.85],
+  stove: [0.12, 0.2, 0.88, 0.85],
+  fridge: [0.2, 0.2, 0.8, 0.85],
+  sink: [0.12, 0.25, 0.88, 0.85],
+  bookshelf: [0.05, 0.6, 0.95, 0.9],
+  tv: [0.15, 0.35, 0.85, 0.7],
+  umbrella: [0.1, 0.1, 0.9, 0.9],
+  grill: [0.25, 0.25, 0.75, 0.75],
+  bar: [0.05, 0.3, 0.95, 0.85],
+  menu: [0.3, 0.4, 0.7, 0.7],
+  chandelier: [0.2, 0.2, 0.8, 0.8],
+  statue: [0.25, 0.25, 0.75, 0.75],
+  hedge: [0.05, 0.25, 0.95, 0.75],
+  bench: [0.08, 0.35, 0.92, 0.7],
+  picnic: [0.08, 0.15, 0.92, 0.85],
+  signpost: [0.4, 0.4, 0.6, 0.6],
+  swing: [0.08, 0.3, 0.92, 0.7],
+  flag: [0.4, 0.4, 0.6, 0.6],
+  bike: [0.15, 0.35, 0.85, 0.65],
+  rocks: [0.1, 0.15, 0.9, 0.85],
+  firepit: [0.15, 0.15, 0.85, 0.85],
+  boat: [0.1, 0.05, 0.9, 0.95],
+  canoe: [0.2, 0.05, 0.8, 0.95],
+  buoy: [0.3, 0.3, 0.7, 0.7],
+  cleat: [0.3, 0.35, 0.7, 0.65],
+  haybale: [0.15, 0.2, 0.85, 0.8],
+  tractor: [0.1, 0.1, 0.9, 0.9],
+  well: [0.15, 0.15, 0.85, 0.85],
+  trough: [0.1, 0.3, 0.9, 0.7],
+  logs: [0.1, 0.25, 0.9, 0.8],
 };
 
 /** Four legs from the corners of a slab to the ground. */
@@ -827,6 +858,349 @@ const DESIGNS: Readonly<Record<TileProp, Draw>> = {
     for (let i = 1; i < 6; i += 1) k.line([[0.2 + i * 0.1, 0.8, h * 0.35], [0.2 + i * 0.1, 0.8, h * 0.85]], t.ink, 1, 0.45);
     for (let i = 1; i < 4; i += 1) k.line([[0.2, 0.8, h * (0.35 + i * 0.125)], [0.8, 0.8, h * (0.35 + i * 0.125)]], t.ink, 1, 0.45);
     k.box(0.18, 0.28, 0.82, 0.33, h * 0.85, h * 0.9, t.dark, { crown: false });
+    return null;
+  },
+
+  // --- home ---------------------------------------------------------------
+  bed: (k, h) => {
+    const t = k.t;
+    k.box(0.08, 0.05, 0.92, 0.95, 0, h * 0.35, t.dark, { crown: false });
+    k.box(0.1, 0.08, 0.9, 0.92, h * 0.35, h * 0.55, t.base);
+    // Headboard at the north end, pillow just below it, the fold of a blanket.
+    k.box(0.08, 0.05, 0.92, 0.12, h * 0.35, h * 0.95, shade(t.base, 0.8));
+    k.box(0.2, 0.14, 0.8, 0.3, h * 0.55, h * 0.66, t.light);
+    k.line([[0.1, 0.42, h * 0.555], [0.9, 0.42, h * 0.555]], t.ink, 1, 0.5);
+    k.box(0.1, 0.42, 0.9, 0.92, h * 0.55, h * 0.6, t.accent);
+    return null;
+  },
+  counter: (k, h) => {
+    const t = k.t;
+    k.box(0.05, 0.35, 0.95, 0.85, 0, h * 0.85, shade(t.base, 0.9));
+    for (const u of [0.35, 0.65]) k.line([[u, 0.85, 0], [u, 0.85, h * 0.85]], t.ink, 1, 0.5);
+    for (const u of [0.2, 0.5, 0.8]) k.facePanel('u', 0.851, u - 0.06, h * 0.55, u + 0.06, h * 0.58, t.light, 0.9);
+    k.box(0.03, 0.33, 0.97, 0.87, h * 0.85, h * 0.92, t.base);
+    // The splashback, on the wall side.
+    k.box(0.05, 0.3, 0.95, 0.35, h * 0.92, h * 1.35, t.accent, { crown: false });
+    return null;
+  },
+  stove: (k, h, glow) => {
+    const t = k.t;
+    k.box(0.12, 0.2, 0.88, 0.85, 0, h * 0.88, t.base);
+    k.facePanel('u', 0.851, 0.2, h * 0.2, 0.8, h * 0.6, t.dark, 0.7);
+    k.facePanel('u', 0.852, 0.25, h * 0.62, 0.75, h * 0.66, t.light, 0.9);
+    k.box(0.1, 0.18, 0.9, 0.87, h * 0.88, h * 0.94, shade(t.base, 1.05));
+    // The rings: dark when cold, the light's own colour when this stove is a
+    // light — a wok range or a wood burner glows from the top.
+    for (const [u, v] of [[0.32, 0.4], [0.68, 0.4], [0.32, 0.68], [0.68, 0.68]] as const) {
+      k.disc(u, v, 0.1, h * 0.945, t.ink, 0.85);
+      k.disc(u, v, 0.05, h * 0.95, glow ?? t.dark, 1);
+    }
+    k.box(0.12, 0.18, 0.88, 0.24, h * 0.94, h * 1.2, shade(t.base, 0.85), { crown: false });
+    return glow ? k.pool(0.5, 0.55, 0.32) : null;
+  },
+  fridge: (k, h) => {
+    const t = k.t;
+    k.box(0.2, 0.2, 0.8, 0.85, 0, h, t.base);
+    k.line([[0.2, 0.85, h * 0.62], [0.8, 0.85, h * 0.62]], t.ink, 1, 0.6);
+    k.facePanel('u', 0.851, 0.66, h * 0.66, 0.7, h * 0.92, t.dark, 0.9);
+    k.facePanel('u', 0.851, 0.66, h * 0.2, 0.7, h * 0.56, t.dark, 0.9);
+    return null;
+  },
+  sink: (k, h) => {
+    const t = k.t;
+    k.box(0.12, 0.25, 0.88, 0.85, 0, h * 0.85, shade(t.base, 0.9));
+    k.box(0.1, 0.23, 0.9, 0.87, h * 0.85, h * 0.9, t.base);
+    k.poly([[0.25, 0.35, h * 0.905], [0.75, 0.35, h * 0.905], [0.75, 0.75, h * 0.905], [0.25, 0.75, h * 0.905]], t.dark, 1, true);
+    k.poly([[0.28, 0.38, h * 0.906], [0.72, 0.38, h * 0.906], [0.72, 0.72, h * 0.906], [0.28, 0.72, h * 0.906]], GLASS, 0.35);
+    k.cyl(0.5, 0.3, 0.03, h * 0.9, h * 1.15, t.light, { sides: 6, ink: false });
+    k.line([[0.5, 0.3, h * 1.15], [0.5, 0.45, h * 1.15]], t.light, 2, 0.95);
+    return null;
+  },
+  bookshelf: (k, h) => {
+    const t = k.t;
+    k.box(0.05, 0.6, 0.95, 0.9, 0, h, shade(t.base, 0.85));
+    for (let i = 1; i < 4; i += 1) k.facePanel('u', 0.901, 0.07, h * (i / 4), 0.93, h * (i / 4) + 0.02, t.dark, 0.9);
+    // Books: a row of spines on each shelf, varied by the cell's seed.
+    for (let s = 0; s < 4; s += 1) {
+      let u = 0.09;
+      let i = 0;
+      while (u < 0.9) {
+        const w = 0.04 + k.rnd(s * 17 + i) * 0.05;
+        const tone = i % 3 === 0 ? t.accent : i % 3 === 1 ? t.light : shade(t.base, 1.15);
+        k.facePanel('u', 0.902, u, h * (s / 4) + 0.02, Math.min(0.91, u + w), h * ((s + 1) / 4) - 0.03 - k.rnd(s * 31 + i) * 0.05, tone, 0.95);
+        u += w + 0.01;
+        i += 1;
+      }
+    }
+    return null;
+  },
+  tv: (k, h, glow) => {
+    const t = k.t;
+    k.box(0.15, 0.4, 0.85, 0.7, 0, h * 0.35, t.dark, { crown: false });
+    k.box(0.4, 0.5, 0.6, 0.6, h * 0.35, h * 0.45, t.ink, { crown: false });
+    k.box(0.15, 0.5, 0.85, 0.55, h * 0.45, h * 1.0, t.ink, { crown: false });
+    k.facePanel('u', 0.551, 0.17, h * 0.48, 0.83, h * 0.97, glow ?? GLASS, glow ? 0.9 : 0.5);
+    return glow ? k.pool(0.5, 0.75, 0.35) : null;
+  },
+
+  // --- eating and drinking -------------------------------------------------
+  umbrella: (k, h) => {
+    const t = k.t;
+    k.disc(0.5, 0.5, 0.1, 0, t.dark, 1, true);
+    k.cyl(0.5, 0.5, 0.03, 0, h * 1.6, t.dark, { sides: 6, ink: false });
+    // The canopy: a wide shallow cone, drawn as a disc with a lit half.
+    k.cyl(0.5, 0.5, 0.42, h * 1.5, h * 1.62, t.base, { sides: 8, ink: true });
+    k.cyl(0.5, 0.5, 0.2, h * 1.62, h * 1.78, shade(t.base, 1.08), { sides: 8, ink: false });
+    k.disc(0.5, 0.5, 0.04, h * 1.8, t.light, 1);
+    return null;
+  },
+  grill: (k, h) => {
+    const t = k.t;
+    for (const [u, v] of [[0.32, 0.36], [0.68, 0.36], [0.5, 0.7]] as const) k.line([[u, v, 0], [u, v, h * 0.55]], t.ink, 2, 0.9);
+    const top = k.cyl(0.5, 0.5, 0.25, h * 0.5, h * 0.7, t.base, { sides: 10 });
+    k.band(0.5, 0.5, 0.25, h * 0.6, t.dark, 0.6);
+    k.disc(0.5, 0.5, 0.2, h * 0.705, t.dark, 1);
+    for (let i = -2; i <= 2; i += 1) k.line([[0.5 + i * 0.08, 0.32, h * 0.71], [0.5 + i * 0.08, 0.68, h * 0.71]], t.light, 1, 0.8);
+    void top;
+    return null;
+  },
+  bar: (k, h) => {
+    const t = k.t;
+    k.box(0.05, 0.4, 0.95, 0.85, 0, h * 0.95, shade(t.base, 0.9));
+    k.box(0.03, 0.38, 0.97, 0.87, h * 0.95, h * 1.02, t.base);
+    k.line([[0.05, 0.86, h * 0.35], [0.95, 0.86, h * 0.35]], t.light, 2, 0.8);
+    // Bottles along the back.
+    for (let i = 0; i < 6; i += 1) {
+      const u = 0.12 + i * 0.15;
+      k.cyl(u, 0.45, 0.03, h * 1.02, h * 1.25 + k.rnd(i) * 0.1 * h, i % 2 === 0 ? t.accent : GLASS, { sides: 6, ink: false });
+    }
+    return null;
+  },
+  menu: (k, h) => {
+    const t = k.t;
+    for (const v of [0.42, 0.68]) k.box(0.3, v, 0.7, v + 0.02, 0, h * 1.0, t.dark, { crown: false, ink: false });
+    k.box(0.3, 0.42, 0.7, 0.44, h * 0.3, h * 1.0, t.ink, { crown: false });
+    for (let i = 0; i < 5; i += 1) {
+      const w = 0.12 + k.rnd(i) * 0.22;
+      k.facePanel('u', 0.44, 0.34, h * (0.4 + i * 0.11), 0.34 + w, h * (0.42 + i * 0.11), t.light, 0.85);
+    }
+    return null;
+  },
+  chandelier: (k, h, glow) => {
+    const t = k.t;
+    const lit = glow ?? t.light;
+    k.line([[0.5, 0.5, h * 1.9], [0.5, 0.5, h * 1.45]], t.dark, 1, 0.8);
+    k.cyl(0.5, 0.5, 0.26, h * 1.4, h * 1.46, t.accent, { sides: 8, ink: false });
+    for (let i = 0; i < 6; i += 1) {
+      const a = (i / 6) * Math.PI * 2;
+      k.disc(0.5 + Math.cos(a) * 0.24, 0.5 + Math.sin(a) * 0.24, 0.05, h * 1.5, lit, 0.95);
+    }
+    k.disc(0.5, 0.5, 0.07, h * 1.5, lit, 0.9);
+    return glow ? k.pool(0.5, 0.5, 0.45) : null;
+  },
+
+  // --- outside -------------------------------------------------------------
+  statue: (k, h) => {
+    const t = k.t;
+    k.box(0.25, 0.25, 0.75, 0.75, 0, h * 0.45, shade(t.base, 0.85));
+    k.box(0.3, 0.3, 0.7, 0.7, h * 0.45, h * 0.52, t.base);
+    // The figure: a body, shoulders, a head, one arm out.
+    k.cyl(0.5, 0.5, 0.1, h * 0.52, h * 1.15, t.base, { sides: 7, jitter: 0.15, salt: 1 });
+    k.box(0.36, 0.44, 0.64, 0.56, h * 1.1, h * 1.2, t.base, { crown: false, ink: false });
+    k.cyl(0.5, 0.5, 0.06, h * 1.2, h * 1.36, shade(t.base, 1.08), { sides: 6, ink: false });
+    k.line([[0.62, 0.5, h * 1.17], [0.86, 0.5, h * 1.28]], t.base, 3, 0.95);
+    return null;
+  },
+  hedge: (k, h) => {
+    const t = k.t;
+    k.box(0.05, 0.25, 0.95, 0.75, 0, h * 0.85, t.base, { crown: false });
+    for (let i = 0; i < 5; i += 1) {
+      k.cyl(0.12 + i * 0.19, 0.5, 0.14, h * 0.6, h * 0.98, shade(t.base, 1.06 + k.rnd(i) * 0.08), {
+        sides: 6,
+        jitter: 0.3,
+        salt: i,
+        ink: false,
+      });
+    }
+    return null;
+  },
+  bench: (k, h) => {
+    const t = k.t;
+    for (const u of [0.14, 0.86]) {
+      k.box(u - 0.04, 0.35, u + 0.04, 0.7, 0, h * 0.45, t.dark, { crown: false });
+    }
+    for (let i = 0; i < 3; i += 1) k.box(0.08, 0.38 + i * 0.11, 0.92, 0.46 + i * 0.11, h * 0.45, h * 0.5, t.base);
+    k.box(0.08, 0.35, 0.92, 0.4, h * 0.5, h * 0.85, shade(t.base, 0.92));
+    return null;
+  },
+  picnic: (k, h) => {
+    const t = k.t;
+    for (const u of [0.22, 0.78]) {
+      k.line([[u, 0.2, 0], [u, 0.5, h * 0.7]], t.dark, 2, 0.9);
+      k.line([[u, 0.8, 0], [u, 0.5, h * 0.7]], t.dark, 2, 0.9);
+    }
+    k.box(0.08, 0.2, 0.92, 0.32, h * 0.35, h * 0.4, t.base);
+    k.box(0.08, 0.68, 0.92, 0.8, h * 0.35, h * 0.4, t.base);
+    k.box(0.08, 0.38, 0.92, 0.62, h * 0.7, h * 0.76, t.base);
+    k.line([[0.08, 0.5, h * 0.765], [0.92, 0.5, h * 0.765]], t.ink, 1, 0.4);
+    return null;
+  },
+  signpost: (k, h) => {
+    const t = k.t;
+    k.disc(0.5, 0.5, 0.08, 0, t.dark, 1, true);
+    k.cyl(0.5, 0.5, 0.035, 0, h * 1.6, t.dark, { sides: 6, ink: false });
+    k.box(0.5, 0.46, 0.88, 0.54, h * 1.35, h * 1.48, t.base, { crown: false });
+    k.box(0.14, 0.46, 0.5, 0.54, h * 1.15, h * 1.28, shade(t.base, 0.9), { crown: false });
+    k.facePanel('u', 0.541, 0.56, h * 1.38, 0.84, h * 1.45, t.light, 0.8);
+    k.facePanel('u', 0.541, 0.18, h * 1.18, 0.46, h * 1.25, t.light, 0.8);
+    return null;
+  },
+  swing: (k, h) => {
+    const t = k.t;
+    for (const u of [0.1, 0.9]) {
+      k.line([[u, 0.35, 0], [u, 0.5, h * 1.5]], t.dark, 2, 0.9);
+      k.line([[u, 0.65, 0], [u, 0.5, h * 1.5]], t.dark, 2, 0.9);
+    }
+    k.line([[0.1, 0.5, h * 1.5], [0.9, 0.5, h * 1.5]], t.dark, 3, 0.95);
+    for (const u of [0.35, 0.65]) {
+      k.line([[u - 0.07, 0.5, h * 1.5], [u - 0.07, 0.5, h * 0.55]], t.light, 1, 0.8);
+      k.line([[u + 0.07, 0.5, h * 1.5], [u + 0.07, 0.5, h * 0.55]], t.light, 1, 0.8);
+      k.box(u - 0.09, 0.45, u + 0.09, 0.55, h * 0.5, h * 0.55, t.base, { crown: false });
+    }
+    return null;
+  },
+  flag: (k, h) => {
+    const t = k.t;
+    k.disc(0.5, 0.5, 0.1, 0, t.dark, 1, true);
+    k.cyl(0.5, 0.5, 0.03, 0, h * 2.0, t.light, { sides: 6, ink: false });
+    k.poly([[0.5, 0.5, h * 1.95], [0.86, 0.5, h * 1.85], [0.5, 0.5, h * 1.6]], t.accent, 0.95);
+    return null;
+  },
+  bike: (k, h) => {
+    const t = k.t;
+    // Two wheels on the ground and the bar between them: the plan symbol,
+    // and the shadow the standing frame is built over in isometric.
+    k.disc(0.28, 0.5, 0.07, 0, t.ink, 0.9);
+    k.disc(0.72, 0.5, 0.07, 0, t.ink, 0.9);
+    k.poly([[0.28, 0.47, 0], [0.72, 0.47, 0], [0.72, 0.53, 0], [0.28, 0.53, 0]], t.base, 0.9);
+    k.faceCircle(0.28, 0.5, h * 0.2, h * 0.2, 'u', t.ink, 0.95);
+    k.faceCircle(0.72, 0.5, h * 0.2, h * 0.2, 'u', t.ink, 0.95);
+    k.faceCircle(0.28, 0.5, h * 0.2, h * 0.08, 'u', t.light, 0.7);
+    k.faceCircle(0.72, 0.5, h * 0.2, h * 0.08, 'u', t.light, 0.7);
+    k.line([[0.28, 0.5, h * 0.2], [0.5, 0.5, h * 0.5], [0.72, 0.5, h * 0.2]], t.base, 2, 0.95);
+    k.line([[0.5, 0.5, h * 0.5], [0.4, 0.5, h * 0.22]], t.base, 2, 0.95);
+    k.line([[0.44, 0.5, h * 0.55], [0.5, 0.5, h * 0.5]], t.dark, 2, 0.95);
+    k.line([[0.66, 0.5, h * 0.62], [0.72, 0.5, h * 0.2]], t.base, 2, 0.95);
+    return null;
+  },
+  rocks: (k, h) => {
+    const t = k.t;
+    k.cyl(0.4, 0.55, 0.28, 0, h * 0.7, t.base, { sides: 7, jitter: 0.35, salt: 1 });
+    k.cyl(0.72, 0.4, 0.15, 0, h * 0.45, shade(t.base, 0.9), { sides: 6, jitter: 0.4, salt: 2 });
+    k.cyl(0.62, 0.74, 0.11, 0, h * 0.3, shade(t.base, 1.08), { sides: 6, jitter: 0.4, salt: 3 });
+    return null;
+  },
+  firepit: (k, h, glow) => {
+    const t = k.t;
+    const flame = glow ?? t.light;
+    for (let i = 0; i < 8; i += 1) {
+      const a = (i / 8) * Math.PI * 2;
+      k.cyl(0.5 + Math.cos(a) * 0.3, 0.5 + Math.sin(a) * 0.3, 0.07, 0, h * 0.2, shade(t.base, 0.9 + k.rnd(i) * 0.2), { sides: 5, jitter: 0.3, salt: i, ink: false });
+    }
+    k.disc(0.5, 0.5, 0.2, h * 0.02, t.ink, 0.8);
+    k.poly([[0.38, 0.5, h * 0.05], [0.62, 0.5, h * 0.05], [0.56, 0.5, h * 0.4], [0.5, 0.5, h * 0.7], [0.44, 0.5, h * 0.35]], flame, 0.6);
+    k.poly([[0.44, 0.5, h * 0.05], [0.56, 0.5, h * 0.05], [0.5, 0.5, h * 0.45]], shade(flame, 1.2), 0.85);
+    return glow ? k.pool(0.5, 0.5, 0.5) : null;
+  },
+
+  // --- water ---------------------------------------------------------------
+  boat: (k, h) => {
+    const t = k.t;
+    // Hull: pointed at the north end, square at the stern.
+    k.poly([[0.5, 0.05, 0], [0.88, 0.3, 0], [0.9, 0.95, 0], [0.1, 0.95, 0], [0.12, 0.3, 0]], shade(t.base, 0.7), 1, true);
+    k.poly([[0.5, 0.05, h * 0.3], [0.88, 0.3, h * 0.3], [0.9, 0.95, h * 0.3], [0.1, 0.95, h * 0.3], [0.12, 0.3, h * 0.3]], t.base, 1, true);
+    k.line([[0.5, 0.05, h * 0.3], [0.5, 0.05, 0]], t.ink, 1, 0.6);
+    k.poly([[0.5, 0.12, h * 0.31], [0.82, 0.32, h * 0.31], [0.84, 0.9, h * 0.31], [0.16, 0.9, h * 0.31], [0.18, 0.32, h * 0.31]], shade(t.base, 1.08), 0.9);
+    k.box(0.28, 0.42, 0.72, 0.7, h * 0.31, h * 0.75, t.accent);
+    k.facePanel('v', 0.7, 0.32, h * 0.45, 0.68, h * 0.68, GLASS, 0.6);
+    k.line([[0.5, 0.75, h * 0.31], [0.5, 0.9, h * 0.31]], t.ink, 1, 0.5);
+    return null;
+  },
+  canoe: (k, h) => {
+    const t = k.t;
+    k.poly([[0.5, 0.05, 0], [0.78, 0.35, 0], [0.78, 0.65, 0], [0.5, 0.95, 0], [0.22, 0.65, 0], [0.22, 0.35, 0]], shade(t.base, 0.75), 1, true);
+    k.poly([[0.5, 0.05, h * 0.25], [0.78, 0.35, h * 0.25], [0.78, 0.65, h * 0.25], [0.5, 0.95, h * 0.25], [0.22, 0.65, h * 0.25], [0.22, 0.35, h * 0.25]], t.base, 1, true);
+    k.poly([[0.5, 0.12, h * 0.26], [0.72, 0.37, h * 0.26], [0.72, 0.63, h * 0.26], [0.5, 0.88, h * 0.26], [0.28, 0.63, h * 0.26], [0.28, 0.37, h * 0.26]], t.dark, 0.9);
+    for (const v of [0.38, 0.62]) k.box(0.28, v - 0.025, 0.72, v + 0.025, h * 0.2, h * 0.26, t.light, { crown: false, ink: false });
+    return null;
+  },
+  buoy: (k, h, glow) => {
+    const t = k.t;
+    k.cyl(0.5, 0.5, 0.2, 0, h * 0.35, t.base, { sides: 8 });
+    k.band(0.5, 0.5, 0.2, h * 0.18, t.light, 0.8, 2);
+    k.cyl(0.5, 0.5, 0.04, h * 0.35, h * 1.0, t.dark, { sides: 6, ink: false });
+    k.disc(0.5, 0.5, 0.06, h * 1.02, glow ?? t.light, 0.95);
+    return glow ? k.pool(0.5, 0.5, 0.3) : null;
+  },
+  cleat: (k, h) => {
+    const t = k.t;
+    k.box(0.3, 0.42, 0.7, 0.58, 0, h * 0.12, t.dark, { crown: false });
+    k.box(0.42, 0.46, 0.58, 0.54, h * 0.12, h * 0.32, t.base, { crown: false });
+    k.box(0.22, 0.46, 0.78, 0.54, h * 0.32, h * 0.4, t.base);
+    k.line([[0.26, 0.5, h * 0.36], [0.5, 0.62, h * 0.36], [0.74, 0.5, h * 0.36]], t.accent, 2, 0.9);
+    return null;
+  },
+
+  // --- country -------------------------------------------------------------
+  haybale: (k, h) => {
+    const t = k.t;
+    // A drum on its side: drawn as a box with banded south face.
+    k.box(0.15, 0.2, 0.85, 0.8, 0, h * 0.7, t.base);
+    for (const u of [0.35, 0.65]) k.line([[u, 0.8, 0], [u, 0.8, h * 0.7]], t.dark, 1, 0.6);
+    k.faceCircle(0.85, 0.5, h * 0.35, h * 0.3, 'v', shade(t.base, 0.9), 0.95, true);
+    k.faceCircle(0.85, 0.5, h * 0.35, h * 0.12, 'v', t.dark, 0.7);
+    return null;
+  },
+  tractor: (k, h) => {
+    const t = k.t;
+    k.faceCircle(0.25, 0.82, h * 0.18, h * 0.18, 'u', t.ink, 0.95);
+    k.faceCircle(0.78, 0.82, h * 0.3, h * 0.3, 'u', t.ink, 0.95);
+    k.faceCircle(0.25, 0.82, h * 0.18, h * 0.07, 'u', t.light, 0.7);
+    k.faceCircle(0.78, 0.82, h * 0.3, h * 0.12, 'u', t.light, 0.7);
+    k.box(0.1, 0.3, 0.55, 0.7, h * 0.3, h * 0.65, t.base);
+    k.box(0.55, 0.25, 0.9, 0.75, h * 0.35, h * 1.1, shade(t.base, 0.9));
+    k.facePanel('u', 0.751, 0.58, h * 0.65, 0.87, h * 1.05, GLASS, 0.5);
+    k.cyl(0.22, 0.42, 0.03, h * 0.65, h * 1.15, t.dark, { sides: 6, ink: false });
+    return null;
+  },
+  well: (k, h) => {
+    const t = k.t;
+    k.cyl(0.5, 0.5, 0.3, 0, h * 0.5, t.base, { sides: 10 });
+    k.disc(0.5, 0.5, 0.2, h * 0.505, t.ink, 0.9);
+    for (const u of [0.2, 0.8]) k.line([[u, 0.5, 0], [u, 0.5, h * 1.3]], t.dark, 2, 0.9);
+    k.poly([[0.1, 0.5, h * 1.2], [0.5, 0.5, h * 1.5], [0.9, 0.5, h * 1.2]], shade(t.base, 0.85), 0.95, true);
+    k.line([[0.2, 0.5, h * 0.95], [0.8, 0.5, h * 0.95]], t.dark, 1, 0.8);
+    return null;
+  },
+  trough: (k, h) => {
+    const t = k.t;
+    legs(k, 0.12, 0.32, 0.88, 0.68, h * 0.3, t.dark);
+    k.box(0.1, 0.3, 0.9, 0.7, h * 0.3, h * 0.55, t.base);
+    k.poly([[0.14, 0.34, h * 0.555], [0.86, 0.34, h * 0.555], [0.86, 0.66, h * 0.555], [0.14, 0.66, h * 0.555]], GLASS, 0.45);
+    return null;
+  },
+  logs: (k, h) => {
+    const t = k.t;
+    const row = (v: number, z: number, n: number) => {
+      for (let i = 0; i < n; i += 1) {
+        const u = 0.15 + i * (0.7 / (n - 1));
+        k.faceCircle(u, v, z, h * 0.11, 'u', shade(t.base, 0.9 + k.rnd(i * 3 + n) * 0.2), 0.95, true);
+        k.faceCircle(u, v, z, h * 0.05, 'u', t.light, 0.6);
+      }
+    };
+    k.box(0.1, 0.3, 0.9, 0.8, 0, h * 0.45, shade(t.base, 0.8), { crown: false, ink: false });
+    row(0.8, h * 0.12, 4);
+    row(0.8, h * 0.34, 3);
     return null;
   },
 };

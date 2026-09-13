@@ -21,14 +21,16 @@ import {
   tileBySlot,
   tilesetById,
   toSlot,
+  type Tile,
   type Tileset,
 } from '@safehouse/rules';
 import { httpError } from '../services/auth.js';
 import { ScenesService, serializeScene } from '../services/scenes.js';
 import { ROOM_KINDS } from './geometry.js';
-import { LlmClient, type LlmConfig, type LlmUsage, type ModelSlot } from './llm.js';
+import { LlmClient, constrainedEffort, type ChatMessage, type LlmConfig, type LlmUsage, type ModelSlot } from './llm.js';
+import { coerceFloorPlan, repairJson, schemaMissError } from './repair.js';
 import { usageMeter } from './usage.js';
-import { parseModelJson } from './vision.js';
+import { describeKeys, parseModelJson, unwrapEnvelope } from './vision.js';
 
 const FLOOR_TIMEOUT_MS = 180_000;
 
@@ -71,11 +73,33 @@ export const FloorStairSchema = z.object({
   direction: z.enum(['up', 'down']),
 });
 
+/**
+ * Everything that is not a room. A first draft used to leave the rest of the
+ * grid unpainted — a building floating in black — so the GM's second job was
+ * always "fill in the outside by hand". Now the plan says what the outside
+ * is made of and what lies about on it, and the compiler paints every
+ * square of the grid on the first pass.
+ */
+export const FloorOutsideSchema = z.object({
+  ground: z
+    .string()
+    .min(1)
+    .max(60)
+    .optional()
+    .describe('A ground tile id from the palette for every square that is not inside a room: asphalt, grass, water, pier boards'),
+  scatter: z
+    .array(z.string().min(1).max(60))
+    .max(12)
+    .default([])
+    .describe('Decoration tile ids that belong on that ground; the builder scatters a few across the outside'),
+});
+
 export const FloorPlanSchema = z.object({
   title: z.string().min(1).max(120),
   rooms: z.array(FloorRoomSchema).min(1).max(60),
   openings: z.array(FloorOpeningSchema).max(200).default([]),
   stairs: z.array(FloorStairSchema).max(20).default([]),
+  outside: FloorOutsideSchema.default({ scatter: [] }),
   notes: z.string().max(2000).default(''),
 });
 export type FloorPlan = z.infer<typeof FloorPlanSchema>;
@@ -102,12 +126,72 @@ export interface CompiledFloor {
     structure: Record<string, string>;
     object: Record<string, string>;
   };
-  counts: { floor: number; wall: number; door: number; window: number; prop: number; stair: number };
+  counts: {
+    floor: number;
+    wall: number;
+    door: number;
+    window: number;
+    /** Props the plan placed by hand, inside rooms. */
+    prop: number;
+    stair: number;
+    /** Squares outside every room, painted with the outside ground. */
+    outside: number;
+    /** Decoration the compiler scattered across the outside. */
+    scatter: number;
+    /** Furniture the compiler added to rooms the plan left bare. */
+    dressed: number;
+  };
   warnings: string[];
 }
 
 const key = (col: number, row: number): string => `${col},${row}`;
 const clamp = (n: number, lo: number, hi: number): number => Math.min(Math.max(n, lo), hi);
+
+/**
+ * A small deterministic generator (mulberry32) seeded from the plan, so the
+ * same plan on the same grid scatters the same props — a rebuild must not
+ * reshuffle a map the GM has already looked at.
+ */
+function prng(seedText: string): () => number {
+  let h = 1779033703 ^ seedText.length;
+  for (let i = 0; i < seedText.length; i += 1) {
+    h = Math.imul(h ^ seedText.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  let a = h >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Ground tiles that read as "outside" by their ids and names, in order of preference. */
+const OUTSIDE_WORDS = [
+  'road', 'asphalt', 'street', 'pavement', 'walk', 'setts', 'paving', 'yard', 'track', 'path', 'grass', 'lawn',
+  'meadow', 'shore', 'quay', 'planking', 'jetty', 'harbour', 'deep', 'alley', 'dirt', 'gravel', 'rubble', 'lot',
+];
+
+/** The set's best guess at an outside ground when the plan names none. */
+export function outsideGroundFor(set: Tileset): Tile | null {
+  const grounds = set.tiles.filter((t) => categoryOf(t) === 'ground' && t.emissive === undefined && t.connects === undefined);
+  // Whole words only: "catwalk" is not a walk, and a "sludge channel" is not
+  // a road. The id and the name are searched together.
+  for (const word of OUTSIDE_WORDS) {
+    const re = new RegExp(`\\b${word}\\b`);
+    const hit = grounds.find((t) => re.test(`${t.id} ${t.name.toLowerCase()}`));
+    if (hit) return hit;
+  }
+  return grounds[0] ?? null;
+}
+
+/** One prop per this many floor squares is "dressed"; below it a room is bare. */
+const DRESS_PER_SQUARES = 12;
+/** One scattered decoration per this many outside squares. */
+const SCATTER_PER_SQUARES = 16;
+const SCATTER_MAX = 80;
 
 /**
  * Pure and deterministic: the same plan on the same grid with the same set
@@ -124,7 +208,7 @@ export function compileFloorPlan(
   const ground: Record<string, string> = {};
   const structure: Record<string, string> = {};
   const object: Record<string, string> = {};
-  const counts = { floor: 0, wall: 0, door: 0, window: 0, prop: 0, stair: 0 };
+  const counts = { floor: 0, wall: 0, door: 0, window: 0, prop: 0, stair: 0, outside: 0, scatter: 0, dressed: 0 };
 
   const grounds = set.tiles.filter((t) => categoryOf(t) === 'ground');
   const defaultFloor = (grounds[0] && toSlot(set, grounds[0].id)) ?? 'ground/1';
@@ -263,6 +347,112 @@ export function compileFloorPlan(
     counts.stair += 1;
   }
 
+  // --- The outside: every square not inside a room is painted too ------------
+  // A first draft used to stop at the walls and leave the rest of the grid
+  // black. The plan names the outside ground (or the set's best guess), the
+  // compiler paints it edge to edge, then scatters the decoration that belongs
+  // on it — clear of doors, so nothing blocks a way in.
+  const outsideCells: string[] = [];
+  let outsideTile: Tile | null = null;
+  if (plan.outside.ground) {
+    const named = resolveTile(set, plan.outside.ground);
+    if (named && categoryOf(named) === 'ground') outsideTile = named;
+    else warnings.push(`"${plan.outside.ground}" is not a ground tile in ${set.name} — the outside uses the set's own`);
+  }
+  outsideTile ??= outsideGroundFor(set);
+  const outsideSlot = outsideTile ? (toSlot(set, outsideTile.id) ?? defaultFloor) : defaultFloor;
+  for (let c = 0; c < grid.cols; c += 1) {
+    for (let r = 0; r < grid.rows; r += 1) {
+      const k = key(c, r);
+      if (ground[k] !== undefined) continue;
+      ground[k] = outsideSlot;
+      outsideCells.push(k);
+    }
+  }
+  counts.outside = outsideCells.length;
+
+  const rand = prng(`${plan.title}|${grid.cols}x${grid.rows}|${set.id}`);
+  const doorCells = new Set(Object.entries(structure).filter(([, s]) => s === DOOR).map(([k]) => k));
+  const nearDoor = (c: number, r: number): boolean => {
+    for (let dc = -1; dc <= 1; dc += 1) for (let dr = -1; dr <= 1; dr += 1) if (doorCells.has(key(c + dc, r + dr))) return true;
+    return false;
+  };
+  const nearWall = (c: number, r: number): boolean => {
+    for (let dc = -1; dc <= 1; dc += 1) for (let dr = -1; dr <= 1; dr += 1) if (structure[key(c + dc, r + dr)] !== undefined) return true;
+    return false;
+  };
+
+  // What may lie about outside: the plan's list, else every decoration the
+  // set says belongs on that ground (or on anything), never a light.
+  const named = plan.outside.scatter
+    .map((id) => resolveTile(set, id))
+    .filter((t): t is Tile => t !== null && (categoryOf(t) === 'decoration' || categoryOf(t) === 'interior'));
+  for (const id of plan.outside.scatter) {
+    if (!resolveTile(set, id)) warnings.push(`"${id}" is not a tile in ${set.name} — left out of the scatter`);
+  }
+  const fits = (t: Tile): boolean => !t.placement?.on || (outsideTile !== null && t.placement.on.includes(outsideTile.id));
+  const scatterPool =
+    named.length > 0
+      ? named
+      : set.tiles.filter((t) => categoryOf(t) === 'decoration' && t.emissive === undefined && !t.placement?.againstWall && fits(t));
+  if (scatterPool.length > 0 && outsideCells.length > 0) {
+    const want = Math.min(SCATTER_MAX, Math.floor(outsideCells.length / SCATTER_PER_SQUARES));
+    const order = [...outsideCells].sort(() => rand() - 0.5);
+    for (const k of order) {
+      if (counts.scatter >= want) break;
+      const [c, r] = k.split(',').map(Number) as [number, number];
+      if (object[k] !== undefined || structure[k] !== undefined || nearDoor(c, r)) continue;
+      const tile = scatterPool[Math.floor(rand() * scatterPool.length)]!;
+      object[k] = toSlot(set, tile.id) ?? tile.id;
+      counts.scatter += 1;
+    }
+  }
+
+  // --- Dressing: a room the plan left bare gets its furniture ----------------
+  // One prop per twelve floor squares is the line; below it the room reads as
+  // a box. Things that want a wall at their back go along the walls, the rest
+  // in the open, and never in front of a door.
+  const furniture = set.tiles.filter((t) => categoryOf(t) === 'interior' && t.emissive === undefined && !t.placement?.on);
+  const wallSide = furniture.filter((t) => t.placement?.againstWall === true);
+  const open = furniture.filter((t) => t.placement?.againstWall !== true && t.footprint !== 'wall');
+  if (furniture.length > 0) {
+    for (const room of rooms) {
+      const { x, y, w, h } = room.rect;
+      const cells: string[] = [];
+      for (let c = x + 1; c < x + w - 1; c += 1) for (let r = y + 1; r < y + h - 1; r += 1) cells.push(key(c, r));
+      const have = cells.filter((k) => object[k] !== undefined || structure[k] !== undefined).length;
+      let need = Math.floor(cells.length / DRESS_PER_SQUARES) - have;
+      if (need <= 0) continue;
+      const free = cells.filter((k) => {
+        const [c, r] = k.split(',').map(Number) as [number, number];
+        return object[k] === undefined && structure[k] === undefined && !nearDoor(c, r);
+      });
+      const byWall = free.filter((k) => {
+        const [c, r] = k.split(',').map(Number) as [number, number];
+        return nearWall(c, r);
+      });
+      const inOpen = free.filter((k) => !byWall.includes(k));
+      const pick = (pool: string[], from: Tile[]): boolean => {
+        if (pool.length === 0 || from.length === 0) return false;
+        const k = pool.splice(Math.floor(rand() * pool.length), 1)[0]!;
+        const tile = from[Math.floor(rand() * from.length)]!;
+        object[k] = toSlot(set, tile.id) ?? tile.id;
+        counts.dressed += 1;
+        need -= 1;
+        return true;
+      };
+      while (need > 0) {
+        // Alternate: something against the wall, then something in the room.
+        const first = wallSide.length > 0 ? pick(byWall, wallSide) : false;
+        const second = need > 0 ? pick(inOpen, open.length > 0 ? open : furniture) : false;
+        if (!first && !second) {
+          // Nothing left that fits the rule: use whatever square and piece remain.
+          if (!pick(free.filter((k) => object[k] === undefined), furniture)) break;
+        }
+      }
+    }
+  }
+
   counts.floor = Object.keys(ground).length;
   counts.wall = Object.values(structure).filter((s) => s === WALL).length;
 
@@ -292,26 +482,38 @@ const SYSTEM_PROMPT = [
   "4. Doors and windows are openings in a named room's wall: which wall (n, s, e, w), how many squares along from that wall's top or left end, how wide. Never at a corner (offset 0). Every room the runners are meant to enter needs a door, and two rooms that share a wall need a door in it.",
   '5. Floor and prop tiles come ONLY from the palette in the request — use the ids exactly as written. Props stand on floor squares inside a room, never on a wall, one per square, and only where the description calls for furniture or dressing.',
   '6. Stairs go on a floor square inside a room, only if the description asks for another floor.',
-  '7. Prefer fewer, larger, correct rooms. Leave the rest of the grid empty unless the description says otherwise.',
-  '8. Name rooms the way a GM says them out loud ("loading dock", "break room"); the GM reads those names back.',
+  '7. Prefer fewer, larger, correct rooms — and EVERY square of the grid ends up painted. Rooms cover what is built; "outside.ground" names the ground tile for everything else (asphalt, grass, water, pier boards — whatever the description implies), and "outside.scatter" lists a few decoration ids that belong on that ground, which the builder scatters across it.',
+  '8. Dress every room: at least one prop per ten floor squares, chosen for what the room is — furniture against the walls, the rest in the open, nothing in front of a door. A bare room is a mistake.',
+  '9. Name rooms the way a GM says them out loud ("loading dock", "break room"); the GM reads those names back.',
 ].join('\n');
 
 function palette(set: Tileset): string {
+  // Each tile with the one fact the model needs to place it: what it stands
+  // on, whether it wants a wall at its back.
+  const where = (t: Tile): string => {
+    const bits: string[] = [];
+    if (t.placement?.on && t.placement.on.length > 0) bits.push(`on ${t.placement.on.join('/')}`);
+    if (t.placement?.againstWall) bits.push('against a wall');
+    if (t.emissive) bits.push('a light');
+    return bits.length > 0 ? ` (${bits.join(', ')})` : '';
+  };
   const list = (category: string) =>
     set.tiles
       .filter((t) => categoryOf(t) === category)
-      .map((t) => `  ${t.id} — ${t.name}`)
+      .map((t) => `  ${t.id} — ${t.name}${where(t)}`)
       .join('\n');
   const stairs = set.tiles.some((t) => categoryOf(t) === 'stairs');
+  const outside = outsideGroundFor(set);
   return [
     `Tileset: ${set.name}.`,
-    'Ground tiles (a room\'s "floor"):',
+    'Ground tiles (a room\'s "floor", and "outside.ground"):',
     list('ground'),
     'Interior tiles (furniture — a prop\'s "tile"):',
     list('interior'),
-    'Decoration tiles (dressing — also a prop\'s "tile"):',
+    'Decoration tiles (dressing — a prop\'s "tile", and "outside.scatter"):',
     list('decoration'),
     stairs ? 'Stairs up and down are available.' : 'This set has no stairs; leave "stairs" empty.',
+    outside ? `If you name no "outside.ground", the builder uses ${outside.id} (${outside.name}).` : '',
   ].join('\n');
 }
 
@@ -385,21 +587,16 @@ export async function proposeFloor(db: Db, config: LlmConfig | null, ask: FloorA
 
   const client = new LlmClient(config);
   const model = ask.slot === 'fast' ? config.fast : config.primary;
-  const turn = await client.chat(
+  const messages: ChatMessage[] = [
+    { role: 'system', content: SYSTEM_PROMPT },
     {
-      model,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        {
-          role: 'user',
-          content: `${userPrompt(scene, ask.level, set, painted, ask.prompt)}\n\nSchema:\n${JSON.stringify(floorPlanJsonSchema())}`,
-        },
-      ],
-      temperature: 0.2,
-      max_tokens: 8000,
+      role: 'user',
+      content: `${userPrompt(scene, ask.level, set, painted, ask.prompt)}\n\nSchema:\n${JSON.stringify(floorPlanJsonSchema())}`,
     },
-    { timeoutMs: FLOOR_TIMEOUT_MS, ...(ask.signal ? { signal: ask.signal } : {}) },
-  );
+  ];
+  const opts = { timeoutMs: FLOOR_TIMEOUT_MS, ...(ask.signal ? { signal: ask.signal } : {}) };
+  const effort = constrainedEffort(config);
+  const turn = await client.chat({ model, messages, temperature: 0.2, max_tokens: 8000, effort }, opts);
   if (turn.finishReason === 'length' && !/\}\s*$/.test(turn.content.trim())) {
     throw httpError(
       502,
@@ -408,19 +605,36 @@ export async function proposeFloor(db: Db, config: LlmConfig | null, ask: FloorA
       { preview: turn.content.trim().slice(-240), finishReason: turn.finishReason },
     );
   }
-  const parsed = parseModelJson(turn.content, 'the floor plan');
-  const checked = FloorPlanSchema.safeParse(parsed);
+  const parsed = unwrapEnvelope(parseModelJson(turn.content, 'the floor plan'), 'rooms');
+  // Bend the numbers and the names into bounds first; if the schema still
+  // says no, one correction turn with the issues by path (fixer/repair.ts).
+  let checked = FloorPlanSchema.safeParse(coerceFloorPlan(parsed, ROOM_KINDS));
+  let usage = turn.usage;
+  let latencyMs = turn.latencyMs;
   if (!checked.success) {
-    throw httpError(502, 'ai_error', 'the model returned a floor plan the schema rejects', checked.error.issues.slice(0, 8));
+    const repaired = await repairJson(
+      client,
+      { model, max_tokens: 8000, effort },
+      opts,
+      { messages, badContent: turn.content, issues: checked.error.issues, what: 'the floor plan', mustHave: 'rooms' },
+    );
+    usage = {
+      promptTokens: usage.promptTokens + repaired.turn.usage.promptTokens,
+      completionTokens: usage.completionTokens + repaired.turn.usage.completionTokens,
+      totalTokens: usage.totalTokens + repaired.turn.usage.totalTokens,
+    };
+    latencyMs += repaired.turn.latencyMs;
+    checked = FloorPlanSchema.safeParse(coerceFloorPlan(repaired.parsed, ROOM_KINDS));
+    if (!checked.success) throw schemaMissError(`floor plan (it sent ${describeKeys(parsed)})`, checked.error.issues);
   }
   const plan = compileFloorPlan(checked.data, scene.grid, set);
-  usageMeter.record(ask.campaignId, { model: turn.model, usage: turn.usage, latencyMs: turn.latencyMs });
+  usageMeter.record(ask.campaignId, { model: turn.model, usage, latencyMs });
   return {
     plan,
     raw: checked.data,
     level: ask.level,
     model: turn.model,
-    usage: turn.usage,
-    latencyMs: turn.latencyMs,
+    usage,
+    latencyMs,
   };
 }

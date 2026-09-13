@@ -7,6 +7,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { create } from 'zustand';
 import type { AiSettingsView, AiSettingsWrite } from '@safehouse/contracts';
 import { ApiError, apiGet, apiPost, apiPut, queryClient } from '../../../api/client.js';
+import type { AiContext } from './aiContext.js';
 
 /** True when the server said AI is off (503 ai_disabled). */
 export function isAiDisabled(err: unknown): boolean {
@@ -48,6 +49,8 @@ export interface FixerChatBody {
   conversationId?: string;
   /** Model slot hint (FR12.16): 'primary' | 'fast'. */
   slot?: 'primary' | 'fast';
+  /** What the GM is looking at — the dock stamps it on every turn (aiContext.ts). */
+  context?: AiContext;
 }
 
 /** The turn also streams over WS as `fixer.*` ephemerals; this is the result. */

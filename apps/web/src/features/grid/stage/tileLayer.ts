@@ -867,6 +867,102 @@ function drawPattern(
       }
       break;
     }
+    case 'cobble': {
+      // Setts in offset courses: each stone its own tone, rounded by a lit
+      // top-left edge and a dark joint below and right.
+      const cols = 4;
+      const rows = 4;
+      for (let j = 0; j < rows; j += 1) {
+        const off = j % 2 === 0 ? 0 : 0.5;
+        for (let i = -1; i < cols; i += 1) {
+          const u0 = Math.max(0, (i + off) / cols + 0.02);
+          const u1 = Math.min(1, (i + off + 1) / cols - 0.02);
+          if (u1 <= u0) continue;
+          const v0 = j / rows + 0.02;
+          const v1 = (j + 1) / rows - 0.02;
+          const tone = shade(tones.base, 0.94 + rnd(seed, i * 7 + j * 13 + 3) * 0.12);
+          uvRect(g, P, u0, v0, u1, v1, { color: tone, alpha: 0.85 });
+          line([[u0, v0], [u1, v0]], light, 0.35);
+          line([[u0, v1], [u1, v1]], ink, 0.5);
+        }
+      }
+      break;
+    }
+    case 'marble': {
+      // Two big slabs, a soft vein across each, one hairline joint. Kept
+      // quiet: polished stone is read by its sheen, not its pattern.
+      uvRect(g, P, 0, 0, 1, 0.5, { color: shade(tones.base, 1.03), alpha: 0.5 });
+      uvRect(g, P, 0, 0.5, 1, 1, { color: shade(tones.base, 0.98), alpha: 0.5 });
+      line([[0, 0.5], [1, 0.5]], ink, 0.35);
+      for (let i = 0; i < 2; i += 1) {
+        const v = 0.1 + i * 0.5 + rnd(seed, i) * 0.3;
+        const u = rnd(seed, 10 + i) * 0.4;
+        line(
+          [
+            [u, v],
+            [u + 0.25, v + 0.08 + rnd(seed, 20 + i) * 0.06],
+            [u + 0.55, v - 0.04],
+          ],
+          i === 0 ? light : accent,
+          0.28,
+        );
+      }
+      break;
+    }
+    case 'sand': {
+      // Grain as a fine stipple, a ripple line, two pebbles.
+      for (let i = 0; i < 18; i += 1) {
+        uvDot(g, m, P, rnd(seed, i), rnd(seed, 30 + i), 0.012, {
+          color: i % 3 === 0 ? light : dark,
+          alpha: 0.45,
+        });
+      }
+      const v = 0.3 + rnd(seed, 60) * 0.4;
+      line(
+        [
+          [0.05, v],
+          [0.3, v - 0.05],
+          [0.55, v + 0.04],
+          [0.8, v - 0.03],
+          [0.95, v + 0.02],
+        ],
+        accent,
+        0.4,
+      );
+      for (let i = 0; i < 2; i += 1) {
+        uvDot(g, m, P, 0.15 + rnd(seed, 70 + i) * 0.7, 0.15 + rnd(seed, 80 + i) * 0.7, 0.03, { color: dark, alpha: 0.8 });
+      }
+      break;
+    }
+    case 'field': {
+      // Furrows: five parallel ridges, lit on one side, with the odd break.
+      const n = 5;
+      for (let i = 0; i < n; i += 1) {
+        const v = (i + 0.5) / n;
+        const gap = rnd(seed, i) < 0.25;
+        const cut = 0.3 + rnd(seed, 10 + i) * 0.4;
+        uvRect(g, P, 0, v - 0.06, gap ? cut : 1, v + 0.06, { color: dark, alpha: 0.35 });
+        if (gap) uvRect(g, P, cut + 0.1, v - 0.06, 1, v + 0.06, { color: dark, alpha: 0.35 });
+        line([[0, v - 0.06], [1, v - 0.06]], light, 0.4);
+      }
+      for (let i = 0; i < 4; i += 1) {
+        uvDot(g, m, P, rnd(seed, 20 + i), rnd(seed, 30 + i), 0.02, { color: accent, alpha: 0.7 });
+      }
+      break;
+    }
+    case 'reeds': {
+      // Dark water, then standing stalks leaning together, a seed head on some.
+      uvRect(g, P, 0, 0, 1, 1, { color: dark, alpha: 0.3 });
+      for (let i = 0; i < 12; i += 1) {
+        const u = 0.05 + rnd(seed, i) * 0.9;
+        const v = 0.25 + rnd(seed, 20 + i) * 0.7;
+        const lean = -0.02 + rnd(seed, 40 + i) * 0.05;
+        const tall = 0.18 + rnd(seed, 60 + i) * 0.14;
+        line([[u, v], [u + lean, v - tall]], i % 4 === 0 ? light : accent, 0.85);
+        if (i % 3 === 0) uvDot(g, m, P, u + lean, v - tall, 0.014, { color: light, alpha: 0.8 });
+      }
+      break;
+    }
     case 'solid':
       break;
     default: {

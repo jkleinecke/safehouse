@@ -9,7 +9,7 @@
  */
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { tilesetById } from '@safehouse/rules';
-import { compileFloorPlan, type FloorPlanInput } from '../src/fixer/floor-plan.js';
+import { compileFloorPlan, outsideGroundFor, type FloorPlanInput } from '../src/fixer/floor-plan.js';
 import { MockLlmServer } from '../src/fixer/mock-llm.js';
 import { bootstrapCampaign, makeTestApp, type BootstrapResult, type TestApp } from './core-helpers.js';
 import { disableAi, enableAi } from './fixer-helpers.js';
@@ -101,7 +101,78 @@ describe('compileFloorPlan', () => {
       for (const slot of Object.values(out.layers[layer])) expect(slot).toMatch(/^[a-z]+\//);
     }
   });
+
+  it('paints every square of the grid on the first pass — the outside too', () => {
+    expect(Object.keys(out.layers.ground)).toHaveLength(GRID.cols * GRID.rows);
+    // Outside the two rooms: the set's best guess at an exterior ground.
+    const outside = outsideGroundFor(dock)!;
+    // Docklands has no road, yard or walk ("catwalk" is not a walk), so the
+    // outside is its first ground: poured concrete.
+    expect(outside.id).toBe('floor');
+    expect(out.layers.ground['15,12']).toBe('ground/1');
+    // A set with a street knows it.
+    expect(outsideGroundFor(tilesetById('sprawl')!)?.id).toBe('road');
+    expect(outsideGroundFor(tilesetById('park')!)?.id).toBe('path');
+    expect(outsideGroundFor(tilesetById('lake')!)?.id).toBe('shore');
+    expect(out.counts.outside).toBe(GRID.cols * GRID.rows - 6 * 5 - 5 * 5 + 5);
+    expect(out.counts.floor).toBe(GRID.cols * GRID.rows);
+  });
+
+  it('honours a named outside ground and scatters decoration on it, clear of doors', () => {
+    const plan: FloorPlanInput = {
+      ...PLAN,
+      outside: { ground: 'grate', scatter: ['barrel', 'pallet', 'nothing-such'] },
+    };
+    const built = compileFloorPlan(plan, GRID, dock);
+    expect(built.layers.ground['15,12']).toBe('ground/3'); // grate
+    expect(built.warnings.join('\n')).toMatch(/"nothing-such" is not a tile/);
+    // Scatter lands only outside, only on empty squares, never beside a door.
+    const scattered = Object.keys(built.layers.object).filter((k) => !PLAN.rooms.some((r) => inside(r, k)));
+    expect(scattered.length).toBe(built.counts.scatter);
+    expect(built.counts.scatter).toBeGreaterThan(0);
+    const doors = Object.entries(built.layers.structure).filter(([, s]) => s === 'building/door').map(([k]) => k);
+    for (const k of scattered) {
+      const [c, r] = k.split(',').map(Number) as [number, number];
+      expect(built.layers.structure[k]).toBeUndefined();
+      for (const d of doors) {
+        const [dc, dr] = d.split(',').map(Number) as [number, number];
+        expect(Math.max(Math.abs(dc - c), Math.abs(dr - r)), `${k} is beside door ${d}`).toBeGreaterThan(1);
+      }
+      expect(['decoration/1', 'decoration/4']).toContain(built.layers.object[k]); // barrel, pallet
+    }
+    // Deterministic: the same plan scatters the same squares.
+    expect(compileFloorPlan(plan, GRID, dock).layers.object).toEqual(built.layers.object);
+  });
+
+  it('dresses a room the plan left bare, walls first, and leaves a furnished one alone', () => {
+    const bare: FloorPlanInput = {
+      title: 'Bare',
+      rooms: [{ name: 'hall', x: 0, y: 0, w: 10, h: 8 }], // 8x6 = 48 floor squares → 4 props
+      openings: [{ room: 'hall', wall: 's', offset: 4, kind: 'door' }],
+    };
+    const built = compileFloorPlan(bare, GRID, dock);
+    expect(built.counts.dressed).toBe(4);
+    expect(built.counts.prop).toBe(0);
+    const placed = Object.keys(built.layers.object).filter((k) => inside(bare.rooms[0]!, k));
+    expect(placed).toHaveLength(4);
+    for (const k of placed) {
+      const [c, r] = k.split(',').map(Number) as [number, number];
+      // Inside the ring, and not on the door's doorstep.
+      expect(c).toBeGreaterThan(0);
+      expect(r).toBeGreaterThan(0);
+      expect(Math.max(Math.abs(c - 4), Math.abs(r - 7))).toBeGreaterThan(1);
+      expect(built.layers.object[k]).toMatch(/^interior\//);
+    }
+    // The clinic's rooms already carry a prop each for their size: untouched.
+    expect(out.counts.dressed).toBe(0);
+  });
 });
+
+/** Is a "col,row" key inside a room's rectangle (walls included)? */
+function inside(room: { x: number; y: number; w: number; h: number }, k: string): boolean {
+  const [c, r] = k.split(',').map(Number) as [number, number];
+  return c >= room.x && c < room.x + room.w && r >= room.y && r < room.y + room.h;
+}
 
 describe('POST /api/fixer/build-floor', () => {
   let t: TestApp;

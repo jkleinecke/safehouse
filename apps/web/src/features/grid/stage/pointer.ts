@@ -17,7 +17,7 @@ import {
   type SceneMetrics,
 } from '../geometry.js';
 import { pointInPolygon } from '../geometry.js';
-import type { StageCallbacks, StageSceneState, TileRectMode } from '../types.js';
+import type { ContextTarget, StageCallbacks, StageSceneState, TileRectMode } from '../types.js';
 import { Camera, wheelZoomFactor } from './camera.js';
 import {
   hitCamera,
@@ -28,6 +28,7 @@ import {
   hitToken,
   hitWall,
   isDoubleTap,
+  touchHitSlop,
   worldTolerance,
   type TapRecord,
 } from './hit.js';
@@ -113,6 +114,9 @@ export function cellsBetween(from: Cell, to: Cell): Cell[] {
   return out;
 }
 
+/** A touch held still this long is a right-click (the map's context menu). */
+const LONG_PRESS_MS = 500;
+
 export class PointerController {
   private mode: Mode = 'idle';
   /** Cells already sent this stroke, so a wandering drag sends each once. */
@@ -123,7 +127,19 @@ export class PointerController {
   private readonly pointers = new Map<number, ActivePointer>();
   private rect: DOMRect | null = null;
   private lastTap: TapRecord | null = null;
+  /**
+   * Whether the last tap landed on a token. A double-tap is a ping only when
+   * neither tap did: a player's second try at their own runner is a select,
+   * not a flash for the whole table (B6).
+   */
+  private lastTapOnToken = false;
+  /** 'mouse' | 'pen' | 'touch' of the pointer that started the gesture. */
+  private pointerType: string | undefined;
   private moved = false;
+  /** The gesture began with the right button: a still release opens the menu. */
+  private rightButton = false;
+  /** A finger held still this long opens the menu too — phones have no right button. */
+  private longPress: ReturnType<typeof setTimeout> | null = null;
 
   // token drag
   private dragTokenId: string | null = null;
@@ -178,6 +194,7 @@ export class PointerController {
     this.el.removeEventListener('pointerleave', this.onUp);
     this.el.removeEventListener('wheel', this.onWheel);
     this.el.removeEventListener('contextmenu', this.onContext);
+    this.cancelLongPress();
     this.pointers.clear();
   }
 
@@ -270,17 +287,40 @@ export class PointerController {
     const state = this.host.state();
     const m = this.host.metrics();
     const grid = this.toGrid(screen);
+    this.pointerType = e.pointerType;
+    this.rightButton = e.button === 2;
+    this.cancelLongPress();
+    // A finger held still for half a second is the phone's right-click. It
+    // is armed on every touch down and disarmed by the first real movement,
+    // so a drag or a pan never opens it.
+    if (e.pointerType === 'touch' && e.button === 0 && this.host.callbacks.onContextMenu) {
+      this.longPress = setTimeout(() => {
+        this.longPress = null;
+        if (this.moved || this.pointers.size !== 1) return;
+        this.mode = 'idle';
+        this.host.clearRuler?.();
+        this.openContextMenu(screen, this.toGrid(screen));
+      }, LONG_PRESS_MS);
+    }
 
-    // Double-tap anywhere flashes a ping for everyone (FR9.15).
+    // Double-tap on empty floor flashes a ping for everyone (FR9.15). On a
+    // token it is two taps at a token — the second one selects like the first,
+    // because on a phone the second tap is usually the player trying again.
     const tap: TapRecord = { x: screen.x, y: screen.y, t: e.timeStamp || Date.now() };
-    if (isDoubleTap(this.lastTap, tap)) {
+    const onToken =
+      hitToken(m, state.tokens, grid, {
+        minHitPx: touchHitSlop(this.host.camera.scale, e.pointerType),
+      }) !== null;
+    if (isDoubleTap(this.lastTap, tap) && !onToken && !this.lastTapOnToken) {
       this.lastTap = null;
+      this.lastTapOnToken = false;
       this.mode = 'idle';
       this.host.echoPing(worldFromGrid(m, grid));
       this.host.callbacks.onPing(grid.x, grid.y);
       return;
     }
     this.lastTap = tap;
+    this.lastTapOnToken = onToken;
 
     // Middle/right button always pans, whatever tool is selected.
     if (e.button === 1 || e.button === 2) {
@@ -413,7 +453,11 @@ export class PointerController {
       }
     }
 
-    const token = hitToken(m, state.tokens, grid);
+    // A finger gets a bigger target than a mouse, and both grow as the map
+    // zooms out (B6: a phone's default fit left tokens four pixels wide).
+    const token = hitToken(m, state.tokens, grid, {
+      minHitPx: touchHitSlop(this.host.camera.scale, this.pointerType),
+    });
     if (token) {
       this.host.callbacks.onSelectToken(token.id);
       if (state.draggableIds.has(token.id)) {
@@ -506,7 +550,10 @@ export class PointerController {
     const dy = screen.y - tracked.y;
     tracked.x = screen.x;
     tracked.y = screen.y;
-    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) this.moved = true;
+    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+      this.moved = true;
+      this.cancelLongPress();
+    }
 
     if (this.mode === 'pinch') {
       this.updatePinch();
@@ -626,11 +673,61 @@ export class PointerController {
       // A single cell is still a fill — a click with the area tool paints
       // one square, which is what a click with any brush does.
       if (b) this.host.callbacks.onTileRect?.(b.c0, b.r0, b.c1, b.r1, this.rectMode);
+    } else if (this.mode === 'pan' && !this.moved && this.rightButton) {
+      // A right button pressed and released in place: the menu, about
+      // whatever is under the pointer. A right-drag stayed a pan.
+      this.cancelLongPress();
+      const screen = this.local(e);
+      this.openContextMenu(screen, this.toGrid(screen));
     } else if (this.mode === 'pan' && !this.moved) {
       this.host.callbacks.onSelectToken(null);
       this.clickOnFloor(e);
     }
+    this.cancelLongPress();
+    this.rightButton = false;
     this.mode = 'idle';
+  }
+
+  private cancelLongPress(): void {
+    if (this.longPress !== null) {
+      clearTimeout(this.longPress);
+      this.longPress = null;
+    }
+  }
+
+  /**
+   * What a context menu is about, resolved the way a left-click resolves
+   * its target: token first (with the pointer's own slop), then a door's
+   * knob, a painted door, a wall for the GM, and otherwise the floor.
+   */
+  private contextTarget(grid: Point): ContextTarget {
+    const state = this.host.state();
+    const m = this.host.metrics();
+    const token = hitToken(m, state.tokens, grid, {
+      minHitPx: touchHitSlop(this.host.camera.scale, this.pointerType),
+    });
+    if (token) return { kind: 'token', id: token.id };
+    const tol = Math.max(12, worldTolerance(this.host.camera.scale, 12));
+    const doorId = hitDoor(m, state.scene, grid, tol);
+    if (doorId) return { kind: 'door', id: doorId };
+    const level = state.level ?? 0;
+    const cell = hitTileDoor(state.scene, grid, level);
+    if (cell) return { kind: 'tileDoor', cell, level };
+    if (state.role === 'gm') {
+      const wallId = hitWall(m, state.scene, grid, tol);
+      if (wallId) return { kind: 'wall', id: wallId };
+    }
+    return { kind: 'floor' };
+  }
+
+  private openContextMenu(screen: Point, grid: Point): void {
+    const open = this.host.callbacks.onContextMenu;
+    if (!open) return;
+    const target = this.contextTarget(grid);
+    // The menu is about a token: select it too, so "range from the selected
+    // runner" on the next menu and the inspector both point at the same thing.
+    if (target.kind === 'token') this.host.callbacks.onSelectToken(target.id);
+    open({ target, grid, screen });
   }
 
   // -------------------------------------------------------------------------

@@ -3,7 +3,7 @@
  * so the main bundle stays lean; the stage subtree is loaded lazily.
  */
 import type { Point, Role, Scene, Token } from '@safehouse/contracts';
-import type { TileCut, TilePattern, TileProp } from '@safehouse/rules';
+import type { TileCut, TilePattern, TileProp, VisionMode } from '@safehouse/rules';
 import { slotOf, slotUniverse, tileBySlot } from '@safehouse/rules';
 
 /** Active pointer tool on the canvas. */
@@ -226,6 +226,22 @@ export interface SegmentDraft {
 }
 
 /** Live ruler measurement, reported by the stage to the DOM readout. */
+/** What a right-click or long press landed on. Resolved by the stage, acted on by the page. */
+export type ContextTarget =
+  | { kind: 'token'; id: string }
+  | { kind: 'door'; id: string }
+  | { kind: 'tileDoor'; cell: string; level: number }
+  | { kind: 'wall'; id: string }
+  | { kind: 'floor' };
+
+export interface ContextMenuRequest {
+  target: ContextTarget;
+  /** Grid units, where the pointer was. */
+  grid: Point;
+  /** Pixels from the canvas host's top-left, where the menu opens. */
+  screen: Point;
+}
+
 export interface RulerState {
   /** Grid-unit coordinates. */
   from: Point;
@@ -380,6 +396,14 @@ export interface StageCallbacks {
   onFogVertex(x: number, y: number): void;
   /** focus tool click — broadcast "focus here" (grid units). */
   onFocus(x: number, y: number): void;
+  /**
+   * A right-click, or a long press on a touch screen, that did not turn into
+   * a drag (docs/UX_MAP_BUILDER.md, the context menu). What sits under the
+   * pointer is resolved here, in the same order a left-click uses, so the
+   * menu is about the thing the GM sees. Screen coordinates are relative to
+   * the canvas host, where the menu is drawn.
+   */
+  onContextMenu?(request: ContextMenuRequest): void;
 
   // -- GM geometry authoring (FR9.2/9.3). Optional so other stages (the TV
   // kiosk) can implement the play-side callbacks alone.
@@ -446,6 +470,13 @@ export interface StageApi {
    * this call (the TV) still draws a floor rather than a blank screen.
    */
   setTileDefs(defs: Record<string, TileDrawDef>): void;
+  /**
+   * The eyes the map is drawn for (docs/VISION.md §4.4–4.5): a restyle of the
+   * floor and the tokens — thermal false colour, low-light lift, ultrasound
+   * grey — and nothing else. What the viewer is allowed to see does not
+   * change here; that is the server's line, and the shroud's.
+   */
+  setViewMode(mode: VisionMode): void;
   /** Interim remote drag ghosts: tokenId → grid position (+ relay timestamp). */
   setDrags(drags: Record<string, { x: number; y: number; ts?: number }>): void;
   /** Flash a ping at grid coords (remote or local echo). */

@@ -43,11 +43,34 @@ export function useCreateSession(campaignId: string) {
   });
 }
 
+const sessionsKey = (campaignId: string) => ['campaign', campaignId, 'sessions'] as const;
+
+/**
+ * Optimistic on purpose (B7): the attendance chips compute the next list from
+ * the cached session, so two taps a second apart used to send two PATCHes
+ * built from the same stale list and the second one erased the first. Writing
+ * the patch into the cache before the request leaves means the next tap
+ * starts from what the GM already sees; a failure puts the old row back.
+ */
 export function useUpdateSession(campaignId: string) {
   return useMutation({
     mutationFn: async ({ id, patch }: { id: string; patch: Partial<GameSession> }) =>
       (await apiPatch<{ session: GameSession }>(`/api/sessions/${id}`, patch)).session,
-    onSuccess: invalidateSessions(campaignId),
+    onMutate: async ({ id, patch }) => {
+      await queryClient.cancelQueries({ queryKey: sessionsKey(campaignId) });
+      const previous = queryClient.getQueryData<GameSession[]>(sessionsKey(campaignId));
+      if (previous) {
+        queryClient.setQueryData<GameSession[]>(
+          sessionsKey(campaignId),
+          previous.map((s) => (s.id === id ? { ...s, ...patch } : s)),
+        );
+      }
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(sessionsKey(campaignId), context.previous);
+    },
+    onSettled: invalidateSessions(campaignId),
   });
 }
 

@@ -10,3 +10,4 @@ export * from './model.js';
 export * from './cover.js';
 export * from './visible.js';
 export * from './cone.js';
+export * from './modes.js';

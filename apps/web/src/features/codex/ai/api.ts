@@ -157,7 +157,25 @@ export interface AskInput extends PromptInput {
 interface ChatAck {
   text?: string;
   model?: string;
+  conversationId?: string;
+  /** The turn hit the tool-round ceiling before the model answered. */
+  truncated?: boolean;
 }
+
+/**
+ * The line the panel shows when a turn ran the tool budget dry and never
+ * drafted. A plain error, not a proposal: the old fallback wrapped the
+ * "I ran out of tool rounds" text in a card with an accept button (B5).
+ */
+export const EXHAUSTED_LINE =
+  'The Fixer used up its tool rounds researching and never drafted — even after being told to draft with what it had. Nothing to accept; narrow the brief and try again.';
+
+/**
+ * What the rescue turn says. Same conversation, so the model still has
+ * everything it read; two rounds, so it can draft and answer and no more.
+ */
+export const RESCUE_MESSAGE =
+  'Stop researching. Call draft_wiki_page now, once, with what you already have, then answer in one line.';
 
 /**
  * One turn, then find what it produced.
@@ -174,13 +192,30 @@ export function useCodexAsk(campaignId: string) {
     mutationFn: async (input: AskInput): Promise<CodexProposal> => {
       const before = new Set((await fetchWikiDrafts(campaignId)).map((d) => d.id));
       const message = buildPrompt(input);
-      const ack = await apiPost<ChatAck>('/api/fixer/chat', {
+      let ack = await apiPost<ChatAck>('/api/fixer/chat', {
         campaignId,
         message,
         ...(input.slot ? { slot: input.slot } : {}),
       });
-      const after = await fetchWikiDrafts(campaignId);
-      const fresh = after.filter((d) => !before.has(d.id));
+      let after = await fetchWikiDrafts(campaignId);
+      let fresh = after.filter((d) => !before.has(d.id));
+
+      // The turn ran the tool budget dry — eight rounds of search_books and
+      // search_codex with no draft at the end. Once, on the same thread, tell
+      // it to draft with what it has. If that also comes back empty the turn
+      // failed, and a failure is an error line, never a proposal card (B5).
+      if (fresh.length === 0 && ack.truncated) {
+        ack = await apiPost<ChatAck>('/api/fixer/chat', {
+          campaignId,
+          message: RESCUE_MESSAGE,
+          maxRounds: 2,
+          ...(ack.conversationId ? { conversationId: ack.conversationId } : {}),
+          ...(input.slot ? { slot: input.slot } : {}),
+        });
+        after = await fetchWikiDrafts(campaignId);
+        fresh = after.filter((d) => !before.has(d.id));
+        if (fresh.length === 0) throw new Error(EXHAUSTED_LINE);
+      }
       const seed: ProposalSeed = {
         action: input.action,
         mode: input.mode,

@@ -30,6 +30,8 @@ import AiPanel from './AiPanel.js';
 import NewPagePrompt from './NewPagePrompt.js';
 import ProposalCard from './ProposalCard.js';
 import {
+  EXHAUSTED_LINE,
+  RESCUE_MESSAGE,
   useAcceptAsNewPage,
   useApplyToPage,
   useCodexAsk,
@@ -442,10 +444,19 @@ interface Call {
  * A stand-in for the four routes this feature touches. It records every call,
  * which is how "nothing was written" is asserted rather than assumed.
  */
-function fakeServer(opts: { toolCalled?: boolean } = {}) {
+function fakeServer(
+  opts: {
+    toolCalled?: boolean;
+    /** The first chat turn runs the tool budget dry and never drafts. */
+    truncated?: boolean;
+    /** Whether the rescue turn that follows a truncated one drafts. */
+    rescueDrafts?: boolean;
+  } = {},
+) {
   const toolCalled = opts.toolCalled ?? true;
   const calls: Call[] = [];
   let generations: AiGeneration[] = [];
+  let chats = 0;
   return {
     calls,
     generations: () => generations,
@@ -456,6 +467,19 @@ function fakeServer(opts: { toolCalled?: boolean } = {}) {
 
       if (url.startsWith(`/api/campaigns/${CAMPAIGN}/generations`)) return json({ generations });
       if (url === '/api/fixer/chat') {
+        chats += 1;
+        if (opts.truncated && chats === 1) {
+          return json({
+            text: 'I ran out of tool rounds (8) before I could answer.',
+            model: 'local-7b',
+            conversationId: 'conv-1',
+            truncated: true,
+          });
+        }
+        if (opts.truncated && chats === 2) {
+          if (opts.rescueDrafts) generations = [draftRow(), ...generations];
+          return json({ text: 'Drafted it.', model: 'local-7b', conversationId: 'conv-1', truncated: false });
+        }
         if (toolCalled) generations = [draftRow(), ...generations];
         return json({ text: 'Drafted the back room.', model: 'local-7b' });
       }
@@ -545,6 +569,45 @@ describe('ask → preview → accept', () => {
     expect(result.unverified).toBe(true);
     expect(result.contentMd).toBe('Drafted the back room.');
     expect(server.calls.some((c) => c.url.startsWith('/api/wiki/'))).toBe(false);
+  });
+
+  it('rescues a turn that ran out of tool rounds with one "draft now" turn (B5)', async () => {
+    const server = fakeServer({ truncated: true, rescueDrafts: true });
+    vi.stubGlobal('fetch', (url: string, init?: RequestInit) => server.fetch(url, init));
+    const qc = client();
+    const hooks = await runHooks(qc, () => ({ ask: useCodexAsk(CAMPAIGN) }));
+
+    const result = await hooks.ask.mutateAsync({
+      action: 'draft',
+      ctx: ctxOf(),
+      playerFacing: true,
+      mode: 'replace',
+    });
+    // The rescue continues the same thread, says exactly one thing, and gets
+    // two rounds: one to draft, one to answer.
+    const chats = server.calls.filter((c) => c.url === '/api/fixer/chat');
+    expect(chats).toHaveLength(2);
+    expect(chats[1]?.body?.['conversationId']).toBe('conv-1');
+    expect(chats[1]?.body?.['message']).toBe(RESCUE_MESSAGE);
+    expect(chats[1]?.body?.['maxRounds']).toBe(2);
+    // …and the draft it produced is a real, verified proposal.
+    expect(result.generationId).toBe('gen-1');
+    expect(result.unverified).toBe(false);
+  });
+
+  it('fails outright when the rescue turn drafts nothing either — never a card', async () => {
+    const server = fakeServer({ truncated: true, rescueDrafts: false });
+    vi.stubGlobal('fetch', (url: string, init?: RequestInit) => server.fetch(url, init));
+    const qc = client();
+    const hooks = await runHooks(qc, () => ({ ask: useCodexAsk(CAMPAIGN) }));
+
+    await expect(
+      hooks.ask.mutateAsync({ action: 'draft', ctx: ctxOf(), playerFacing: true, mode: 'replace' }),
+    ).rejects.toThrow(EXHAUSTED_LINE);
+    expect(server.calls.filter((c) => c.url === '/api/fixer/chat')).toHaveLength(2);
+    // The "ran out of rounds" text is a failure, and a failure is a line the
+    // panel shows, not a proposal with an accept button.
+    expect(askErrorLine(new Error(EXHAUSTED_LINE))).toBe(EXHAUSTED_LINE);
   });
 });
 

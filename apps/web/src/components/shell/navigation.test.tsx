@@ -139,6 +139,7 @@ describe('no dead links', () => {
       'calendar',
       'runs',
       'generator',
+      'npcs',
       'fixer',
       'architect',
       'books',
@@ -165,7 +166,7 @@ describe('no dead links', () => {
  * `React.lazy` chunk whose static render is the Suspense fallback — neither
  * proves anything about placeholder copy here. Test 1 above still walks them.
  */
-const PREP_SCREENS = ['overview', 'party', 'ai', 'scenes', 'generator', 'fixer', 'architect', 'books', 'sessions'];
+const PREP_SCREENS = ['overview', 'party', 'ai', 'scenes', 'generator', 'npcs', 'fixer', 'architect', 'books', 'sessions'];
 
 describe('no placeholder screens behind the nav', () => {
   for (const key of PREP_SCREENS) {

@@ -465,6 +465,30 @@ function drawElevation(
       f.line([[0.02, 0.96], [0.98, 0.96]], tones.light, 0.9, 2);
       break;
     }
+    case 'picket': {
+      // Pales on two rails, waist-high: the top half of the face stays open.
+      const pales = 6 * n;
+      for (let k = 0; k < pales; k += 1) {
+        const u0 = (k + 0.15) / pales;
+        const u1 = (k + 0.7) / pales;
+        f.fill(u0, 0.02, u1, 0.58, tones.base, 0.95);
+        f.line([[u0, 0.58], [(u0 + u1) / 2, 0.66], [u1, 0.58]], tones.light, 0.9);
+        f.line([[u1, 0.02], [u1, 0.58]], tones.ink, 0.5);
+      }
+      for (const v of [0.18, 0.44]) f.fill(0, v - 0.025, 1, v + 0.025, shade(tones.base, 0.85), 0.95);
+      break;
+    }
+    case 'railing': {
+      // Posts and two rails; the water or the drop shows through.
+      const posts = 2 * n + 1;
+      for (let k = 0; k < posts; k += 1) {
+        const u = k / (posts - 1);
+        f.fill(Math.max(0, u - 0.02), 0, Math.min(1, u + 0.02), 0.62, tones.dark, 0.95);
+      }
+      for (const v of [0.36, 0.6]) f.fill(0, v - 0.025, 1, v + 0.025, tones.base, 0.95);
+      f.line([[0, 0.625], [1, 0.625]], tones.light, 0.8);
+      break;
+    }
     default: {
       const unhandled: never = cut;
       void unhandled;
@@ -600,6 +624,16 @@ function drawSymbol(
       f.fill(0, 0.35, 1, 0.65, C.ground, 0.3);
       for (let k = 0; k <= 6 * n; k += 1) f.line([[k / (6 * n), 0.35], [k / (6 * n), 0.65]], tones.accent, 0.7);
       f.line([[0, 0.5], [1, 0.5]], tones.accent, 0.9, 2);
+      break;
+    case 'picket':
+      // A fence in plan: a line with a tick per pale.
+      f.line([[0, 0.5], [1, 0.5]], tones.base, 0.95, 2);
+      for (let k = 0; k <= 6 * n; k += 1) f.line([[k / (6 * n), 0.4], [k / (6 * n), 0.6]], tones.ink, 0.7);
+      break;
+    case 'railing':
+      // A railing in plan: a thin line with a post dot at each cell edge.
+      f.line([[0, 0.5], [1, 0.5]], tones.base, 0.95);
+      for (let k = 0; k <= 2 * n; k += 1) f.fill(k / (2 * n) - 0.02, 0.44, k / (2 * n) + 0.02, 0.56, tones.dark, 0.95);
       break;
     default: {
       const unhandled: never = cut;

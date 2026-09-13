@@ -25,9 +25,10 @@ import { ScenesService } from '../services/scenes.js';
 import { updateRun, type ActivityHub, type AiRun } from './activity.js';
 import { createDraft } from './drafts.js';
 import { proposeFloor } from './floor-plan.js';
-import { LlmClient, type LlmConfig, type LlmUsage, type ModelSlot } from './llm.js';
+import { LlmClient, constrainedEffort, type ChatMessage, type LlmConfig, type LlmUsage, type ModelSlot } from './llm.js';
+import { coerceOutline, repairJson, schemaMissError } from './repair.js';
 import { usageMeter } from './usage.js';
-import { parseModelJson } from './vision.js';
+import { describeKeys, parseModelJson, unwrapEnvelope } from './vision.js';
 
 const ARCHITECT_TIMEOUT_MS = 240_000;
 
@@ -137,15 +138,18 @@ export async function outlineArchitect(db: Db, config: LlmConfig | null, ask: Ou
   const archetypes = (await new GeneratorService(db).listTemplates(ask.campaignId)).map((t) => t.name);
   const client = new LlmClient(config);
   const model = ask.slot === 'fast' ? config.fast : config.primary;
+  const messages: ChatMessage[] = [
+    { role: 'system', content: OUTLINE_SYSTEM },
+    { role: 'user', content: outlineUserPrompt(name, archetypes, ask.brief) },
+  ];
+  const effort = constrainedEffort(config);
   const turn = await client.chat(
     {
       model,
-      messages: [
-        { role: 'system', content: OUTLINE_SYSTEM },
-        { role: 'user', content: outlineUserPrompt(name, archetypes, ask.brief) },
-      ],
+      messages,
       temperature: 0.7,
       max_tokens: 8000,
+      effort,
     },
     { timeoutMs: ARCHITECT_TIMEOUT_MS, ...(ask.signal ? { signal: ask.signal } : {}) },
   );
@@ -157,13 +161,35 @@ export async function outlineArchitect(db: Db, config: LlmConfig | null, ask: Ou
       { preview: turn.content.trim().slice(-240), finishReason: turn.finishReason },
     );
   }
-  const parsed = parseModelJson(turn.content, 'the campaign outline');
-  const checked = ArchitectOutlineSchema.safeParse(parsed);
+  const parsed = unwrapEnvelope(parseModelJson(turn.content, 'the campaign outline'), 'premise');
+  // Bend first (an "encounter" kind, a 3.0, a summary a line too long), and
+  // only if the schema still says no, spend one turn asking for the fix —
+  // with the issues by path, so the model corrects rather than starts over.
+  let checked = ArchitectOutlineSchema.safeParse(coerceOutline(parsed));
+  let usage = turn.usage;
+  let latencyMs = turn.latencyMs;
   if (!checked.success) {
-    throw httpError(502, 'ai_error', 'the model returned an outline the schema rejects', checked.error.issues.slice(0, 8));
+    const repaired = await repairJson(
+      client,
+      { model, max_tokens: 8000, effort },
+      { timeoutMs: ARCHITECT_TIMEOUT_MS, ...(ask.signal ? { signal: ask.signal } : {}) },
+      { messages, badContent: turn.content, issues: checked.error.issues, what: 'the campaign outline', mustHave: 'premise' },
+    );
+    usage = addUsage(usage, repaired.turn.usage);
+    latencyMs += repaired.turn.latencyMs;
+    checked = ArchitectOutlineSchema.safeParse(coerceOutline(repaired.parsed));
+    if (!checked.success) throw schemaMissError(`outline (it sent ${describeKeys(parsed)})`, checked.error.issues);
   }
-  usageMeter.record(ask.campaignId, { model: turn.model, usage: turn.usage, latencyMs: turn.latencyMs });
-  return { outline: checked.data, model: turn.model, usage: turn.usage, latencyMs: turn.latencyMs };
+  usageMeter.record(ask.campaignId, { model: turn.model, usage, latencyMs });
+  return { outline: checked.data, model: turn.model, usage, latencyMs };
+}
+
+function addUsage(a: LlmUsage, b: LlmUsage): LlmUsage {
+  return {
+    promptTokens: a.promptTokens + b.promptTokens,
+    completionTokens: a.completionTokens + b.completionTokens,
+    totalTokens: a.totalTokens + b.totalTokens,
+  };
 }
 
 // ---------------------------------------------------------------------------

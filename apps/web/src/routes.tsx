@@ -24,6 +24,7 @@ import AiPage from './features/gm/AiPage.js';
 import ArchitectPage from './features/gm/ArchitectPage.js';
 import FixerPage from './features/gm/FixerPage.js';
 import GeneratorPage from './features/gm/GeneratorPage.js';
+import NpcsPage from './features/gm/npcs/NpcsPage.js';
 import GmHome from './features/gm/GmHome.js';
 // The richer roster took this route, exactly as `features/gm/home/PartyPage`
 // asked it to: same path, same links out, plus condition monitors, Edge, the
@@ -108,6 +109,7 @@ export const routes: RouteObject[] = [
           { path: 'runs', element: <Chunk><RunsBoard /></Chunk> },
           { path: 'scenes', element: <ScenesPage /> },
           { path: 'generator', element: <GeneratorPage /> },
+          { path: 'npcs', element: <NpcsPage /> },
           { path: 'fixer', element: <FixerPage /> },
           // The overarching AI: one brief → pages, NPCs, mapped scenes, as drafts.
           { path: 'architect', element: <ArchitectPage /> },

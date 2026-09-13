@@ -299,15 +299,20 @@ describe('definitions are keyed by tileset AND tile', () => {
 const PATTERNS = [
   'brick',
   'carpet',
+  'cobble',
   'concrete',
   'dirt',
+  'field',
   'grass',
   'grating',
   'gravel',
   'hatch',
+  'marble',
   'panel',
   'planks',
+  'reeds',
   'rubble',
+  'sand',
   'solid',
   'tile',
   'water',
@@ -339,6 +344,11 @@ describe('every pattern the catalogue uses actually draws something', () => {
       water: ['moveTo', 'lineTo', 'stroke'],
       grass: ['moveTo', 'lineTo', 'stroke'],
       dirt: ['moveTo', 'lineTo', 'stroke', 'ellipse'],
+      cobble: ['moveTo', 'lineTo', 'stroke'],
+      marble: ['moveTo', 'lineTo', 'stroke'],
+      sand: ['ellipse', 'moveTo', 'lineTo', 'stroke'],
+      field: ['moveTo', 'lineTo', 'stroke', 'ellipse'],
+      reeds: ['moveTo', 'lineTo', 'stroke', 'ellipse'],
     };
 
     for (const pattern of PATTERNS) {

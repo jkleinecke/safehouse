@@ -3,7 +3,8 @@
  * Live/shared state stays in src/live/store; server state in TanStack Query.
  */
 import { create } from 'zustand';
-import { TILESETS } from '@safehouse/rules';
+import type { Point } from '@safehouse/contracts';
+import { TILESETS, type VisionMode } from '@safehouse/rules';
 import {
   PENDING_ROLL_MOD_EVENT,
   PENDING_ROLL_MOD_KEY,
@@ -129,6 +130,22 @@ export interface GridUiState {
   fogDraft: FogDraft | null;
   gmPanelOpen: boolean;
   gmTab: GmTab;
+  /**
+   * The fight rail beside the canvas — initiative tracker over the session
+   * log — so running a fight never means leaving the map (UX proposal 4.1).
+   */
+  playRailOpen: boolean;
+  /**
+   * The eyes the canvas is drawn for (docs/VISION.md §4.5): a player picks
+   * from the modes their runner has, the GM from all of them. A restyle
+   * only — what is visible is still the server's and the shroud's call.
+   */
+  viewMode: VisionMode;
+  /**
+   * Where the next token goes when the GM picked "place a token here" from
+   * the map's context menu; the Tokens tab reads it once and clears it.
+   */
+  placeAt: Point | null;
   /** Build · Prep · Play — which of the Grid's three jobs the GM is doing (hud/modes.ts). */
   mode: GridMode;
   /** GM only: view a non-active scene while staging (FR9.1). */
@@ -168,6 +185,9 @@ export interface GridUiState {
   clearFogDraft: () => void;
   toggleGmPanel: () => void;
   openGmPanel: () => void;
+  togglePlayRail: () => void;
+  setViewMode: (mode: VisionMode) => void;
+  setPlaceAt: (at: Point | null) => void;
   setViewSceneId: (id: string | null) => void;
   setPendingRollMod: (mod: PendingRollMod | null) => void;
   select: (selected: GeometrySelection | null) => void;
@@ -219,6 +239,9 @@ export const useGridStore = create<GridUiState>()((set) => ({
   scatterNetHits: 0,
   fogDraft: null,
   gmPanelOpen: true,
+  playRailOpen: true,
+  viewMode: 'normal',
+  placeAt: null,
   gmTab: 'scenes',
   mode: readStoredMode(),
   viewSceneId: null,
@@ -314,6 +337,9 @@ export const useGridStore = create<GridUiState>()((set) => ({
   clearFogDraft: () => set({ fogDraft: null }),
   toggleGmPanel: () => set((s) => ({ gmPanelOpen: !s.gmPanelOpen })),
   openGmPanel: () => set({ gmPanelOpen: true }),
+  togglePlayRail: () => set((s) => ({ playRailOpen: !s.playRailOpen })),
+  setViewMode: (viewMode) => set({ viewMode }),
+  setPlaceAt: (placeAt) => set({ placeAt }),
   setViewSceneId: (viewSceneId) => set({ viewSceneId }),
   setPendingRollMod: (pendingRollMod) => {
     publishPendingRollMod(pendingRollMod);

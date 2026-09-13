@@ -30,9 +30,14 @@
  */
 import { chatCompletionsUrl, serverRootUrl, type LlmConfig, type ModelSlot } from './llm.js';
 
-/** A 2x2 PNG. Small enough to be free, real enough to be a genuine image part. */
+/**
+ * A 64x64 PNG, one flat colour. Small enough to be free, real enough to be
+ * a genuine image part — and big enough for a Qwen-style vision processor,
+ * which rejects anything under 32 px a side ("must be larger than
+ * factor:32"). The old 2x2 probe made every such model look blind.
+ */
 export const PROBE_IMAGE_DATA_URI =
-  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4//8/AwQAWQAp5AX7XiD3SwAAAABJRU5ErkJggg==';
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAeklEQVR4nO3PUQkAIBTAwNfJtHYylCH8OITBAtxm7fN1wwUNaEEDWtCAFjSgBQ1oQQNa0IAWNKAFDWhBA1rQgBY0oAUNaEEDWtCAFjSgBQ1oQQNa0IAWNKAFDWhBA1rQgBY0oAUNaEEDWtCAFjSgBQ1oQQNa0IAWPHYBrZaBeElk0SMAAAAASUVORK5CYII=';
 
 /**
  * Short on purpose: `GET /api/fixer/status` awaits this, and a box that has to

@@ -11,6 +11,7 @@ import { useLiveStore } from '../../../live/store.js';
 import { fmtLatency, fmtTokens } from '../common.js';
 import { ErrorNote, SectionTitle, Spinner } from '../ui.js';
 import { aiDisabledFrom, isAiCancelled, useCancelAi, useFixerSend, useFixerStatus } from './api.js';
+import type { AiContext } from './aiContext.js';
 import { reduceFixerStream, type FixerUsage, type ToolChip } from './stream.js';
 
 const SUGGESTIONS = [
@@ -57,9 +58,17 @@ export interface FixerChatProps {
   sessionLive?: boolean;
   /** Compact layout for the dock; the full page gives it more room. */
   dense?: boolean;
+  /** What the GM is looking at — stamped on every message (aiContext.ts). */
+  context?: AiContext;
+  /**
+   * A chip's text, handed in from the dock: it lands in the box, and goes
+   * at once when `send` is set. `nonce` changes per click so the same chip
+   * can be used twice.
+   */
+  seed?: { text: string; send: boolean; nonce: number } | null;
 }
 
-export default function FixerChat({ campaignId, sessionLive, dense }: FixerChatProps) {
+export default function FixerChat({ campaignId, sessionLive, dense, context, seed }: FixerChatProps) {
   const chunks = useLiveStore((s) => s.fixerStream);
   const clearStream = useLiveStore((s) => s.clearFixerStream);
   const send = useFixerSend();
@@ -80,16 +89,32 @@ export default function FixerChat({ campaignId, sessionLive, dense }: FixerChatP
     if (el) el.scrollTop = el.scrollHeight;
   }, [chunks.length, sent.length]);
 
-  const submit = () => {
-    const message = draft.trim();
+  // `text` only when a chip calls it; the send button passes its click event.
+  const submit = (text?: unknown) => {
+    const message = (typeof text === 'string' ? text : draft).trim();
     if (!message || disabled) return;
     setSent((s) => [...s, { text: message, ts: Date.now() }]);
     setDraft('');
     send.mutate(
-      { campaignId, message, slot, ...(conversationId ? { conversationId } : {}) },
+      {
+        campaignId,
+        message,
+        slot,
+        ...(conversationId ? { conversationId } : {}),
+        ...(context ? { context } : {}),
+      },
       { onSuccess: (ack) => ack.conversationId && setConversationId(ack.conversationId) },
     );
   };
+
+  // A chip from the dock: into the box, or straight out the door.
+  const seedNonce = seed?.nonce;
+  useEffect(() => {
+    if (!seed || seedNonce === undefined) return;
+    if (seed.send) submit(seed.text);
+    else setDraft(seed.text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seedNonce]);
 
   if (disabled) {
     return (

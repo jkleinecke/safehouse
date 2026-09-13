@@ -108,6 +108,13 @@ export const GM_NAV: readonly GmNavEntry[] = [
     blurb: 'Roll opposition from archetype tiers, then check the threat math against the party.',
   },
   {
+    key: 'npcs',
+    label: 'NPCs',
+    to: '/gm/npcs',
+    section: 'prep',
+    blurb: 'Every NPC on one screen: who they are, your notes on them, and a way to talk to them in their own voice.',
+  },
+  {
     key: 'fixer',
     label: 'Fixer',
     to: '/gm/fixer',

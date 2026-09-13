@@ -6,9 +6,9 @@
  * commands. All rendering lives in the lazily-imported `stage/` chunk.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import type { Scene, Token } from '@safehouse/contracts';
-import { GROUND_LEVEL_NAME, deriveCharacter, levelTiles } from '@safehouse/rules';
+import { GROUND_LEVEL_NAME, VISION_MODE_LABELS, deriveCharacter, levelTiles } from '@safehouse/rules';
 import { useMyCharacterId } from '../../api/campaigns.js';
 import { ApiError } from '../../api/client.js';
 import { getSession } from '../../api/session.js';
@@ -16,6 +16,7 @@ import { getLiveSocket } from '../../live/socket.js';
 import {
   fileUrl,
   useCharacter,
+  useDeleteToken,
   useDoorOp,
   useGridLiveSync,
   usePatchGeometry,
@@ -31,10 +32,24 @@ import {
   TileStrokeBuffer,
 } from './api.js';
 import { GridCommands } from './commands.js';
-import { rollScatter } from './geometry.js';
-import { addCamera, addDoor, addNote, addPin, addWall, tileDoorOpen } from './geometryEdit.js';
+import { metersBetween, metricsFor, rollScatter } from './geometry.js';
+import {
+  addCamera,
+  addDoor,
+  addNote,
+  addPin,
+  addWall,
+  convertWallToDoor,
+  removeDoor,
+  removeWall,
+  tileDoorOpen,
+} from './geometryEdit.js';
 import GmPanel from './gm/GmPanel.js';
+import ContextMenu from './hud/ContextMenu.js';
+import { contextMenuItems, type ContextMenuActions, type ContextMenuInput } from './hud/contextMenuItems.js';
 import MeasurePanel from './hud/MeasurePanel.js';
+import PlayRail from './hud/PlayRail.js';
+import { availableModes, clampMode } from './hud/eyes.js';
 import Toolbar, { ViewControls } from './hud/Toolbar.js';
 import BuildProgress from './gm/BuildProgress.js';
 import { useGridShortcuts } from './hud/useGridShortcuts.js';
@@ -53,6 +68,7 @@ import { useStairOffer } from './useStairs.js';
 import { historyFor, useHistory } from './history.js';
 import { useGridStore } from './store.js';
 import {
+  type ContextMenuRequest,
   type RulerState,
   type StageApi,
   type StageCallbacks,
@@ -188,6 +204,13 @@ export default function GridPage() {
   const rulerCharacterId =
     rulerToken?.source === 'character' ? (rulerToken.sourceId ?? null) : null;
   const rulerCharacter = useCharacter(rulerCharacterId);
+  // The eyes the viewer may look through (docs/VISION.md §4.5): a player's
+  // own sheet decides; the GM sees every mode the canvas can draw.
+  const ownCharacter = useCharacter(isGm ? null : myCharacterId);
+  const eyes = useMemo(
+    () => availableModes(isGm, ownCharacter.data?.sheet ?? null),
+    [isGm, ownCharacter.data?.sheet],
+  );
   const sheet = rulerCharacter.data?.sheet ?? null;
   const derived = useMemo(() => {
     if (!sheet) return null;
@@ -331,6 +354,12 @@ export default function GridPage() {
   const [focusNotice, setFocusNotice] = useState<string | null>(null);
   const activateScene = useActivateScene();
   const apiRef = useRef<StageApi | null>(null);
+  // The context menu (UX proposal 4.1): the stage says what was right-clicked
+  // and where; the page decides the verbs and draws the list.
+  const [menu, setMenu] = useState<ContextMenuRequest | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
+  const deleteToken = useDeleteToken(scene?.id);
+  const navigate = useNavigate();
 
   const callbacks: StageCallbacks = useMemo(
     () => ({
@@ -497,6 +526,7 @@ export default function GridPage() {
         s.openGmPanel();
       },
       onSelectClear: () => useGridStore.getState().select(null),
+      onContextMenu: (request) => setMenu(request),
       // -- Security cameras (FR9.23) -----------------------------------------
       onCameraPlace: (x, y) => {
         if (!scene || !isGm) return;
@@ -542,6 +572,86 @@ export default function GridPage() {
     drags,
   });
   apiRef.current = api;
+
+  // The verbs behind the context menu are the mutations the panel tabs and
+  // the inspector already call — the menu is a shorter road to them, not a
+  // second set of rules.
+  const menuActions: ContextMenuActions = {
+    ping: (x, y) => commands.ping(x, y),
+    focus: (x, y) => callbacks.onFocus(x, y),
+    centerOn: (x, y) => api?.centerOn(x, y),
+    rangeBetween: (from, to) => {
+      if (!scene) return;
+      const m = metricsFor(scene.grid);
+      const s = useGridStore.getState();
+      s.setTool('ruler');
+      s.setRuler({
+        from: { x: from.x, y: from.y },
+        to: { x: to.x, y: to.y },
+        meters: metersBetween(m, from, to),
+        fromTokenId: from.id,
+      });
+    },
+    openSheet: (characterId) => navigate(`/c/${campaignId}/sheet/${characterId}`),
+    setHidden: (tokenId, hidden) => patchToken.mutate({ tokenId, patch: { hidden } }),
+    removeToken: (tokenId) => deleteToken.mutate(tokenId),
+    doorOp: (input) => doorOp.mutate(input, { onError: showDoorNotice }),
+    pinHere: (x, y) => callbacks.onPinPlace?.(x, y),
+    noteHere: (x, y) => callbacks.onNotePlace?.(x, y),
+    cameraHere: (x, y) => callbacks.onCameraPlace?.(x, y),
+    placeTokenHere: (x, y) => {
+      const s = useGridStore.getState();
+      // Half-square precision: the centre of the cell the GM pointed at.
+      s.setPlaceAt({ x: Math.floor(x) + 0.5, y: Math.floor(y) + 0.5 });
+      s.setGmTab('tokens');
+      s.openGmPanel();
+    },
+    revealRegion: (regionId) => {
+      if (scene) commands.fogReveal(scene.id, regionId, true);
+    },
+    hideRegion: (regionId) => {
+      if (scene) commands.fogHide(scene.id, regionId);
+    },
+    wallToDoor: (wallId) => {
+      if (scene) patchGeometry.mutate({ sceneId: scene.id, geometry: convertWallToDoor(scene.geometry, wallId) });
+    },
+    removeWall: (wallId) => {
+      if (scene) patchGeometry.mutate({ sceneId: scene.id, geometry: removeWall(scene.geometry, wallId) });
+    },
+    removeDoor: (doorId) => {
+      if (scene) patchGeometry.mutate({ sceneId: scene.id, geometry: removeDoor(scene.geometry, doorId) });
+    },
+  };
+  // The canvas draws for the chosen eyes; a mode the sheet stops granting
+  // falls back to normal rather than lingering as a thermal view.
+  const viewMode = clampMode(store.viewMode, eyes);
+  useEffect(() => {
+    api?.setViewMode(viewMode);
+  }, [api, viewMode]);
+
+  const menuRole: ContextMenuInput['role'] =
+    viewer.role === 'gm' || viewer.role === 'player' ? viewer.role : 'observer';
+  const menuItems =
+    menu && scene
+      ? contextMenuItems({
+          role: menuRole,
+          target: menu.target,
+          grid: menu.grid,
+          scene,
+          tokens,
+          selectedTokenId: store.selectedTokenId,
+          myCharacterId: myCharacterId ?? null,
+          actions: menuActions,
+        })
+      : [];
+  const menuAbout = (() => {
+    if (!menu) return '';
+    const t = menu.target;
+    if (t.kind === 'token') return tokens.find((k) => k.id === t.id)?.name ?? 'token';
+    if (t.kind === 'door' || t.kind === 'tileDoor') return 'the door';
+    if (t.kind === 'wall') return 'the wall';
+    return `square ${Math.floor(menu.grid.x)}, ${Math.floor(menu.grid.y)}`;
+  })();
 
   /**
    * Hand the canvas the served palette. The dependency on `api` is the whole
@@ -769,6 +879,52 @@ export default function GridPage() {
               />
             )}
             {focusNotice && <span className="chip bg-panel/90 text-cyan">{focusNotice}</span>}
+            {/*
+              Eyes (docs/VISION.md §4.5): the modes this viewer can look
+              through. A player whose runner has only normal sight gets no
+              switch at all — there is nothing to switch to.
+            */}
+            {eyes.length > 1 && (
+              <div
+                className="pointer-events-auto flex flex-wrap justify-end gap-1"
+                role="group"
+                aria-label="Eyes"
+                data-testid="eyes-switch"
+              >
+                <span className="chip bg-panel/90 text-faint">eyes</span>
+                {eyes.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    aria-pressed={m === viewMode}
+                    onClick={() => store.setViewMode(m)}
+                    className={'chip bg-panel/90 ' + (m === viewMode ? 'border-cyan text-cyan' : 'text-dim hover:text-ink')}
+                    title={
+                      m === 'thermographic'
+                        ? 'Heat, not light: the floor in false colour, bodies warm'
+                        : m === 'lowlight'
+                          ? 'Dim light lifted; colour drained'
+                          : m === 'ultrasound'
+                            ? 'Shape without colour'
+                            : 'Plain sight'
+                    }
+                  >
+                    {VISION_MODE_LABELS[m]}
+                  </button>
+                ))}
+              </div>
+            )}
+            {!store.playRailOpen && (isGm ? store.mode === 'play' : true) && (
+              <button
+                type="button"
+                data-testid="play-rail-open"
+                className="chip pointer-events-auto hidden bg-panel/90 text-dim hover:text-ink md:inline-flex"
+                title="The initiative tracker and the session log, beside the map"
+                onClick={store.togglePlayRail}
+              >
+                tracker · log
+              </button>
+            )}
             {doorNotice && (
               <span data-testid="door-notice" className="chip bg-panel/90 text-warn">
                 {doorNotice}
@@ -793,6 +949,16 @@ export default function GridPage() {
             )}
           </div>
         </div>
+
+        {menu && menuItems.length > 0 && (
+          <ContextMenu
+            x={menu.screen.x}
+            y={menu.screen.y}
+            about={menuAbout}
+            items={menuItems}
+            onClose={closeMenu}
+          />
+        )}
 
         <MeasurePanel
           tool={store.tool}
@@ -820,6 +986,15 @@ export default function GridPage() {
           onClearAoe={() => store.setAoe(null)}
         />
       </div>
+
+      {/*
+        The fight rail (UX proposal 4.1): the tracker over the log, beside
+        the canvas, for the GM in Play mode and for every player. The GM
+        panel keeps Build and Prep; a fight is run from here.
+      */}
+      {campaignId && scene && store.playRailOpen && (isGm ? store.mode === 'play' : true) && (
+        <PlayRail campaignId={campaignId} onCollapse={store.togglePlayRail} />
+      )}
 
       {isGm && store.gmPanelOpen && scene && campaignId && (
         <GmPanel
