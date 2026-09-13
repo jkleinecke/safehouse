@@ -48,15 +48,17 @@ export function deliveryFor(cost: number | null): Delivery {
   return { label: '1 month', hours: 720 };
 }
 
-/** "8 hours", "3 days", "1 week 2 days". */
+/** "8 hours", "1 day 12 hours", "3 days", "1 week 2 days" — rounded up, as the book rounds (SR5 p.48). */
 export function hoursLabel(hours: number): string {
-  const h = Math.max(1, Math.round(hours));
-  if (h < 24) return `${h} hour${h === 1 ? '' : 's'}`;
-  const days = Math.round(h / 24);
-  if (days < 7) return `${days} day${days === 1 ? '' : 's'}`;
+  const h = Math.max(1, Math.ceil(hours));
+  const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? '' : 's'}`;
+  if (h < 24) return plural(h, 'hour');
+  const days = Math.floor(h / 24);
+  const restHours = h - days * 24;
+  if (days < 7) return `${plural(days, 'day')}${restHours > 0 ? ` ${plural(restHours, 'hour')}` : ''}`;
   const weeks = Math.floor(days / 7);
-  const rest = days - weeks * 7;
-  return `${weeks} week${weeks === 1 ? '' : 's'}${rest > 0 ? ` ${rest} day${rest === 1 ? '' : 's'}` : ''}`;
+  const restDays = days - weeks * 7;
+  return `${plural(weeks, 'week')}${restDays > 0 ? ` ${plural(restDays, 'day')}` : ''}`;
 }
 
 /** Every extra quarter of the list price offered is one more die, up to twelve (SR5 p.418). */

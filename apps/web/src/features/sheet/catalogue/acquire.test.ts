@@ -26,8 +26,10 @@ describe('deliveryFor and hoursLabel', () => {
     expect(deliveryFor(250_000)).toEqual({ label: '1 month', hours: 720 });
     expect(deliveryFor(null)).toEqual({ label: '6 hours', hours: 6 });
   });
-  it('says how long', () => {
+  it('says how long, rounding up as the book rounds (SR5 p.48)', () => {
     expect(hoursLabel(12)).toBe('12 hours');
+    expect(hoursLabel(4.8)).toBe('5 hours');
+    expect(hoursLabel(36)).toBe('1 day 12 hours');
     expect(hoursLabel(72)).toBe('3 days');
     expect(hoursLabel(216)).toBe('1 week 2 days');
     expect(hoursLabel(0.4)).toBe('1 hour');
@@ -63,6 +65,9 @@ describe('availabilityOutcome', () => {
   const day = deliveryFor(725);
   it('reads net hits against the delivery band', () => {
     expect(availabilityOutcome(3, day)).toMatchObject({ found: true, deliveryHours: 8, line: 'found — delivered in 8 hours (3 net hits)' });
+    // 24 hours over 5 net hits is 4.8 — the book rounds up.
+    expect(availabilityOutcome(5, day).line).toBe('found — delivered in 5 hours (5 net hits)');
+    expect(availabilityOutcome(1, deliveryFor(50_000)).line).toBe('found — delivered in 1 week (1 net hit)');
     expect(availabilityOutcome(0, day)).toMatchObject({ found: true, deliveryHours: 48, line: 'found on a tie — delivered in 2 days' });
     expect(availabilityOutcome(-2, day)).toMatchObject({ found: false, retryAfterHours: 48, line: 'not found — try again after 2 days' });
   });

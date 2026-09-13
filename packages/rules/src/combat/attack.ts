@@ -211,18 +211,25 @@ export function resolveAttackChain(
   }
   const ap = opts.apOverride ?? weapon.ap;
   const armor = defender.armor ?? 0;
-  const modifiedArmor = Math.max(0, armor + ap);
+  // AP that would RAISE armor does nothing to a target wearing none, and AP
+  // that takes armor to 0 or below leaves Body alone (SR5 p.169).
+  const modifiedArmor = armor > 0 ? Math.max(0, armor + ap) : 0;
   const modifiedDv = parsed.value + netHits;
-  const convertedToStun = parsed.type === 'P' && modifiedDv <= modifiedArmor;
+  // Physical when the modified DV is greater than OR EQUAL to the modified
+  // armor; Stun only when it is less (SR5 p.173, step B).
+  const convertedToStun = parsed.type === 'P' && modifiedDv < modifiedArmor;
   const type: DamageType = convertedToStun ? 'S' : parsed.type;
-  if (convertedToStun) notes.push('Modified DV did not beat armor — damage becomes Stun.');
+  if (convertedToStun) notes.push('Modified DV fell short of armor — damage becomes Stun.');
 
   // 5. Soak: BOD + modified armor. Wound modifiers do not reduce the soak
   //    roll by default (GM-editable via soakModifiers).
+  // The AP line is what AP actually did to the armor — nothing on bare skin,
+  // and never past zero — so the pool is Body + modified armor, as printed.
+  const apApplied = modifiedArmor - armor;
   const soakBreakdown: ProvenanceEntry[] = [
     { label: 'BOD', value: defender.attributes.bod },
     { label: 'Armor', value: armor },
-    ...(ap !== 0 ? [{ label: 'AP', value: ap }] : []),
+    ...(apApplied !== 0 ? [{ label: 'AP', value: apApplied }] : []),
     ...(opts.soakModifiers ?? []),
   ];
   const soakPool = poolTotal(soakBreakdown);

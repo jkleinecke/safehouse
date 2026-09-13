@@ -243,6 +243,9 @@ export class RollService {
         threshold,
         intervalsUsed: ext.intervalsUsed,
         success: ext.success,
+        // A critical glitch on any interval fails the test and loses the
+        // hits so far (SR5 p.48); an ordinary glitch is the GM's to price.
+        criticalGlitch: ext.criticalGlitch,
         ...(typeof meta['interval'] === 'string' ? { interval: meta['interval'] } : {}),
         perInterval: ext.rolls.map((r) => ({ hits: r.limitedHits, glitch: r.glitch })),
       };
@@ -253,8 +256,11 @@ export class RollService {
       detail = {
         helperPools,
         bonusDice: tw.bonusDice,
+        // Helper hits beyond the leader's skill rating add nothing (SR5 p.49).
+        rawBonusDice: tw.rawBonusDice,
+        bonusCap: tw.bonusCap,
         limitBonus: tw.limitBonus,
-        helpers: tw.helpers.map((h) => ({ hits: h.hits, faces: h.faces })),
+        helpers: tw.helpers.map((h) => ({ hits: h.hits, faces: h.faces, glitch: h.glitch })),
       };
     } else {
       result = resolveRoll(finalReq, this.rng);

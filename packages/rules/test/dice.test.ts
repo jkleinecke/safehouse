@@ -10,6 +10,7 @@ import {
   resolveExtendedTest,
   resolveRoll,
   resolveTeamwork,
+  teamworkDiceCap,
   rollDice,
   seizeInitiative,
   turnOrder,
@@ -202,6 +203,22 @@ describe('Edge semantics (FR2.3)', () => {
     expect(r.exploded).toBeUndefined();
   });
 
+  it('second_chance keeps the glitch the first roll made — it cannot negate one (SR5 p.56)', () => {
+    // First roll 1,1,1,5: three ones of four is a glitch with one hit. The
+    // re-rolled ones come up 5,5,5 — four hits now, still a glitch.
+    const r = resolveRoll(req({ pool: 4, edge: 'second_chance' }), seqRng([1, 1, 1, 5, 5, 5, 5]));
+    expect(r.faces).toEqual([5, 5, 5, 5]);
+    expect(r.hits).toBe(4);
+    expect(r.glitch).toBe('glitch');
+    // A critical glitch stays critical even when the re-roll finds hits.
+    const c = resolveRoll(req({ pool: 4, edge: 'second_chance' }), seqRng([1, 1, 1, 1, 5, 5, 5, 5]));
+    expect(c.hits).toBe(4);
+    expect(c.glitch).toBe('critical');
+    // And a clean first roll does not become a glitch through the re-roll.
+    const clean = resolveRoll(req({ pool: 4, edge: 'second_chance' }), seqRng([5, 2, 3, 4, 1, 1, 1]));
+    expect(clean.glitch).toBe('none');
+  });
+
   it('exploded dice count toward the glitch denominator', () => {
     // 4 dice + 1 explosion = 5 rolled; 3 ones > floor(5/2) => glitch
     const r = resolveRoll(
@@ -248,6 +265,22 @@ describe('extended tests (FR2.5)', () => {
     // 3 hits + 2 hits + 0, each interval clipped to 1
     expect(r.totalHits).toBe(2);
     expect(r.success).toBe(false);
+    expect(r.criticalGlitch).toBe(false);
+  });
+
+  it('a critical glitch on any interval fails the test and loses the work (SR5 p.48)', () => {
+    // 3 dice: 5,5,5 (three hits, short of 4); then 2 dice: 1,1 — critical glitch.
+    const r = resolveExtendedTest({ pool: 3, threshold: 4 }, seqRng([5, 5, 5, 1, 1, 5]));
+    expect(r.intervalsUsed).toBe(2);
+    expect(r.rolls[1]?.glitch).toBe('critical');
+    expect(r.criticalGlitch).toBe(true);
+    expect(r.totalHits).toBe(0);
+    expect(r.success).toBe(false);
+    // An ordinary glitch does not end it — the GM may dock 1D6; the roll says so.
+    const g = resolveExtendedTest({ pool: 4, threshold: 3 }, seqRng([1, 1, 1, 5, 5, 5, 5]));
+    expect(g.rolls[0]?.glitch).toBe('glitch');
+    expect(g.success).toBe(true);
+    expect(g.criticalGlitch).toBe(false);
   });
 });
 
@@ -265,6 +298,41 @@ describe('teamwork tests (FR2.5)', () => {
     expect(r.leader.faces).toHaveLength(6); // 4 + 2 bonus dice
     expect(r.leader.hits).toBe(5);
     expect(r.leader.limitedHits).toBe(5); // limit raised 5 -> 6, hits under it
+    expect(r.bonusCap).toBeNull(); // no provenance, no cap
+  });
+
+  it('adds no more dice than the leader\'s skill rating, or highest attribute without one (SR5 p.49)', () => {
+    const skilled = req({
+      pool: 5,
+      kind: 'teamwork',
+      breakdown: [
+        { label: 'AGI', value: 3, source: 'attribute' },
+        { label: 'sneaking', value: 2, source: 'skill' },
+      ],
+    });
+    // Two helpers with 2 hits each: 4 raw, capped at the skill's 2.
+    const r = resolveTeamwork(skilled, [2, 2], seqRng([5, 5, 5, 5, 3, 3, 3, 3, 3, 3, 3]));
+    expect(r.rawBonusDice).toBe(4);
+    expect(r.bonusCap).toBe(2);
+    expect(r.bonusDice).toBe(2);
+    expect(r.leader.faces).toHaveLength(7);
+    expect(teamworkDiceCap([{ label: 'INT', value: 4, source: 'attribute' }, { label: 'LOG', value: 3, source: 'attribute' }])).toBe(4);
+    // An explicit cap wins over the provenance.
+    expect(resolveTeamwork(skilled, [2, 2], seqRng([5, 5, 5, 5, 3, 3, 3, 3, 3, 3, 3, 3]), { maxBonusDice: 3 }).bonusDice).toBe(3);
+  });
+
+  it('a glitching helper adds dice but no limit; a critical glitch by any helper means no limit bonus at all', () => {
+    const leader = req({ pool: 4, kind: 'teamwork', limit: { kind: 'mental', value: 5 } });
+    // Helper A: 1,1,1,5 — a glitch with one hit; helper B: 5,5 — clean.
+    const r = resolveTeamwork(leader, [4, 2], seqRng([1, 1, 1, 5, 5, 5, 3, 3, 3, 3, 3, 3, 3]));
+    expect(r.helpers[0]?.glitch).toBe('glitch');
+    expect(r.bonusDice).toBe(3);
+    expect(r.limitBonus).toBe(1);
+    // Helper A: 1,1,1,1 — critical; helper B clean with two hits: dice yes, limit no.
+    const c = resolveTeamwork(leader, [4, 2], seqRng([1, 1, 1, 1, 5, 5, 3, 3, 3, 3, 3, 3]));
+    expect(c.helpers[0]?.glitch).toBe('critical');
+    expect(c.bonusDice).toBe(2);
+    expect(c.limitBonus).toBe(0);
   });
 });
 
@@ -340,13 +408,16 @@ describe('Blitz (FR2.3/FR4.4)', () => {
 });
 
 describe('Close Call (FR2.3)', () => {
-  it('negates a critical glitch without touching the dice (G5)', () => {
+  it('turns a critical glitch into an ordinary one without touching the dice (SR5 p.56, G5)', () => {
     const rolled = resolveRoll(req({ pool: 4 }), seqRng([1, 1, 1, 1]));
     expect(rolled.glitch).toBe('critical');
     const out = closeCall(rolled);
     expect(out.applied).toBe(true);
     expect(out.negated).toBe('critical');
-    expect(out.result.glitch).toBe('none');
+    // "turn a critical glitch into a glitch" — never negated outright (p.46).
+    expect(out.result.glitch).toBe('glitch');
+    // …and a second point cannot finish the job: the downgraded roll is an ordinary glitch now,
+    // which is the caller's business to refuse (one point of Edge per test).
     expect(out.result.faces).toEqual(rolled.faces);
     expect(out.result.hits).toBe(rolled.hits);
     // The input is untouched — the stored record is what it always was.

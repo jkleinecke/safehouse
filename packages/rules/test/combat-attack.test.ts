@@ -107,6 +107,29 @@ describe('resolveAttackChain (FR10.8)', () => {
     expect(result.applied?.monitors.physical.filled).toBe(0);
   });
 
+  it('stays Physical when the modified DV equals the modified armor (SR5 p.173: greater than OR equal)', () => {
+    const lightGun: SheetWeapon = { ...predatorish, dv: '6P', ap: -2 };
+    const armored = ganger({ armor: 12 });
+    // DV 6+4=10 vs armor 12-2=10 -> Physical, not Stun.
+    const result = resolveAttackChain(samurai(), armored, lightGun, mulberry32(3), {
+      rolls: { attack: forcedRoll(4), defense: forcedRoll(0), soak: forcedRoll(0) },
+    });
+    expect(result.damage?.convertedToStun).toBe(false);
+    expect(result.damage?.type).toBe('P');
+    expect(result.soak?.track).toBe('physical');
+  });
+
+  it('AP that would raise armor does nothing to a target wearing none (SR5 p.169)', () => {
+    const shotgun: SheetWeapon = { ...predatorish, dv: '9P', ap: 2 };
+    const bare = ganger({ armor: 0 });
+    const result = resolveAttackChain(samurai(), bare, shotgun, mulberry32(4), {
+      rolls: { attack: forcedRoll(1), defense: forcedRoll(0), soak: forcedRoll(0) },
+    });
+    expect(result.damage?.modifiedArmor).toBe(0);
+    // Soak is Body alone.
+    expect(result.soak?.pool).toBe(bare.attributes.bod);
+  });
+
   it('full defense adds WIL to the defense pool', () => {
     const result = resolveAttackChain(samurai(), ganger(), predatorish, mulberry32(4), {
       fullDefense: true,

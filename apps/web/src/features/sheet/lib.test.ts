@@ -5,6 +5,7 @@ import { deriveCharacter } from '@safehouse/rules';
 import {
   ammoAfterShots,
   bulletsForMode,
+  castHitsFromEvents,
   chipEntries,
   chipSum,
   clampFill,
@@ -21,6 +22,7 @@ import {
   ledgerBalances,
   monitorTapTarget,
   readerHref,
+  recoilCompensation,
   recoilPenalty,
   setPowerActive,
   signed,
@@ -208,6 +210,13 @@ describe('weapons: recoil + ammo (FR3.4)', () => {
     expect(recoilPenalty(0, 1, 2)).toBe(0); // single shot, nothing to compensate
     expect(recoilPenalty(0, 3, 2)).toBe(0); // 3 rounds − 1 free − 2 comp
     expect(recoilPenalty(0, 6, 2)).toBe(-3);
+    // Strength ÷ 3 rounded up joins the compensation (SR5 p.175).
+    expect(recoilCompensation(2, 5)).toBe(1 + 2 + 2);
+    expect(recoilCompensation(0, 0)).toBe(1);
+    expect(recoilPenalty(0, 6, 2, 5)).toBe(-1);
+    expect(recoilPenalty(3, 3, 2, 5)).toBe(-1); // cumulative across shots
+    expect(recoilPenalty(0, 6, 2, 6)).toBe(-1); // 6/3 = 2, no rounding needed
+    expect(recoilPenalty(0, 6, 2, 7)).toBe(0); // 7/3 rounds up to 3
     expect(recoilPenalty(3, 3, 2)).toBe(-3); // second burst this turn stacks
     expect(recoilPenalty(0, 1, 0)).toBe(0);
   });
@@ -268,6 +277,14 @@ describe('drain hit pickup from the log', () => {
     expect(drainHitsFromEvents([event(1, { meta: { drainFor: 'X' }, hits: 2 })], 'X')).toBe(2);
     expect(drainHitsFromEvents([], 'X')).toBeNull();
     expect(drainHitsFromEvents([event(1, { meta: { drainFor: 'Y' } })], 'X')).toBeNull();
+  });
+
+  it('finds the CAST roll\'s hits too — the drain roll for the same spell is not it (SR5 p.282)', () => {
+    const cast = event(1, { meta: { spell: 'X', poolKey: 'spell.X', force: 6 }, hits: 5, limitedHits: 5 });
+    const drain = event(2, { meta: { drainFor: 'X', threshold: 4 }, hits: 2 });
+    expect(castHitsFromEvents([cast, drain], 'X')).toBe(5);
+    expect(castHitsFromEvents([drain], 'X')).toBeNull();
+    expect(castHitsFromEvents([cast], 'Y')).toBeNull();
   });
 });
 

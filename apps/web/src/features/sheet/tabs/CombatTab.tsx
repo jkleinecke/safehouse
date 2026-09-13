@@ -8,6 +8,7 @@ import type { SheetWeapon } from '@safehouse/contracts';
 import { rangeModifier } from '@safehouse/rules';
 import {
   bulletsForMode,
+  recoilCompensation,
   recoilPenalty,
   signed,
   withWeaponAmmo,
@@ -145,14 +146,19 @@ export default function CombatTab(props: TabProps) {
 function WeaponCard({ weapon, character, derived, roll, patchSheet, overrideFor }: TabProps & { weapon: SheetWeapon }) {
   const sheet = character.sheet;
   const pool = derived.pools[`weapon.${weapon.name}`];
-  const rKey = recoilKey(character.id, weapon.name);
+  // Recoil is the shooter's, not the gun's (SR5 p.175): one counter per character.
+  const rKey = recoilKey(character.id);
   const fired = useSheetPlayStore((s) => s.recoil[rKey] ?? 0);
   const bumpRecoil = useSheetPlayStore((s) => s.bumpRecoil);
   const resetRecoil = useSheetPlayStore((s) => s.resetRecoil);
   const [distance, setDistance] = useState('');
 
   const comp = weapon.recoilComp ?? 0;
+  const str = derived.attributes['str']?.value ?? 0;
   const modes = weapon.modes.length > 0 ? weapon.modes : ['SA'];
+  /** Single-shot weapons take no progressive recoil (SR5 p.175). */
+  const recoilFor = (mode: string, bullets: number): number =>
+    mode.toUpperCase() === 'SS' ? 0 : recoilPenalty(fired, bullets, comp, str);
 
   // Range band from the sheet's own user-entered table (FR9.9, G6).
   const rangeCat = weapon.rangeCat;
@@ -169,7 +175,7 @@ function WeaponCard({ weapon, character, derived, roll, patchSheet, overrideFor 
 
   const fire = (mode: string) => {
     const bullets = bulletsForMode(mode);
-    const penalty = recoilPenalty(fired, bullets, comp);
+    const penalty = recoilFor(mode, bullets);
     const chips: RollChip[] = [];
     if (rangeMod) {
       chips.push({
@@ -220,7 +226,8 @@ function WeaponCard({ weapon, character, derived, roll, patchSheet, overrideFor 
         },
       },
       () => {
-        bumpRecoil(rKey, bullets);
+        // Single-shot weapons do not build recoil (SR5 p.175).
+        if (mode.toUpperCase() !== 'SS') bumpRecoil(rKey, bullets);
         if (weapon.ammo) {
           patchSheet(
             withWeaponAmmo(sheet, weapon.name, Math.max(0, weapon.ammo.current - bullets)),
@@ -256,13 +263,16 @@ function WeaponCard({ weapon, character, derived, roll, patchSheet, overrideFor 
         {weapon.dv ?? '—'}
         {typeof weapon.ap === 'number' && weapon.ap !== 0 ? ` · AP ${weapon.ap}` : ''}
         {typeof weapon.acc === 'number' ? ` · acc ${weapon.acc}` : ''}
-        {comp > 0 ? ` · RC ${comp}` : ''}
+        {` · RC ${recoilCompensation(comp, str)}`}
+        <span className="text-faint" title="1 free + STR÷3 rounded up + the weapon's own (SR5 p.175)">
+          {` (1 + ${Math.ceil(str / 3)} + ${comp})`}
+        </span>
       </div>
 
       {/* Per-mode attack buttons with the recoil-adjusted pool preview */}
       <div className="mt-2 flex flex-wrap gap-1.5">
         {modes.map((mode) => {
-          const penalty = recoilPenalty(fired, bulletsForMode(mode), comp) + (rangeMod?.value ?? 0);
+          const penalty = recoilFor(mode, bulletsForMode(mode)) + (rangeMod?.value ?? 0);
           const effective = Math.max(0, pool.total + penalty);
           return (
             <button

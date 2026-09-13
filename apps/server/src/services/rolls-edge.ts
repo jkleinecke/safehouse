@@ -182,6 +182,11 @@ export class EdgeActionService {
   }): Promise<CloseCallResult> {
     const roll = await this.rolls.getRoll(opts.campaignId, opts.viewer, opts.rollId);
     if (!roll) throw httpError(404, 'not_found', 'unknown roll');
+    // One point of Edge per test (SR5 p.56): a roll that was pushed or
+    // re-rolled with Edge cannot buy a Close Call on top.
+    if (roll.edgeAction) {
+      throw httpError(400, 'edge_spent', 'Edge was already spent on that roll — one point per test (SR5 p.56)');
+    }
     const outcome = closeCall(toResult(roll));
     if (!outcome.applied) {
       throw httpError(400, 'no_glitch', 'that roll did not glitch — nothing to negate');
@@ -192,7 +197,8 @@ export class EdgeActionService {
     // The log line is as visible as the roll it answers — a Close Call on a
     // roll behind the screen must not announce itself to the table.
     const { edge } = await this.spend(opts, payer, 'close_call', {
-      detail: `${outcome.negated === 'critical' ? 'critical glitch' : 'glitch'} negated`,
+      // A critical glitch is downgraded, never wiped (SR5 p.46, p.56).
+      detail: outcome.negated === 'critical' ? 'critical glitch downgraded to a glitch' : 'glitch negated',
       visibility: roll.visibility,
       ownerUserId: payer.kind === 'character' ? payer.rec.ownerUserId : null,
       extra: { rollId: roll.id, negated: outcome.negated },

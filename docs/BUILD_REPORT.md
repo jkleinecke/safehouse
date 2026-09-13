@@ -887,6 +887,60 @@ the server's own sheet.
 **FR3.2 moves from `partial` to `done` for acquisition;** the Matrix tab is
 still the gap.
 
+### RULES-1 — the engine read against the book *(2026-09-13)*
+
+"Double check all the logic for rolls and rules against the book's
+definition." Done the only honest way: the relevant pages of the GM's own
+core rulebook (p.44–49 tests, p.56–57 Edge, p.169–175 damage and recoil,
+p.281–282 drain, p.300 summoning, p.418 buying gear) read out of the
+library's own extracted text and compared line by line with
+`packages/rules` and the sheet. What matched: hits on 5–6; a glitch when
+ones exceed half the dice and a critical glitch when it lands no hits;
+buying hits at four to one; limits clipping hits and Push the Limit
+ignoring them, with the Rule of Six on the whole pool before the roll and
+on the Edge dice only after; opposed and threshold net hits; Physical,
+Mental and Social limits; both condition monitors, overflow, wound
+modifiers, initiative and movement; range bands; soak as Body plus armor
+after AP with armor at zero costing no Body; the Availability test as
+rebuilt the day before. What did not, now fixed with a test pinned to the
+page:
+
+- **Extended tests ended only when the dice ran out.** p.48: a critical
+  glitch on any interval fails the test and loses the work. The engine
+  stops, zeroes the total, and says so (`criticalGlitch`); an ordinary
+  glitch is left to the GM, who may dock 1D6, and each interval's glitch is
+  in the record for that call.
+- **Second Chance could erase a glitch.** p.56: it re-rolls the misses and
+  "cannot be used to negate a glitch or critical glitch". The glitch is now
+  the first roll's, whatever the re-rolled dice show.
+- **Close Call wiped a critical glitch.** p.56 and p.46: it negates a glitch
+  or turns a critical glitch into an ordinary one, and no second point
+  finishes the job. Downgraded now, and the server refuses a Close Call on
+  a roll that already spent Edge — one point per test.
+- **Teamwork added every helper hit and every helper's limit.** p.49: the
+  dice added cannot exceed the leader's skill rating (highest attribute for
+  a two-attribute test), a glitching helper adds no limit, and any helper's
+  critical glitch means no limit bonus at all. The cap reads off the
+  leader's own provenance.
+- **Recoil compensation forgot the shooter.** p.175: one free point, plus
+  Strength ÷ 3 rounded up, plus the weapon's; recoil is cumulative to the
+  character across every gun, and single-shot weapons build none. The sheet
+  now totals all three, keeps one counter per shooter, and leaves SS alone.
+- **Drain went Physical on Force alone.** p.281–282: it is Physical when the
+  CAST's hits after the limit exceed Magic. The drain panel reads the cast
+  roll off the table log and decides from its hits, assuming the worst only
+  when the roll is not there.
+- **Armor equal to the modified DV made the damage Stun.** p.173: Physical
+  when the modified DV is greater than *or equal to* the modified armor.
+  And AP that would raise armor now does nothing to a target wearing none
+  (p.169).
+- **Delivery times rounded to nearest.** p.48: round up.
+
+Not automated, on purpose: the GM's 1D6 on an extended-test glitch, the
+"trying again" −2, and summoning drain (twice the spirit's hits, minimum 2,
+Physical if its Force beats Magic — p.300), which the magic workbench leaves
+to the caster's own roll.
+
 ### What changed structurally
 
 `apps/web/e2e/` exists: Playwright, chromium, 14 spec files, 40 tests, run

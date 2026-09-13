@@ -191,10 +191,37 @@ export function bulletsForMode(mode: string): number {
  * `firedSoFar` this turn: cumulative rounds − 1 (first is free) − recoil comp.
  * Assistive per Principle 2 — the roll dialog lets the GM/user adjust it.
  */
-export function recoilPenalty(firedSoFar: number, bullets: number, recoilComp: number): number {
+export function recoilPenalty(firedSoFar: number, bullets: number, recoilComp: number, strength = 0): number {
   const total = Math.max(0, firedSoFar) + Math.max(0, bullets);
-  const uncompensated = Math.max(0, total - 1 - Math.max(0, recoilComp));
+  const uncompensated = Math.max(0, total - recoilCompensation(recoilComp, strength));
   return uncompensated === 0 ? 0 : -uncompensated; // never -0
+}
+
+/**
+ * Recoil compensation as the book totals it (SR5 p.175): one free point,
+ * Strength ÷ 3 rounded up, and the weapon's own compensation. Recoil is the
+ * shooter's, not the gun's, and single-shot weapons do not accumulate it.
+ */
+export function recoilCompensation(recoilComp: number, strength: number): number {
+  return 1 + Math.ceil(Math.max(0, strength) / 3) + Math.max(0, recoilComp);
+}
+
+/**
+ * The cast roll's hits for `spell`, from the table log — what decides whether
+ * its Drain is Physical: hits (after the limit) over Magic (SR5 p.281-282).
+ */
+export function castHitsFromEvents(events: readonly WsEvent[], spell: string): number | null {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (!event || event.type !== 'roll.created') continue;
+    const p = asRecord(event.payload);
+    const meta = asRecord(asRecord(p['request'])['meta'] ?? p['meta']);
+    if (meta['spell'] !== spell || meta['drainFor'] !== undefined) continue;
+    const result = asRecord(p['result'] ?? p);
+    const hits = result['limitedHits'] ?? result['hits'];
+    return typeof hits === 'number' ? hits : null;
+  }
+  return null;
 }
 
 export function ammoAfterShots(weapon: SheetWeapon, bullets: number): SheetV1['weapons'][number] {

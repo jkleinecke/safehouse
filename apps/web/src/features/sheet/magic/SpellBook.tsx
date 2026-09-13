@@ -54,7 +54,10 @@ export default function SpellBook(props: SpellBookProps) {
   const rollDrain = (spell: SheetSpell, force: number, dv: number) => {
     const wil = attr('wil');
     const second = attr(drainAttr);
-    const physical = force > attr('mag');
+    const mag = attr('mag');
+    // Drain is Physical when the CAST's hits (after the Force limit) exceed
+    // Magic (SR5 p.281-282) — only possible above Magic, decided by the dice.
+    const overMagic = force > mag;
     const breakdown: ProvenanceEntry[] = [
       { label: 'WIL', value: wil, source: 'attribute' },
       { label: drainAttr.toUpperCase(), value: second, source: 'attribute' },
@@ -62,15 +65,13 @@ export default function SpellBook(props: SpellBookProps) {
     roll(
       {
         title: `Drain — ${spell.name}`,
-        note: `Resist ${dv} ${physical ? 'Physical' : 'Stun'} (Force ${force}${
-          physical ? ' > MAG' : ''
-        }); unresisted boxes hit your monitor.`,
+        note: `Resist ${dv} ${overMagic ? `Stun — Physical if the cast's hits beat Magic ${mag}` : 'Stun'} (Force ${force}); unresisted boxes hit your monitor.`,
         kind: 'threshold',
         baseTotal: wil + second,
         baseBreakdown: breakdown,
-        meta: { drainFor: spell.name, threshold: dv, force, damage: physical ? 'P' : 'S' },
+        meta: { drainFor: spell.name, threshold: dv, force, damage: overMagic ? 'P if hits > MAG' : 'S' },
       },
-      () => setPendingDrain({ spell: spell.name, dv, physical, at: Date.now() }),
+      () => setPendingDrain({ spell: spell.name, dv, physical: overMagic, magic: mag, at: Date.now() }),
     );
   };
 
@@ -261,7 +262,7 @@ function CastDialog({
       </div>
       <p className="mt-1 text-xs text-faint">
         Pool {pool} · limit Force {force}
-        {physical ? ' · over Magic — drain is Physical' : ''}
+        {physical ? ` · over Magic — drain is Physical if the cast's hits beat ${mag}` : ''}
       </p>
 
       <div className="mt-3 flex items-center justify-between gap-2">
@@ -283,7 +284,7 @@ function CastDialog({
       <p className="mt-1 text-xs text-faint">
         {dv === null
           ? `No drain code entered${spell.drain ? ` ("${spell.drain}" unrecognized)` : ''} — the drain roll is skipped.`
-          : `Drain ${dv} ${physical ? 'Physical' : 'Stun'} (min 2), rolled right after the cast.`}
+          : `Drain ${dv} (min 2), rolled right after the cast${physical ? ' — Physical only if the cast beats Magic' : ''}.`}
       </p>
 
       {!alreadySustained && (

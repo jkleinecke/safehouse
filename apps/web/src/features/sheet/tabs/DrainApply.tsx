@@ -6,15 +6,28 @@
  */
 import { useMemo, useState } from 'react';
 import { useLiveStore } from '../../../live/store.js';
-import { drainHitsFromEvents, type ConditionState } from '../lib.js';
+import { castHitsFromEvents, drainHitsFromEvents, type ConditionState } from '../lib.js';
 
 export interface PendingDrain {
   spell: string;
   dv: number;
-  /** Force exceeded Magic → the boxes are Physical, not Stun (FR8.1). */
+  /**
+   * Force exceeded Magic, so the Drain MAY be Physical: it is, when the
+   * cast's hits after the limit beat Magic (SR5 p.281-282). The panel reads
+   * the cast roll off the log to decide; without it, it assumes the worst.
+   */
   physical: boolean;
+  /** The caster's Magic, the line the cast's hits are measured against. */
+  magic?: number;
   /** Cast timestamp — keys the panel so a re-cast starts with a clean field. */
   at: number;
+}
+
+/** Physical or Stun, from the cast's own hits when the log has them. */
+export function drainIsPhysical(pending: Pick<PendingDrain, 'physical' | 'magic'>, castHits: number | null): boolean {
+  if (!pending.physical) return false;
+  if (castHits === null || pending.magic === undefined) return true;
+  return castHits > pending.magic;
 }
 
 export default function DrainApplyPanel({
@@ -30,6 +43,8 @@ export default function DrainApplyPanel({
 }) {
   const events = useLiveStore((s) => s.events);
   const rolled = useMemo(() => drainHitsFromEvents(events, pending.spell), [events, pending.spell]);
+  const castHits = useMemo(() => castHitsFromEvents(events, pending.spell), [events, pending.spell]);
+  const physical = drainIsPhysical(pending, castHits);
   const [edited, setEdited] = useState<string | null>(null);
 
   const hitsText = edited ?? (rolled === null ? '' : String(rolled));
@@ -41,7 +56,12 @@ export default function DrainApplyPanel({
     <div className="panel mt-3 border-magenta-dim p-3">
       <div className="mono-label text-magenta">Drain — {pending.spell}</div>
       <p className="mt-1 text-xs text-dim">
-        Resisting {pending.dv} {pending.physical ? 'Physical' : 'Stun'}.
+        Resisting {pending.dv} {physical ? 'Physical' : 'Stun'}.
+        {pending.physical && pending.magic !== undefined
+          ? castHits === null
+            ? ` Force over Magic — Physical unless the cast's hits stay at or under ${pending.magic}.`
+            : ` The cast scored ${castHits} hit${castHits === 1 ? '' : 's'} against Magic ${pending.magic} — ${physical ? 'Physical' : 'Stun'}.`
+          : ''}
         {rolled === null
           ? ' Enter the hits your drain roll scored.'
           : ' Hits picked up from the table log.'}
@@ -57,7 +77,7 @@ export default function DrainApplyPanel({
           aria-label="Drain resistance hits"
         />
         <span className="font-label text-sm text-ink">
-          → {boxes} {pending.physical ? 'P' : 'S'} box{boxes === 1 ? '' : 'es'}
+          → {boxes} {physical ? 'P' : 'S'} box{boxes === 1 ? '' : 'es'}
         </span>
         <div className="ml-auto flex gap-1.5">
           <button type="button" className="chip text-dim" onClick={onDismiss}>
@@ -69,7 +89,7 @@ export default function DrainApplyPanel({
             disabled={boxes <= 0}
             onClick={() =>
               onApply(
-                pending.physical
+                physical
                   ? { ...condition, physical: condition.physical + boxes }
                   : { ...condition, stun: condition.stun + boxes },
               )

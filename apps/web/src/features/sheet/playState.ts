@@ -33,8 +33,8 @@ export function isSheetTab(value: unknown): value is SheetTab {
   return SHEET_TABS.some((t) => t.id === value);
 }
 
-export const recoilKey = (characterId: string, weaponName: string): string =>
-  `${characterId}:${weaponName}`;
+/** Recoil is cumulative to the character, not the weapon (SR5 p.175): one counter per shooter. */
+export const recoilKey = (characterId: string): string => characterId;
 
 /**
  * Second attribute the caster soaks Drain with (FR8.1 "the tradition's

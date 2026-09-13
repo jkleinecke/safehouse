@@ -295,7 +295,7 @@ describe('Close Call (FR2.3)', () => {
     return res['roll'] as { id: string; glitch: string };
   }
 
-  it('negates the critical glitch, bills Edge, and leaves the roll on record (G5)', async () => {
+  it('turns the critical glitch into a glitch, bills Edge, and leaves the roll on record (SR5 p.56, G5)', async () => {
     await resetEdge(3);
     const roll = await criticalGlitch();
     expect(roll.glitch).toBe('critical');
@@ -303,7 +303,8 @@ describe('Close Call (FR2.3)', () => {
     const out = await json('POST', '/api/edge/close-call', player.token, { rollId: roll.id });
     expect(out['action']).toBe('close_call');
     expect(out['negated']).toBe('critical');
-    expect(out['result'].glitch).toBe('none');
+    // "turn a critical glitch into a glitch" — a critical glitch is never wiped (p.46).
+    expect(out['result'].glitch).toBe('glitch');
     expect(out['edge'].current).toBe(2);
     expect(await edgeLeft()).toBe(2);
 
@@ -315,9 +316,26 @@ describe('Close Call (FR2.3)', () => {
     const log = await edgeLog(player.token);
     const line = log[0]!;
     expect(line.text).toContain('Close Call');
-    expect(line.text).toContain('critical glitch negated');
+    expect(line.text).toContain('critical glitch downgraded to a glitch');
     expect(line.extra['rollId']).toBe(roll.id);
     expect(line.extra['negated']).toBe('critical');
+  });
+
+  it('refuses a Close Call on a roll that already spent Edge — one point per test (SR5 p.56)', async () => {
+    await resetEdge(3);
+    svc.setRng(fixedFace(1));
+    const pushed = await json('POST', '/api/rolls', player.token, {
+      pool: 4,
+      edge: 'second_chance',
+      actor: { characterId },
+      meta: { poolRef: 'skill.perception' },
+    });
+    expect((pushed['roll'] as { glitch: string }).glitch).toBe('critical');
+    expect(await edgeLeft()).toBe(2);
+    const res = await call('POST', '/api/edge/close-call', player.token, { rollId: (pushed['roll'] as { id: string }).id });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error: { code: string } }).error.code).toBe('edge_spent');
+    expect(await edgeLeft()).toBe(2);
   });
 
   it('refuses a roll that did not glitch, and costs nothing', async () => {
