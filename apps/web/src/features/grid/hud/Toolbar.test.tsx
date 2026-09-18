@@ -85,7 +85,7 @@ describe('<Toolbar> undo and redo', () => {
 });
 
 describe('<ViewControls>', () => {
-  it('holds snap, zoom, fit and — for the GM — the view and the panel', () => {
+  it('holds snap, zoom, fit and the view for everyone, and the panel for the GM', () => {
     const gm = renderToStaticMarkup(
       <ViewControls
         isGm
@@ -108,6 +108,9 @@ describe('<ViewControls>', () => {
         isGm={false}
         snapEnabled={false}
         gmPanelOpen={false}
+        viewProjection="scene"
+        sceneProjection="iso"
+        onView={() => undefined}
         onToggleSnap={() => undefined}
         onToggleGmPanel={() => undefined}
         onZoom={() => undefined}
@@ -115,6 +118,8 @@ describe('<ViewControls>', () => {
       />,
     );
     expect(player).toContain('Zoom in');
-    expect(player).not.toContain('data-testid="view-toggle"');
+    // A player flips plan / iso on their own screen too.
+    expect(player).toContain('data-testid="view-toggle"');
+    expect(player).not.toContain('GM authoring panel');
   });
 });

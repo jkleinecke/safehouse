@@ -97,6 +97,16 @@ export default function TvPage() {
   );
   const ribbon = useMemo(() => tvRibbonRows(world.encounter), [world.encounter]);
   const focus = useFocusMark(world.sceneId);
+  // The table sees the map in isometric, whatever the scene is saved as — the
+  // GM builds in plan, the big screen shows the room. Memoised so an idle
+  // minute still pushes the stage nothing (six-hour discipline).
+  const tvScene = useMemo(
+    () =>
+      scene && scene.scene.grid.projection !== 'iso'
+        ? { ...scene.scene, grid: { ...scene.scene.grid, projection: 'iso' as const } }
+        : scene?.scene,
+    [scene],
+  );
 
   const shownMoment = useLatched(moment, moment?.flagged ? FLAGGED_TTL_MS : MOMENT_TTL_MS);
   const shownTakeover = useLatched(takeoverSource, TAKEOVER_TTL_MS);
@@ -147,7 +157,7 @@ export default function TvPage() {
     return (
       <Kiosk>
         <TvStageView
-          scene={scene.scene}
+          scene={tvScene ?? scene.scene}
           tokens={scene.tokens}
           bars={decor.bars}
           actingTokenId={decor.actingTokenId}

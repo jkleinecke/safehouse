@@ -171,7 +171,7 @@ export interface ViewControlsProps {
   isGm: boolean;
   snapEnabled: boolean;
   gmPanelOpen: boolean;
-  /** The GM's own view of the map — see `ViewProjection`. */
+  /** This screen's own view of the map — see `ViewProjection`. */
   viewProjection?: ViewProjection;
   /** What the scene is saved as, i.e. what the table sees. */
   sceneProjection?: GridProjection;
@@ -207,23 +207,25 @@ export function ViewControls(props: ViewControlsProps) {
         <span aria-hidden>⤢</span>
       </Btn>
 
-      {props.isGm && (
+      {/*
+        Plan or isometric, one click apart, for anyone at the table. It is
+        this screen's OWN view: flipping it never touches the scene, so the
+        GM laying rooms out in plan does not flip a player's phone, and a
+        player who prefers plan does not flip anyone else. The scene's
+        default is set in Setup ▸ View.
+      */}
+      {props.onView && (
         <>
           <span className="mx-0.5 h-5 w-px bg-edge" aria-hidden />
-          {/*
-            The map builder's two views, one click apart. Plan is where rooms
-            are laid out — a rectangle is a rectangle — and isometric is what
-            the table is shown. This is the GM's OWN view: flipping it never
-            touches the scene, so the table does not flip mid-session. What
-            the table sees is set in Setup ▸ View.
-          */}
-          {props.onView && (
-            <ViewToggle
-              view={props.viewProjection ?? 'scene'}
-              sceneProjection={props.sceneProjection ?? 'topdown'}
-              onView={props.onView}
-            />
-          )}
+          <ViewToggle
+            view={props.viewProjection ?? 'scene'}
+            sceneProjection={props.sceneProjection ?? 'topdown'}
+            onView={props.onView}
+          />
+        </>
+      )}
+      {props.isGm && (
+        <>
           <Btn active={props.gmPanelOpen} title="GM authoring panel" onClick={props.onToggleGmPanel}>
             <span aria-hidden>▤</span>
           </Btn>

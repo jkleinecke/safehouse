@@ -112,9 +112,10 @@ export interface GridUiState {
    */
   activeLevel: number;
   /**
-   * GM only: plan or isometric on THIS screen, regardless of what the scene
-   * is saved as. `scene` means "whatever the table sees". Never persisted —
-   * it is how the GM likes to build, not a fact about the map.
+   * Plan or isometric on THIS screen, regardless of what the scene is saved
+   * as — the GM's and every player's own choice. `scene` means "whatever the
+   * scene is set to". Never persisted — it is how this person likes to look,
+   * not a fact about the map.
    */
   viewProjection: ViewProjection;
   losTokenId: string | null;

@@ -110,6 +110,14 @@ export default function GridPage() {
   const isGm = viewer.role === 'gm';
 
   const store = useGridStore();
+  // Isometric is how the table is meant to see the map: a player's screen
+  // opens on it whatever the scene is saved as (the GM's opens on the scene's
+  // own setting, which is where rooms get built). Only a view — they can flip.
+  useEffect(() => {
+    if (!isGm && useGridStore.getState().viewProjection === 'scene') {
+      useGridStore.getState().setViewProjection('iso');
+    }
+  }, [isGm]);
   const liveActiveSceneId = useActiveSceneId();
   const scenesQuery = useScenes(campaignId);
 
@@ -271,15 +279,16 @@ export default function GridPage() {
   /**
    * The scene as THIS screen draws it.
    *
-   * The GM's plan/iso choice is a view, not an edit: it overrides the grid's
-   * projection on the way to the canvas and nowhere else, so the table keeps
-   * seeing the scene the way it is saved while the GM lays rooms out in plan.
+   * This screen's plan/iso choice is a view, not an edit: it overrides the
+   * grid's projection on the way to the canvas and nowhere else, so everyone
+   * else keeps their own view — the GM lays rooms out in plan while a player
+   * watches in iso, or the other way round.
    */
   const viewScene = useMemo(() => {
-    if (!scene || !isGm || store.viewProjection === 'scene') return scene;
+    if (!scene || store.viewProjection === 'scene') return scene;
     if (scene.grid.projection === store.viewProjection) return scene;
     return { ...scene, grid: { ...scene.grid, projection: store.viewProjection } };
-  }, [scene, isGm, store.viewProjection]);
+  }, [scene, store.viewProjection]);
 
   /**
    * Which floor this screen shows.
