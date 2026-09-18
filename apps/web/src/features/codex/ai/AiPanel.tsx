@@ -22,7 +22,6 @@
  */
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useCampaign } from '../../../api/campaigns.js';
 import { ErrorNote, Spinner } from '../../gm/ui.js';
 import { useCancelAi } from '../../gm/fixer/api.js';
 import { useFixerStatus } from '../../gm/fixer/api.js';
@@ -55,13 +54,12 @@ const inputClass =
 export interface AiPanelProps {
   campaignId: string;
   page: CodexPage;
-  /** Override the FR12.16 slot choice; otherwise a live session picks `fast`. */
+  /** Unused since the fast slot went away; kept so callers need not change. */
   sessionLive?: boolean;
 }
 
-export default function AiPanel({ campaignId, page, sessionLive }: AiPanelProps) {
+export default function AiPanel({ campaignId, page }: AiPanelProps) {
   const status = useFixerStatus();
-  const campaign = useCampaign(campaignId);
   const pages = usePages(campaignId);
   const drafts = useWikiDrafts(campaignId);
   const ask = useCodexAsk(campaignId);
@@ -160,10 +158,6 @@ export default function AiPanel({ campaignId, page, sessionLive }: AiPanelProps)
         playerFacing,
         mode: useSection ? 'section' : (spec?.mode === 'section' ? 'replace' : (spec?.mode ?? 'replace')),
         ...(useSection ? { sectionId } : {}),
-        // FR12.16: during play the fast slot, so inference never starves the table.
-        ...((sessionLive ?? Boolean(campaign.data?.activeSessionId))
-          ? { slot: 'fast' as const }
-          : {}),
       },
       {
         onSuccess: (result) => {

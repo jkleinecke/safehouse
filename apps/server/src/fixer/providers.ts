@@ -112,7 +112,8 @@ export function resolveLlmConfig(
 
   const primary = ai.primaryModel.trim() || info.defaults.primary;
   if (primary.length === 0) return null;
-  const fast = ai.fastModel.trim() || primary;
+  // One model does everything; there is no separate fast slot.
+  const fast = primary;
 
   return {
     baseUrl,

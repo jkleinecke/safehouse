@@ -5,7 +5,7 @@
  * (`llama-server`) or vLLM on the LAN inference box. Streaming SSE always
  * (§15 "AI latency"): deltas relay to the GM's panel as they arrive. Tool
  * calling is OpenAI-style function calling; tool_call deltas are re-assembled
- * by index. Two model slots (`LLM_MODEL_PRIMARY` / `LLM_MODEL_FAST`, FR12.16).
+ * by index. One model (`LLM_MODEL_PRIMARY`) serves every call.
  *
  * Nothing here touches the internet: the only destination is the configured
  * base URL. With `LLM_BASE_URL` unset, `llmConfigFromEnv()` returns null and
@@ -57,7 +57,8 @@ export function llmConfigFromEnv(
   if (raw.length === 0) return null;
   const baseUrl = raw.replace(/\/+$/, '');
   const primary = (env['LLM_MODEL_PRIMARY'] ?? '').trim() || 'local-primary';
-  const fast = (env['LLM_MODEL_FAST'] ?? '').trim() || primary;
+  // One model does everything; there is no separate fast slot.
+  const fast = primary;
   // `LLM_API_KEY` is optional and always has been implicitly: a box on the LAN
   // takes no credential, and that is still the default posture.
   const apiKey = (env['LLM_API_KEY'] ?? '').trim();
@@ -187,7 +188,7 @@ export async function explain404(baseUrl: string, model: string): Promise<string
     // The name is right, so the 404 is about the ROUTE, not the model.
     return `the inference server at ${baseUrl} does serve "${model}" but answered 404 — the base URL path is wrong, not the model name`;
   }
-  return `the inference server has no model called "${model}" — it serves: ${served.join(', ')}. Set LLM_MODEL_PRIMARY (and LLM_MODEL_FAST) to one of those.`;
+  return `the inference server has no model called "${model}" — it serves: ${served.join(', ')}. Set LLM_MODEL_PRIMARY to one of those.`;
 }
 
 // ---------------------------------------------------------------------------

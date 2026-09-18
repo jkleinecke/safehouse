@@ -41,7 +41,6 @@ export default function AiSettings({ campaignId }: { campaignId: string }) {
   const [provider, setProvider] = useState<AiProvider>('off');
   const [baseUrl, setBaseUrl] = useState('');
   const [primaryModel, setPrimary] = useState('');
-  const [fastModel, setFast] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [effort, setEffort] = useState<AiEffort>('default');
   const [touched, setTouched] = useState(false);
@@ -54,7 +53,6 @@ export default function AiSettings({ campaignId }: { campaignId: string }) {
     setProvider(saved.provider);
     setBaseUrl(saved.baseUrl);
     setPrimary(saved.primaryModel);
-    setFast(saved.fastModel);
     setEffort(saved.reasoningEffort);
   }, [saved, touched]);
 
@@ -72,7 +70,7 @@ export default function AiSettings({ campaignId }: { campaignId: string }) {
         provider,
         baseUrl: isLocal ? baseUrl.trim() : '',
         primaryModel: primaryModel.trim() || info.defaults.primary,
-        fastModel: fastModel.trim(),
+        fastModel: '',
         reasoningEffort: effort,
         // Omitted, not blank: an omitted key leaves the stored one alone, a
         // blank one clears it, and those must not be the same request.
@@ -143,7 +141,6 @@ export default function AiSettings({ campaignId }: { campaignId: string }) {
             // heard of and a 404 the GM has to decode.
             const chosen = aiProviderInfo(next);
             setPrimary(chosen.defaults.primary);
-            setFast(chosen.defaults.fast);
           }}
         >
           {AI_PROVIDERS.map((p) => (
@@ -199,7 +196,7 @@ export default function AiSettings({ campaignId }: { campaignId: string }) {
                         <span className="text-dim">
                           {' '}
                           · {probe.data.models.length} model{probe.data.models.length === 1 ? '' : 's'} — click
-                          one to make it the primary
+                          one to use it
                         </span>
                         <div className="mt-1 flex flex-wrap gap-1">
                           {probe.data.models.map((id) => (
@@ -209,12 +206,7 @@ export default function AiSettings({ campaignId }: { campaignId: string }) {
                               className={`chip cursor-pointer normal-case ${
                                 primaryModel === id ? 'border-cyan text-cyan' : 'text-dim hover:text-cyan'
                               }`}
-                              onClick={() => {
-                                edit(setPrimary)(id);
-                                // A fast model the box does not serve would 404 mid-session;
-                                // blank means the primary, which it does serve.
-                                if (!probe.data?.models.includes(fastModel)) edit(setFast)('');
-                              }}
+                              onClick={() => edit(setPrimary)(id)}
                               data-testid="ai-probe-model"
                             >
                               {id}
@@ -286,31 +278,16 @@ export default function AiSettings({ campaignId }: { campaignId: string }) {
             </span>
           </label>
 
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <label className="block">
-              <span className="mono-label">Primary model</span>
-              <input
-                className={inputCls}
-                value={primaryModel}
-                placeholder={info.defaults.primary}
-                data-testid="ai-primary"
-                onChange={(e) => edit(setPrimary)(e.target.value)}
-              />
-            </label>
-            <label className="block">
-              <span className="mono-label">Fast model</span>
-              <input
-                className={inputCls}
-                value={fastModel}
-                placeholder={info.defaults.fast || primaryModel}
-                data-testid="ai-fast"
-                onChange={(e) => edit(setFast)(e.target.value)}
-              />
-              <span className="mt-1 block text-[0.7rem] text-dim">
-                Used for mechanical work during play. Blank means the primary.
-              </span>
-            </label>
-          </div>
+          <label className="mt-3 block">
+            <span className="mono-label">Model</span>
+            <input
+              className={inputCls}
+              value={primaryModel}
+              placeholder={info.defaults.primary}
+              data-testid="ai-primary"
+              onChange={(e) => edit(setPrimary)(e.target.value)}
+            />
+          </label>
         </>
       )}
 

@@ -14,12 +14,6 @@ import { aiDisabledFrom, isAiCancelled, useCancelAi, useFixerSend, useFixerStatu
 import type { AiContext } from './aiContext.js';
 import { reduceFixerStream, type FixerUsage, type ToolChip } from './stream.js';
 
-const SUGGESTIONS = [
-  'Who on the team is hurt worst right now?',
-  'Three complications for tonight, escalating.',
-  'What does the team actually know about the Johnson?',
-];
-
 function ToolChipView({ chip }: { chip: ToolChip }) {
   const tone =
     chip.status === 'error'
@@ -54,10 +48,12 @@ function UsageMeter({ last, total }: { last?: FixerUsage; total: FixerUsage }) {
 
 export interface FixerChatProps {
   campaignId: string;
-  /** Live session → default to the fast slot so inference never starves the table. */
+  /** Unused since the fast slot went away; kept so callers need not change. */
   sessionLive?: boolean;
   /** Compact layout for the dock; the full page gives it more room. */
   dense?: boolean;
+  /** Grow to the container's height (the drawer) instead of capping the transcript. */
+  fill?: boolean;
   /** What the GM is looking at — stamped on every message (aiContext.ts). */
   context?: AiContext;
   /**
@@ -68,7 +64,7 @@ export interface FixerChatProps {
   seed?: { text: string; send: boolean; nonce: number } | null;
 }
 
-export default function FixerChat({ campaignId, sessionLive, dense, context, seed }: FixerChatProps) {
+export default function FixerChat({ campaignId, dense, fill, context, seed }: FixerChatProps) {
   const chunks = useLiveStore((s) => s.fixerStream);
   const clearStream = useLiveStore((s) => s.clearFixerStream);
   const send = useFixerSend();
@@ -76,7 +72,6 @@ export default function FixerChat({ campaignId, sessionLive, dense, context, see
   const cancel = useCancelAi(campaignId);
 
   const [draft, setDraft] = useState('');
-  const [slot, setSlot] = useState<'primary' | 'fast'>(sessionLive ? 'fast' : 'primary');
   const [sent, setSent] = useState<{ text: string; ts: number }[]>([]);
   const [conversationId, setConversationId] = useState<string | undefined>(undefined);
   const scroller = useRef<HTMLDivElement | null>(null);
@@ -99,7 +94,6 @@ export default function FixerChat({ campaignId, sessionLive, dense, context, see
       {
         campaignId,
         message,
-        slot,
         ...(conversationId ? { conversationId } : {}),
         ...(context ? { context } : {}),
       },
@@ -131,7 +125,7 @@ export default function FixerChat({ campaignId, sessionLive, dense, context, see
         </p>
         {status.data?.models && (
           <p className="mono-label mt-2 text-faint">
-            configured models: {status.data.models.primary} / {status.data.models.fast}
+            configured model: {status.data.models.primary}
           </p>
         )}
       </div>
@@ -150,16 +144,7 @@ export default function FixerChat({ campaignId, sessionLive, dense, context, see
   return (
     <div className="panel flex min-h-0 flex-1 flex-col p-4">
       <div className="flex flex-wrap items-center gap-2">
-        <SectionTitle hint="GM-only — players never talk to it">The Fixer</SectionTitle>
-        <span className="chip text-faint" title="Model slot">
-          {slot}
-        </span>
-        <button
-          className="chip cursor-pointer text-dim hover:text-cyan"
-          onClick={() => setSlot(slot === 'primary' ? 'fast' : 'primary')}
-        >
-          use {slot === 'primary' ? 'fast' : 'primary'}
-        </button>
+        <SectionTitle>The Fixer</SectionTitle>
         <button
           className="btn ml-auto px-2.5 py-1"
           onClick={() => {
@@ -185,28 +170,8 @@ export default function FixerChat({ campaignId, sessionLive, dense, context, see
 
       <div
         ref={scroller}
-        className={`mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 ${dense ? 'max-h-80' : 'max-h-[60vh]'}`}
+        className={`mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 ${fill ? '' : dense ? 'max-h-80' : 'max-h-[60vh]'}`}
       >
-        {timeline.length === 0 && (
-          <div className="space-y-2">
-            <p className="text-sm text-dim">
-              Ask about the rules in your own books, the campaign's own state, or tonight's plan.
-              Everything it writes lands as a draft you approve.
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {SUGGESTIONS.map((s) => (
-                <button
-                  key={s}
-                  className="chip cursor-pointer normal-case text-faint hover:text-cyan"
-                  onClick={() => setDraft(s)}
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
         {timeline.map((item, i) =>
           item.kind === 'user' ? (
             <div key={`u${i}`} className="ml-auto max-w-[85%] rounded-md bg-raised px-3 py-2">

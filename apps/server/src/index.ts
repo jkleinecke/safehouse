@@ -4,7 +4,7 @@
  * Env (all optional — the app must boot with none set, Principle 5 / NG7):
  * PORT (8787), DATA_DIR (./data; PGlite at data/pglite, files at data/files),
  * DATABASE_URL (node-postgres when set, else PGlite), SESSION_SECRET,
- * DISCORD_WEBHOOK_URL, LLM_BASE_URL, LLM_MODEL_PRIMARY, LLM_MODEL_FAST.
+ * DISCORD_WEBHOOK_URL, LLM_BASE_URL, LLM_MODEL_PRIMARY.
  *
  * Binds 0.0.0.0 — the LAN posture (§8/§13): the table's Wi-Fi during
  * sessions, localhost between them; nothing ever faces the internet.

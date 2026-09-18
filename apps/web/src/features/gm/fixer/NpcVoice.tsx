@@ -52,13 +52,13 @@ export function personaLine(t: NpcTemplate | undefined): string | null {
 
 export interface NpcVoiceProps {
   campaignId: string;
-  /** Live session → default to the fast slot so inference never starves the table. */
+  /** Unused since the fast slot went away; kept so callers need not change. */
   sessionLive?: boolean | undefined;
   /** Start on this NPC — the token the GM has selected on the map (aiContext.ts). */
   npcId?: string | undefined;
 }
 
-export default function NpcVoice({ campaignId, sessionLive, npcId: initialNpcId }: NpcVoiceProps) {
+export default function NpcVoice({ campaignId, npcId: initialNpcId }: NpcVoiceProps) {
   const templates = useNpcTemplates(campaignId);
   const status = useFixerStatus();
   const send = useNpcConverse();
@@ -67,7 +67,6 @@ export default function NpcVoice({ campaignId, sessionLive, npcId: initialNpcId 
 
   const [npcId, setNpcId] = useState(initialNpcId ?? '');
   const [draft, setDraft] = useState('');
-  const [slot, setSlot] = useState<'primary' | 'fast'>(sessionLive ? 'fast' : 'primary');
   const [lines, setLines] = useState<VoiceLine[]>([]);
   const [conversationId, setConversationId] = useState<string | undefined>(undefined);
   const [last, setLast] = useState<NpcConverseAck | null>(null);
@@ -99,7 +98,7 @@ export default function NpcVoice({ campaignId, sessionLive, npcId: initialNpcId 
     send.mutate(
       {
         npcId: picked.id,
-        body: { campaignId, message, slot, ...(conversationId ? { conversationId } : {}) },
+        body: { campaignId, message, ...(conversationId ? { conversationId } : {}) },
       },
       {
         onSuccess: (ack) => {
@@ -132,15 +131,6 @@ export default function NpcVoice({ campaignId, sessionLive, npcId: initialNpcId 
         <SectionTitle hint="in character, inside what they know — for you to read aloud">
           Speak as an NPC
         </SectionTitle>
-        <span className="chip text-faint" title="Model slot">
-          {slot}
-        </span>
-        <button
-          className="chip cursor-pointer text-dim hover:text-cyan"
-          onClick={() => setSlot(slot === 'primary' ? 'fast' : 'primary')}
-        >
-          use {slot === 'primary' ? 'fast' : 'primary'}
-        </button>
         <button
           className="btn ml-auto px-2.5 py-1"
           onClick={reset}
