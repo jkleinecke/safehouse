@@ -144,6 +144,30 @@ describe('join flow (FR1.1/1.3)', () => {
     expect(second.statusCode).toBe(410);
     expect((second.json() as { error: { code: string } }).error.code).toBe('invite_exhausted');
   });
+
+  it('peek reports role + campaign without spending a use, then a POST names the player', async () => {
+    const inviteRes = await t.app.inject({
+      method: 'POST',
+      url: `/api/campaigns/${boot.campaignId}/invites`,
+      headers: { authorization: `Bearer ${boot.gmToken}` },
+      payload: { role: 'player', maxUses: 1 },
+    });
+    const { code } = inviteRes.json() as { code: string };
+    const peek = await t.app.inject({ method: 'GET', url: `/api/join/${code.toLowerCase()}/peek` });
+    expect(peek.statusCode).toBe(200);
+    expect(peek.json()).toMatchObject({ role: 'player', campaignName: expect.any(String) });
+
+    const joined = await t.app.inject({
+      method: 'POST',
+      url: `/api/join/${code}`,
+      payload: { name: 'Kestrel' },
+    });
+    expect(joined.statusCode).toBe(200);
+    expect((joined.json() as { user: { displayName: string } }).user.displayName).toBe('Kestrel');
+
+    const spent = await t.app.inject({ method: 'GET', url: `/api/join/${code}/peek` });
+    expect(spent.statusCode).toBe(410);
+  });
 });
 
 describe('role guard (FR1.4, §13 capability matrix)', () => {

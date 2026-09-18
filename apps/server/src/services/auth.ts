@@ -506,6 +506,37 @@ export class AuthService {
     return row;
   }
 
+  /**
+   * `GET /api/join/:code/peek` — what a code would join, without redeeming it,
+   * so the join screen can ask a player their name before the device is
+   * minted. Same validity checks as `redeemInvite`; spends nothing.
+   */
+  async peekInvite(code: string): Promise<{ role: Role; campaignName: string }> {
+    const row = (
+      await this.db
+        .select({
+          role: invites.role,
+          revokedAt: invites.revokedAt,
+          expiresAt: invites.expiresAt,
+          uses: invites.uses,
+          maxUses: invites.maxUses,
+          campaignName: campaigns.name,
+        })
+        .from(invites)
+        .innerJoin(campaigns, eq(campaigns.id, invites.campaignId))
+        .where(eq(invites.code, code))
+        .limit(1)
+    )[0];
+    if (!row || row.revokedAt) throw httpError(404, 'invite_not_found', 'unknown join code');
+    if (row.expiresAt && row.expiresAt.getTime() < Date.now()) {
+      throw httpError(410, 'invite_expired', 'this join code has expired');
+    }
+    if (row.maxUses != null && row.uses >= row.maxUses) {
+      throw httpError(410, 'invite_exhausted', 'this join code has no uses left');
+    }
+    return { role: row.role, campaignName: row.campaignName };
+  }
+
   /** `GET|POST /api/join/:code` — mint user + membership + device token (FR1.1). */
   async redeemInvite(
     code: string,
@@ -1010,6 +1041,10 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthService): voi
   };
   app.get('/api/join/:code', join);
   app.post('/api/join/:code', join);
+  app.get('/api/join/:code/peek', async (req) => {
+    const { code } = req.params as { code: string };
+    return auth.peekInvite(code.toUpperCase());
+  });
 
   // Revoke a lost phone (FR1.3) — the campaign's GM, or the device's own user.
   app.post('/api/devices/:id/revoke', async (req, reply) => {

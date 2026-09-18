@@ -43,7 +43,7 @@ import {
 import { getSession, listSessions, type Session } from '../../api/session.js';
 import BuildBadge from './BuildBadge.js';
 import CampaignPicker from './CampaignPicker.js';
-import { useBootstrapCampaign, useAdoptPastedSession, useRedeemCode } from './signin-api.js';
+import { useBootstrapCampaign, useAdoptPastedSession } from './signin-api.js';
 import { destinationFor, normalizePairCode, parsePastedSession } from './signin.js';
 
 const inputClass =
@@ -187,7 +187,6 @@ export default function Landing() {
   const [pasteError, setPasteError] = useState<string | null>(null);
 
   const bootstrap = useBootstrapCampaign();
-  const redeem = useRedeemCode();
   const adopt = useAdoptPastedSession();
 
   useEffect(() => {
@@ -241,7 +240,9 @@ export default function Landing() {
       return;
     }
     setCodeError(null);
-    redeem.mutate(normalized, { onSuccess: go });
+    // The join screen peeks the code first, so a player gets asked their name
+    // and a GM pairing code or TV goes straight through.
+    navigate(`/join/${normalized}`);
   };
 
   const onPaste = (e: FormEvent) => {
@@ -319,15 +320,14 @@ export default function Landing() {
             <p id="pair-help" className="mono-label text-faint">
               The whole join URL works too.
             </p>
-            <button className="btn btn-accent w-full" type="submit" disabled={redeem.isPending}>
-              {redeem.isPending ? 'jacking in…' : 'pair this device'}
+            <button className="btn btn-accent w-full" type="submit">
+              pair this device
             </button>
             {codeError && (
               <p role="alert" className="text-xs text-danger">
                 {codeError}
               </p>
             )}
-            <Problem error={redeem.error} />
           </form>
         )}
 

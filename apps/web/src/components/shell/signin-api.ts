@@ -92,17 +92,29 @@ export function useMintGmDevice(campaignId: string) {
   });
 }
 
+/** `GET /api/join/:code/peek` — what a code joins, without spending it. */
+export interface JoinPeek {
+  role: Role;
+  campaignName: string;
+}
+
+export function peekJoinCode(code: string): Promise<JoinPeek> {
+  return apiGet<JoinPeek>(`/api/join/${encodeURIComponent(code)}/peek`, { anonymous: true });
+}
+
 /**
- * Redeem a pairing/join code straight from the landing screen. Same endpoint
- * the `/join/:code` screen uses; this path exists for a typed code, where
- * navigating first would leave a dead history entry behind.
+ * Redeem a join or pairing code (`POST /api/join/:code`). `name` becomes the
+ * new player's display name; a GM pairing code ignores it (it binds to the
+ * existing GM identity).
  */
 export function useRedeemCode() {
   return useMutation({
-    mutationFn: async (code: string): Promise<Session> => {
-      const res = await apiGet<JoinResponse>(`/api/join/${encodeURIComponent(code)}`, {
-        anonymous: true,
-      });
+    mutationFn: async ({ code, name }: { code: string; name?: string }): Promise<Session> => {
+      const res = await apiPost<JoinResponse>(
+        `/api/join/${encodeURIComponent(code)}`,
+        name ? { name } : {},
+        { anonymous: true },
+      );
       const session = sessionFrom(res);
       saveSession(session);
       return session;

@@ -5,6 +5,7 @@
  *
  *   POST  /api/campaigns/:id/transfer-ownership  { toUserId }
  *   PATCH /api/characters/:id/owner              { ownerUserId }
+ *   POST  /api/characters/:id/claim              player takes an unclaimed runner
  *
  * Transfer is not a cosmetic field flip. A campaign has exactly one GM (FR1.2),
  * so the move has to carry everything that answers "who is the GM":
@@ -28,7 +29,7 @@
  * characters plugin ever want `ownerUserId` in its own PatchBody it can call
  * `setCharacterOwner` below, and this route retires.
  */
-import { and, eq, ne } from 'drizzle-orm';
+import { and, eq, isNull, ne } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { campaigns, characters, devices, memberships, users, type Db } from '@safehouse/db';
@@ -206,5 +207,56 @@ export default async function campaignsAdminPlugin(app: FastifyInstance): Promis
       campaignId: rec.campaignId,
       ownerUserId: body.ownerUserId,
     });
+  });
+
+  // --- a joining player picks an unclaimed runner (onboarding) -------------
+  // The self-serve half of the route above, and deliberately narrower: only a
+  // sheet nobody holds, and only while the player holds none — otherwise the
+  // first phone through the door could pocket the whole unclaimed pool. Moving
+  // a runner that already has a player stays the GM's (`PATCH …/owner`).
+  app.post('/api/characters/:id/claim', async (req, reply) => {
+    const auth = requireRole(req, 'player');
+    const { id } = req.params as { id: string };
+    const rec = (
+      await app.db
+        .select({ id: characters.id, campaignId: characters.campaignId, name: characters.name })
+        .from(characters)
+        .where(eq(characters.id, id))
+        .limit(1)
+    )[0];
+    if (!rec) throw httpError(404, 'not_found', 'unknown character');
+    assertCampaign(auth, rec.campaignId);
+
+    await app.hub.atomic(rec.campaignId, async (tx) => {
+      const held = await tx.db
+        .select({ id: characters.id })
+        .from(characters)
+        .where(and(eq(characters.campaignId, rec.campaignId), eq(characters.ownerUserId, auth.userId)))
+        .limit(1);
+      if (held.length > 0) {
+        throw httpError(409, 'already_have_character', 'you already play a runner here; ask the GM to swap');
+      }
+      // Conditional on still being unowned: two phones tapping the same
+      // runner at once, one wins and the other is told, never both.
+      const won = await tx.db
+        .update(characters)
+        .set({ ownerUserId: auth.userId })
+        .where(and(eq(characters.id, rec.id), isNull(characters.ownerUserId)))
+        .returning({ id: characters.id });
+      if (won.length === 0) {
+        throw httpError(409, 'already_claimed', 'someone else already plays that runner');
+      }
+      await tx.emit({
+        type: 'sheet.updated',
+        payload: {
+          characterId: rec.id,
+          name: rec.name,
+          ownerUserId: auth.userId,
+          cause: 'ownership',
+        },
+      });
+    });
+
+    return reply.send({ characterId: rec.id, campaignId: rec.campaignId, ownerUserId: auth.userId });
   });
 }

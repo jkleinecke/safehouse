@@ -463,4 +463,47 @@ describe('claim sheet (PATCH /api/characters/:id/owner)', () => {
     });
     expect(missing.statusCode).toBe(404);
   });
+
+  it('a joining player claims an unclaimed runner, once, and never someone else’s', async () => {
+    const camp = await newCampaign('Open Seats');
+    const first = await joinAs(t.app, camp.campaignId, camp.token, 'player', 'Vex');
+    const second = await joinAs(t.app, camp.campaignId, camp.token, 'player', 'Nib');
+    const outsider = await joinAs(t.app, boot.campaignId, boot.gmToken, 'player', 'Elsewhere');
+    const seat = await makeCharacter(camp.campaignId, camp.token, 'Seat one');
+    const spare = await makeCharacter(camp.campaignId, camp.token, 'Seat two');
+    const claim = (id: string, token: string) =>
+      t.app.inject({
+        method: 'POST',
+        url: `/api/characters/${id}/claim`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+    const code = (res: { json: () => unknown }) => (res.json() as { error: { code: string } }).error.code;
+
+    const won = await claim(seat, first.token);
+    expect(won.statusCode).toBe(200);
+    expect(await ownerOf(seat)).toBe(first.user.id);
+
+    const taken = await claim(seat, second.token);
+    expect(taken.statusCode).toBe(409);
+    expect(code(taken)).toBe('already_claimed');
+    expect(await ownerOf(seat)).toBe(first.user.id);
+
+    const greedy = await claim(spare, first.token);
+    expect(greedy.statusCode).toBe(409);
+    expect(code(greedy)).toBe('already_have_character');
+    expect(await ownerOf(spare)).toBeNull();
+
+    expect((await claim(spare, outsider.token)).statusCode).toBe(403);
+    expect((await claim(spare, camp.token)).statusCode).toBe(403); // the GM uses PATCH …/owner
+
+    // The GM can still move a claimed runner wherever they like.
+    const moved = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/characters/${seat}/owner`,
+      headers: { authorization: `Bearer ${camp.token}` },
+      payload: { ownerUserId: second.user.id },
+    });
+    expect(moved.statusCode).toBe(200);
+    expect(await ownerOf(seat)).toBe(second.user.id);
+  });
 });

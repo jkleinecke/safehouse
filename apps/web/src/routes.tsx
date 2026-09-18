@@ -18,6 +18,7 @@ import CampaignHome from './components/shell/CampaignHome.js';
 import CampaignLayout from './components/shell/CampaignLayout.js';
 import JoinPage from './components/shell/JoinPage.js';
 import Landing from './components/shell/Landing.js';
+import WelcomePage from './components/shell/WelcomePage.js';
 import NotFound from './components/shell/NotFound.js';
 import BooksPage from './features/gm/BooksPage.js';
 import AiPage from './features/gm/AiPage.js';
@@ -94,6 +95,8 @@ export const routes: RouteObject[] = [
     element: <CampaignLayout />,
     children: [
       { index: true, element: <CampaignHome /> },
+      // A joining player's onboarding: pick, upload or build their runner.
+      { path: 'welcome', element: <WelcomePage /> },
       { path: 'sheet/:characterId', element: <SheetPage /> },
       { path: 'table', element: <TablePage /> },
       { path: 'grid', element: <GridPage /> },

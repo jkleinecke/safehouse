@@ -22,7 +22,12 @@ test.describe('LIVE-3 · the QR lands on the join screen', () => {
     expect(response?.status()).toBe(200);
     expect(response?.headers()['content-type'] ?? '').toContain('text/html');
 
-    await page.waitForURL(`**/c/${world.campaignId}`);
+    // A player invite asks who is joining before it mints the device.
+    await page.getByLabel('Your name').fill('Kestrel');
+    await page.getByRole('button', { name: 'jack in' }).click();
+    // …then onboarding: pick, upload or build a runner.
+    await page.waitForURL(`**/c/${world.campaignId}/welcome`);
+    await expect(page.getByTestId('player-welcome')).toBeVisible();
     await expect(page.getByRole('heading', { name: world.campaignName })).toBeVisible();
   });
 

@@ -59,9 +59,14 @@ export default function CampaignHome() {
           >
             <div className="mono-label text-warn">No sheet on this device yet</div>
             <p className="mt-1 text-sm text-dim">
-              Your device has joined, but no character has been handed to it. Ask the GM to pick
-              your name on their Party roster — it takes them one click and your Sheet tab appears.
+              Pick a runner nobody plays yet, upload your own, or build one — or ask the GM to
+              hand you one from their Party roster.
             </p>
+            {session?.role === 'player' && (
+              <Link to={`${c}/welcome`} className="btn mt-3 inline-flex px-3 py-1.5" data-testid="choose-runner">
+                choose your runner
+              </Link>
+            )}
           </div>
         )
       )}

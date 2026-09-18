@@ -69,21 +69,39 @@ export function useRoster(campaignId: string | undefined) {
  */
 export function useCreateCharacter(campaignId: string) {
   return useMutation({
-    mutationFn: (input: { name: string } | { file: File; name?: string }) => {
+    // The route answers `{ character, revision, report? }`; callers want the
+    // character (reading `.id` off the envelope never opened the new sheet).
+    mutationFn: async (input: { name: string } | { file: File; name?: string }) => {
+      type Created = { character: RosterCharacter };
       if ('file' in input) {
         const form = new FormData();
         form.set('campaignId', campaignId);
         if (input.name) form.set('name', input.name);
         form.set('file', input.file, input.file.name);
-        return api<RosterCharacter>('/api/characters', { method: 'POST', body: form });
+        return (await api<Created>('/api/characters', { method: 'POST', body: form })).character;
       }
-      return apiPost<RosterCharacter>('/api/characters', {
-        campaignId,
-        name: input.name,
-      });
+      return (await apiPost<Created>('/api/characters', { campaignId, name: input.name })).character;
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['characters', campaignId] });
+      // A player's upload is theirs on arrival — `/api/me` names their sheet.
+      void queryClient.invalidateQueries({ queryKey: ['me'] });
+    },
+  });
+}
+
+/**
+ * POST /api/characters/:id/claim — a player takes an unclaimed runner as
+ * their own (onboarding). The server refuses a sheet someone already holds, or
+ * a player who already has one; the GM's `useAssignOwner` is the override.
+ */
+export function useClaimCharacter(campaignId: string) {
+  return useMutation({
+    mutationFn: (characterId: string) =>
+      apiPost<{ characterId: string; ownerUserId: string }>(`/api/characters/${characterId}/claim`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['characters', campaignId] });
+      void queryClient.invalidateQueries({ queryKey: ['me'] });
     },
   });
 }
