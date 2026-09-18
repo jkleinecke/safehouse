@@ -188,7 +188,7 @@ export default function LibraryPanel({ campaignId, canEdit, books }: LibraryPane
             >
               {shelf.map((b) => (
                 <option key={b.id} value={b.code}>
-                  {b.code}
+                  {b.title || b.code}
                 </option>
               ))}
             </select>

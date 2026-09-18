@@ -155,7 +155,7 @@ export default function BookSearch({ books, compact, initialQuery, autoFocus, on
             <option value="">every book</option>
             {shelf.map((b) => (
               <option key={b.id} value={b.code}>
-                {b.code}
+                {b.title || b.code}
               </option>
             ))}
           </select>

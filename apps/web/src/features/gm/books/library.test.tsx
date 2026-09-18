@@ -131,7 +131,7 @@ describe('the library', () => {
     expect(gm).toContain('>unpin<'); // the pinned one offers the reverse
     expect(gm).toContain('>pin<');
     // The add form only offers books with a PDF.
-    expect(gm).toMatch(/<option value="SR5"[^>]*>SR5<\/option>/);
+    expect(gm).toMatch(/<option value="SR5"[^>]*>Core Rulebook<\/option>/);
     expect(gm).not.toContain('<option value="HT">');
   });
 
