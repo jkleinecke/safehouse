@@ -75,6 +75,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@material-symbols/font-400':
+        specifier: ^0.47.3
+        version: 0.47.3
       '@safehouse/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -782,6 +785,9 @@ packages:
   '@lukeed/ms@2.0.2':
     resolution: {integrity: sha512-9I2Zn6+NJLfaGoz9jN3lpwDgAYvfGeNYdbAIjJOqzs4Tpc+VU3Jqq4IofSUBKajiDS8k9fZIg18/z13mpk1bsA==}
     engines: {node: '>=8'}
+
+  '@material-symbols/font-400@0.47.3':
+    resolution: {integrity: sha512-8umtZ7dgpUgnD+zBAqaTPPSzn1a2gQ2jmKLXvAYDG1ukmmfh18WSxmz81vUpc0L0js1PAMcd5Pdig0wdzrTORw==}
 
   '@napi-rs/canvas-android-arm64@0.1.100':
     resolution: {integrity: sha512-hjhCKhntPv9+t4ckHymdx0phYNcVW+GKQR6Lzw2zE+pOVjOplSmtx9nNNknTjbEDLcuLZqA1y8ufKg1XfgftzQ==}
@@ -2787,6 +2793,8 @@ snapshots:
       '@jridgewell/sourcemap-codec': 1.5.5
 
   '@lukeed/ms@2.0.2': {}
+
+  '@material-symbols/font-400@0.47.3': {}
 
   '@napi-rs/canvas-android-arm64@0.1.100':
     optional: true

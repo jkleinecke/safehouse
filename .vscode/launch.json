@@ -10,8 +10,10 @@
       "name": "Safehouse: server (debug)",
       "type": "node",
       "request": "launch",
-      "program": "${workspaceFolder}/apps/server/src/index.ts",
-      "runtimeArgs": ["--import", "tsx"],
+      // The entry goes in runtimeArgs, NOT "program": given a .ts program,
+      // js-debug looks for compiled output and silently runs a stale
+      // apps/server/dist/index.js instead of the source when one exists.
+      "runtimeArgs": ["--import", "tsx", "src/index.ts"],
       // The same working directory `pnpm dev:server` uses, so DATA_DIR=./data
       // lands in apps/server/data either way. The repo-root .env is found by
       // the server itself (src/dotenv.ts), whatever the cwd.

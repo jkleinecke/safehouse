@@ -154,7 +154,7 @@ export default async function authPlugin(app: FastifyInstance): Promise<void> {
       expiresInMinutes: minutes,
     });
 
-    const url = joinUrl(app, invite.code);
+    const url = joinUrl(app, invite.code, req);
     return reply.status(201).send({
       code: invite.code,
       role: 'gm' as const,

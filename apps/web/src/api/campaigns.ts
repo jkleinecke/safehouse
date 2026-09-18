@@ -43,6 +43,8 @@ export interface JoinQrInfo {
   url: string;
   code: string;
   role: Role;
+  /** When the invite stops working (24h after minting); every use until then is fine. */
+  expiresAt?: string | null;
   /** Pre-rendered PNG data URL of the QR itself. */
   dataUrl: string;
 }

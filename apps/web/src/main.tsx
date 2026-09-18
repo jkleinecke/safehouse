@@ -3,6 +3,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App.js';
 import { reloadOnStaleChunk } from './staleChunks.js';
+import '@material-symbols/font-400/outlined.css';
 import './index.css';
 
 reloadOnStaleChunk(window);

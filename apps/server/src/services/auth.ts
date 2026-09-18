@@ -1003,7 +1003,7 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthService): voi
       ...(body.expiresInMinutes !== undefined ? { expiresInMinutes: body.expiresInMinutes } : {}),
       ...(body.maxUses !== undefined ? { maxUses: body.maxUses } : {}),
     });
-    return reply.status(201).send({ ...invite, url: joinUrl(app, invite.code) });
+    return reply.status(201).send({ ...invite, url: joinUrl(app, invite.code, req) });
   });
 
   // QR against the server's LAN address (FR1.1) — GM only.
@@ -1019,9 +1019,9 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthService): voi
       role: roleParsed.data,
       createdBy: authCtx.userId,
     });
-    const url = joinUrl(app, invite.code);
+    const url = joinUrl(app, invite.code, req);
     const dataUrl = await QRCode.toDataURL(url, { margin: 1, width: 512 });
-    return reply.send({ url, code: invite.code, role: invite.role, dataUrl });
+    return reply.send({ url, code: invite.code, role: invite.role, expiresAt: invite.expiresAt, dataUrl });
   });
 
   // QR join → device token (FR1.1). JSON, under /api; `/join/:code` belongs to
@@ -1069,17 +1069,38 @@ export function registerAuthRoutes(app: FastifyInstance, auth: AuthService): voi
  * `GET /api/join/:code` for the token — scanning must land on the join screen,
  * never on raw JSON (LIVE-3).
  *
- * Default origin is this server's LAN address, which is right in production
- * (the server serves the built SPA). Set `WEB_ORIGIN` (e.g.
- * `http://192.168.1.20:5173`) when Vite is serving the SPA on another port.
+ * The origin follows the address the GM is using, so the link lands on the
+ * same app: through Vite on :5173 in dev (the proxy keeps the `Host` header),
+ * on this server's own port in production. A loopback host (`localhost`) is
+ * swapped for the LAN address, since a phone cannot reach the GM's loopback.
+ * `WEB_ORIGIN` overrides all of it (a tunnel, a hostname).
  */
-export function joinUrl(app: FastifyInstance, code: string): string {
+export function joinUrl(app: FastifyInstance, code: string, req?: FastifyRequest): string {
   const override = process.env.WEB_ORIGIN?.trim();
   if (override) return `${override.replace(/\/+$/, '')}/join/${code}`;
+  const seen = hostOf(req);
+  if (seen) {
+    const host = LOOPBACK.has(seen.hostname) ? lanAddress() : seen.hostname;
+    return `http://${host}${seen.port ? `:${seen.port}` : ''}/join/${code}`;
+  }
   const address = app.server.address();
   const port =
     typeof address === 'object' && address !== null
       ? address.port
       : Number(process.env.PORT ?? 8787);
   return `http://${lanAddress()}:${port}/join/${code}`;
+}
+
+const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+
+/** The request's `Host`, split — `null` when absent or unparseable. */
+function hostOf(req: FastifyRequest | undefined): { hostname: string; port: string } | null {
+  const raw = req?.headers.host;
+  if (!raw) return null;
+  try {
+    const u = new URL(`http://${raw}`);
+    return { hostname: u.hostname, port: u.port };
+  } catch {
+    return null;
+  }
 }

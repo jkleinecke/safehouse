@@ -53,6 +53,10 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // On the LAN too, so a phone scanning the dev QR reaches this server; the
+    // join link follows the GM's port (services/auth.ts#joinUrl), so in dev it
+    // points here and the phone gets the current code, no build needed.
+    host: true,
     proxy: {
       '/api': target,
       '/files': target,

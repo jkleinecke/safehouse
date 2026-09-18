@@ -214,11 +214,12 @@ describe('join QR (FR1.1)', () => {
     const res = await t.app.inject({
       method: 'GET',
       url: `/api/campaigns/${boot.campaignId}/join-qr`,
-      headers: { authorization: `Bearer ${boot.gmToken}` },
+      headers: { authorization: `Bearer ${boot.gmToken}`, host: 'localhost:8787' },
     });
     expect(res.statusCode).toBe(200);
     const body = res.json() as { url: string; code: string; dataUrl: string };
-    expect(body.url).toMatch(/^http:\/\/\d+\.\d+\.\d+\.\d+:\d+\/join\//);
+    // localhost is the GM's loopback — the link carries the LAN address instead.
+    expect(body.url).toMatch(/^http:\/\/\d+\.\d+\.\d+\.\d+:8787\/join\//);
     expect(body.url.endsWith(`/join/${body.code}`)).toBe(true);
     expect(body.dataUrl.startsWith('data:image/png;base64,')).toBe(true);
 
@@ -229,6 +230,24 @@ describe('join QR (FR1.1)', () => {
       headers: { authorization: `Bearer ${player.token}` },
     });
     expect(denied.statusCode).toBe(403);
+  });
+
+  it('follows the port the GM is on, so a dev QR lands on Vite', async () => {
+    // Through Vite's proxy the Host header is still the page's own: :5173.
+    const viaVite = await t.app.inject({
+      method: 'GET',
+      url: `/api/campaigns/${boot.campaignId}/join-qr`,
+      headers: { authorization: `Bearer ${boot.gmToken}`, host: 'localhost:5173' },
+    });
+    expect((viaVite.json() as { url: string }).url).toMatch(/^http:\/\/\d+\.\d+\.\d+\.\d+:5173\/join\//);
+
+    // A GM already on the LAN address keeps it verbatim.
+    const onLan = await t.app.inject({
+      method: 'GET',
+      url: `/api/campaigns/${boot.campaignId}/join-qr`,
+      headers: { authorization: `Bearer ${boot.gmToken}`, host: '192.168.9.9:8787' },
+    });
+    expect((onLan.json() as { url: string }).url).toMatch(/^http:\/\/192\.168\.9\.9:8787\/join\//);
   });
 });
 

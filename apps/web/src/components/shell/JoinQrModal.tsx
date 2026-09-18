@@ -1,12 +1,14 @@
 /**
  * GM "Show join QR" modal (FR1.1, §16 "Join QR").
  * Fetches /api/campaigns/:id/join-qr and renders the returned LAN join URL
- * as a QR big enough to scan across the table.
+ * as a QR big enough to scan across the table, and as a link the GM can copy
+ * or share into a chat — the same invite, good for everyone until it expires.
  */
 import { useEffect, useState } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import type { Role } from '@safehouse/contracts';
 import { useJoinQr } from '../../api/campaigns.js';
+import Icon from '../Icon.js';
 
 const ROLES: Role[] = ['player', 'observer', 'display'];
 
@@ -17,6 +19,10 @@ const ROLE_HINT: Record<Role, string> = {
   observer: 'read-only — the active scene, the roll log, shared lore',
   display: 'the table TV: open /tv on that screen and scan this from it',
 };
+
+/** Borderless icon button — the icon is the affordance. */
+const ICON_BUTTON =
+  'inline-flex shrink-0 items-center justify-center rounded-md p-1.5 text-dim hover:bg-edge/40 hover:text-cyan focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan pointer-coarse:min-h-10 pointer-coarse:min-w-10';
 
 export interface JoinQrModalProps {
   campaignId: string;
@@ -39,6 +45,25 @@ export default function JoinQrModal({
 }: JoinQrModalProps) {
   const [role, setRole] = useState<Role>(initialRole);
   const { data, isLoading, error } = useJoinQr(campaignId, role, open);
+  const [copied, setCopied] = useState(false);
+  const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+
+  const copyLink = async () => {
+    if (!data) return;
+    try {
+      await navigator.clipboard.writeText(data.url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // No clipboard (plain http on some browsers) — the box is selectable.
+    }
+  };
+  const shareLink = () => {
+    if (!data) return;
+    void navigator
+      .share({ title: 'Join the campaign', text: 'Join the table on Safehouse', url: data.url })
+      .catch(() => undefined);
+  };
 
   // Re-opening for a different purpose starts on that purpose's role rather
   // than on whatever the GM last looked at.
@@ -68,8 +93,8 @@ export default function JoinQrModal({
       <div className="panel w-full max-w-sm p-6" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="mono-label text-cyan">Join this campaign</h2>
-          <button className="btn px-2 py-1" onClick={onClose} aria-label="Close">
-            ✕
+          <button type="button" className={ICON_BUTTON} onClick={onClose} aria-label="Close" title="Close">
+            <Icon name="close" />
           </button>
         </div>
 
@@ -108,12 +133,48 @@ export default function JoinQrModal({
           )}
         </div>
 
-        {data && (
-          <p className="mt-3 break-all text-center font-label text-xs text-dim">{data.url}</p>
-        )}
         <p className="mono-label mt-3 text-center">
           Scan with a phone camera — no passwords, no app store
         </p>
+
+        {data && (
+          <div className="mt-4 border-t border-edge/60 pt-3" data-testid="join-link">
+            <span className="mono-label text-dim">or send the link</span>
+            <div className="mt-1 flex items-center gap-1">
+              <input
+                className="min-w-0 flex-1 rounded-md bg-deck px-2 py-1.5 font-label text-xs text-ink focus:outline-none focus-visible:ring-1 focus-visible:ring-cyan"
+                value={data.url}
+                readOnly
+                onFocus={(e) => e.currentTarget.select()}
+                aria-label="Join link"
+              />
+              <button
+                type="button"
+                className={ICON_BUTTON}
+                onClick={() => void copyLink()}
+                aria-label={copied ? 'Link copied' : 'Copy link'}
+                title={copied ? 'Copied' : 'Copy link'}
+              >
+                {copied ? <Icon name="check" className="text-ok" /> : <Icon name="content_copy" />}
+              </button>
+              {canShare && (
+                <button
+                  type="button"
+                  className={ICON_BUTTON}
+                  onClick={shareLink}
+                  aria-label="Share link"
+                  title="Share link"
+                >
+                  <Icon name="share" />
+                </button>
+              )}
+            </div>
+            <p className="mono-label mt-1.5 text-faint">
+              anyone with it joins as {role === 'display' ? 'the TV' : `a ${role}`}
+              {data.expiresAt ? ` · works until ${new Date(data.expiresAt).toLocaleString()}` : ''}
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );
