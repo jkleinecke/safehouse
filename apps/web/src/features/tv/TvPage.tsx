@@ -18,9 +18,10 @@
  *    buffers, every timer single and cleared, and nothing allocated per frame —
  *    the per-frame work all lives inside the pixi stage.
  */
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { getSession } from '../../api/session.js';
+import Icon from '../../components/Icon.js';
 import { useLiveStore } from '../../live/store.js';
 import { useLiveConnection } from '../../live/useLiveConnection.js';
 import BigMoment from './BigMoment.js';
@@ -44,6 +45,48 @@ const FLAGGED_TTL_MS = 26_000;
 const TAKEOVER_TTL_MS = 60_000;
 /** A staged reveal is an announcement, not a screen state. */
 const REVEAL_TTL_MS = 5_000;
+
+/** This TV's own plan/iso choice — remembered across reloads, on this screen only. */
+const TV_VIEW_KEY = 'safehouse.tv.view';
+
+function useTvIso(): [boolean, (iso: boolean) => void] {
+  const [iso, setIso] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(TV_VIEW_KEY) !== 'topdown';
+    } catch {
+      return true;
+    }
+  });
+  const choose = (next: boolean) => {
+    setIso(next);
+    try {
+      localStorage.setItem(TV_VIEW_KEY, next ? 'iso' : 'topdown');
+    } catch {
+      // Private mode: the choice lasts until the page reloads.
+    }
+  };
+  return [iso, choose];
+}
+
+/**
+ * The one control on the kiosk: flip this screen between isometric and plan.
+ * Small and in a corner, so it never competes with the map at a distance.
+ */
+function ViewSwitch({ iso, onChange }: { iso: boolean; onChange: (iso: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      className="tv-control absolute bottom-6 right-6 z-20 flex items-center gap-2 rounded-full bg-panel/70 px-4 py-2 text-dim backdrop-blur hover:text-cyan"
+      onClick={() => onChange(!iso)}
+      aria-label={iso ? 'Switch to the plan view' : 'Switch to the isometric view'}
+      title={iso ? 'Plan view' : 'Isometric view'}
+      data-testid="tv-view-switch"
+    >
+      <Icon name={iso ? 'grid_on' : 'view_in_ar'} size={28} />
+      <span className="font-label text-sm tracking-[0.3em]">{iso ? 'ISO' : 'PLAN'}</span>
+    </button>
+  );
+}
 
 function Kiosk({ children }: { children: React.ReactNode }) {
   return (
@@ -97,15 +140,17 @@ export default function TvPage() {
   );
   const ribbon = useMemo(() => tvRibbonRows(world.encounter), [world.encounter]);
   const focus = useFocusMark(world.sceneId);
-  // The table sees the map in isometric, whatever the scene is saved as — the
-  // GM builds in plan, the big screen shows the room. Memoised so an idle
-  // minute still pushes the stage nothing (six-hour discipline).
+  // This screen's own view: isometric unless someone at the TV flipped it to
+  // plan — whatever the scene is saved as, and touching no other screen.
+  // Memoised so an idle minute still pushes the stage nothing (six-hour discipline).
+  const [tvIso, setTvIso] = useTvIso();
+  const tvProjection = tvIso ? ('iso' as const) : ('topdown' as const);
   const tvScene = useMemo(
     () =>
-      scene && scene.scene.grid.projection !== 'iso'
-        ? { ...scene.scene, grid: { ...scene.scene.grid, projection: 'iso' as const } }
+      scene && scene.scene.grid.projection !== tvProjection
+        ? { ...scene.scene, grid: { ...scene.scene.grid, projection: tvProjection } }
         : scene?.scene,
-    [scene],
+    [scene, tvProjection],
   );
 
   const shownMoment = useLatched(moment, moment?.flagged ? FLAGGED_TTL_MS : MOMENT_TTL_MS);
@@ -163,6 +208,7 @@ export default function TvPage() {
           actingTokenId={decor.actingTokenId}
           focus={focus}
         />
+        <ViewSwitch iso={tvIso} onChange={setTvIso} />
 
         {header}
         {shownReveal && <RevealBanner reveal={shownReveal} />}

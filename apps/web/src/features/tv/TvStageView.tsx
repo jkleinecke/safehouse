@@ -3,8 +3,9 @@
  * read-only stage adapter — mount once, push state, tear down cleanly.
  *
  * Kiosk discipline (FR9.19): the host is `pointer-events: none`, so the
- * canvas's own pan/zoom/drag listeners can never fire. Nothing on this device
- * is a control surface, whatever wanders past the TV and touches it.
+ * canvas's own pan/zoom/drag listeners can never fire. The map is never a
+ * control surface; the one control on this screen is the plan/iso switch
+ * `TvPage` lays over it.
  *
  * Six-hour discipline: exactly one stage instance (the pixi ticker inside it is
  * the only ticker on the page), the handle is guarded against post-teardown
@@ -87,6 +88,16 @@ export default function TvStageView({
   useEffect(() => {
     handleRef.current?.update({ scene, tokens, bars, actingTokenId });
   }, [scene, tokens, bars, actingTokenId]);
+
+  // A plan ⇄ iso flip moves every world coordinate; reframe on the flip
+  // (same scene, new projection) so the map does not land off-screen.
+  const flipKey = `${scene.id}|${scene.grid.projection}`;
+  const lastFlip = useRef(flipKey);
+  useEffect(() => {
+    const [prevScene, prevProjection] = lastFlip.current.split('|');
+    lastFlip.current = flipKey;
+    if (prevScene === scene.id && prevProjection !== scene.grid.projection) handleRef.current?.fit();
+  }, [flipKey, scene.id, scene.grid.projection]);
 
   useEffect(() => {
     if (!focus) return;

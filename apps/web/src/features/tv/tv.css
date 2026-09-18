@@ -107,3 +107,8 @@
   cursor: none;
   overflow: hidden;
 }
+
+/* The kiosk's one control (the plan/iso switch): a cursor over it, nowhere else. */
+.tv-kiosk .tv-control {
+  cursor: pointer;
+}
