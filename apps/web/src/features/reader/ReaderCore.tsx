@@ -215,11 +215,11 @@ export default function ReaderCore({
       }
       calibrate={calibrate}
       bookmark={
-        campaignId && session?.role === 'gm' && !calibrating
+        campaignId && session?.role === 'gm'
           ? {
-              onSave: (label) =>
+              onSave: (label, note) =>
                 addBookmark.mutate(
-                  { book: code, page, label },
+                  { book: code, page, label, ...(note ? { note } : {}) },
                   {
                     onSuccess: (b) => setMarked(`saved as “${b.label}”`),
                     onError: (err) => setMarked(err instanceof Error ? err.message : 'could not save'),

@@ -118,21 +118,20 @@ describe('the library', () => {
     expect(player).toContain('data-testid="recent-refs"');
     expect(player).toContain('RG p.42');
     expect(player).toContain('suppressive fire');
-    expect(player).not.toContain('data-testid="bookmark-form"');
+    expect(player).not.toContain('data-testid="add-bookmark"');
     expect(player).not.toContain('remove-bookmark-');
-    expect(player).not.toContain('>rename<');
+    expect(player).not.toContain('>edit<');
 
     const gm = render(<LibraryPanel campaignId="c1" canEdit books={BOOKS} />, (qc) =>
       qc.setQueryData(libraryKey('c1'), LIBRARY),
     );
-    expect(gm).toContain('data-testid="bookmark-form"');
+    expect(gm).toContain('data-testid="add-bookmark"');
+    // The form lives in a popup, closed until + or edit opens it.
+    expect(gm).not.toContain('data-testid="bookmark-form"');
     expect(gm).toContain('data-testid="remove-bookmark-a"');
-    expect(gm).toContain('>rename<');
+    expect(gm).toContain('>edit<');
     expect(gm).toContain('>unpin<'); // the pinned one offers the reverse
     expect(gm).toContain('>pin<');
-    // The add form only offers books with a PDF.
-    expect(gm).toMatch(/<option value="SR5"[^>]*>Core Rulebook<\/option>/);
-    expect(gm).not.toContain('<option value="HT">');
   });
 
   it('says what an empty library means to each audience', () => {
@@ -147,5 +146,6 @@ describe('the library', () => {
       qc.setQueryData(libraryKey('c1'), empty),
     );
     expect(gm).toContain('bookmark button inside any open book');
+    expect(gm).toContain('Add one with +');
   });
 });

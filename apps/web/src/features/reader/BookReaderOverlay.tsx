@@ -8,7 +8,7 @@
  * page that actually opens on a phone. Props are unchanged from the iframe
  * version it replaced, calibration included (FR11.1).
  */
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import ReaderCore from './ReaderCore.js';
 import type { ReaderCalibration } from './ReaderShell.js';
 
@@ -27,9 +27,14 @@ export default function BookReaderOverlay({
   calibrate,
 }: BookReaderOverlayProps) {
   // Escape closes it — the reader is a detour, never a destination.
+  // A popup opened inside the reader (the bookmark form) takes Escape first.
+  const self = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key !== 'Escape') return;
+      const inner = document.activeElement?.closest('[role="dialog"]');
+      if (inner && inner !== self.current && self.current?.contains(inner)) return;
+      onClose();
     };
     globalThis.addEventListener('keydown', onKey);
     return () => globalThis.removeEventListener('keydown', onKey);
@@ -37,6 +42,7 @@ export default function BookReaderOverlay({
 
   return (
     <div
+      ref={self}
       className="fixed inset-0 z-50 bg-ground/95 backdrop-blur"
       role="dialog"
       aria-modal="true"

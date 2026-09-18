@@ -9,20 +9,19 @@
  * at once (sixteen is the real number), and never applies a detected offset
  * without a click — a proposal is a draft, the GM approves it (Principle 8).
  *
- * Also here: the shared-with-table toggle (FR11.5) and a verify link that opens
- * the reader at a printed page so the mapping can be confirmed end to end.
+ * One table row per book: offset, searchable pages, the shared-with-table
+ * toggle (FR11.5), and "open" to nudge the offset against the page itself.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useBooks, useDetectOffset, useUpdateBook, type BookRecord } from './api.js';
 import BookSearch from './BookSearch.js';
-import BookShelfCard, { type DetectPhase } from './BookShelfCard.js';
+import BookShelfRow, { type DetectPhase } from './BookShelfRow.js';
 import LibraryPanel from './LibraryPanel.js';
 import SeedInstructions from './SeedInstructions.js';
 import { BookViewerOverlay } from './RefChip.js';
 import {
   clampOffset,
-  clampPrinted,
   detectQueue,
   shelfSummary,
   type OffsetProposal,
@@ -37,7 +36,7 @@ interface CalibrationSession {
 
 type Dict<T> = Record<string, T>;
 
-/** Default probe page: deep enough to be past the front matter of any book. */
+/** Where "open" lands: deep enough to be past the front matter of any book. */
 const DEFAULT_PROBE = 50;
 
 export default function BooksPage() {
@@ -49,7 +48,6 @@ export default function BooksPage() {
   const detect = useDetectOffset();
 
   const [drafts, setDrafts] = useState<Dict<number>>({});
-  const [probes, setProbes] = useState<Dict<number>>({});
   const [proposals, setProposals] = useState<Dict<OffsetProposal | null>>({});
   /** The server's own verdict per book — the reason, when it declined. */
   const [notes, setNotes] = useState<Dict<string | null>>({});
@@ -63,8 +61,8 @@ export default function BooksPage() {
 
   const rows = useMemo(() => books.data ?? [], [books.data]);
 
-  // Hydrate on mount (and whenever the shelf reloads): every card starts from
-  // the saved offset, so "dirty" means the GM moved it, not that we did.
+  // Hydrate on mount (and whenever the shelf reloads): every row starts from
+  // the saved offset.
   useEffect(() => {
     if (rows.length === 0) return;
     setDrafts((prev) => {
@@ -78,30 +76,22 @@ export default function BooksPage() {
       }
       return changed ? next : prev;
     });
-    setProbes((prev) => {
-      const next = { ...prev };
-      let changed = false;
-      for (const b of rows) {
-        if (next[b.id] === undefined) {
-          next[b.id] = DEFAULT_PROBE;
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
   }, [rows]);
 
   const summary = useMemo(() => shelfSummary(rows), [rows]);
 
   const saveOffset = useCallback(
     (book: BookRecord, offset: number) => {
+      const next = clampOffset(offset);
       setSavingId(book.id);
+      // Shown at once; put back if the server refuses it.
+      setDrafts((d) => ({ ...d, [book.id]: next }));
       update.mutate(
-        { id: book.id, patch: { pageOffset: clampOffset(offset) } },
+        { id: book.id, patch: { pageOffset: next } },
         {
           onSettled: () => setSavingId(null),
+          onError: () => setDrafts((d) => ({ ...d, [book.id]: book.pageOffset })),
           onSuccess: () => {
-            setDrafts((d) => ({ ...d, [book.id]: clampOffset(offset) }));
             setProposals((p) => ({ ...p, [book.id]: null }));
             setNotes((n) => ({ ...n, [book.id]: null }));
             setPhases((p) => ({ ...p, [book.id]: 'idle' }));
@@ -112,7 +102,7 @@ export default function BooksPage() {
     [update],
   );
 
-  /** One detection. Never writes — it parks a proposal on the card. */
+  /** One detection. Never writes — it parks a proposal under the row. */
   const runDetect = useCallback(
     async (book: BookRecord): Promise<boolean> => {
       setPhases((p) => ({ ...p, [book.id]: 'pending' }));
@@ -141,8 +131,8 @@ export default function BooksPage() {
    * books resolve wants to see them land in order, not all at once at the end.
    */
   const runDetectAll = useCallback(
-    async (includeCalibrated: boolean) => {
-      const ids = detectQueue(rows, { includeCalibrated });
+    async () => {
+      const ids = detectQueue(rows);
       if (ids.length === 0) return;
       cancelSweep.current = false;
       setSweepNote(null);
@@ -159,7 +149,7 @@ export default function BooksPage() {
           if (ids.length > 1) {
             setSweepNote(
               'Detection failed on the first book, so the rest were not attempted — ' +
-                'see that card for the reason. Every book can still be calibrated by hand.',
+                'see that row for the reason. Every book can still be calibrated by hand.',
             );
           }
           break;
@@ -176,9 +166,7 @@ export default function BooksPage() {
   return (
     <GmGuard>
       <div className="p-6">
-        <SectionTitle hint="the table's own PDFs, seeded with pnpm seed:books">
-          Rules library
-        </SectionTitle>
+        <SectionTitle>Rules library</SectionTitle>
         <h1 className="mt-1 text-lg font-semibold">Books</h1>
 
         {/* Look it up, and name the page (FR12.14, FR11.6) — above the calibration work. */}
@@ -202,7 +190,7 @@ export default function BooksPage() {
         )}
 
         {rows.length > 0 && (
-          <div className="panel mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 p-3">
+          <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2">
             <span className="mono-label">
               {summary.total} book{summary.total === 1 ? '' : 's'}
             </span>
@@ -232,31 +220,18 @@ export default function BooksPage() {
                   </button>
                 </>
               ) : (
-                <>
-                  <button
-                    type="button"
-                    className="btn btn-accent px-3 py-1.5"
-                    disabled={queueSize === 0}
-                    onClick={() => void runDetectAll(false)}
-                    title="Propose an offset for every book still at the seeded default"
-                  >
-                    detect all ({queueSize})
-                  </button>
-                  <button
-                    type="button"
-                    className="btn px-3 py-1.5"
-                    onClick={() => void runDetectAll(true)}
-                    title="Include books that already have a measured offset"
-                  >
-                    re-detect everything
-                  </button>
-                </>
+                <button
+                  type="button"
+                  className="btn btn-accent px-3 py-1.5"
+                  disabled={queueSize === 0}
+                  onClick={() => void runDetectAll()}
+                  title="Propose an offset for every book still at the seeded default — nothing is saved until you apply it per book"
+                >
+                  detect all ({queueSize})
+                </button>
               )}
             </span>
 
-            <p className="mono-label w-full text-faint">
-              detection proposes; nothing is saved until you apply it per book
-            </p>
             {sweepNote && (
               <p className="w-full text-xs text-warn" data-testid="sweep-note">
                 {sweepNote}
@@ -265,47 +240,55 @@ export default function BooksPage() {
           </div>
         )}
 
-        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
-          {rows.map((book) => (
-            <BookShelfCard
-              key={book.id}
-              book={book}
-              draftOffset={drafts[book.id] ?? book.pageOffset}
-              probePrinted={probes[book.id] ?? DEFAULT_PROBE}
-              proposal={proposals[book.id] ?? null}
-              detectPhase={phases[book.id] ?? 'idle'}
-              detectNote={notes[book.id] ?? null}
-              detectError={errors[book.id] ?? null}
-              saving={savingId === book.id}
-              onDraftOffset={(next) =>
-                setDrafts((d) => ({ ...d, [book.id]: clampOffset(next) }))
-              }
-              onProbePrinted={(next) =>
-                setProbes((p) => ({ ...p, [book.id]: clampPrinted(next) }))
-              }
-              onSaveOffset={() => saveOffset(book, drafts[book.id] ?? book.pageOffset)}
-              onRevertOffset={() => setDrafts((d) => ({ ...d, [book.id]: book.pageOffset }))}
-              onDetect={() => void runDetect(book)}
-              onApplyProposal={() => {
-                const p = proposals[book.id];
-                if (p) saveOffset(book, p.offset);
-              }}
-              onDismissProposal={() => {
-                setProposals((s) => ({ ...s, [book.id]: null }));
-                setNotes((s) => ({ ...s, [book.id]: null }));
-                setPhases((s) => ({ ...s, [book.id]: 'idle' }));
-              }}
-              onToggleShared={(next) => update.mutate({ id: book.id, patch: { shared: next } })}
-              onOpenCalibrate={() =>
-                setSession({
-                  book,
-                  printedPage: probes[book.id] ?? DEFAULT_PROBE,
-                  offset: drafts[book.id] ?? book.pageOffset,
-                })
-              }
-            />
-          ))}
-        </div>
+        {rows.length > 0 && (
+          <div className="panel mt-2 overflow-x-auto px-4 py-2">
+            <table className="w-full min-w-[44rem] text-left" data-testid="book-table">
+              <thead>
+                <tr className="mono-label text-faint">
+                  <th className="py-2 pr-3 font-normal">book</th>
+                  <th className="py-2 pr-3 font-normal">page offset</th>
+                  <th className="py-2 pr-3 font-normal">pages indexed</th>
+                  <th className="py-2 pr-3 font-normal">items</th>
+                  <th className="py-2 pr-3 text-center font-normal">shared</th>
+                  <th className="py-2 font-normal" />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((book) => (
+                  <BookShelfRow
+                    key={book.id}
+                    book={book}
+                    offset={drafts[book.id] ?? book.pageOffset}
+                    proposal={proposals[book.id] ?? null}
+                    detectPhase={phases[book.id] ?? 'idle'}
+                    detectNote={notes[book.id] ?? null}
+                    detectError={errors[book.id] ?? null}
+                    saving={savingId === book.id}
+                    onSetOffset={(next) => saveOffset(book, next)}
+                    onDetect={() => void runDetect(book)}
+                    onApplyProposal={() => {
+                      const p = proposals[book.id];
+                      if (p) saveOffset(book, p.offset);
+                    }}
+                    onDismissProposal={() => {
+                      setProposals((s) => ({ ...s, [book.id]: null }));
+                      setNotes((s) => ({ ...s, [book.id]: null }));
+                      setPhases((s) => ({ ...s, [book.id]: 'idle' }));
+                    }}
+                    onToggleShared={(next) => update.mutate({ id: book.id, patch: { shared: next } })}
+                    onOpenCalibrate={() =>
+                      setSession({
+                        book,
+                        printedPage: DEFAULT_PROBE,
+                        offset: drafts[book.id] ?? book.pageOffset,
+                      })
+                    }
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         {rows.length > 0 && (
           <details className="mt-6 max-w-3xl">
@@ -337,8 +320,10 @@ export default function BooksPage() {
               saving: savingId === session.book.id,
             }}
             onClose={() => {
-              // Keep the nudged value on the card so it is not lost on close.
-              setDrafts((d) => ({ ...d, [session.book.id]: session.offset }));
+              // No confirm step: a nudged offset is saved when the book closes.
+              if (session.offset !== (drafts[session.book.id] ?? session.book.pageOffset)) {
+                saveOffset(session.book, session.offset);
+              }
               setSession(null);
             }}
           />

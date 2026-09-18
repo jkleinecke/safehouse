@@ -8,7 +8,7 @@
  *
  *   1. a book still at the seeded +0 looks different from a calibrated one;
  *   2. a detection renders as a *proposal* and writes nothing until applied;
- *   3. stepping the offset moves the resolved PDF page the card advertises;
+ *   3. changing the offset saves it at once — no save/revert step;
  *   4. an empty shelf prints the command that actually works.
  */
 import { describe, expect, it, vi } from 'vitest';
@@ -16,10 +16,10 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { ReactNode } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import BookShelfCard from './BookShelfCard.js';
+import BookShelfRow from './BookShelfRow.js';
 import SeedInstructions from './SeedInstructions.js';
 import BooksPage from './BooksPage.js';
-import { normalizeDetection, stepOffset } from './calibration.js';
+import { normalizeDetection } from './calibration.js';
 import type { BookRecord } from './api.js';
 
 const noop = () => undefined;
@@ -36,24 +36,24 @@ function book(over: Partial<BookRecord> = {}): BookRecord {
   } as BookRecord;
 }
 
-function card(props: Partial<Parameters<typeof BookShelfCard>[0]> = {}): string {
+function card(props: Partial<Parameters<typeof BookShelfRow>[0]> = {}): string {
   const b = props.book ?? book();
   return renderToStaticMarkup(
-    <BookShelfCard
+    <table>
+      <tbody>
+    <BookShelfRow
       book={b}
-      draftOffset={b.pageOffset}
-      probePrinted={104}
-      onDraftOffset={noop}
-      onProbePrinted={noop}
-      onSaveOffset={noop}
-      onRevertOffset={noop}
+      offset={b.pageOffset}
+      onSetOffset={noop}
       onDetect={noop}
       onApplyProposal={noop}
       onDismissProposal={noop}
       onToggleShared={noop}
       onOpenCalibrate={noop}
       {...props}
-    />,
+    />
+      </tbody>
+    </table>,
   );
 }
 
@@ -62,17 +62,17 @@ describe('an uncalibrated book is visually distinct', () => {
     const html = card({ book: book({ pageOffset: 0 }) });
     expect(html).toContain('data-calibration="uncalibrated"');
     expect(html).toContain('not calibrated');
-    expect(html).toContain('border-warn/50'); // the card itself is warn-toned
+    expect(html).toContain('bg-warn/5'); // the row itself is warn-toned
     expect(html).toMatch(/wrong page/i);
   });
 
   it('a measured book reads as calibrated and carries no warning', () => {
     const b = book({ id: 'sr5', code: 'SR5', title: 'Core Rulebook', pageOffset: 5 });
-    const html = card({ book: b, draftOffset: 5 });
+    const html = card({ book: b, offset: 5 });
     expect(html).toContain('data-calibration="calibrated"');
-    expect(html).toContain('offset +5');
+    expect(html).toContain('value="5"');
     expect(html).not.toContain('not calibrated');
-    expect(html).not.toContain('border-warn/50');
+    expect(html).not.toContain('bg-warn/5');
   });
 
   it('a registry row with no PDF cannot be detected', () => {
@@ -80,24 +80,24 @@ describe('an uncalibrated book is visually distinct', () => {
     expect(html).toContain('data-calibration="no-file"');
     expect(html).toContain('pnpm seed:books');
     // The detect button is present but disabled — nothing to read.
-    expect(html).toMatch(/<button[^>]*disabled[^>]*>detect offset<\/button>/);
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>detect<\/button>/);
   });
 
-  it('is honest when a route did not report page counts', () => {
+  it('prints no zero when a route did not report page counts', () => {
     // The single-book routes carry no counts; only the listing does.
-    expect(card()).toContain('page counts not reported');
+    const html = card();
+    expect(html).toContain('—');
+    expect(html).not.toContain('not searchable');
   });
 
   it('reports what the listing sends, and the gap when a PDF count exists', () => {
     const indexedOnly = card({ book: book({ indexedPages: 199 }) });
-    expect(indexedOnly).toContain('199 pages indexed');
-    // No pdf page count exists anywhere, so no fabricated total and no gap.
-    expect(indexedOnly).not.toContain('pdf pages');
+    expect(indexedOnly).toContain('199');
+    // No pdf page count exists anywhere, so no fabricated gap.
     expect(indexedOnly).not.toContain('image-only');
 
     const withStats = card({ book: book({ pdfPages: 202, indexedPages: 199 }) });
-    expect(withStats).toContain('202 pdf pages');
-    expect(withStats).toContain('199 pages indexed');
+    expect(withStats).toContain('199');
     expect(withStats).toContain('3 image-only');
   });
 
@@ -108,7 +108,6 @@ describe('an uncalibrated book is visually distinct', () => {
    */
   it('calls out a seeded book that indexed nothing at all', () => {
     const html = card({ book: book({ hasFile: true, indexedPages: 0 }) });
-    expect(html).toContain('0 pages indexed');
     expect(html).toContain('not searchable');
     expect(html).toContain('text-warn');
   });
@@ -128,7 +127,6 @@ describe('detection proposes, the GM applies', () => {
     expect(html).toContain('offset +6');
     expect(html).toContain('91% confident');
     expect(html).toContain('printed numbers on 8 of 9 sampled pages agree');
-    expect(html).toContain('printed 100 found on pdf page 106');
     expect(html).toContain('Would change +0 → +6.');
   });
 
@@ -137,7 +135,6 @@ describe('detection proposes, the GM applies', () => {
     const html = card({ book: book({ pageOffset: 0 }), proposal, onApplyProposal });
     expect(onApplyProposal).not.toHaveBeenCalled();
     expect(html).toContain('data-calibration="uncalibrated"');
-    expect(html).toContain('not saved yet');
     expect(html).toMatch(/apply \+6/);
     expect(html).toContain('dismiss');
   });
@@ -175,40 +172,19 @@ describe('detection proposes, the GM applies', () => {
 });
 
 describe('the manual nudge loop', () => {
-  it('shows the PDF page a printed page resolves to', () => {
-    expect(card({ probePrinted: 104, draftOffset: 0 })).toContain(
-      'printed p.104 → PDF page 104 (+0)',
-    );
+  it('steps the offset straight to a save, with nothing to confirm', () => {
+    const onSetOffset = vi.fn();
+    const html = card({ offset: 4, onSetOffset });
+    expect(html).toContain('aria-label="RG offset +1"');
+    expect(html).toContain('value="4"');
+    expect(html).not.toMatch(/save \+|revert/);
+    expect(card({ saving: true })).toContain('saving…');
   });
 
-  it('stepping the offset moves the resolved PDF page', () => {
-    let offset = 0;
-    const onDraftOffset = (next: number) => {
-      offset = next;
-    };
-    // Render, then drive the same transition the ± buttons drive.
-    const before = card({ probePrinted: 104, draftOffset: offset, onDraftOffset });
-    expect(before).toContain('PDF page 104');
-    expect(before).toContain('aria-label="RG offset +1"');
-
-    offset = stepOffset(offset, 1);
-    expect(card({ probePrinted: 104, draftOffset: offset })).toContain(
-      'printed p.104 → PDF page 105 (+1)',
-    );
-
-    offset = stepOffset(offset, 4);
-    const at5 = card({ probePrinted: 104, draftOffset: offset });
-    expect(at5).toContain('printed p.104 → PDF page 109 (+5)');
-    // A moved offset offers to save; an untouched one does not.
-    expect(at5).toMatch(/save \+5/);
-    expect(card({ probePrinted: 104, draftOffset: 0 })).not.toMatch(/save \+/);
-  });
-
-  it('offers both the in-app nudge and a shareable verify link', () => {
-    const html = card({ probePrinted: 104 });
-    expect(html).toContain('open p.104 &amp; nudge');
-    expect(html).toContain('href="/read/RG?p=104"');
-    expect(html).toContain('verify');
+  it('opens the book to nudge against the page itself', () => {
+    expect(card()).toMatch(/<button[^>]*>open<\/button>/);
+    // A registry row with no file has nothing to open.
+    expect(card({ book: book({ hasFile: false }) })).toMatch(/<button[^>]*disabled[^>]*>open<\/button>/);
   });
 });
 
@@ -305,7 +281,7 @@ describe('BooksPage', () => {
     expect(html).toContain('nothing is saved until you apply it per book');
     expect(html).toContain('data-book-code="SR5"');
     expect(html).toContain('data-book-code="RG"');
-    // Each card starts from its own saved offset without waiting for effects.
+    // Each row starts from its own saved offset without waiting for effects.
     expect(html).toContain('data-calibration="calibrated"');
     expect(html).toContain('data-calibration="uncalibrated"');
   });
@@ -314,7 +290,7 @@ describe('BooksPage', () => {
     const html = renderPage([]);
     expect(html).toContain('data-testid="seed-instructions"');
     expect(html).toContain('pnpm seed:books --list');
-    expect(html).not.toContain('data-testid="book-card"');
+    expect(html).not.toContain('data-testid="book-row"');
     expect(html).not.toContain('detect all');
   });
 });

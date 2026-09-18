@@ -11,6 +11,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { describeMapping, parsePrintedParam, type PageMapping } from './pageMath.js';
 import type { ReaderMode } from './mode.js';
+import { Sheet } from '../sheet/components/ui.js';
 
 export interface ReaderZoomControls {
   value: number;
@@ -30,7 +31,7 @@ export interface ReaderCalibration {
 
 /** Name this page for the table (FR11.6) — offered to the GM inside a campaign. */
 export interface ReaderBookmark {
-  onSave: (label: string) => void;
+  onSave: (label: string, note?: string) => void;
   saving?: boolean | undefined;
   /** What the last save came to — "saved as …", or why not. */
   saved?: string | null | undefined;
@@ -83,7 +84,7 @@ export default function ReaderShell({
 }: ReaderShellProps) {
   const [draft, setDraft] = useState(String(mapping.printed));
   const [marking, setMarking] = useState(false);
-  const [mark, setMark] = useState('');
+  const [mark, setMark] = useState({ label: '', note: '' });
 
   // The jump box follows the page when it moves for any other reason (stepper,
   // a clamp at the back cover, a new ref chip opening the same reader).
@@ -256,44 +257,63 @@ export default function ReaderShell({
 
         {bookmark && (
           <span className="flex flex-wrap items-center gap-1" data-testid="reader-bookmark">
-            {marking ? (
+            <button
+              type="button"
+              className={`btn px-2.5 ${TAP}`}
+              onClick={() => setMarking(true)}
+              title="Name this page for the table — it lands in the library's bookmarks"
+            >
+              bookmark p.{mapping.printed}
+            </button>
+            {bookmark.saved && <span className="mono-label text-ok">{bookmark.saved}</span>}
+            <Sheet open={marking} onClose={() => setMarking(false)} title={`Bookmark ${code} p.${mapping.printed}`}>
               <form
-                className="flex items-center gap-1"
+                className="flex flex-col gap-3"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  const label = mark.trim();
+                  const label = mark.label.trim();
                   if (!label) return;
-                  bookmark.onSave(label);
+                  const note = mark.note.trim();
+                  bookmark.onSave(label, note || undefined);
                   setMarking(false);
-                  setMark('');
+                  setMark({ label: '', note: '' });
                 }}
               >
-                <input
-                  className={`rounded-md border border-edge bg-deck px-2 text-sm text-ink placeholder:text-faint focus:border-cyan focus:outline-none ${TAP}`}
-                  value={mark}
-                  autoFocus
-                  placeholder="what this page is"
-                  aria-label="Bookmark label"
-                  onChange={(e) => setMark(e.target.value)}
-                />
-                <button type="submit" className={`btn btn-accent px-2.5 ${TAP}`} disabled={bookmark.saving}>
-                  {bookmark.saving ? 'saving…' : 'save'}
-                </button>
-                <button type="button" className={`btn px-2.5 ${TAP}`} onClick={() => setMarking(false)}>
-                  cancel
-                </button>
+                <label className="flex flex-col gap-1">
+                  <span className="mono-label">label</span>
+                  <input
+                    className={`rounded-md border border-edge bg-deck px-2 text-sm text-ink placeholder:text-faint focus:border-cyan focus:outline-none ${TAP}`}
+                    value={mark.label}
+                    autoFocus
+                    placeholder="what this page is"
+                    aria-label="Bookmark label"
+                    onChange={(e) => setMark({ ...mark, label: e.target.value })}
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="mono-label">note</span>
+                  <input
+                    className={`rounded-md border border-edge bg-deck px-2 text-sm text-ink placeholder:text-faint focus:border-cyan focus:outline-none ${TAP}`}
+                    value={mark.note}
+                    placeholder="optional"
+                    aria-label="Bookmark note"
+                    onChange={(e) => setMark({ ...mark, note: e.target.value })}
+                  />
+                </label>
+                <div className="flex justify-end gap-2">
+                  <button type="button" className={`btn px-3 ${TAP}`} onClick={() => setMarking(false)}>
+                    cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className={`btn btn-accent px-3 ${TAP}`}
+                    disabled={bookmark.saving || mark.label.trim() === ''}
+                  >
+                    {bookmark.saving ? 'saving…' : 'add bookmark'}
+                  </button>
+                </div>
               </form>
-            ) : (
-              <button
-                type="button"
-                className={`btn px-2.5 ${TAP}`}
-                onClick={() => setMarking(true)}
-                title="Name this page for the table — it lands in the library's bookmarks"
-              >
-                bookmark p.{mapping.printed}
-              </button>
-            )}
-            {bookmark.saved && <span className="mono-label text-ok">{bookmark.saved}</span>}
+            </Sheet>
           </span>
         )}
 

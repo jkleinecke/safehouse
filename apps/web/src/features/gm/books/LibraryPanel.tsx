@@ -2,12 +2,14 @@
  * Bookmarks and the recently-opened trail (FR11.6). The routes have been on
  * the server since M11 — `GET /api/campaigns/:id/library`, the bookmark CRUD,
  * the trail — and nothing on screen called them (docs/UX_AUDIT.md). Everyone
- * at the table sees the same list; the GM names, pins, re-labels and removes.
- * A bookmark is a page the table keeps arguing about, so pinned ones sit on
- * top, and every entry opens the book over whatever is on screen.
+ * at the table sees the same table; the GM pins and removes in the row, and
+ * adds or edits in a popup (the + under the table). A bookmark is a page the
+ * table keeps arguing about, so pinned ones sit on top, and every entry opens
+ * the book over whatever is on screen.
  */
 import { useState } from 'react';
 import ConfirmButton from '../../grid/gm/ConfirmButton.js';
+import { Sheet } from '../../sheet/components/ui.js';
 import { ErrorNote, inputClass } from '../ui.js';
 import {
   useAddBookmark,
@@ -29,10 +31,19 @@ export function orderBookmarks(list: readonly Bookmark[]): Bookmark[] {
 
 export interface LibraryPanelProps {
   campaignId: string;
-  /** The GM: add, rename, pin, remove. Everyone else reads and opens. */
+  /** The GM: add, edit, pin, remove. Everyone else reads and opens. */
   canEdit: boolean;
   /** The shelf, for the add form's book picker. */
   books?: readonly BookRecord[] | undefined;
+}
+
+interface BookmarkDraft {
+  /** Set when editing an existing bookmark; its book cannot change. */
+  id?: string;
+  book: string;
+  page: string;
+  label: string;
+  note: string;
 }
 
 export default function LibraryPanel({ campaignId, canEdit, books }: LibraryPanelProps) {
@@ -41,198 +52,215 @@ export default function LibraryPanel({ campaignId, canEdit, books }: LibraryPane
   const update = useUpdateBookmark(campaignId);
   const remove = useRemoveBookmark(campaignId);
   const [open, setOpen] = useState<{ code: string; page: number } | null>(null);
-  const [renaming, setRenaming] = useState<{ id: string; label: string } | null>(null);
-  const [form, setForm] = useState({ book: '', page: '', label: '', note: '' });
+  const [draft, setDraft] = useState<BookmarkDraft | null>(null);
+  /** The book the last add used — the next add starts there. */
+  const [lastBook, setLastBook] = useState('');
 
   const bookmarks = orderBookmarks(library.data?.bookmarks ?? []);
   const recent = library.data?.recentRefs ?? [];
   const shelf = (books ?? []).filter((b) => b.hasFile !== false);
-  const bookCode = form.book || shelf[0]?.code || '';
-  const pageNum = Number.parseInt(form.page, 10);
-  const canAdd =
+
+  const startAdd = () =>
+    setDraft({ book: lastBook || shelf[0]?.code || '', page: '', label: '', note: '' });
+  const startEdit = (b: Bookmark) =>
+    setDraft({ id: b.id, book: b.book, page: String(b.page), label: b.label, note: b.note ?? '' });
+
+  const pageNum = draft ? Number.parseInt(draft.page, 10) : NaN;
+  const canSave =
     canEdit &&
-    bookCode !== '' &&
+    draft !== null &&
+    draft.book !== '' &&
     Number.isFinite(pageNum) &&
     pageNum > 0 &&
-    form.label.trim().length > 0;
+    draft.label.trim().length > 0;
+  const saving = add.isPending || update.isPending;
 
-  const submitAdd = () => {
-    if (!canAdd) return;
-    add.mutate(
-      {
-        book: bookCode,
-        page: pageNum,
-        label: form.label.trim(),
-        ...(form.note.trim() ? { note: form.note.trim() } : {}),
-      },
-      { onSuccess: () => setForm({ book: bookCode, page: '', label: '', note: '' }) },
-    );
+  const submit = () => {
+    if (!canSave || !draft) return;
+    const label = draft.label.trim();
+    const note = draft.note.trim();
+    const done = { onSuccess: () => setDraft(null) };
+    if (draft.id) {
+      update.mutate({ id: draft.id, patch: { page: pageNum, label, note } }, done);
+    } else {
+      setLastBook(draft.book);
+      add.mutate({ book: draft.book, page: pageNum, label, ...(note ? { note } : {}) }, done);
+    }
   };
 
   return (
     <div className="panel p-4" data-testid="library-panel">
-      <div className="flex flex-wrap items-baseline gap-2">
-        <h2 className="mono-label text-dim">Bookmarks</h2>
-        <span className="mono-label text-faint">
-          {canEdit ? 'pages the table keeps arguing about — you name them' : 'the pages the GM named'}
-        </span>
-      </div>
+      <h2 className="mono-label text-dim">Bookmarks</h2>
 
       {library.isPending && <p className="mt-2 text-sm text-dim">Loading…</p>}
       <ErrorNote error={library.error} />
       {library.data && bookmarks.length === 0 && (
         <p className="mt-2 text-sm text-dim" data-testid="bookmarks-empty">
           {canEdit
-            ? 'No bookmarks yet. Name a page below, or with the bookmark button inside any open book.'
+            ? 'No bookmarks yet. Add one with +, or with the bookmark button inside any open book.'
             : 'The GM has not bookmarked anything yet.'}
         </p>
       )}
 
       {bookmarks.length > 0 && (
-        <ul className="mt-2 divide-y divide-edge/60" data-testid="bookmark-list">
-          {bookmarks.map((b) => (
-            <li
-              key={b.id}
-              className="flex flex-wrap items-center gap-2 py-1.5"
-              data-bookmark={b.id}
-              data-pinned={b.pinned ? 'yes' : 'no'}
-            >
-              {b.pinned && (
-                <span className="mono-label text-cyan" title="Pinned">
-                  ★
-                </span>
-              )}
-              <button
-                type="button"
-                className="chip cursor-pointer border-cyan-dim/60 text-cyan hover:border-cyan"
-                onClick={() => setOpen({ code: b.book, page: b.page })}
-                title={`Open ${b.title} at printed page ${b.page}`}
+        <table className="mt-2 w-full text-left" data-testid="bookmark-list">
+          <tbody>
+            {bookmarks.map((b) => (
+              <tr
+                key={b.id}
+                className="border-t border-edge/60 first:border-t-0"
+                data-bookmark={b.id}
+                data-pinned={b.pinned ? 'yes' : 'no'}
               >
-                {b.ref}
-              </button>
-              {renaming?.id === b.id ? (
-                <form
-                  className="flex items-center gap-1"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    const label = renaming.label.trim();
-                    if (!label) return;
-                    update.mutate({ id: b.id, patch: { label } }, { onSuccess: () => setRenaming(null) });
-                  }}
-                >
-                  <input
-                    className={`${inputClass} w-48`}
-                    value={renaming.label}
-                    autoFocus
-                    onChange={(e) => setRenaming({ id: b.id, label: e.target.value })}
-                    aria-label="New bookmark label"
-                  />
-                  <button type="submit" className="btn px-2 py-1" disabled={update.isPending}>
-                    save
-                  </button>
-                  <button type="button" className="btn px-2 py-1" onClick={() => setRenaming(null)}>
-                    cancel
-                  </button>
-                </form>
-              ) : (
-                <span className="text-sm text-ink">{b.label}</span>
-              )}
-              {b.note && <span className="text-xs text-dim">— {b.note}</span>}
-              {canEdit && renaming?.id !== b.id && (
-                <span className="ml-auto flex items-center gap-1">
+                <td className="w-4 py-1.5 pr-1 text-center">
+                  {b.pinned && (
+                    <span className="mono-label text-cyan" title="Pinned">
+                      ★
+                    </span>
+                  )}
+                </td>
+                <td className="whitespace-nowrap py-1.5 pr-2">
                   <button
                     type="button"
-                    className="btn px-2 py-1"
-                    onClick={() => update.mutate({ id: b.id, patch: { pinned: !b.pinned } })}
-                    title={b.pinned ? 'Unpin' : 'Pin to the top'}
+                    className="chip cursor-pointer border-cyan-dim/60 text-cyan hover:border-cyan"
+                    onClick={() => setOpen({ code: b.book, page: b.page })}
+                    title={`Open ${b.title} at printed page ${b.page}`}
                   >
-                    {b.pinned ? 'unpin' : 'pin'}
+                    {b.ref}
                   </button>
-                  <button
-                    type="button"
-                    className="btn px-2 py-1"
-                    onClick={() => setRenaming({ id: b.id, label: b.label })}
-                  >
-                    rename
-                  </button>
-                  <ConfirmButton
-                    className="btn px-2 py-1 text-danger"
-                    label="remove"
-                    confirmLabel="remove?"
-                    onConfirm={() => remove.mutate(b.id)}
-                    testId={`remove-bookmark-${b.id}`}
-                  />
-                </span>
-              )}
-            </li>
-          ))}
-        </ul>
+                </td>
+                <td className="w-full py-1.5 pr-2 text-sm text-ink">
+                  {b.label}
+                  {b.note && <span className="ml-2 text-xs text-dim">— {b.note}</span>}
+                </td>
+                {canEdit && (
+                  <td className="whitespace-nowrap py-1.5 text-right">
+                    <span className="inline-flex items-center gap-1">
+                      <button
+                        type="button"
+                        className="btn px-2 py-1"
+                        onClick={() => update.mutate({ id: b.id, patch: { pinned: !b.pinned } })}
+                        title={b.pinned ? 'Unpin' : 'Pin to the top'}
+                      >
+                        {b.pinned ? 'unpin' : 'pin'}
+                      </button>
+                      <button type="button" className="btn px-2 py-1" onClick={() => startEdit(b)}>
+                        edit
+                      </button>
+                      <ConfirmButton
+                        className="btn px-2 py-1 text-danger"
+                        label="remove"
+                        confirmLabel="remove?"
+                        onConfirm={() => remove.mutate(b.id)}
+                        testId={`remove-bookmark-${b.id}`}
+                      />
+                    </span>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
 
       {canEdit && (
-        <form
-          className="mt-3 flex flex-wrap items-end gap-2 border-t border-edge/60 pt-3"
-          data-testid="bookmark-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            submitAdd();
-          }}
-        >
-          <label className="flex flex-col gap-1">
-            <span className="mono-label">book</span>
-            <select
-              className={`${inputClass} w-auto`}
-              value={bookCode}
-              onChange={(e) => setForm({ ...form, book: e.target.value })}
-              aria-label="Book"
-            >
-              {shelf.map((b) => (
-                <option key={b.id} value={b.code}>
-                  {b.title || b.code}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="mono-label">printed p.</span>
-            <input
-              className={`${inputClass} w-20`}
-              inputMode="numeric"
-              value={form.page}
-              onChange={(e) => setForm({ ...form, page: e.target.value })}
-              placeholder="426"
-              aria-label="Printed page"
-            />
-          </label>
-          <label className="flex min-w-[10rem] flex-1 flex-col gap-1">
-            <span className="mono-label">label</span>
-            <input
-              className={inputClass}
-              value={form.label}
-              onChange={(e) => setForm({ ...form, label: e.target.value })}
-              placeholder="called shots"
-              aria-label="Bookmark label"
-            />
-          </label>
-          <label className="flex min-w-[10rem] flex-1 flex-col gap-1">
-            <span className="mono-label">note</span>
-            <input
-              className={inputClass}
-              value={form.note}
-              onChange={(e) => setForm({ ...form, note: e.target.value })}
-              placeholder="optional"
-              aria-label="Bookmark note"
-            />
-          </label>
+        <div className="mt-2 border-t border-edge/60 pt-2">
           <button
-            type="submit"
-            className="btn btn-accent px-3 py-1.5"
-            disabled={!canAdd || add.isPending}
+            type="button"
+            className="btn btn-accent px-3 py-1"
+            onClick={startAdd}
+            disabled={shelf.length === 0}
+            aria-label="Add a bookmark"
+            title="Add a bookmark"
+            data-testid="add-bookmark"
           >
-            {add.isPending ? 'adding…' : 'add bookmark'}
+            +
           </button>
-          <ErrorNote error={add.error ?? update.error ?? remove.error} />
-        </form>
+          <ErrorNote error={update.error ?? remove.error} />
+        </div>
+      )}
+
+      {canEdit && (
+        <Sheet
+          open={draft !== null}
+          onClose={() => setDraft(null)}
+          title={draft?.id ? 'Edit bookmark' : 'Add a bookmark'}
+        >
+          {draft && (
+            <form
+              className="flex flex-col gap-3"
+              data-testid="bookmark-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                submit();
+              }}
+            >
+              <div className="flex flex-wrap gap-3">
+                <label className="flex min-w-[12rem] flex-1 flex-col gap-1">
+                  <span className="mono-label">book</span>
+                  <select
+                    className={inputClass}
+                    value={draft.book}
+                    disabled={Boolean(draft.id)}
+                    onChange={(e) => setDraft({ ...draft, book: e.target.value })}
+                    aria-label="Book"
+                  >
+                    {shelf.map((b) => (
+                      <option key={b.id} value={b.code}>
+                        {b.title || b.code}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="mono-label">printed p.</span>
+                  <input
+                    className={`${inputClass} w-24`}
+                    inputMode="numeric"
+                    value={draft.page}
+                    onChange={(e) => setDraft({ ...draft, page: e.target.value })}
+                    placeholder="426"
+                    aria-label="Printed page"
+                  />
+                </label>
+              </div>
+              <label className="flex flex-col gap-1">
+                <span className="mono-label">label</span>
+                <input
+                  className={inputClass}
+                  value={draft.label}
+                  autoFocus
+                  onChange={(e) => setDraft({ ...draft, label: e.target.value })}
+                  placeholder="called shots"
+                  aria-label="Bookmark label"
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="mono-label">note</span>
+                <input
+                  className={inputClass}
+                  value={draft.note}
+                  onChange={(e) => setDraft({ ...draft, note: e.target.value })}
+                  placeholder="optional"
+                  aria-label="Bookmark note"
+                />
+              </label>
+              <ErrorNote error={draft.id ? update.error : add.error} />
+              <div className="flex justify-end gap-2">
+                <button type="button" className="btn px-3 py-1.5" onClick={() => setDraft(null)}>
+                  cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-accent px-3 py-1.5"
+                  disabled={!canSave || saving}
+                >
+                  {saving ? 'saving…' : draft.id ? 'save' : 'add bookmark'}
+                </button>
+              </div>
+            </form>
+          )}
+        </Sheet>
       )}
 
       <div className="mt-4">
