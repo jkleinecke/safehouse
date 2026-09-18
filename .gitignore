@@ -6,6 +6,10 @@ models/
 node_modules/
 dist/
 build/
+# ...but the character builder's source is named for what it does, not for
+# being output (docs/CHARGEN.md §8.6) — without this line the whole feature
+# silently stays out of every commit.
+!apps/web/src/features/build/
 coverage/
 *.tsbuildinfo
 

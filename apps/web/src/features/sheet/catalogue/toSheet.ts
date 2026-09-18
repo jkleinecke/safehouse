@@ -11,8 +11,15 @@
  *
  * Acquiring is the table's business: the GM and the player work out how the
  * runner came by it; this only keeps the inventory and the stats.
+ *
+ * A quality records what it is and what it cost — `type`, `karma` and, for a
+ * rated one, `rating` — read by the rules engine's `catalogueQualityPrice`.
+ * It used to write only a note ("4 karma · positive"), so a sheet could not
+ * say which of its qualities were negative, and a rated quality's price per
+ * rating read as its whole price.
  */
 import type { SheetV1 } from '@safehouse/contracts';
+import { catalogueQualityKarma, catalogueQualityPrice } from '@safehouse/rules';
 
 export interface CatalogueHit {
   id: string;
@@ -75,11 +82,16 @@ const statRank = (k: string): number => {
   return i === -1 ? STAT_ORDER.length : i;
 };
 
-export function statsLine(hit: Pick<CatalogueHit, 'stats' | 'avail' | 'cost' | 'costText'>): string {
+export function statsLine(
+  hit: Pick<CatalogueHit, 'stats' | 'avail' | 'cost' | 'costText'>,
+  options: { priced?: boolean } = {},
+): string {
   const parts = Object.entries(hit.stats)
     .filter(([, v]) => v !== '' && v !== '—')
     .sort((a, b) => statRank(a[0]) - statRank(b[0]))
     .map(([k, v]) => `${k.toLowerCase()} ${v}`);
+  // `priced: false` leaves Availability and price to a caller that shows them its own way (the builder's picker).
+  if (options.priced === false) return parts.join(' · ');
   if (hit.avail && hit.avail !== '—') parts.push(`avail ${hit.avail}`);
   if (hit.cost !== null) parts.push(`${hit.cost.toLocaleString('en-US')}¥`);
   else if (hit.costText) parts.push(hit.costText);
@@ -208,11 +220,21 @@ export function toSheetItem(hit: CatalogueHit): { list: SheetList; item: SheetIt
       return { list: 'complexForms', item };
     }
     case 'quality': {
+      // The price is read by the rules engine, the one reader the builder and
+      // the server share. A rated quality lands at rating 1, priced there; a
+      // band ("4-20") or an unprinted price records no Karma, since the table
+      // has not chosen one.
+      const price = catalogueQualityPrice(s);
+      const rated = price.perRating !== null;
+      const printed = s['KARMA'] ? `${s['KARMA']} karma${rated ? ` per rating${price.perRating?.max != null ? ` (max ${price.perRating.max})` : ''}` : ''}` : '';
       const item: SheetItemOf<'qualities'> = {
         name: hit.name,
         mods: [],
         ...(ref ? { ref } : {}),
-        ...note([s['KARMA'] ? `${s['KARMA']} karma` : '', s['TYPE'] ?? ''].filter(Boolean).join(' · ')),
+        ...(price.type ? { type: price.type } : {}),
+        ...(typeof price.karma === 'number' ? { karma: catalogueQualityKarma(price, { rating: 1 }) } : {}),
+        ...(rated ? { rating: 1 } : {}),
+        ...note([printed, s['TYPE'] ?? ''].filter(Boolean).join(' · ')),
       };
       return { list: 'qualities', item };
     }

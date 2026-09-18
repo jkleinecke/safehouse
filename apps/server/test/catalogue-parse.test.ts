@@ -4,7 +4,20 @@
  * code or fixtures); what is real is the layout pdf.js hands back.
  */
 import { describe, expect, it } from 'vitest';
-import { isHeading, parseHeader, parsePageItems, parseRow, parseStatBlock, splitCells, titleCase } from '../src/services/catalogue.js';
+import { BuildPurchaseSchema, BuildQualitySchema } from '@safehouse/contracts';
+import { parseAvailability, purchaseAvailability, purchaseCost, purchaseEssence } from '@safehouse/rules';
+import {
+  essenceCell,
+  isHeading,
+  parseHeader,
+  parsePageItems,
+  parseRow,
+  parseStatBlock,
+  qualityPrice,
+  splitCells,
+  titleCase,
+  wareFigures,
+} from '../src/services/catalogue.js';
 
 describe('parseHeader', () => {
   it('reads a weapon table header: heading, columns, kind', () => {
@@ -116,9 +129,184 @@ describe('parseStatBlock', () => {
     expect(parseStatBlock('BAD KNEES', ['Bonus: 5 Karma'], 'NEGATIVE QUALITIES', 78)).toMatchObject({ kind: 'quality', stats: { KARMA: '5', TYPE: 'negative' } });
     expect(parseStatBlock('STATIC VEIL', ['Target: Device Duration: S FV: L + 1'], 'COMPLEX FORMS', 252)).toMatchObject({ kind: 'complex_form', stats: { TARGET: 'Device', DURATION: 'S', FV: 'L + 1' } });
   });
+  it('reads labels printed in capitals', () => {
+    expect(parseStatBlock('STILL WATER', ['COST: 0.25 PP PER LEVEL', 'ACTIVATION: FREE ACTION'], 'ADEPT POWERS', 170)).toMatchObject({ kind: 'power', name: 'Still Water', stats: { COST: '0.25 PP PER LEVEL', ACTIVATION: 'FREE ACTION' } });
+    expect(parseStatBlock('STONE FIST', ['TYPE: P RANGE: LOS DAMAGE: S', 'DURATION: I DRAIN: F – 3'], 'COMBAT SPELLS', 284)).toMatchObject({ kind: 'spell', stats: { TYPE: 'P', RANGE: 'LOS', DAMAGE: 'S', DURATION: 'I', DRAIN: 'F – 3' } });
+    expect(parseStatBlock('STATIC VEIL', ['TARGET: Device DURATION: S FV: L + 1'], 'COMPLEX FORMS', 252)).toMatchObject({ kind: 'complex_form', stats: { TARGET: 'Device', DURATION: 'S', FV: 'L + 1' } });
+  });
   it('ignores headings with no stat line under them', () => {
     expect(parseStatBlock('HEAVY PISTOLS', ['Heavy pistols are powerful sidearms.'], '', 1)).toBeNull();
     expect(parseStatBlock('ARMOR', ['Advances in ballistic fabrics'], '', 1)).toBeNull();
+  });
+});
+
+describe('a quality\'s price (CHARGEN.md §5 P4, §8.5)', () => {
+  const quality = (line: string, heading = 'POSITIVE QUALITIES') => parseStatBlock('IRON NERVE', [line], heading, 77)?.stats ?? null;
+
+  it('keeps a price per rating and its maximum instead of dropping them', () => {
+    expect(quality('Cost: 4 Karma per rating (max rating 3)')).toEqual({ KARMA: '4', PER: 'rating', MAX: '3', TYPE: 'positive' });
+    expect(quality('Bonus: 3 Karma per level (max 4)', 'NEGATIVE QUALITIES')).toEqual({ KARMA: '3', PER: 'rating', MAX: '4', TYPE: 'negative' });
+    expect(quality('Cost: 5 Karma per rating (maximum rating of 6)')).toEqual({ KARMA: '5', PER: 'rating', MAX: '6', TYPE: 'positive' });
+    // No maximum printed: none invented.
+    expect(quality('Cost: 2 Karma per rating')).toEqual({ KARMA: '2', PER: 'rating', TYPE: 'positive' });
+  });
+
+  it('reads a band the table picks within as "A-B", however the dash was printed, and now finds "A to B" at all', () => {
+    expect(quality('Bonus: 5 to 20 Karma')).toEqual({ KARMA: '5-20', TYPE: 'negative' });
+    expect(quality('Bonus: 5 to 20 Karma (see the text)')).toEqual({ KARMA: '5-20', TYPE: 'negative' });
+    expect(quality('Bonus: 4 – 25 Karma')).toEqual({ KARMA: '4-25', TYPE: 'negative' });
+    expect(quality('Bonus: 4-25 Karma')).toEqual({ KARMA: '4-25', TYPE: 'negative' });
+    expect(quality('Cost: 3 to 9 Karma')).toEqual({ KARMA: '3-9', TYPE: 'positive' });
+  });
+
+  it('leaves a flat price and a list of prices as they were, and a price with no number out', () => {
+    expect(quality('Cost: 12 Karma')).toEqual({ KARMA: '12', TYPE: 'positive' });
+    expect(quality('Cost: 7 or 14 Karma')).toEqual({ KARMA: '7 or 14', TYPE: 'positive' });
+    expect(quality('Cost: 5, 10 or 15 Karma')).toEqual({ KARMA: '5, 10 or 15', TYPE: 'positive' });
+    expect(quality('Cost: Varies')).toBeNull();
+  });
+
+  it('reads the price lines the books print in capitals, as the mixed-case ones', () => {
+    // Most quality sections print their labels in capitals; before the stat
+    // line was matched without regard to case, not one of these was read.
+    expect(quality('COST: 12 KARMA')).toEqual({ KARMA: '12', TYPE: 'positive' });
+    expect(quality('BONUS: 6 KARMA', 'NEGATIVE QUALITIES')).toEqual({ KARMA: '6', TYPE: 'negative' });
+    expect(quality('BONUS: 4 TO 20 KARMA', 'NEGATIVE QUALITIES')).toEqual({ KARMA: '4-20', TYPE: 'negative' });
+    expect(quality('COST: 3 KARMA PER LEVEL (MAX 4)')).toEqual({ KARMA: '3', PER: 'rating', MAX: '4', TYPE: 'positive' });
+    expect(quality('COST: 5 OR 10 KARMA')).toEqual({ KARMA: '5 OR 10', TYPE: 'positive' });
+    // A list with a comma before its "or" is still a list.
+    expect(quality('BONUS: 3, 6, OR 9 KARMA', 'NEGATIVE QUALITIES')).toEqual({ KARMA: '3, 6, OR 9', TYPE: 'negative' });
+    expect(qualityPrice({ KARMA: '3, 6, OR 9', TYPE: 'negative' })).toMatchObject({ karma: null, range: { min: 3, max: 9 } });
+  });
+
+  it('joins a price line the page broke after "per" to the line that finishes it', () => {
+    const wrapped = (lines: string[]) => parseStatBlock('NIGHT OWL', lines, 'POSITIVE QUALITIES', 80)?.stats ?? null;
+    expect(wrapped(['COST: 3 KARMA PER', 'RATING (MAX 3)', 'Up all night, in our words.'])).toEqual({ KARMA: '3', PER: 'rating', MAX: '3', TYPE: 'positive' });
+    expect(wrapped(['COST: 2 KARMA PER', 'RATING (MAX RATING 5)'])).toEqual({ KARMA: '2', PER: 'rating', MAX: '5', TYPE: 'positive' });
+    expect(wrapped(['Cost: 4 Karma per', 'level (max 2)'])).toEqual({ KARMA: '4', PER: 'rating', MAX: '2', TYPE: 'positive' });
+    expect(wrapped(['COST: 6 KARMA PER RATING (MAX', 'RATING 3)'])).toEqual({ KARMA: '6', PER: 'rating', MAX: '3', TYPE: 'positive' });
+    // A finished line is not joined to the prose under it, whatever the prose says.
+    expect(wrapped(['COST: 2 KARMA PER RATING', 'The max 6 here is prose, not a price.'])).toEqual({ KARMA: '2', PER: 'rating', TYPE: 'positive' });
+    // …and a page that ends on the dangling word keeps what it has.
+    expect(wrapped(['COST: 2 KARMA PER'])).toEqual({ KARMA: '2', TYPE: 'positive' });
+  });
+
+  it('compiles a capitalised quality section from a whole page', () => {
+    const page = ['POSITIVE QUALITIES', 'NIGHT OWL', 'COST: 3 KARMA PER', 'RATING (MAX 3)', 'Awake after dark, in our words.', 'NEGATIVE QUALITIES', 'GLASS JAW', 'BONUS: 4 TO 20 KARMA', 'Folds at a tap.'].join('\n');
+    const { items } = parsePageItems(page, 81);
+    expect(items.map((i) => [i.kind, i.name, i.category, i.stats])).toEqual([
+      ['quality', 'Night Owl', 'POSITIVE QUALITIES', { KARMA: '3', PER: 'rating', MAX: '3', TYPE: 'positive' }],
+      ['quality', 'Glass Jaw', 'NEGATIVE QUALITIES', { KARMA: '4-20', TYPE: 'negative' }],
+    ]);
+  });
+
+  it('reads each shape back as the Karma a build records', () => {
+    expect(qualityPrice({ KARMA: '12', TYPE: 'positive' })).toEqual({ type: 'positive', karma: 12, rated: null, range: null });
+    expect(qualityPrice({ KARMA: '4', PER: 'rating', MAX: '3', TYPE: 'positive' }, 2)).toEqual({ type: 'positive', karma: 8, rated: { perRating: 4, maxRating: 3 }, range: null });
+    expect(qualityPrice({ KARMA: '4', PER: 'rating', MAX: '3', TYPE: 'positive' })).toMatchObject({ karma: null, rated: { perRating: 4, maxRating: 3 } });
+    expect(qualityPrice({ KARMA: '2', PER: 'rating', TYPE: 'negative' }, 5)).toEqual({ type: 'negative', karma: 10, rated: { perRating: 2, maxRating: null }, range: null });
+    expect(qualityPrice({ KARMA: '5-20', TYPE: 'negative' })).toEqual({ type: 'negative', karma: null, rated: null, range: { min: 5, max: 20 } });
+    expect(qualityPrice({ KARMA: '7 or 14', TYPE: 'positive' })).toMatchObject({ karma: null, range: { min: 7, max: 14 } });
+  });
+
+  it('round-trips a rated quality from its printed line to a build\'s quality', () => {
+    const item = parsePageItems(['POSITIVE QUALITIES', 'IRON NERVE', 'Cost: 4 Karma per rating (max rating 3)', 'Nerves of iron, in our words.'].join('\n'), 77).items[0]!;
+    expect(item).toMatchObject({ kind: 'quality', name: 'Iron Nerve', category: 'POSITIVE QUALITIES' });
+    const price = qualityPrice(item.stats, 3);
+    const built = BuildQualitySchema.parse({ name: item.name, ref: { book: 'SR5', page: item.printedPage }, type: price.type, karma: price.karma, rating: 3 });
+    expect(built).toMatchObject({ name: 'Iron Nerve', type: 'positive', karma: 12, rating: 3, ref: { book: 'SR5', page: 77 } });
+    // A rating over the printed maximum is priced, not clamped — the validator says it is over.
+    expect(qualityPrice(item.stats, 4).karma).toBe(16);
+  });
+});
+
+describe('\'ware rows: Essence and price as numbers, Availability as printed (CHARGEN.md §5 P4)', () => {
+  const page = [
+    'HEADWARE ESSENCE CAPACITY AVAIL COST',
+    'Brain Box 0.2* — 12F 4,000¥',
+    'Ear Plugs .1 [2] 6R 1,500¥',
+    'Eye Mods',
+    'Rating 1 — [1] — 500¥',
+    'Hand Blade — [2] Rating x 6R Rating x 900¥',
+    'BASIC BIOWARE ESSENCE AVAIL COST',
+    'Bone knit (Rating 1–3) (Rating × 0.1) (Rating×2)R Rating x 5,000¥',
+    'Stubborn Gland 0.25 4 12,000¥',
+    'CYBERLIMB ACCESSORIES ESSENCE CAPACITY AVAIL COST',
+    'Grip Pad — [1] +2 800¥',
+    'Arm Gun 0.3 — 8F Gun + 3,000¥',
+  ].join('\n');
+  const items = parsePageItems(page, 452).items;
+  const byName = (name: string) => items.find((i) => i.name === name)!;
+
+  it('reads every row, with Essence in a form arithmetic reads', () => {
+    expect(items.map((i) => [i.name, i.stats['ESSENCE'], i.avail, i.cost ?? i.costText])).toEqual([
+      ['Brain Box', '0.2', '12F', 4000],
+      ['Ear Plugs', '0.1', '6R', 1500],
+      ['Eye Mods (Rating 1)', '—', '—', 500],
+      ['Hand Blade', '—', 'Rating x 6R', 'Rating x 900¥'],
+      ['Bone knit (Rating 1–3)', 'Rating x 0.1', '(Rating×2)R', 'Rating x 5,000¥'],
+      ['Stubborn Gland', '0.25', '4', 12000],
+      ['Grip Pad', '—', '+2', 800],
+      ['Arm Gun', '0.3', '8F', 'Gun + 3,000¥'],
+    ]);
+    expect(essenceCell('0.20')).toBe('0.2');
+    expect(essenceCell('(Level x .05)')).toBe('Rating x 0.05');
+    expect(essenceCell('[Rating]')).toBe('[Rating]');
+  });
+
+  it('keeps every Availability form the parser emits verbatim, and the rules engine reads each one', () => {
+    const forms = [...new Set(items.map((i) => i.avail))];
+    expect(forms).toEqual(['12F', '6R', '—', 'Rating x 6R', '(Rating×2)R', '4', '+2', '8F']);
+    // Read with the rating a purchase would record — 2 — as the builder does.
+    const read = Object.fromEntries(forms.map((f) => [f, parseAvailability(f, 2)]));
+    expect(read).toEqual({
+      '12F': { value: 12, legality: 'F', status: 'ok' },
+      '6R': { value: 6, legality: 'R', status: 'ok' },
+      '—': { value: null, legality: null, status: 'none' },
+      'Rating x 6R': { value: 12, legality: 'R', status: 'ok' },
+      '(Rating×2)R': { value: 4, legality: 'R', status: 'ok' },
+      '4': { value: 4, legality: null, status: 'ok' },
+      '+2': { value: null, legality: null, status: 'relative' },
+      '8F': { value: 8, legality: 'F', status: 'ok' },
+    });
+    // Without a rating a formula is flagged, never read as 0.
+    expect(parseAvailability('(Rating×2)R', null).status).toBe('needsRating');
+    // The other shapes the table reader accepts, read the same way.
+    expect(parseAvailability('16+', null)).toEqual({ value: 16, legality: null, status: 'ok' });
+    expect(parseAvailability('(Force x 6)R', 3)).toEqual({ value: 18, legality: 'R', status: 'ok' });
+    expect(parseAvailability('(Rating x 5)R', 4)).toEqual({ value: 20, legality: 'R', status: 'ok' });
+    expect(parseAvailability('+4R', null)).toEqual({ value: null, legality: 'R', status: 'relative' });
+    for (const f of forms) expect(parseAvailability(f, 2).status, String(f)).not.toBe('unreadable');
+  });
+
+  it('turns a row and a rating into the standard-grade numbers a purchase records', () => {
+    expect(wareFigures(byName('Brain Box'))).toEqual({ essence: 0.2, cost: 4000, avail: '12F', rating: null, maxRating: null, needsRating: false });
+    expect(wareFigures(byName('Eye Mods (Rating 1)'))).toEqual({ essence: 0, cost: 500, avail: '—', rating: 1, maxRating: null, needsRating: false });
+    expect(wareFigures(byName('Bone knit (Rating 1–3)'))).toEqual({ essence: null, cost: null, avail: '(Rating×2)R', rating: null, maxRating: 3, needsRating: true });
+    expect(wareFigures(byName('Bone knit (Rating 1–3)'), 2)).toEqual({ essence: 0.2, cost: 10000, avail: '(Rating×2)R', rating: 2, maxRating: 3, needsRating: false });
+    expect(wareFigures(byName('Hand Blade'), 3)).toMatchObject({ essence: 0, cost: 2700, avail: 'Rating x 6R', needsRating: false });
+    // A price in terms of another item is not a number on its own.
+    expect(wareFigures(byName('Arm Gun'))).toMatchObject({ essence: 0.3, cost: null, needsRating: false });
+  });
+
+  it('leaves the grade to the build: the engine applies alphaware and used on top of the catalogue\'s numbers', () => {
+    const row = byName('Stubborn Gland');
+    const figures = wareFigures(row);
+    const purchase = (grade: 'standard' | 'alphaware' | 'used') =>
+      BuildPurchaseSchema.parse({
+        list: 'augments',
+        kind: row.kind,
+        category: row.category,
+        name: row.name,
+        cost: figures.cost,
+        essence: figures.essence,
+        avail: figures.avail,
+        grade,
+        item: { name: row.name, essence: figures.essence },
+      });
+    expect([purchaseCost(purchase('standard')), purchaseEssence(purchase('standard')), purchaseAvailability(purchase('standard')).value]).toEqual([12000, 0.25, 4]);
+    expect([purchaseCost(purchase('alphaware')), purchaseEssence(purchase('alphaware')), purchaseAvailability(purchase('alphaware')).value]).toEqual([14400, 0.2, 6]);
+    expect([purchaseCost(purchase('used')), purchaseEssence(purchase('used')), purchaseAvailability(purchase('used')).value]).toEqual([9000, 0.3125, 0]);
   });
 });
 

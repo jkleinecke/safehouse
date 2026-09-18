@@ -17,6 +17,13 @@
  *   POST /api/ledger/:entryId/reject         GM
  *
  * Every write emits `ledger.changed` (§11 catalog).
+ *
+ * An entry may carry what approving it also does (FR3.7): an advance
+ * (`POST /api/characters/:id/advance`, `plugins/advance.ts`) is a pending
+ * Karma spend whose `payload` is the sheet change it pays for. Approving it
+ * applies that change as a revision in the same transaction — refused, and
+ * the entry left pending, when the change no longer fits the sheet — and
+ * rejecting it never touches the sheet.
  */
 import { and, desc, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -24,6 +31,7 @@ import { z } from 'zod';
 import { CurrencySchema, LedgerStateSchema, type LedgerEntry } from '@safehouse/contracts';
 import { characters, ledgerEntries, ledgerBalance, type Db } from '@safehouse/db';
 import type { EventTx, Hub } from '../hub.js';
+import { ADVANCE_UUID_RE, advanceOf, applyAdvance } from '../services/advance.js';
 import { httpError, requireAuth, requireRole, type AuthContext } from '../services/auth.js';
 import { requireCharacter, assertCanView } from '../services/characters.js';
 
@@ -35,6 +43,7 @@ export interface LedgerBalances {
 }
 
 function toDto(row: typeof ledgerEntries.$inferSelect): LedgerEntry {
+  const advance = advanceOf(row.payload);
   return {
     id: row.id,
     characterId: row.characterId,
@@ -47,6 +56,7 @@ function toDto(row: typeof ledgerEntries.$inferSelect): LedgerEntry {
     ...(row.createdBy ? { createdBy: row.createdBy } : {}),
     approvedBy: row.approvedBy,
     createdAt: row.createdAt.toISOString(),
+    ...(advance ? { advance } : {}),
   };
 }
 
@@ -66,6 +76,8 @@ export interface CreateEntryInput {
   sessionId?: string | null;
   runId?: string | null;
   createdBy?: string | null;
+  /** What approving the entry also does — an advance's sheet change (FR3.7). Written once, never edited. */
+  payload?: unknown;
 }
 
 /**
@@ -106,6 +118,7 @@ export async function createEntry(
         runId: input.runId ?? null,
         createdBy: input.createdBy ?? null,
         approvedBy: input.state === 'approved' ? (input.createdBy ?? null) : null,
+        ...(input.payload !== undefined ? { payload: input.payload } : {}),
       })
       .returning();
     const entry = toDto(rows[0]!);
@@ -153,7 +166,8 @@ async function settle(
   auth: AuthContext,
   entryId: string,
   next: 'approved' | 'rejected',
-): Promise<{ entry: LedgerEntry; balances: LedgerBalances }> {
+): Promise<{ entry: LedgerEntry; balances: LedgerBalances; revision?: number }> {
+  if (!ADVANCE_UUID_RE.test(entryId)) throw httpError(404, 'not_found', 'unknown ledger entry');
   const { entry: row, campaignId } = await loadEntry(app.db, entryId);
   if (auth.campaignId !== campaignId) {
     throw httpError(403, 'forbidden', 'device is not bound to this campaign');
@@ -169,13 +183,21 @@ async function settle(
       .set({ state: next, approvedBy: auth.userId })
       .where(and(eq(ledgerEntries.id, entryId), eq(ledgerEntries.state, 'pending')))
       .returning();
-    const entry = toDto(updated[0]!);
+    // Settled by someone else between the read above and this block.
+    if (!updated[0]) throw httpError(409, 'already_settled', 'entry is already settled');
+    const entry = toDto(updated[0]);
+    // An approved advance changes the sheet in this same transaction; if the
+    // change no longer applies it throws, and the entry stays pending.
+    const applied =
+      next === 'approved' && entry.advance
+        ? await applyAdvance(tx, auth, { characterId: entry.characterId, entryId, advance: entry.advance })
+        : null;
     const balances = await balancesFor(tx.db, entry.characterId);
     await tx.emit({
       type: 'ledger.changed',
       payload: { entry, balances, characterId: entry.characterId, settled: next },
     });
-    return { entry, balances };
+    return { entry, balances, ...(applied ? { revision: applied.revision } : {}) };
   });
 }
 

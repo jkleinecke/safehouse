@@ -31,11 +31,52 @@ export const WS_EVENT_TYPES = [
    * the display's state is exactly the kind of thing replay has to restore.
    */
   'display.updated',
+  /**
+   * The native builder's review loop (FR3.9, docs/CHARGEN.md §8.2/§8.5):
+   * a player submits a build, the GM returns it with a note or approves it.
+   * Persisted, `gm_owner` with the build's owner, so the GM's console and the
+   * player's list both catch up after a reconnect. Approval also emits
+   * `sheet.updated` (cause `built`), which is what refreshes rosters — there
+   * is no `character.created`.
+   */
+  'build.submitted',
+  'build.returned',
+  'build.approved',
+  /**
+   * The GM's per-item decisions on a build's approval issues
+   * (`POST /api/builds/:id/approvals`). Persisted like the rest of the loop
+   * rather than folded into one of them: a `build.submitted` would tell the
+   * console the player sent it again, a `build.returned` would reopen the
+   * player's editing with a note nobody wrote — and a decision changes what
+   * the owner's check shows, so it has to replay after a reconnect.
+   */
+  'build.reviewed',
 ] as const;
 export type WsEventType = (typeof WS_EVENT_TYPES)[number];
 
-/** Ephemeral message types — relayed, throttled, never stored (§11). */
-export const WS_EPHEMERAL_TYPES = ['token.dragging', 'ping', 'pointer', 'presence.changed'] as const;
+/**
+ * Ephemeral message types — relayed, throttled, never stored (§11).
+ * `build.saved` is an autosave landing (`PATCH /api/builds/:id`,
+ * `{ buildId, ownerUserId, updatedAt, by }`, `gm_owner`): a draft's
+ * keystrokes are not something the table replays, but a second open device
+ * on the same build has to hear that the record moved.
+ *
+ * `chargen.updated` is the GM writing the campaign's creation rules
+ * (`PUT /api/campaigns/:id/chargen`, `{ campaignId, level, table, by }`).
+ * Ephemeral rather than persisted because nothing about a past settings write
+ * needs replaying — the settings are a single current value every device
+ * refetches — but without it a phone mid-build keeps the level, the caps and
+ * the book list the GM has just changed, and the builder's own numbers and
+ * catalogue searches go on obeying rules the table has left behind.
+ */
+export const WS_EPHEMERAL_TYPES = [
+  'token.dragging',
+  'ping',
+  'pointer',
+  'presence.changed',
+  'build.saved',
+  'chargen.updated',
+] as const;
 export type WsEphemeralType = (typeof WS_EPHEMERAL_TYPES)[number];
 
 /**

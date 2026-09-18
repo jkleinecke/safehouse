@@ -2,7 +2,8 @@
  * magic domain plugin (M8: FR8.3 spirit tracker, FR8.4 foci and reagents).
  *
  * Routes:
- *   GET    /api/campaigns/:campaignId/magic                          the whole tracker
+ *   GET    /api/campaigns/:campaignId/magic                          the whole tracker (sprites
+ *                                                                    registered at creation included)
  *   POST   /api/campaigns/:campaignId/magic/spirits                  summon
  *   PATCH  /api/campaigns/:campaignId/magic/spirits/:spiritId        hand-edit / bind
  *   POST   /api/campaigns/:campaignId/magic/spirits/:spiritId/services   spend / grant / set
@@ -207,6 +208,7 @@ export default async function magicPlugin(app: FastifyInstance): Promise<void> {
     return reply.send({
       campaignId,
       spirits: state.spirits,
+      sprites: state.sprites,
       foci: state.foci,
       reagents: state.reagents,
       scope: auth.role === 'gm' ? 'gm' : 'player',

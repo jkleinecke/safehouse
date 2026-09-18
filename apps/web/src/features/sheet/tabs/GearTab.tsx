@@ -1,10 +1,11 @@
 /**
  * Gear tab (FR3.2): carried gear with live quantity steppers, augmentations
- * with their Essence cost and injected modifiers, and the persona/deck stats
- * when the sheet carries one.
+ * with their grade, rating, Essence cost and injected modifiers, and the
+ * persona/deck stats when the sheet carries one.
  */
 import type { SheetV1 } from '@safehouse/contracts';
 import { signed } from '../lib.js';
+import { augmentDetail } from '../rows.js';
 import { BreakdownButton } from '../components/Provenance.js';
 import { Empty, RefChip, SectionLabel } from '../components/ui.js';
 import AddFromBooks from '../catalogue/AddFromBooks.js';
@@ -106,7 +107,10 @@ export default function GearTab({ character, derived, patchSheet, overrideFor }:
             <div className="min-w-0 flex-1">
               <div className="truncate text-sm text-ink">{aug.name}</div>
               <div className="mono-label truncate">
-                {aug.essence > 0 ? `−${aug.essence} ess` : 'no essence cost'}
+                {/* Grade and rating first: alphaware and used changed what this
+                    cost and what it took out of Essence, and the builder made
+                    the player choose them (§8.3). */}
+                {augmentDetail(aug)}
                 {aug.mods.length > 0
                   ? ` · ${aug.mods.map((m) => `${m.target} ${signed(m.value)}`).join(', ')}`
                   : ''}

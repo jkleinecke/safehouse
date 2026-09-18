@@ -62,12 +62,23 @@ export interface SkillRowInfo {
   attr: string;
   rating: number;
   spec?: string | null | undefined;
+  /** The weapon or vehicle a specific skill is for (Exotic Ranged, Pilot Exotic Vehicle). */
+  target?: string | null | undefined;
+}
+
+/** "exotic-ranged-weapon (dart pistol)" — the row's name, target and all. */
+export function skillRowName(skill: Pick<SkillRowInfo, 'id' | 'target'>): string {
+  const target = skill.target?.trim();
+  return target ? `${skill.id} (${target})` : skill.id;
 }
 
 /**
  * "Roll Perception, pool 5, mental limit 5. Intuition, rating 3,
  * specialization visual." — identity first so a screen reader reaching the row
  * says the useful half before the detail.
+ *
+ * A skill that names a target says it in the name, because two rows of Exotic
+ * Ranged are otherwise read out identically and roll different pools.
  */
 export function skillRowLabel(skill: SkillRowInfo, total: number, limit?: LimitRef): string {
   const detail = [
@@ -75,7 +86,7 @@ export function skillRowLabel(skill: SkillRowInfo, total: number, limit?: LimitR
     `rating ${skill.rating}`,
     ...(skill.spec ? [`specialization ${skill.spec}`] : []),
   ].join(', ');
-  return `${rollRowLabel(skill.id, total, limit)}. ${detail}`;
+  return `${rollRowLabel(skillRowName(skill), total, limit)}. ${detail}`;
 }
 
 export function spellRowLabel(name: string, total: number | undefined, drain?: string): string {

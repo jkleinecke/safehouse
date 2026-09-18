@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Visibility, WsEvent } from '@safehouse/contracts';
-import { edgeLabel, parseRoll, toLogItem, toLogItems } from './views.js';
+import { edgeLabel, ledgerAmount, parseRoll, toLogItem, toLogItems } from './views.js';
 
 function evt(
   type: string,
@@ -141,7 +141,16 @@ describe('toLogItem', () => {
       evt('ledger.changed', { entry: { currency: 'nuyen', delta: -2500, reason: 'Fixer cut' } }),
     );
     expect(item).toMatchObject({ kind: 'ledger' });
-    expect(item && 'text' in item ? item.text : '').toContain('-2500 nuyen');
+    expect(item && 'text' in item ? item.text : '').toBe('−2,500¥ — Fixer cut');
+  });
+
+  it('writes opening balances the way the Ledger tab does: grouped nuyen with the yen sign, signed Karma', () => {
+    const opening = toLogItem(evt('ledger.changed', { entry: { currency: 'nuyen', delta: 5000, reason: 'Built: 5,000¥ left over from creation' } }));
+    expect(opening && 'text' in opening ? opening.text : '').toBe('+5,000¥ — Built: 5,000¥ left over from creation');
+    expect(ledgerAmount(7, 'karma')).toBe('+7 karma');
+    expect(ledgerAmount(-12, 'karma')).toBe('−12 karma');
+    expect(ledgerAmount(1200000, 'nuyen')).toBe('+1,200,000¥');
+    expect(ledgerAmount(undefined, 'nuyen')).toBe('? nuyen');
   });
 });
 

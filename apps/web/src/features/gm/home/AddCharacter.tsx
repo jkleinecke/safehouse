@@ -7,9 +7,15 @@
  * `pnpm seed:demo` was the only thing that had ever created a character. This
  * is that missing control, and it is deliberately the empty roster's call to
  * action rather than a screen of its own.
+ *
+ * The third way in sits beside the other two: "build a runner" opens the
+ * native character builder (FR3.9, docs/CHARGEN.md §6 decision 3) on a new
+ * draft named with whatever street name is typed here. The Chummer path stays
+ * exactly as it was.
  */
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { BuildRunnerButton } from '../../build/entry.js';
 import { ErrorNote, inputClass } from '../ui.js';
 import { useCreateCharacter } from './api.js';
 
@@ -73,6 +79,7 @@ export default function AddCharacter({
         >
           import .chum5
         </button>
+        <BuildRunnerButton campaignId={campaignId} name={name} />
         <input
           ref={fileRef}
           type="file"

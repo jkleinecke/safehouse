@@ -24,6 +24,8 @@ import codexPlugin from './codex.js';
 import contactsPlugin from './contacts.js';
 import magicPlugin from './magic.js';
 import macrosPlugin from './macros.js';
+import buildsPlugin from './builds.js';
+import advancePlugin from './advance.js';
 
 const domainPlugins = [
   authPlugin,
@@ -43,6 +45,8 @@ const domainPlugins = [
   contactsPlugin,
   macrosPlugin,
   magicPlugin,
+  buildsPlugin,
+  advancePlugin,
 ] as const;
 
 /** Register every domain plugin (called once from buildApp). */

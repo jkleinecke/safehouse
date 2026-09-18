@@ -30,6 +30,15 @@ export interface MockTurn {
   model?: string;
   /** Milliseconds to stall before the first frame (latency-meter tests). */
   delayMs?: number;
+  /**
+   * Refuse the turn with this HTTP status instead of completing it — the
+   * error paths, which are as much a part of the client as the happy one. A
+   * hosted provider's refusal is a JSON body with its own text in it, and
+   * what we do with that text is a question about who is reading.
+   */
+  status?: number;
+  /** The raw body a `status` turn answers with. Default: a small JSON error. */
+  body?: string;
 }
 
 export interface MockChatRequest {
@@ -158,6 +167,12 @@ export class MockLlmServer {
     }
     if (turn.delayMs && turn.delayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, turn.delayMs));
+    }
+
+    if (turn.status !== undefined && turn.status >= 400) {
+      res.writeHead(turn.status, { 'content-type': 'application/json' });
+      res.end(turn.body ?? JSON.stringify({ error: { message: `mock refusal ${turn.status}` } }));
+      return;
     }
 
     const model = turn.model ?? parsed.model ?? 'mock-model';

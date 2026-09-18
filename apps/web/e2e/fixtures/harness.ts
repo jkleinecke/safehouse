@@ -213,6 +213,12 @@ export function childEnv(dataDir: string, extra: NodeJS.ProcessEnv = {}): NodeJS
     // nobody thought they were editing. An explicit '0' is what closes the
     // door; a spec that wants the open table can pass '1' through `extra`.
     SAFEHOUSE_OPEN_TABLE: '0',
+    // And the file itself switched off. Deleting LLM_BASE_URL below only made
+    // it unset, which is exactly what the non-overriding loader fills: the GM
+    // overview of the test world showed the developer's own model address
+    // ("running on the server's .env"). With this the server reads no `.env`
+    // at all (apps/server/src/dotenv.ts), so the deletes mean what they say.
+    SAFEHOUSE_NO_DOTENV: '1',
   };
   delete env.DATABASE_URL;
   delete env.LLM_BASE_URL;

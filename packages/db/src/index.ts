@@ -25,6 +25,7 @@ export {
 export {
   searchBookPages,
   searchBookItems,
+  findBookItems,
   countBookItems,
   searchCodex,
   type BookPageHit,
@@ -32,6 +33,7 @@ export {
   type CodexHit,
   type SearchBookPagesOpts,
   type SearchBookItemsOpts,
+  type BookItemPage,
 } from './fts.js';
 export {
   appendEvent,

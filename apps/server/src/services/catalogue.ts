@@ -27,8 +27,43 @@
  * tables whose rows wrap over two lines, or ratings tables that print one
  * row per rating. Those items are still on the page, still in full-text
  * search, still a ref away; they are just not pickable by name.
+ *
+ * `stats` stays a map of strings — the column as printed — because that is
+ * what `book_items.stats`, the search hit and the sheet's mapping all type it
+ * as. Where the character builder has to do arithmetic (docs/CHARGEN.md §5
+ * P4, §8.5) the parser writes the number in a form `Number()` reads rather
+ * than inventing a second, typed record:
+ *
+ * - A quality's price. "Cost: 12 Karma" is `{ KARMA: '12' }`. A price per
+ *   rating, "Cost: 6 Karma per rating (max rating 4)", is
+ *   `{ KARMA: '6', PER: 'rating', MAX: '4' }` (a "per level" price reads the
+ *   same: a quality's level is its rating). A band the table picks within,
+ *   "Bonus: 4 to 25 Karma", is `{ KARMA: '4-25' }` — a hyphen, however the
+ *   page printed the dash. A list of prices ("7 or 14") stays as printed.
+ *   `qualityPrice` reads all of these back (through the rules engine's
+ *   `catalogueQualityPrice`, which the builder's steps call directly).
+ * - 'Ware. Essence and price are the standard grade's — the tables print no
+ *   other, and the grade multipliers are the rules engine's
+ *   (`IMPLANT_GRADES`), applied to a purchase, never to the catalogue. An
+ *   Essence cell loses its footnote marks and a formula its brackets and its
+ *   "×" ("0.2", "Rating x 0.2"); `cost` is the price as a number and
+ *   `costText` the formula. `wareFigures` turns a row and a rating into the
+ *   numbers a purchase records (the rules engine's `catalogueWareFigures`,
+ *   which also quotes a grade).
+ * - Availability is kept exactly as printed ("12F", "6R", "—",
+ *   "(Rating x 2)R", "+2"): the rules engine's `parseAvailability` reads the
+ *   code against the rating the purchase chose, and a rewritten code would be
+ *   one it had never been tested on.
+ *
+ * All of this lands at compile time. Rows already in `book_items` keep the
+ * shape they were compiled with until the book is compiled again — the GM's
+ * "recompile" on the shelf (`POST /api/books/:id/catalogue`) or
+ * `seed:books --catalogue` — which rereads the stored pages and replaces the
+ * book's rows, so a parser change reaches an existing library without the
+ * PDFs being extracted again.
  */
 import { asc, eq } from 'drizzle-orm';
+import { catalogueQualityKarma, catalogueQualityPrice, catalogueWareFigures } from '@safehouse/rules';
 import { bookItems, bookPages, type Db } from '@safehouse/db';
 
 export type ItemKind =
@@ -227,7 +262,12 @@ const COST_WORDS = new Set([
 
 const PRICE = /^\(?[\d,]+\)?¥$/;
 const REF_PIECE = /^(?:\d{1,3}|p\.?|pg\.?|pp\.?|[A-Z]{2,4}\d?)$/;
-const AVAIL = /^(?:[—–-]|\d{1,3}[RFrf]?\+?|\(.*\)[RFrf]?|(?:Rating|Force|Level)\s*[x×]\s*\d+[RFrf]?|\d+\s*\+\s*Rating)$/;
+/**
+ * An Availability cell: a dash, "12", "12F", "16+", a bracketed formula
+ * ("(Rating x 2)R"), a bare one ("Rating x 6R", "10 + Rating"), or an
+ * accessory's addition to what it mounts on ("+2", "+4R").
+ */
+const AVAIL = /^(?:[—–-]|\d{1,3}[RFrf]?\+?|\+\d{1,2}[RFrf]?|\(.*\)[RFrf]?|(?:Rating|Force|Level)\s*[x×]\s*\d+[RFrf]?|\d+\s*\+\s*Rating)$/;
 const NUMERIC_CELL = /^(?:\d+[A-Za-z]?|[\d.]+|\d+\/\d+)$/;
 
 /**
@@ -293,6 +333,22 @@ export function isHeading(line: string): boolean {
 function priceOf(costText: string): number | null {
   const m = /^([\d,]+)¥$/.exec(costText);
   return m ? Number(m[1]!.replace(/,/g, '')) : null;
+}
+
+/** Footnote marks a printed cell can trail: asterisks, daggers, superscript digits. */
+const FOOTNOTE = /[*†‡¹²³]+$/u;
+
+/**
+ * An Essence cell in a form arithmetic can read: "0.2*" → "0.2", ".5" →
+ * "0.5", "(Rating × 0.1)" → "Rating x 0.1". A dash, a bracket that is not a
+ * formula, or anything else is left as printed.
+ */
+export function essenceCell(cell: string): string {
+  const t = cell.trim().replace(FOOTNOTE, '');
+  if (/^\d*\.?\d+$/.test(t)) return String(Number(t));
+  const formula = /^\(?\s*(Rating|Level)\s*[x×*]\s*(\d*\.?\d+)\s*\)?$/i.exec(t);
+  if (formula) return `Rating x ${String(Number(formula[2]!))}`;
+  return t.length > 0 ? t : cell;
 }
 
 /** A line that could be an item's name: short, wordy, not a row, not a header. */
@@ -372,7 +428,7 @@ export function parseRow(
   if (name.length < 2 || !/[A-Za-z]/.test(name)) return null;
   const stats: Record<string, string> = {};
   header.stats.forEach((col, i) => {
-    stats[col] = statCells[i]!;
+    stats[col] = col === 'ESSENCE' ? essenceCell(statCells[i]!) : statCells[i]!;
   });
   return {
     kind: header.kind,
@@ -391,12 +447,26 @@ export function parseRow(
 // ---------------------------------------------------------------------------
 
 const NAME_LINE = /^[A-Z][A-Z0-9 '’\-(),/&\[\]]{1,46}$/;
-const STAT_LINE = /^(?:Type|Range|Damage|Duration|Drain|Cost|Bonus|Activation|Target|FV|Threshold):/;
+/**
+ * The labels are matched without regard to case: a section may print "Cost:"
+ * or "COST:", and the books do both (most quality sections are in capitals —
+ * a case-sensitive match read none of them).
+ */
+const STAT_LABELS = 'Type|Range|Damage|Duration|Drain|Cost|Bonus|Activation|Target|FV|Threshold';
+const STAT_LINE = new RegExp(`^(?:${STAT_LABELS}):`, 'i');
 
 function field(block: string, label: string): string | null {
-  const m = new RegExp(`\\b${label}:\\s*(.+?)(?=\\s+(?:Type|Range|Damage|Duration|Drain|Cost|Bonus|Activation|Target|FV|Threshold):|$)`).exec(block);
+  const m = new RegExp(`\\b${label}:\\s*(.+?)(?=\\s+(?:${STAT_LABELS}):|$)`, 'i').exec(block);
   return m ? m[1]!.trim() : null;
 }
+
+/**
+ * A price line the page broke mid-phrase — "COST: 3 KARMA PER" over "RATING
+ * (MAX 3)", or one that stops inside its brackets — whose rest is the next
+ * line. A line that reads as finished ("… per rating") is never joined: the
+ * line under it is prose, and prose can say "max" too.
+ */
+const BROKEN_PRICE = /\bKarma\b.*(?:\bper|\([^)]*)$/i;
 
 /** A spell, power, quality or complex form whose name is `line`, or null. */
 export function parseStatBlock(line: string, following: readonly string[], category: string, printedPage: number): ParsedItem | null {
@@ -418,7 +488,7 @@ export function parseStatBlock(line: string, following: readonly string[], categ
   const block = statLines.join(' ');
   const first = statLines[0] ?? '';
   const base = { category, name: titleCase(name), avail: null, cost: null, costText: null, printedPage };
-  if (/^Type:/.test(first) && /\bDrain:/.test(block)) {
+  if (/^Type:/i.test(first) && /\bDrain:/i.test(block)) {
     const stats: Record<string, string> = {};
     if (keywords) stats['KEYWORDS'] = keywords;
     for (const key of ['Type', 'Range', 'Damage', 'Duration', 'Drain'] as const) {
@@ -435,11 +505,11 @@ export function parseStatBlock(line: string, following: readonly string[], categ
     if (act !== null) stats['ACTIVATION'] = act;
     return { ...base, kind: 'power', stats };
   }
-  const karma = /^(Cost|Bonus):\s*(\d+(?:\s*(?:,|or|–|-)\s*\d+)*)\s*Karma/i.exec(first);
-  if (karma) {
-    return { ...base, kind: 'quality', stats: { KARMA: karma[2]!, TYPE: karma[1]!.toLowerCase() === 'cost' ? 'positive' : 'negative' } };
-  }
-  if (/^Target:/.test(first) && /\bFV:/.test(block)) {
+  const next = rest[statLines.length];
+  const priceLine = statLines.length === 1 && next !== undefined && BROKEN_PRICE.test(first) ? `${first} ${next}` : first;
+  const karma = qualityKarmaStats(priceLine);
+  if (karma) return { ...base, kind: 'quality', stats: karma };
+  if (/^Target:/i.test(first) && /\bFV:/i.test(block)) {
     const stats: Record<string, string> = {};
     for (const key of ['Target', 'Duration', 'FV'] as const) {
       const v = field(block, key);
@@ -448,6 +518,121 @@ export function parseStatBlock(line: string, following: readonly string[], categ
     return { ...base, kind: 'complex_form', stats };
   }
   return null;
+}
+
+/**
+ * A quality's price line, "Cost: …" or "Bonus: …", as stats — or null when
+ * the line prints no Karma number ("Cost: Varies").
+ *
+ *   Cost: 12 Karma                               { KARMA: '12' }
+ *   Cost: 6 Karma per rating (max rating 4)      { KARMA: '6', PER: 'rating', MAX: '4' }
+ *   Cost: 2 Karma per level (max 3)              { KARMA: '2', PER: 'rating', MAX: '3' }
+ *   Bonus: 4 to 25 Karma  /  4 – 25 Karma        { KARMA: '4-25' }
+ *   Cost: 7 or 14 Karma                          { KARMA: '7 or 14' }
+ *   BONUS: 3, 6, OR 9 KARMA                      { KARMA: '3, 6, OR 9' }
+ *
+ * each with `TYPE` positive for a cost and negative for a bonus, and each
+ * read whatever the case it was printed in (a list keeps its printed case —
+ * `qualityPrice` reads only its numbers). Before the per-rating and band
+ * shapes were read, the first dropped its scaling and its maximum without a
+ * word, and the second was not in the catalogue at all — a builder pricing
+ * either off the catalogue priced it wrong.
+ */
+function qualityKarmaStats(line: string): Record<string, string> | null {
+  const m = /^(Cost|Bonus):\s*(\d+(?:\s*(?:,(?:\s*or)?|or|to|–|—|-)\s*\d+)*)\s*Karma\b(.*)$/i.exec(line.trim());
+  if (!m) return null;
+  const type = m[1]!.toLowerCase() === 'cost' ? 'positive' : 'negative';
+  const printed = m[2]!.trim();
+  const rest = m[3] ?? '';
+  const band = /^(\d+)\s*(?:to|–|—|-)\s*(\d+)$/i.exec(printed);
+  if (band) return { KARMA: `${Number(band[1])}-${Number(band[2])}`, TYPE: type };
+  if (/^\d+$/.test(printed) && /^[\s(]*per\s+(?:rating|level)\b/i.test(rest)) {
+    const max = /\bmax(?:imum)?\.?\s*(?:rating|level)?\s*(?:of\s+)?(\d+)/i.exec(rest);
+    return { KARMA: String(Number(printed)), PER: 'rating', ...(max ? { MAX: String(Number(max[1])) } : {}), TYPE: type };
+  }
+  return { KARMA: printed, TYPE: type };
+}
+
+// ---------------------------------------------------------------------------
+// Reading the numbers back — what a build records from a row
+// ---------------------------------------------------------------------------
+//
+// The reading itself is the rules engine's (`catalogueQualityPrice`,
+// `catalogueWareFigures` in @safehouse/rules chargen/catalogue.ts), so the
+// builder's steps in the browser and every server path price a row the same
+// way. These two keep the shapes the server's callers and tests were written
+// against.
+
+/** What a catalogue quality's price line allows, read back from its stats. */
+export interface QualityPrice {
+  type: 'positive' | 'negative' | null;
+  /**
+   * The Karma at `rating` — a flat price ignores the rating. Null when the
+   * table has to choose (a band, a list of prices) or a per-rating price was
+   * given no rating.
+   */
+  karma: number | null;
+  /** A price per rating, and the highest rating the book allows (null when it names none). */
+  rated: { perRating: number; maxRating: number | null } | null;
+  /** The bounds a band ("4-25") or a list ("7 or 14") lets the table choose within. */
+  range: { min: number; max: number } | null;
+}
+
+/**
+ * A quality row's Karma at a rating. A rating above the book's maximum is
+ * not clamped — the validator is where a table is told its build is over.
+ */
+export function qualityPrice(stats: Readonly<Record<string, string>>, rating: number | null = null): QualityPrice {
+  const price = catalogueQualityPrice(stats);
+  const { type, karma, perRating } = price;
+  if (typeof karma === 'number') {
+    if (perRating) {
+      return {
+        type,
+        karma: rating !== null && rating >= 1 ? catalogueQualityKarma(price, { rating }) : null,
+        rated: { perRating: karma, maxRating: perRating.max },
+        range: null,
+      };
+    }
+    return { type, karma, rated: null, range: null };
+  }
+  return { type, karma: null, rated: null, range: karma };
+}
+
+/** The numbers a 'ware (or any rated gear) purchase records from a catalogue row, at standard grade. */
+export interface WareFigures {
+  /** Essence per unit at the rating; 0 when the row prints none or a dash; null when unreadable or it needs a rating. */
+  essence: number | null;
+  /** List price per unit at the rating; null when the price is a formula this cannot evaluate, or it needs a rating. */
+  cost: number | null;
+  /** The Availability exactly as printed — the rules engine reads it against the rating. */
+  avail: string | null;
+  /** The rating these figures are at: the one asked for, else the one the row's name prints ("Glass Eyes (Rating 2)"). */
+  rating: number | null;
+  /** The top of a printed rating range ("Muscle knot (Rating 1–4)"), when the name gives one. */
+  maxRating: number | null;
+  /** The row prices Essence or nuyen by rating, and no rating was given or printed. */
+  needsRating: boolean;
+}
+
+/**
+ * A catalogue row's Essence, price and Availability for a purchase at a
+ * rating. The numbers are the standard grade's; the build applies the grade
+ * (CHARGEN.md §8.3), so changing a grade never means re-reading this.
+ */
+export function wareFigures(
+  row: Pick<ParsedItem, 'name' | 'stats' | 'avail' | 'cost' | 'costText'>,
+  rating: number | null = null,
+): WareFigures {
+  const figures = catalogueWareFigures(row, { rating });
+  return {
+    essence: figures.essence,
+    cost: figures.cost,
+    avail: row.avail,
+    rating: figures.rating,
+    maxRating: figures.maxRating,
+    needsRating: figures.needsRating,
+  };
 }
 
 /** "MANABOLT" → "Manabolt", "ANALYZE DEVICE" → "Analyze Device". */

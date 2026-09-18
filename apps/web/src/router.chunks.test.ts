@@ -14,6 +14,13 @@
  * The same reasoning is why the Grid's pixi subtree has `useStage.ts`'s
  * docblock and only one `import('./stage/index.js')` in the tree; this is that
  * rule written down as an assertion rather than a comment.
+ *
+ * The character builder (FR3.9, docs/CHARGEN.md §8.6 "lazy chunks") follows
+ * the same rule with one allowance: the roster, the player home and the GM
+ * console carry small doors into it (`features/build/entry.tsx`) and read its
+ * data hooks (`features/build/api.ts`), so those two files — and only those —
+ * may be imported statically from outside. The walkthrough, its rail, its
+ * steps and its session stay behind the two route `import()` calls.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -45,6 +52,9 @@ const STATIC_CODEX =
 
 /** The dynamic form — what we require instead. */
 const DYNAMIC_CODEX = /import\(\s*['"][^'"]*features\/codex\/[^'"]*['"]\s*\)/g;
+
+/** Every static (non-type) import specifier in a source file. */
+const STATIC_IMPORT = /^\s*import\s+(?!type)[^;]*?from\s+['"]([^'"]+)['"]/gm;
 
 function rel(file: string): string {
   return path.relative(SRC, file).split(path.sep).join('/');
@@ -117,5 +127,52 @@ describe('the codex feature is a lazy chunk (§15)', () => {
     }
     expect(offenders).toEqual([]);
     expect(dynamicHits).toBeGreaterThan(0);
+  });
+});
+
+describe('the character builder is a lazy chunk (FR3.9, §8.6)', () => {
+  const buildDir = path.join(SRC, 'features', 'build');
+  /** Files outside the chunk may reach these, statically, and nothing else. */
+  const DOORS = new Set([path.join(buildDir, 'entry.js'), path.join(buildDir, 'api.js')]);
+
+  it('is reached from outside itself only through its doors and the route imports', () => {
+    const offenders: string[] = [];
+    let doorsUsed = 0;
+    for (const file of sourceFiles(SRC)) {
+      if (file.startsWith(buildDir + path.sep)) continue;
+      const src = fs.readFileSync(file, 'utf8');
+      for (const m of src.matchAll(STATIC_IMPORT)) {
+        const spec = m[1]!;
+        if (!spec.startsWith('.')) continue;
+        const target = path.resolve(path.dirname(file), spec);
+        if (!target.startsWith(buildDir + path.sep)) continue;
+        if (DOORS.has(target)) doorsUsed++;
+        else offenders.push(`${rel(file)}: ${m[0].trim()}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+    // The roster, the player home and the console each open one door.
+    expect(doorsUsed).toBeGreaterThanOrEqual(3);
+  });
+
+  it('the router lazy-loads both builder routes, each inside a Suspense boundary', () => {
+    const src = fs.readFileSync(ROUTER, 'utf8');
+    const dynamic = [...src.matchAll(/import\(\s*['"][^'"]*features\/build\/[^'"]*['"]\s*\)/g)];
+    expect(dynamic).toHaveLength(2);
+    for (const name of ['BuildListPage', 'BuildPage']) {
+      expect(src).toMatch(new RegExp(`const ${name} = lazy\\(`));
+      const uses = [...src.matchAll(new RegExp(`element: (.*<${name} ?/>.*)`, 'g'))];
+      expect(uses.length).toBeGreaterThan(0);
+      for (const [, element] of uses) expect(element).toContain(`<Chunk><${name} /></Chunk>`);
+    }
+  });
+
+  it("the builder's doors stay light: no page, rail, step or engine run behind them", () => {
+    for (const door of ['entry.tsx', 'api.ts']) {
+      const src = fs.readFileSync(path.join(buildDir, door), 'utf8');
+      const specs = [...src.matchAll(STATIC_IMPORT)].map((m) => m[1]!);
+      const reachesIn = specs.filter((s) => s.startsWith('./') && !['./api.js', './lib.js'].includes(s));
+      expect(reachesIn, door).toEqual([]);
+    }
   });
 });

@@ -56,7 +56,15 @@ const CalendarView = lazy(() => import('./features/codex/CalendarView.js'));
 const CodexPage = lazy(() => import('./features/codex/CodexPage.js'));
 const RunsBoard = lazy(() => import('./features/codex/RunsBoard.js'));
 
-/** Suspense boundary for the lazy codex chunk — one line while it arrives. */
+// The character builder (FR3.9, docs/CHARGEN.md §8.6) is a lazy chunk of its
+// own on the same pattern: these two `import()` calls are the only way into
+// `features/build/` from outside it, apart from the small entry controls
+// (`entry.tsx`) and data hooks (`api.ts`) the roster, the player home and the
+// console carry. `router.chunks.test.ts` holds that line.
+const BuildListPage = lazy(() => import('./features/build/BuildListPage.js'));
+const BuildPage = lazy(() => import('./features/build/BuildPage.js'));
+
+/** Suspense boundary for a lazy route chunk (codex, builder) — one line while it arrives. */
 function Chunk({ children }: { children: ReactNode }) {
   return (
     <Suspense
@@ -97,6 +105,11 @@ export const routes: RouteObject[] = [
       // The library is table-wide too (FR11.5 shares books by default); the
       // page itself decides whether this device gets the calibration shelf.
       { path: 'books', element: <LibraryPage /> },
+      // Character creation is player-facing and GM-reviewed, so it sits
+      // beside the sheet rather than under `gm` (§6 decision 3). The server
+      // decides who may read or write which build.
+      { path: 'build', element: <Chunk><BuildListPage /></Chunk> },
+      { path: 'build/:buildId', element: <Chunk><BuildPage /></Chunk> },
       {
         path: 'gm',
         children: [

@@ -80,6 +80,31 @@ describe('WsCommandSchema (client→server)', () => {
     expect(WS_EPHEMERAL_TYPES).not.toContain('display.updated');
   });
 
+  it('names the builder review loop in the persisted catalog (FR3.9)', () => {
+    // A GM who reconnects has to see the build that was submitted while they
+    // were away, so these replay rather than relay.
+    for (const t of ['build.submitted', 'build.returned', 'build.approved', 'build.reviewed']) {
+      expect(WS_EVENT_TYPES).toContain(t);
+      expect(WS_EPHEMERAL_TYPES).not.toContain(t);
+    }
+  });
+
+  it('relays an autosave landing without storing it (FR3.9)', () => {
+    // A draft's keystrokes are not the table's history; a second open device
+    // on the build only needs to hear that the record moved.
+    expect(WS_EPHEMERAL_TYPES).toContain('build.saved');
+    expect(WS_EVENT_TYPES).not.toContain('build.saved');
+  });
+
+  it('relays a creation-settings write the same way (FR3.9)', () => {
+    // The settings are one current value, so there is nothing to replay — but
+    // every open builder holds a copy of the level's caps, the priority table
+    // and the book list, and without this ping it keeps building to rules the
+    // GM has already changed.
+    expect(WS_EPHEMERAL_TYPES).toContain('chargen.updated');
+    expect(WS_EVENT_TYPES).not.toContain('chargen.updated');
+  });
+
   it('fog.reveal defaults op to reveal and accepts define with a region', () => {
     const reveal = WsCommandSchema.parse({ cmd: 'fog.reveal', sceneId: 's1', regionId: 'lab' });
     expect(reveal).toMatchObject({ op: 'reveal' });

@@ -4,7 +4,7 @@
  * `book_pages.tsv` is a GENERATED tsvector (english config) with a GIN index;
  * codex search builds its vector on the fly over title + content.
  */
-import { and, desc, eq, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import type { Db } from './client.js';
 import { bookItems, bookPages, books, wikiPages } from './schema.js';
 
@@ -106,48 +106,146 @@ export interface BookItemHit {
 
 export interface SearchBookItemsOpts {
   kind?: string;
+  /** One book, by code — the old single-book filter. */
   bookCode?: string;
+  /** Several books by code: an item from any of them. Empty finds nothing. */
+  bookCodes?: readonly string[];
+  /**
+   * Several books by id: what a caller that has already worked out which
+   * books a device may open passes, because a code is not unique across
+   * campaigns and an id is. Empty finds nothing.
+   */
+  bookIds?: readonly string[];
   limit?: number;
+  /** Rows to skip, for paging; the order is stable, so page two follows page one. */
+  offset?: number;
 }
+
+/** One page of catalogue rows, and how many rows match in all. */
+export interface BookItemPage {
+  hits: BookItemHit[];
+  total: number;
+}
+
+/**
+ * `q` as the body of a LIKE pattern. Backslash, `%` and `_` are escaped with
+ * a backslash, which is Postgres' default LIKE escape, so "100%" looks for a
+ * percent sign and "a_b" for an underscore rather than matching everything.
+ * (The first version wrote the replacement as a template string with an
+ * escaped dollar sign, so every `%` and `_` in a query became the literal
+ * text `${c}` and the name match silently failed.)
+ */
+function likeBody(q: string): string {
+  return q.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+const ITEM_COLUMNS = {
+  id: bookItems.id,
+  bookId: bookItems.bookId,
+  bookCode: books.code,
+  printedPage: bookItems.printedPage,
+  kind: bookItems.kind,
+  category: bookItems.category,
+  name: bookItems.name,
+  stats: bookItems.stats,
+  avail: bookItems.avail,
+  cost: bookItems.cost,
+  costText: bookItems.costText,
+};
 
 /**
  * Items by name: a substring match on the name OR a word match on
  * name + category, exact names first, then names that start with the query,
  * then the rest by length — so "predator" finds the pistol before the
  * pistol's ammunition, and "heavy pistol" finds every heavy pistol.
+ *
+ * An empty query finds nothing here (the Fixer's tool and the sheet's search
+ * box both mean "nothing typed yet"); `findBookItems` is the one that browses.
  */
 export async function searchBookItems(
   db: Db,
   query: string,
   opts: SearchBookItemsOpts = {},
 ): Promise<BookItemHit[]> {
+  if (query.trim().length === 0) return [];
+  return (await findBookItems(db, query, opts)).hits;
+}
+
+/**
+ * A page of the catalogue with its total. With a query it ranks as
+ * `searchBookItems` does; with none it BROWSES — every row the filters let
+ * through, alphabetically — which is how the character builder lists all the
+ * qualities or all the cyberware in a campaign's books without inventing a
+ * query (docs/CHARGEN.md §8.5). A browse over the whole catalogue is the
+ * caller's to allow or refuse; the route insists on a kind.
+ *
+ * Every order ends on the row id, so offset paging never shows a row twice
+ * or skips one between two equally-named rows. The total rides along as a
+ * window count in the same query; only a page past the end, which has no row
+ * to carry it, costs a second count.
+ */
+export async function findBookItems(
+  db: Db,
+  query: string,
+  opts: SearchBookItemsOpts = {},
+): Promise<BookItemPage> {
   const q = query.trim();
-  if (q.length === 0) return [];
-  const pattern = `%${q.replace(/[\%_]/g, (c) => `\${c}`)}%`;
-  const tsq = sql`websearch_to_tsquery('simple', ${q})`;
-  const conditions: SQL[] = [sql`(${bookItems.name} ILIKE ${pattern} OR ${bookItems.tsv} @@ ${tsq})`];
+  const conditions: SQL[] = [];
   if (opts.kind !== undefined) conditions.push(eq(bookItems.kind, opts.kind));
   if (opts.bookCode !== undefined) conditions.push(eq(books.code, opts.bookCode));
-  const tier = sql<number>`CASE WHEN lower(${bookItems.name}) = lower(${q}) THEN 0 WHEN lower(${bookItems.name}) LIKE lower(${q}) || '%' THEN 1 WHEN ${bookItems.name} ILIKE ${pattern} THEN 2 ELSE 3 END`;
-  return db
-    .select({
-      id: bookItems.id,
-      bookId: bookItems.bookId,
-      bookCode: books.code,
-      printedPage: bookItems.printedPage,
-      kind: bookItems.kind,
-      category: bookItems.category,
-      name: bookItems.name,
-      stats: bookItems.stats,
-      avail: bookItems.avail,
-      cost: bookItems.cost,
-      costText: bookItems.costText,
-    })
+  if (opts.bookCodes !== undefined) {
+    if (opts.bookCodes.length === 0) return { hits: [], total: 0 };
+    conditions.push(inArray(books.code, [...opts.bookCodes]));
+  }
+  if (opts.bookIds !== undefined) {
+    if (opts.bookIds.length === 0) return { hits: [], total: 0 };
+    conditions.push(inArray(bookItems.bookId, [...opts.bookIds]));
+  }
+  let order: SQL[];
+  if (q.length > 0) {
+    const body = likeBody(q);
+    const pattern = `%${body}%`;
+    const tsq = sql`websearch_to_tsquery('simple', ${q})`;
+    conditions.push(sql`(${bookItems.name} ILIKE ${pattern} OR ${bookItems.tsv} @@ ${tsq})`);
+    const tier = sql`CASE WHEN lower(${bookItems.name}) = lower(${q}) THEN 0 WHEN lower(${bookItems.name}) LIKE lower(${`${body}%`}) THEN 1 WHEN ${bookItems.name} ILIKE ${pattern} THEN 2 ELSE 3 END`;
+    order = [tier, sql`length(${bookItems.name})`, sql`${bookItems.name}`, sql`${books.code}`, sql`${bookItems.printedPage}`, sql`${bookItems.id}`];
+  } else {
+    order = [sql`lower(${bookItems.name})`, sql`${bookItems.name}`, sql`${books.code}`, sql`${bookItems.printedPage}`, sql`${bookItems.id}`];
+  }
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+  const offset = Math.max(0, Math.floor(opts.offset ?? 0));
+  const rows = await db
+    .select({ ...ITEM_COLUMNS, total: sql<number>`count(*) over ()` })
     .from(bookItems)
     .innerJoin(books, eq(bookItems.bookId, books.id))
-    .where(and(...conditions))
-    .orderBy(tier, sql`length(${bookItems.name})`, bookItems.name, books.code)
-    .limit(opts.limit ?? 20);
+    .where(where)
+    .orderBy(...order)
+    .limit(opts.limit ?? 20)
+    .offset(offset);
+  if (rows.length > 0) {
+    const total = Number(rows[0]!.total);
+    const hits: BookItemHit[] = rows.map((r) => ({
+      id: r.id,
+      bookId: r.bookId,
+      bookCode: r.bookCode,
+      printedPage: r.printedPage,
+      kind: r.kind,
+      category: r.category,
+      name: r.name,
+      stats: r.stats,
+      avail: r.avail,
+      cost: r.cost,
+      costText: r.costText,
+    }));
+    return { hits, total };
+  }
+  if (offset === 0) return { hits: [], total: 0 };
+  const counted = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(bookItems)
+    .innerJoin(books, eq(bookItems.bookId, books.id))
+    .where(where);
+  return { hits: [], total: Number(counted[0]?.n ?? 0) };
 }
 
 /** How many items of each kind each book holds — the shelf's "what was read". */

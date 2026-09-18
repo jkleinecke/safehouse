@@ -74,7 +74,8 @@ export default function CampaignLayout() {
         <header className="sticky top-0 z-40 flex items-center gap-3 border-b border-edge bg-deck/95 px-4 py-2.5 backdrop-blur">
           <div className="min-w-0 flex-1">
             <h1 className="truncate text-sm font-semibold tracking-wide">{name}</h1>
-            <div className="mono-label text-faint">
+            {/* One line at phone width: a wrapped date made the header two rows taller than it needs. */}
+            <div className="mono-label truncate text-faint">
               {campaign?.ingameDate ?? '2076-??-??'}
             </div>
           </div>

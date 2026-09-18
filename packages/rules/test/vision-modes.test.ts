@@ -15,13 +15,22 @@ const sheet = ({ metatype = 'human', ...rest }: Partial<Omit<Like, 'identity'>> 
 });
 
 describe('metatype vision', () => {
-  it('follows the metatype table', () => {
+  it('follows the metatype table — dwarfs and trolls thermographic, elves and orks low-light (SR5 p.66)', () => {
     expect(metatypeVision('troll')).toEqual(['thermographic']);
     expect(metatypeVision('Elf')).toEqual(['lowlight']);
-    expect(metatypeVision('dwarf')).toEqual(['lowlight']);
+    expect(metatypeVision('dwarf')).toEqual(['thermographic']);
     expect(metatypeVision('ork')).toEqual(['lowlight']);
+    expect(metatypeVision('orc')).toEqual(['lowlight']);
     expect(metatypeVision('human')).toEqual([]);
     expect(metatypeVision(undefined)).toEqual([]);
+    expect(metatypeVision('Street Legend')).toEqual([]);
+  });
+
+  it('gives Run Faster metavariants and metasapients the eyes their rows list (RF p.104–105)', () => {
+    expect(metatypeVision('gnome')).toEqual(['thermographic']);
+    expect(metatypeVision('ogre')).toEqual(['lowlight']);
+    expect(metatypeVision('centaur')).toEqual(['lowlight', 'thermographic']);
+    expect(metatypeVision('pixie')).toEqual(['astral']);
   });
 });
 

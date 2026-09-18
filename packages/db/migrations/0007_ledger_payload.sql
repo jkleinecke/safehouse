@@ -1,0 +1,15 @@
+-- FR3.7 — career-mode advancement (docs/CHARGEN.md §8.5 "Advancement").
+--
+-- One nullable column, so this is safe to apply to a live campaign
+-- mid-season: every entry already in the ledger reads `payload` as null and
+-- means exactly what it meant before.
+--
+-- A Karma spend that improves a runner is asked for as a pending ledger entry
+-- and settled where every other spend is settled — but approving it must also
+-- change the sheet, so the entry carries the change it pays for: the spend,
+-- the price and the training time quoted, and its label. The ledger approve
+-- route applies it as a revision in the same transaction that approves the
+-- entry; rejecting the entry leaves it unapplied for good. Nothing else reads
+-- the column, and an entry's payload is never edited after it is written,
+-- like its delta and reason.
+ALTER TABLE "ledger_entries" ADD COLUMN IF NOT EXISTS "payload" jsonb;

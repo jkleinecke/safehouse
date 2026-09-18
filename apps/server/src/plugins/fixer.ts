@@ -26,6 +26,7 @@ import {
   resolveLlmConfig,
 } from '../fixer/providers.js';
 import { cancelRun, currentRun, withRun } from '../fixer/activity.js';
+import { runningBuildDrafts } from '../fixer/build-draft.js';
 import { runFixerChat, runNpcConverse } from '../fixer/agent.js';
 import { listConversations, loadConversation } from '../fixer/conversations.js';
 import { acceptDraft, listDrafts, rejectDraft } from '../fixer/drafts.js';
@@ -275,6 +276,13 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
       maxToolRounds: 8,
       /** What the AI is doing for this campaign right now, if anything. */
       activity: currentRun(campaignId),
+      /**
+       * Runner drafts holding a slot (fixer/build-draft.ts). They are not in
+       * `activity` on purpose — a player's draft is not the GM's run — but the
+       * GM is the only person who can free somebody else's slot, and cancelling
+       * one takes the build id.
+       */
+      drafts: runningBuildDrafts(campaignId),
       vision: {
         supported: vision.supported,
         via: vision.via,

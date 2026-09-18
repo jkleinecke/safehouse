@@ -6,13 +6,14 @@
  */
 import { queryOptions, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  CharacterBuildSummary,
   DerivedCharacter,
   LedgerEntry,
   Modifier,
   Scene,
   SheetV1,
 } from '@safehouse/contracts';
-import { SheetV1Schema } from '@safehouse/contracts';
+import { CharacterBuildSummarySchema, SheetV1Schema } from '@safehouse/contracts';
 import { deriveCharacter, environment } from '@safehouse/rules';
 import { api, apiDelete, apiGet, apiPatch, apiPost } from '../../api/client.js';
 import { useLiveStore } from '../../live/store.js';
@@ -51,6 +52,13 @@ export interface CharacterRecord {
   edgeBurned: number;
   balances: { karma: number; nuyen: number };
   sheetVersion?: number;
+  /**
+   * How the native builder made this runner (FR3.9 §4.1) — what the header
+   * says as "built with Priority B/A/E/C/D". Null for an imported or
+   * hand-typed sheet, and for any record whose summary does not read;
+   * optional so a record assembled by hand (a preview, a test) reads the same.
+   */
+  build?: CharacterBuildSummary | null;
 }
 
 /** `GET /api/characters/:id` → the record the sheet renders (LIVE-1: this is
@@ -73,6 +81,8 @@ export function normalizeCharacter(raw: unknown): CharacterRecord {
     edgeBurned: num(play['edgeBurned']),
     balances: { karma: num(balances['karma']), nuyen: num(balances['nuyen']) },
     sheetVersion: typeof r['sheetVersion'] === 'number' ? r['sheetVersion'] : undefined,
+    // A courtesy line in the header, never a reason the sheet fails to render.
+    build: CharacterBuildSummarySchema.safeParse(r['build']).data ?? null,
   };
 }
 

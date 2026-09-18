@@ -134,3 +134,17 @@ describe('a 401 retires the token that earned it', () => {
     expect(listSessions()).toEqual([]);
   });
 });
+
+describe('keepalive', () => {
+  it('asks fetch to outlive the page only when the caller does', async () => {
+    const seen: RequestInit[] = [];
+    vi.stubGlobal('fetch', (_path: string, init: RequestInit) => {
+      seen.push(init);
+      return Promise.resolve(reply(200, { ok: true }));
+    });
+    await api('/api/builds/b1', { method: 'PATCH', body: { build: {} }, keepalive: true });
+    await api('/api/builds/b1');
+    expect(seen[0]!.keepalive).toBe(true);
+    expect(seen[1]).not.toHaveProperty('keepalive');
+  });
+});

@@ -6,10 +6,15 @@
  * which they previously had no route to at all). A GM gets sent on to the
  * console rather than a shorter version of the player's menu, because the GM's
  * "where to?" is answered by `GM_NAV`, not by four cards.
+ *
+ * A player also gets the builder's card (FR3.9): resume a runner in the
+ * making, or start one — so a phone with no sheet is no longer told only to
+ * wait for the GM.
  */
 import { Link, useParams } from 'react-router-dom';
 import { useMyCharacterId } from '../../api/campaigns.js';
 import { getSession } from '../../api/session.js';
+import { PlayerBuildsCard } from '../../features/build/entry.js';
 import { PLAYER_NAV } from './gmNav.js';
 
 function Card({ to, title, blurb }: { to: string; title: string; blurb: string }) {
@@ -60,6 +65,8 @@ export default function CampaignHome() {
           </div>
         )
       )}
+
+      {campaignId && <PlayerBuildsCard campaignId={campaignId} hasCharacter={Boolean(myCharacterId)} />}
 
       {PLAYER_NAV.map((entry) => (
         <Card key={entry.key} to={`${c}${entry.to}`} title={entry.label} blurb={entry.blurb} />

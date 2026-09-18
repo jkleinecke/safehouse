@@ -38,6 +38,7 @@ import type {
   SheetSkill,
   Visibility,
 } from '@safehouse/contracts';
+import { skillPoolKey } from '@safehouse/rules';
 import type { PendingRollMod } from '../../live/rollHandoff.js';
 import { chipEntries, chipSum, clampPool, type RollChip } from './lib.js';
 
@@ -115,9 +116,11 @@ export const SPEC_BONUS = 2;
  * and any sustained spells into it. Nothing here re-applies them.
  */
 export function skillRollConfig(skill: SheetSkill, pool: PoolBreakdown): RollConfig {
-  const ref = `skill.${skill.id}`;
+  // Keyed by the skill AND its target, so Exotic Ranged (dart pistol) and
+  // Exotic Ranged (blowgun) recompute against their own row server-side.
+  const ref = skillPoolKey(skill.id, skill.target);
   return {
-    title: skill.id,
+    title: skill.target ? `${skill.id} (${skill.target})` : skill.id,
     baseTotal: pool.total,
     baseBreakdown: pool.breakdown,
     ...(pool.limit ? { limit: pool.limit } : {}),

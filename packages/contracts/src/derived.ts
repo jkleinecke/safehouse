@@ -39,6 +39,22 @@ export const InitiativeLineSchema = z.object({
 });
 export type InitiativeLine = z.infer<typeof InitiativeLineSchema>;
 
+/**
+ * A technomancer's living persona (SR5 p.101, p.250): the Matrix attributes
+ * their own mind supplies where everyone else needs a device — Attack from
+ * Charisma, Sleaze from Intuition, Data Processing from Logic, Firewall from
+ * Willpower and Device Rating from Resonance. Each carries its receipt, so an
+ * echo that raises one (SR5 p.257) reads as a line rather than a mystery.
+ */
+export const LivingPersonaSchema = z.object({
+  attack: DerivedValueSchema,
+  sleaze: DerivedValueSchema,
+  dataProcessing: DerivedValueSchema,
+  firewall: DerivedValueSchema,
+  deviceRating: DerivedValueSchema,
+});
+export type LivingPersona = z.infer<typeof LivingPersonaSchema>;
+
 /** Output of the rules engine's deriveCharacter (§7.2, BUILD_CONVENTIONS). */
 export const DerivedCharacterSchema = z.object({
   attributes: z.record(z.string(), DerivedValueSchema),
@@ -67,6 +83,12 @@ export const DerivedCharacterSchema = z.object({
   }),
   /** Keyed pools, e.g. 'skill.perception', 'weapon.<name>', 'defense', 'soak'. */
   pools: z.record(z.string(), PoolBreakdownSchema),
+  /**
+   * The living persona for anyone with Resonance (or an awakening block that
+   * says technomancer); null for everyone else. Defaults to null so derived
+   * JSON cached before the field existed still parses.
+   */
+  livingPersona: LivingPersonaSchema.nullable().default(null),
   /** Current wound modifier (negative), when wounds were supplied to derivation. */
   woundModifier: DerivedValueSchema.optional(),
 });

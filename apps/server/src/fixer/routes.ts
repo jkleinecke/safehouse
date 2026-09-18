@@ -12,9 +12,17 @@
  * status code rather than pretending, and `GET /api/fixer/status` publishes the
  * same capability so the button can be hidden before it is ever pressed.
  *
- * Everything is GM-only (§13). The two write-shaped routes produce
+ * Everything is GM-only (§13) but one lane: the runner draft
+ * (`/api/builds/:id/propose`, fixer/build-draft.ts), which a build's owner
+ * reaches too, when the campaign turns it on. The two write-shaped routes produce
  * `ai_generations` drafts exactly like the tool path — nothing they return has
  * touched a token or a scene.
+ *
+ * Being the one player-reachable lane, that route is also the one place where
+ * an error envelope has two audiences. A failure from the box names the
+ * endpoint and quotes the provider, which is what the GM needs and is more
+ * than a player should learn about the table's network, so the answer is
+ * re-told for a non-GM (`sanitizeAiError`) with the status and code intact.
  *
  * Registered from `src/plugins/fixer.ts` (two lines: the import and one
  * `app.register`). That registration is load-bearing: these routes are the
@@ -25,13 +33,23 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 import { campaigns, type Db } from '@safehouse/db';
-import { assertCampaign, httpError, requireRole } from '../services/auth.js';
+import { assertCampaign, httpError, requireAuth, requireRole } from '../services/auth.js';
+import { chargenSettingsOf, requireBuildFor } from '../services/builds.js';
 import { withRun } from './activity.js';
 import { ArchitectOutlineSchema, BuildSelectionSchema, buildArchitect, outlineArchitect } from './architect.js';
+import {
+  cancelBuildDraft,
+  draftAvailability,
+  draftBookIds,
+  draftRefusal,
+  proposeCharBuild,
+  sanitizeAiError,
+  withBuildDraft,
+} from './build-draft.js';
 import { floorPlanJsonSchema, proposeFloor } from './floor-plan.js';
 import { layoutJsonSchema, LayoutDoorSchema, LayoutRoomSchema } from './geometry.js';
 import { resolveLlmConfig } from './providers.js';
-import { persistTurnUsage } from './usage.js';
+import { persistTurnUsage, type UsageKind, type UsageRecord } from './usage.js';
 import { emitFogProximity, fogProximityState } from './proximity.js';
 import { identifyTokensState } from './token-id.js';
 import { FIXER_TOOLS, TOOLS_BY_NAME, toolParameters } from './tools.js';
@@ -88,6 +106,11 @@ const ArchitectBuildBody = z.object({
   slot: z.enum(['primary', 'fast']).optional(),
 });
 
+/** A player's description of their runner — data for the model, never instructions (fixer/build-draft.ts). */
+const ProposeBuildBody = z.object({
+  prompt: z.string().trim().min(3).max(2000),
+});
+
 const ProximityQuery = z.object({
   campaignId: z.string().optional(),
   sceneId: z.string().optional(),
@@ -108,6 +131,28 @@ function parse<T extends z.ZodType>(schema: T, value: unknown): z.output<T> {
     throw httpError(400, 'bad_request', 'invalid request', parsed.error.issues);
   }
   return parsed.data;
+}
+
+/**
+ * One durable row per turn the box answered (FR12.15).
+ *
+ * Per turn rather than per draft, and on the failure path as well as the happy
+ * one: the repair turn's tokens were spent even when the repair missed, and a
+ * meter that only counts the drafts that worked is a meter a GM cannot use to
+ * answer "what has the box been doing?". A row that will not insert is never
+ * worth the caller's answer (`persistTurnUsage` resolves either way).
+ */
+async function meterDraftTurns(
+  db: Db,
+  campaignId: string,
+  turns: readonly UsageRecord[],
+  kind: UsageKind,
+): Promise<void> {
+  for (const turn of turns) {
+    const { promptTokens, completionTokens, totalTokens } = turn.usage;
+    if (promptTokens + completionTokens + totalTokens <= 0) continue;
+    await persistTurnUsage(db, { campaignId, model: turn.model, usage: turn.usage, latencyMs: turn.latencyMs, kind });
+  }
 }
 
 /** GM-only, bound to this campaign — only the GM ever drives the Fixer. */
@@ -338,6 +383,93 @@ export default async function fixerToolRoutes(app: FastifyInstance): Promise<voi
       });
     }
     return reply.status(201).send(result);
+  });
+
+  // --- FR3.9 §8.5: the Fixer drafts a runner (owner or GM) ------------------
+  /**
+   * The build's owner or the GM of its campaign — the builds service's own
+   * rule, so an observer, a display or another player is refused exactly as
+   * opening the build refuses them, a build in another campaign is a 404, and
+   * so is a malformed id.
+   */
+  async function draftTarget(req: FastifyRequest) {
+    const auth = requireAuth(req);
+    const id = (req.params as { id: string }).id;
+    // Access on the row's columns first, the record parsed after: an
+    // unreadable row must not answer a device that may not open the build.
+    const rec = await requireBuildFor(app.db, auth, id, {
+      onUnreadable: (issues) =>
+        req.log.warn({ buildId: id, issues: issues.slice(0, 5) }, 'builds: stored record failed validation'),
+    });
+    const settings = await campaignSettings(app.db, rec.campaignId);
+    const chargen = chargenSettingsOf(settings);
+    const availability = draftAvailability({
+      aiDrafts: chargen.aiDrafts,
+      aiConfigured: resolveLlmConfig(settings) !== null,
+      buildId: rec.id,
+    });
+    return { auth, rec, settings, chargen, availability };
+  }
+
+  /** Whether the Draft button works for this build, and why not — never the provider, model or key. */
+  app.get('/api/builds/:id/propose', async (req, reply) => {
+    const { availability } = await draftTarget(req);
+    return reply.send(availability);
+  });
+
+  /**
+   * A proposed build from a description. Never written: the answer is the
+   * record the player may accept, its issues, and what could not be found.
+   */
+  app.post('/api/builds/:id/propose', async (req, reply) => {
+    const { auth, rec, settings, chargen, availability } = await draftTarget(req);
+    if (availability.reason) throw draftRefusal(availability.reason);
+    if (rec.state !== 'draft' && rec.state !== 'returned') {
+      throw httpError(409, 'build_state', `a ${rec.state} build cannot be redrafted`, { state: rec.state });
+    }
+    const body = parse(ProposeBuildBody, req.body);
+    const config = resolveLlmConfig(settings);
+    const bookIds = await draftBookIds(app.db, {
+      campaignId: rec.campaignId,
+      // The GM's own runner may draw on the GM's books; a player's never does.
+      sharedOnly: !(auth.role === 'gm' && rec.ownerUserId === auth.userId),
+      allowed: chargen.books,
+    });
+    // Every turn the box answered, whether or not the draft survived what was
+    // in it: the meter reports the hardware, so a failed draft counts too
+    // (fixer/usage.ts, `onTurn` in fixer/build-draft.ts).
+    const turns: UsageRecord[] = [];
+    let result: Awaited<ReturnType<typeof proposeCharBuild>>;
+    try {
+      result = await withBuildDraft(
+        { buildId: rec.id, campaignId: rec.campaignId, userId: auth.userId },
+        (signal) =>
+          proposeCharBuild(app.db, config, {
+            campaignId: rec.campaignId,
+            base: rec.build,
+            settings: chargen,
+            bookIds,
+            prompt: body.prompt,
+            signal,
+            onTurn: (record) => turns.push(record),
+          }),
+      );
+    } catch (err) {
+      await meterDraftTurns(app.db, rec.campaignId, turns, 'draft:failed');
+      // The box's own words go to the log and to the GM, never to a player
+      // (`sanitizeAiError`): this is the one Fixer route a non-GM reaches.
+      const told = sanitizeAiError(err, { forGm: auth.role === 'gm' });
+      if (told !== err) req.log.warn({ err }, 'a draft failed for a player; the endpoint and the provider text were kept back');
+      throw told;
+    }
+    await meterDraftTurns(app.db, rec.campaignId, turns, 'draft');
+    return reply.send(result);
+  });
+
+  /** Stop this build's draft; the running request answers `ai_cancelled`. */
+  app.delete('/api/builds/:id/propose', async (req, reply) => {
+    const { rec } = await draftTarget(req);
+    return reply.send({ cancelled: cancelBuildDraft(rec.id) });
   });
 
   // --- FR12.8: proximity prompts -------------------------------------------

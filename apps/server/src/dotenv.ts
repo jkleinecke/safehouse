@@ -13,6 +13,13 @@
  * Deliberately tiny and dependency-free, and deliberately NON-OVERRIDING: a
  * variable already present in the environment always wins, so compose, CI and
  * a one-off `LLM_BASE_URL=… pnpm dev:server` all keep priority over the file.
+ *
+ * Non-overriding is not enough for a process that must see NONE of the file:
+ * the e2e harness deletes `LLM_BASE_URL` from its server's environment, and an
+ * unset variable is exactly what the loader fills — so the developer's own
+ * model address leaked into the test world ("running on the server's .env").
+ * `SAFEHOUSE_NO_DOTENV=1` switches the file off for that process: nothing is
+ * read, nothing is filled, and `envFileFor` names no file.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -28,6 +35,15 @@ export const ENV_FILE = fileURLToPath(new URL('../../../.env', import.meta.url))
 export const RETIRED_ENV_FILES: readonly string[] = [
   fileURLToPath(new URL('../../../infra/.env', import.meta.url)),
 ];
+
+/** The variable that switches the env file off for one process (the e2e harness sets it). */
+export const NO_DOTENV_FLAG = 'SAFEHOUSE_NO_DOTENV';
+
+/** Whether this process was told to read no env file: `SAFEHOUSE_NO_DOTENV` set to `1` or `true`. */
+export function dotenvDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = env[NO_DOTENV_FLAG]?.trim().toLowerCase();
+  return value === '1' || value === 'true';
+}
 
 /** Parse `KEY=value` lines: `#` comments, blanks, `export ` prefixes, quotes. */
 export function parseEnvFile(text: string): Record<string, string> {
@@ -55,9 +71,9 @@ export function retiredEnvFiles(files: readonly string[] = RETIRED_ENV_FILES): s
   return files.filter((f) => existsSync(f));
 }
 
-/** The env file, if it defines `key`. Null means the process environment did. */
+/** The env file, if it defines `key`. Null means the process environment did (or the file is switched off). */
 export function envFileFor(key: string, file: string = ENV_FILE): string | null {
-  if (!existsSync(file)) return null;
+  if (dotenvDisabled() || !existsSync(file)) return null;
   try {
     return key in parseEnvFile(readFileSync(file, 'utf8')) ? file : null;
   } catch {
@@ -75,10 +91,11 @@ export function redactUrl(url: string): string {
 
 /**
  * Fill in anything the environment does not already define. Returns the keys
- * it actually set, so a caller can log them; a missing file is not an error.
+ * it actually set, so a caller can log them; a missing file is not an error,
+ * and `SAFEHOUSE_NO_DOTENV=1` reads nothing at all.
  */
 export function loadEnvFile(file: string = ENV_FILE): string[] {
-  if (!existsSync(file)) return [];
+  if (dotenvDisabled() || !existsSync(file)) return [];
   let parsed: Record<string, string>;
   try {
     parsed = parseEnvFile(readFileSync(file, 'utf8'));

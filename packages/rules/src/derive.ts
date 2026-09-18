@@ -2,15 +2,16 @@ import type {
   DerivedCharacter,
   DerivedValue,
   InitiativeLine,
+  LivingPersona,
   Modifier,
   ProvenanceEntry,
   SheetV1,
 } from '@safehouse/contracts';
-import { applyPipeline, baseEntry } from './derive-pipeline.js';
+import { AUGMENTATION_BONUS_CAP, applyPipeline, baseEntry } from './derive-pipeline.js';
 import { buildPools } from './derive-pools.js';
 
 export * from './derive-pipeline.js';
-export { buildPools, deriveArmor, skillLimitKind } from './derive-pools.js';
+export { buildPools, deriveArmor, skillLimitKind, skillPoolKey } from './derive-pools.js';
 
 export interface DeriveContext {
   /** Scene/range/situational modifiers active for this derivation (FR9.11). */
@@ -80,6 +81,57 @@ interface InitLineSpec {
 }
 
 const INITIATIVE_DICE_CAP = 5;
+
+/**
+ * Which attribute feeds each living persona attribute (SR5 p.101, p.250),
+ * and the modifier target an echo or a GM uses to move it.
+ */
+const LIVING_PERSONA_SOURCES = [
+  { key: 'attack', attr: 'cha' },
+  { key: 'sleaze', attr: 'int' },
+  { key: 'dataProcessing', attr: 'log' },
+  { key: 'firewall', attr: 'wil' },
+  { key: 'deviceRating', attr: 'res' },
+] as const satisfies readonly { key: keyof LivingPersona; attr: string }[];
+
+/**
+ * Whether the sheet belongs to someone with a living persona: anyone with
+ * Resonance, natural or as derived, or an awakening block that says
+ * technomancer. Resonance is the test that reaches imported sheets, whose
+ * awakening block defaults to mundane; the block is what keeps a persona on
+ * a technomancer whose Resonance has burned to 0 (Device Rating 0, with the
+ * Essence loss on Resonance's own receipt, rather than a persona that
+ * silently vanished).
+ */
+function hasLivingPersona(sheet: SheetV1, derivedRes: number): boolean {
+  // `awakening` is optional-chained because it is the newest block on the
+  // sheet; a caller holding pre-migration JSON typed as SheetV1 must not crash.
+  return sheet.awakening?.kind === 'technomancer' || sheet.attributes.res > 0 || derivedRes > 0;
+}
+
+/**
+ * The living persona, each attribute read from the *derived* mental
+ * attribute (an augmented Logic is a faster persona) and piped through
+ * `persona.<key>` so echoes and overrides land with provenance.
+ */
+function deriveLivingPersona(
+  attributes: Readonly<Record<string, DerivedValue>>,
+  mods: readonly Modifier[],
+): LivingPersona {
+  const persona = {} as Record<keyof LivingPersona, DerivedValue>;
+  for (const { key, attr } of LIVING_PERSONA_SOURCES) {
+    const value = attributes[attr]?.value ?? 0;
+    const res = applyPipeline(
+      value,
+      [{ label: attr.toUpperCase(), value, source: 'attribute' }],
+      [`persona.${key}`],
+      mods,
+      { floorZero: true },
+    );
+    persona[key] = dv(res.value, res.breakdown);
+  }
+  return persona;
+}
 
 /**
  * One initiative variant. Generic `initiative.score` / `initiative.dice`
@@ -195,11 +247,14 @@ export function deriveCharacter(sheet: SheetV1, ctx?: DeriveContext): DerivedCha
   });
 
   // --- Attributes ---
+  // Mental and physical attributes hold the +4 augmentation bonus cap
+  // (SR5 p.94); Essence, Magic, Resonance and Edge are not augmented that way.
   const attributes: Record<string, DerivedValue> = {};
   for (const code of CORE_ATTRS) {
     const base = sheet.attributes[code];
     const res = applyPipeline(base, [baseEntry(code.toUpperCase(), base)], [`attr.${code}`], mods, {
       floorZero: true,
+      augmentationCap: AUGMENTATION_BONUS_CAP,
     });
     attributes[code] = dv(res.value, res.breakdown);
   }
@@ -271,16 +326,27 @@ export function deriveCharacter(sheet: SheetV1, ctx?: DeriveContext): DerivedCha
     monitors[spec.key] = dv(res.value, res.breakdown);
   }
 
+  // --- Living persona (SR5 p.101, p.250) ---
+  const livingPersona = hasLivingPersona(sheet, a('res'))
+    ? deriveLivingPersona(attributes, mods)
+    : null;
+
   // --- Initiative variants (§10.2, FR4.2) ---
+  // VR initiative is Data Processing + INT. A deck supplies the Data
+  // Processing when there is one; a technomancer without a deck brings their
+  // own through the living persona; anyone else jacks in at 0.
   const rea = a('rea');
   const int = a('int');
-  const dp = sheet.matrix.deck?.asdf[2] ?? 0;
+  const deckDp = sheet.matrix.deck?.asdf[2];
+  const dp = deckDp ?? livingPersona?.dataProcessing.value ?? 0;
+  const dpLabel =
+    deckDp === undefined && livingPersona ? 'Data Processing (living persona)' : 'Data Processing';
   const meat: ProvenanceEntry[] = [
     { label: 'REA', value: rea, source: 'attribute' },
     { label: 'INT', value: int, source: 'attribute' },
   ];
   const dpInt: ProvenanceEntry[] = [
-    { label: 'Data Processing', value: dp, source: 'attribute' },
+    { label: dpLabel, value: dp, source: 'attribute' },
     { label: 'INT', value: int, source: 'attribute' },
   ];
   const initiative = {
@@ -339,6 +405,7 @@ export function deriveCharacter(sheet: SheetV1, ctx?: DeriveContext): DerivedCha
     initiative,
     movement: { walk: dv(walk.value, walk.breakdown), run: dv(run.value, run.breakdown) },
     pools,
+    livingPersona,
     ...(woundModifier ? { woundModifier } : {}),
   };
 }

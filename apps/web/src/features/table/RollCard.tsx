@@ -1,9 +1,13 @@
 /**
  * One roll in the session log (M2): dice faces, hits vs limit, glitch flair,
  * expandable provenance (FR2.6), edge/burn callouts (FR2.3), visibility chip.
+ *
+ * A starting-nuyen roll (a build's approval, FR3.9) is summed, not counted
+ * for hits: its card shows the dice total × the lifestyle's multiplier = the
+ * nuyen, where it once read "0 hits" (`startingNuyenOf`).
  */
 import type { RollView } from './views.js';
-import { edgeLabel } from './views.js';
+import { edgeLabel, startingNuyenOf } from './views.js';
 import DiceFaces from './DiceFaces.js';
 
 function timeOf(ts: string): string {
@@ -16,6 +20,7 @@ function timeOf(ts: string): string {
 export default function RollCard({ roll }: { roll: RollView }) {
   const overLimit = roll.limit && roll.hits > roll.limitedHits;
   const glitched = roll.glitch !== 'none';
+  const nuyenRoll = startingNuyenOf(roll);
 
   return (
     <article
@@ -56,29 +61,38 @@ export default function RollCard({ roll }: { roll: RollView }) {
         <DiceFaces faces={roll.faces} exploded={roll.exploded} className="mt-2" />
       )}
 
-      <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className="font-label text-lg font-bold text-cyan">
-          {roll.limitedHits} {roll.limitedHits === 1 ? 'hit' : 'hits'}
-        </span>
-        {overLimit && (
-          <span className="text-sm text-faint line-through decoration-danger/60">{roll.hits} rolled</span>
-        )}
-        {roll.limit && (
-          <span className="mono-label">
-            limit {roll.limit.kind} {roll.limit.value}
+      {nuyenRoll ? (
+        <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1" data-testid="roll-starting-nuyen">
+          <span className="mono-label">starting nuyen</span>
+          <span className="font-label text-lg font-bold text-cyan">
+            {nuyenRoll.sum} × {nuyenRoll.multiplier.toLocaleString('en-US')} = {nuyenRoll.nuyen.toLocaleString('en-US')}¥
           </span>
-        )}
-        {roll.ones > 0 && <span className="mono-label text-danger/80">{roll.ones} ones</span>}
-        {glitched && (
-          <span
-            className={`font-label text-sm font-bold uppercase tracking-widest ${
-              roll.glitch === 'critical' ? 'text-danger' : 'text-warn'
-            }`}
-          >
-            {roll.glitch === 'critical' ? '☠ CRITICAL GLITCH' : '⚠ GLITCH'}
+        </div>
+      ) : (
+        <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <span className="font-label text-lg font-bold text-cyan">
+            {roll.limitedHits} {roll.limitedHits === 1 ? 'hit' : 'hits'}
           </span>
-        )}
-      </div>
+          {overLimit && (
+            <span className="text-sm text-faint line-through decoration-danger/60">{roll.hits} rolled</span>
+          )}
+          {roll.limit && (
+            <span className="mono-label">
+              limit {roll.limit.kind} {roll.limit.value}
+            </span>
+          )}
+          {roll.ones > 0 && <span className="mono-label text-danger/80">{roll.ones} ones</span>}
+          {glitched && (
+            <span
+              className={`font-label text-sm font-bold uppercase tracking-widest ${
+                roll.glitch === 'critical' ? 'text-danger' : 'text-warn'
+              }`}
+            >
+              {roll.glitch === 'critical' ? '☠ CRITICAL GLITCH' : '⚠ GLITCH'}
+            </span>
+          )}
+        </div>
+      )}
 
       {roll.breakdown.length > 0 && (
         <details className="mt-2">

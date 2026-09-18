@@ -9,6 +9,7 @@
  * are still accepted so an older stored event still renders.
  */
 import type { ProvenanceEntry, Visibility, WsEvent } from '@safehouse/contracts';
+import { formatNuyen } from '../sheet/lib.js';
 
 // ---------------------------------------------------------------------------
 // Tolerant field readers
@@ -134,6 +135,32 @@ export function parseRoll(event: WsEvent): RollView | null {
   };
 }
 
+/**
+ * A roll that is not a success test: the starting-nuyen roll a build's
+ * approval makes on the record (FR3.9, docs/CHARGEN.md §8.5,
+ * `request.meta.chargen === 'startingNuyen'`). Its dice are summed and
+ * multiplied by the lifestyle's figure, never counted for hits, so the card
+ * shows `12 × 60 = 720¥` — read as "0 hits", the log told a GM the runner
+ * started with nothing.
+ */
+export interface StartingNuyenView {
+  /** The dice total. */
+  sum: number;
+  multiplier: number;
+  /** sum × multiplier: the rolled part, carry-over not included. */
+  nuyen: number;
+}
+
+/** The nuyen a starting-nuyen roll came to, or null for any other roll. */
+export function startingNuyenOf(roll: Pick<RollView, 'meta' | 'faces'>): StartingNuyenView | null {
+  if (roll.meta['chargen'] !== 'startingNuyen') return null;
+  const multiplier = num(roll.meta['multiplier']);
+  if (multiplier === undefined) return null;
+  const sum = num(roll.meta['sum']) ?? roll.faces.reduce((a, b) => a + b, 0);
+  const nuyen = num(roll.meta['nuyen']) ?? sum * multiplier;
+  return { sum, multiplier, nuyen };
+}
+
 // ---------------------------------------------------------------------------
 // The interleaved session log (FR2.9)
 // ---------------------------------------------------------------------------
@@ -163,6 +190,19 @@ export type LogItem =
       currency?: string;
       delta?: number;
     };
+
+/**
+ * A ledger delta as the sheet's Ledger tab writes it: nuyen through the app's
+ * own formatter (`formatNuyen`, "+5,000¥", "−2,500¥"), Karma signed ("+7
+ * karma"), anything else signed with its currency. Grouped, because "+5000
+ * nuyen" beside a "5,000¥" everywhere else read as a different number.
+ */
+export function ledgerAmount(delta: number | undefined, currency: string | undefined): string {
+  if (delta === undefined) return `? ${currency ?? ''}`.trim();
+  const sign = delta < 0 ? '−' : '+';
+  if (currency === 'nuyen') return `${sign}${formatNuyen(Math.abs(delta))}`;
+  return `${sign}${Math.abs(delta).toLocaleString('en-US')} ${currency ?? ''}`.trim();
+}
 
 /** Map one persisted event to a log line; null → not a log-worthy event. */
 export function toLogItem(event: WsEvent): LogItem | null {
@@ -219,13 +259,12 @@ export function toLogItem(event: WsEvent): LogItem | null {
       const delta = num(entry['delta']);
       const reason = str(entry['reason']) ?? '';
       if (currency === undefined && delta === undefined) return null;
-      const sign = delta !== undefined && delta >= 0 ? '+' : '';
       return {
         kind: 'ledger',
         ...base,
         currency,
         delta,
-        text: `${sign}${delta ?? '?'} ${currency ?? ''}${reason ? ` — ${reason}` : ''}`.trim(),
+        text: `${ledgerAmount(delta, currency)}${reason ? ` — ${reason}` : ''}`.trim(),
       };
     }
     default:

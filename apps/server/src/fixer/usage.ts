@@ -104,8 +104,20 @@ export const usageMeter = new UsageMeter();
 // The durable half — `ai_usage`
 // ---------------------------------------------------------------------------
 
-/** What kind of work the tokens bought. Free-form; these are the ones we write. */
-export type UsageKind = 'chat' | 'npc' | 'draft' | 'tool';
+/**
+ * What kind of work the tokens bought. Free-form; these are the ones we write.
+ *
+ * `draft:failed` is the same work that did not land — a turn the box answered
+ * and finished being paid for in seconds and watts, where what came back could
+ * not be used (prose instead of JSON, a schema miss the repair turn could not
+ * fix, an answer cut off at the token limit). It is counted under its own kind
+ * rather than folded into `draft` so the meter reads honestly both ways: the
+ * total is what the hardware did, and the split says how much of it was
+ * wasted — which is exactly the number that tells a GM their model is too
+ * small for the lane, or that somebody is retrying a description that will
+ * never work.
+ */
+export type UsageKind = 'chat' | 'npc' | 'draft' | 'draft:failed' | 'tool';
 
 export interface TurnUsageInput {
   campaignId: string;

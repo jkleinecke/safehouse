@@ -35,6 +35,13 @@ export interface ApiOptions {
    * probe, which refuses on every device that is not the server's own machine.
    */
   keepSessionOn401?: boolean;
+  /**
+   * Let the request outlive the page (`fetch`'s `keepalive`): a save started
+   * as a tab closes still reaches the server. Browsers cap the body of such
+   * requests (64 KB across all of them in flight), so callers only ask for it
+   * with a small body.
+   */
+  keepalive?: boolean;
 }
 
 /**
@@ -102,6 +109,7 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
       headers,
       body,
       signal: opts.signal,
+      ...(opts.keepalive ? { keepalive: true } : {}),
     });
   } catch (err) {
     throw new ApiError(0, 'network_error', err instanceof Error ? err.message : 'Network error');

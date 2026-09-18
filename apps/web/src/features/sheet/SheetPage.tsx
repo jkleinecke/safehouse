@@ -8,10 +8,18 @@
  * reconnect (`HYDRATE_ON_MOUNT`, `useSheetLive`), so a reload mid-session
  * shows the world as it is rather than an empty sheet waiting for the next
  * WebSocket frame.
+ *
+ * The header also carries the career line (FR3.7, FR3.9): how the builder
+ * made this runner, and — for the owner or the GM, never an observer or the
+ * display — Improve with Karma, which is the only thing on this page that
+ * belongs to the builder's chunk (`career.ts` decides both; the panel is
+ * fetched when it is opened).
  */
-import { useCallback, useMemo, useRef, useState, type ReactElement } from 'react';
+import { Suspense, lazy, useCallback, useMemo, useRef, useState, type ReactElement } from 'react';
 import { useParams } from 'react-router-dom';
 import type { SheetV1 } from '@safehouse/contracts';
+import { getSession } from '../../api/session.js';
+import { buildLineOf, canImprove } from './career.js';
 import {
   useCharacter,
   useConditionMutation,
@@ -47,6 +55,15 @@ import LedgerTab from './tabs/LedgerTab.js';
 import MagicTab from './tabs/MagicTab.js';
 import SkillsTab from './tabs/SkillsTab.js';
 import type { TabProps } from './tabs/shared.js';
+
+/**
+ * Improve with Karma (FR3.7, docs/CHARGEN.md §8.5) is the builder's panel: it
+ * spends through the builder's refusing stepper and its kit, so it lives in
+ * the builder's chunk and the sheet reaches it through this one dynamic
+ * `import()`. Nothing of the walkthrough is downloaded until a player opens
+ * it — `router.chunks.test.ts` holds that line.
+ */
+const ImprovePanel = lazy(() => import('../build/advance/ImprovePanel.js'));
 
 function Notice({ title, body }: { title: string; body: string }) {
   return (
@@ -97,6 +114,9 @@ export default function SheetPage() {
   // socket also backfills on reconnect.
   const events = useLiveStore((s) => s.events);
   const [dismissed, setDismissed] = useState<string[]>([]);
+  // Improve with Karma (FR3.7): opened from the header, and only then is the
+  // builder's chunk fetched.
+  const [improving, setImproving] = useState(false);
   const closeCall = useMemo(
     () => findCloseCallOffer(events, characterId, new Set(dismissed)),
     [events, characterId, dismissed],
@@ -221,6 +241,19 @@ export default function SheetPage() {
           overrideFor={overrideFor}
           onCondition={setCondition}
           onEdgeOp={onEdgeOp}
+          buildLine={buildLineOf(character.build)}
+          actions={
+            canImprove(getSession(), character) ? (
+              <button
+                type="button"
+                className="btn shrink-0 px-2.5 py-1 text-xs pointer-coarse:min-h-10"
+                data-testid="sheet-improve"
+                onClick={() => setImproving(true)}
+              >
+                Improve
+              </button>
+            ) : null
+          }
           busy={edgeMutation.isPending}
           edgeActions={{
             combatantId: view.combatantId,
@@ -277,6 +310,18 @@ export default function SheetPage() {
       )}
 
       <TabView {...tabProps} />
+
+      {improving && (
+        <Suspense
+          fallback={
+            <p role="status" className="mono-label p-4 text-center text-faint">
+              opening…
+            </p>
+          }
+        >
+          <ImprovePanel character={character} onClose={() => setImproving(false)} />
+        </Suspense>
+      )}
 
       {pendingRoll && (
         <RollDialog

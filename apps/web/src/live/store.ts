@@ -109,6 +109,35 @@ export interface AiActivityState {
   since: string;
 }
 
+/**
+ * The server's `build.saved` ephemeral (plugins/builds.ts): a build's record
+ * moved — an autosave on some device. Never stored server-side, so it is only
+ * a hint to refetch; `seq` tells two saves of the same build apart.
+ */
+export interface BuildSavedPing {
+  buildId: string;
+  /** The row's `updatedAt` after the save, when the server sent it. */
+  updatedAt: string | null;
+  /** The user whose device saved. */
+  by: string | null;
+  seq: number;
+}
+
+/**
+ * The server's `chargen.updated` ephemeral (plugins/builds.ts): the GM wrote
+ * the campaign's creation rules. Every open builder holds a copy of them — the
+ * level's caps, the priority table, the books its catalogue searches are
+ * scoped by — so this is the hint to refetch them. `seq` tells two writes
+ * apart, since the payload of a second one can be identical.
+ */
+export interface ChargenUpdatedPing {
+  /** The level and printing now in force, for a device showing them before its refetch lands. */
+  level: string | null;
+  table: string | null;
+  by: string | null;
+  seq: number;
+}
+
 export interface LiveState {
   status: SocketStatus;
   /** Highest persisted event id seen — sent on reconnect for gap replay. */
@@ -125,6 +154,10 @@ export interface LiveState {
   lastPing: PingMarker | null;
   fixerStream: FixerChunk[];
   aiActivity: AiActivityState | null;
+  /** The last `build.saved` heard (FR3.9): an open build on another device refetches on it. */
+  buildSaved: BuildSavedPing | null;
+  /** The last `chargen.updated` heard (FR3.9): the campaign's creation rules moved. */
+  chargenUpdated: ChargenUpdatedPing | null;
 
   /** Live-mode readout from `GET /api/campaigns/:id/live` (FR6.2). */
   activeSessionId: string | null;
@@ -179,6 +212,8 @@ const initialState = {
   lastPing: null as PingMarker | null,
   fixerStream: [] as FixerChunk[],
   aiActivity: null as AiActivityState | null,
+  buildSaved: null as BuildSavedPing | null,
+  chargenUpdated: null as ChargenUpdatedPing | null,
   activeSessionId: null as string | null,
   sessionLive: false,
   connectedCount: 0,
@@ -377,6 +412,28 @@ export const useLiveStore = create<LiveState>()((set, get) => ({
       } else {
         set({ aiActivity: null });
       }
+      return;
+    }
+
+    if (msg.type === 'build.saved') {
+      const buildId = payload['buildId'];
+      if (typeof buildId !== 'string') return;
+      const updatedAt = typeof payload['updatedAt'] === 'string' ? payload['updatedAt'] : null;
+      const by = typeof payload['by'] === 'string' ? payload['by'] : null;
+      set((s) => ({ buildSaved: { buildId, updatedAt, by, seq: (s.buildSaved?.seq ?? 0) + 1 } }));
+      return;
+    }
+
+    if (msg.type === 'chargen.updated') {
+      const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
+      set((s) => ({
+        chargenUpdated: {
+          level: str(payload['level']),
+          table: str(payload['table']),
+          by: str(payload['by']),
+          seq: (s.chargenUpdated?.seq ?? 0) + 1,
+        },
+      }));
       return;
     }
 

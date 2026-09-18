@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AdvanceMutationSchema } from './advancement.js';
 import { VisibilitySchema } from './common.js';
 
 export const CurrencySchema = z.enum(['karma', 'nuyen']);
@@ -24,6 +25,11 @@ export const LedgerEntrySchema = z.object({
   approvedBy: z.string().nullable().optional(),
   /** ISO timestamp. */
   createdAt: z.string().optional(),
+  /**
+   * The improvement a Karma spend buys (FR3.7): applied to the sheet when the
+   * entry is approved, never when it is rejected. Absent on every other entry.
+   */
+  advance: AdvanceMutationSchema.optional(),
 });
 export type LedgerEntry = z.infer<typeof LedgerEntrySchema>;
 

@@ -38,10 +38,12 @@ export const recoilKey = (characterId: string): string => characterId;
 
 /**
  * Second attribute the caster soaks Drain with (FR8.1 "the tradition's
- * attributes"). SheetV1 (§9.3) carries no tradition field, so the pick is
- * remembered per character for the session and shown in the cast dialog —
- * asked once rather than every cast, and never silently assumed, because
- * Drain resisted with the wrong attribute is a wrong number that looks right.
+ * attributes"). The sheet now carries the tradition's pair —
+ * `awakening.drain`, written by the character creator (§8.3) and read by
+ * `rows.ts`'s `drainAttrOf` — so this map is the player's OVERRIDE of it
+ * rather than the only answer: absent means "use the record", which is why
+ * the store is read without a default here. It stays session-local, because a
+ * house tradition the GM allows for one evening is not a fact about the sheet.
  */
 export type DrainAttr = 'cha' | 'log' | 'int' | 'wil';
 

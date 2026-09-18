@@ -32,7 +32,45 @@ export interface PipelineResult {
 export interface PipelineOptions {
   /** Clamp the final value at 0, recording the clamp in the breakdown. */
   floorZero?: boolean;
+  /**
+   * The most the augmentation phases may raise the value (SR5 p.94: +4 on
+   * any mental or physical attribute, whatever the source or combination of
+   * sources). See `AUGMENTATION_SOURCE_KINDS` for what counts.
+   */
+  augmentationCap?: number;
 }
+
+/**
+ * The +4 augmentation bonus cap on a mental or physical attribute (SR5 p.94).
+ * It is not a creation-only fence: the book says "at no point", so derive
+ * holds it in play as well as the builder's validator at creation.
+ */
+export const AUGMENTATION_BONUS_CAP = 4;
+
+/**
+ * Which phases count toward the augmentation cap: everything between the
+ * character's innate rating and the GM's word. Qualities are left out
+ * because they are innate — the pipeline treats them as part of the natural
+ * rating the cap is measured from (an Exceptional Attribute raises the
+ * ceiling, it is not a bonus under it). Overrides are left out because the
+ * GM's word beats the engine (Principle 2) — the book's own "unless
+ * specifically excepted" is exactly an override. Wound, scene and range
+ * modifiers never raise an attribute in practice, but if one did the book's
+ * "all sources" would count it too.
+ */
+export const AUGMENTATION_SOURCE_KINDS: readonly ModifierSourceKind[] = [
+  'cyberware',
+  'power',
+  'spell',
+  'status',
+  'wound',
+  'scene',
+  'range',
+  'situational',
+];
+
+const countsTowardAugmentationCap = (phase: readonly ModifierSourceKind[]): boolean =>
+  phase.some((kind) => AUGMENTATION_SOURCE_KINDS.includes(kind));
 
 /**
  * Apply every active modifier whose `target` is in `targets` to `base`,
@@ -46,6 +84,15 @@ export interface PipelineOptions {
  *
  * Every contribution is recorded as a **delta**, so the breakdown always
  * sums exactly to the final value (Principle 3).
+ *
+ * With `augmentationCap`, the value leaving the augmentation phases may sit
+ * no higher than its natural rating (the value entering them) plus the cap
+ * plus whatever penalties were added along the way. Penalties are kept out
+ * of the headroom on purpose: a runner carrying +6 of chrome who takes a −2
+ * ends at +2, not at +4 with the penalty swallowed by the excess. A `set` or
+ * `cap` in those phases is absolute and stands as written. The excess comes
+ * off in one `engine` line just before the override phase, so an override
+ * still has the last word.
  */
 export function applyPipeline(
   base: number,
@@ -59,7 +106,32 @@ export function applyPipeline(
   const targetSet = new Set(targets);
   const relevant = mods.filter((m) => m.active && targetSet.has(m.target));
 
+  const cap = opts?.augmentationCap;
+  /** The value entering the first augmentation phase; null until reached. */
+  let natural: number | null = null;
+  /** Negative `add`s inside the augmentation phases. */
+  let penalties = 0;
+  let capChecked = false;
+  const checkAugmentationCap = (): void => {
+    capChecked = true;
+    if (cap === undefined || natural === null) return;
+    const ceiling = natural + cap + penalties;
+    if (value <= ceiling) return;
+    breakdown.push({
+      label: `augmentation bonus cap (+${cap})`,
+      value: ceiling - value,
+      source: 'engine',
+    });
+    value = ceiling;
+  };
+
   for (const phase of PIPELINE_PHASES) {
+    const augmentation = countsTowardAugmentationCap(phase);
+    if (cap !== undefined && !capChecked) {
+      if (augmentation && natural === null) natural = value;
+      else if (!augmentation && natural !== null) checkAugmentationCap();
+    }
+
     const phaseMods = relevant.filter((m) => phase.includes(m.source.kind));
     if (phaseMods.length === 0) continue;
 
@@ -78,6 +150,7 @@ export function applyPipeline(
     for (const m of phaseMods) {
       if (m.op !== 'add') continue;
       value += m.value;
+      if (augmentation && m.value < 0) penalties += m.value;
       breakdown.push({ label: modifierLabel(m), value: m.value, source: m.source.kind });
     }
 
@@ -95,6 +168,9 @@ export function applyPipeline(
       }
     }
   }
+  // Belt and braces: were the phase list ever to end on an augmentation
+  // phase, the cap would still be held.
+  if (!capChecked) checkAugmentationCap();
 
   if (opts?.floorZero && value < 0) {
     breakdown.push({ label: 'floored at 0', value: -value, source: 'engine' });

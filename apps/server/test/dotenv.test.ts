@@ -13,7 +13,9 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   ENV_FILE,
+  NO_DOTENV_FLAG,
   RETIRED_ENV_FILES,
+  dotenvDisabled,
   envFileFor,
   loadEnvFile,
   parseEnvFile,
@@ -86,6 +88,32 @@ describe('loadEnvFile', () => {
 
   it('is silent when the file does not exist', () => {
     expect(loadEnvFile(join(tmpdir(), 'safehouse-absent', '.env'))).toEqual([]);
+  });
+
+  it('reads nothing when SAFEHOUSE_NO_DOTENV=1 — the e2e harness, whose deleted LLM_BASE_URL the file would otherwise refill', () => {
+    const file = envFile('SAFEHOUSE_TEST_OFF=from-file\n');
+    setEnv('SAFEHOUSE_TEST_OFF', undefined);
+    setEnv(NO_DOTENV_FLAG, '1');
+    expect(loadEnvFile(file)).toEqual([]);
+    expect(process.env['SAFEHOUSE_TEST_OFF']).toBeUndefined();
+    // And nothing claims the file supplied a value it never loaded.
+    expect(envFileFor('SAFEHOUSE_TEST_OFF', file)).toBeNull();
+    // Off means off only for the flag's own values; anything else loads as before.
+    setEnv(NO_DOTENV_FLAG, '0');
+    expect(loadEnvFile(file)).toContain('SAFEHOUSE_TEST_OFF');
+    expect(envFileFor('SAFEHOUSE_TEST_OFF', file)).toBe(file);
+  });
+});
+
+describe('dotenvDisabled', () => {
+  it('is on for 1 and true, and off when unset, empty or anything else', () => {
+    expect(NO_DOTENV_FLAG).toBe('SAFEHOUSE_NO_DOTENV');
+    expect(dotenvDisabled({ SAFEHOUSE_NO_DOTENV: '1' })).toBe(true);
+    expect(dotenvDisabled({ SAFEHOUSE_NO_DOTENV: ' TRUE ' })).toBe(true);
+    expect(dotenvDisabled({})).toBe(false);
+    expect(dotenvDisabled({ SAFEHOUSE_NO_DOTENV: '' })).toBe(false);
+    expect(dotenvDisabled({ SAFEHOUSE_NO_DOTENV: '0' })).toBe(false);
+    expect(dotenvDisabled({ SAFEHOUSE_NO_DOTENV: 'no' })).toBe(false);
   });
 });
 

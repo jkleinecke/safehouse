@@ -13,7 +13,7 @@
  */
 import type { AiDialect, AiEffort, AiProvider } from '@safehouse/contracts';
 import { anthropicChat } from './anthropic.js';
-import { httpError } from '../services/auth.js';
+import { httpError, type HttpError } from '../services/auth.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 
@@ -108,6 +108,48 @@ export async function listServedModels(baseUrl: string, timeoutMs = 5_000): Prom
   } catch {
     return [];
   }
+}
+
+// ---------------------------------------------------------------------------
+// Failures that came from the box, marked as such
+// ---------------------------------------------------------------------------
+
+/**
+ * The envelopes below name the endpoint and carry the provider's own words.
+ *
+ * That is exactly right for the GM, who chose the box and is the only person
+ * who can fix it: "the inference server has no model called X — it serves Y"
+ * ends the investigation in one line. It is exactly wrong for a player, whose
+ * whole part in this was typing a sentence about their runner and who would
+ * otherwise learn the table's LAN address or hosted host name, the model list,
+ * and up to 500 bytes of a provider error that routinely carries a masked key
+ * and an organisation id.
+ *
+ * So every envelope built out of a transport failure is stamped here, and a
+ * player-facing route answers the marked ones with the same status and code
+ * and less in them (`sanitizeAiError`, fixer/build-draft.ts). A mark rather
+ * than a string match, because the message is the part that varies.
+ */
+export function upstreamAiError(
+  statusCode: number,
+  code: string,
+  message: string,
+  details?: unknown,
+): HttpError {
+  return markUpstreamAiError(httpError(statusCode, code, message, details)) as HttpError;
+}
+
+/** Stamp an envelope somebody else built (a provider SDK's) as the box's. */
+export function markUpstreamAiError<T>(err: T): T {
+  if (err !== null && typeof err === 'object' && (err as { expose?: unknown }).expose === true) {
+    (err as { upstream?: true }).upstream = true;
+  }
+  return err;
+}
+
+/** Whether this error is one the box produced, rather than one of ours about it. */
+export function isUpstreamAiError(err: unknown): boolean {
+  return err !== null && typeof err === 'object' && (err as { upstream?: unknown }).upstream === true;
 }
 
 /**
@@ -425,15 +467,22 @@ export class LlmClient {
    */
   async chat(req: ChatRequest, opts: ChatOptions = {}): Promise<ChatTurn> {
     if (this.config.dialect === 'anthropic') {
-      return anthropicChat(
-        {
-          apiKey: this.config.apiKey ?? '',
-          baseUrl: this.config.baseUrl,
-          effort: req.effort ?? this.config.effort,
-        },
-        req,
-        opts,
-      );
+      try {
+        return await anthropicChat(
+          {
+            apiKey: this.config.apiKey ?? '',
+            baseUrl: this.config.baseUrl,
+            effort: req.effort ?? this.config.effort,
+          },
+          req,
+          opts,
+        );
+      } catch (err) {
+        // The SDK's refusals carry the provider's own sentence (`llm_*`
+        // codes, fixer/anthropic.ts) — the box's words, marked like the
+        // fetch path's so a player-facing route can say less.
+        throw markUpstreamAiError(err);
+      }
     }
     return this.chatOpenAi(req, opts);
   }
@@ -470,7 +519,7 @@ export class LlmClient {
         signal: AbortSignal.any(signals),
       });
     } catch (err) {
-      throw httpError(
+      throw upstreamAiError(
         503,
         'ai_unreachable',
         `the inference box at ${this.config.baseUrl} did not answer`,
@@ -486,16 +535,16 @@ export class LlmClient {
       // to explain, so the body is consulted too.
       if (res.status === 404 || looksLikeUnknownModel(res.status, text)) {
         // Worth a round-trip: ask the box what it DOES serve and say so.
-        throw httpError(
+        throw upstreamAiError(
           502,
           'ai_error',
           await explain404(this.config.baseUrl, req.model),
           text.slice(0, 500),
         );
       }
-      throw httpError(502, 'ai_error', `LLM responded ${res.status}`, text.slice(0, 500));
+      throw upstreamAiError(502, 'ai_error', `LLM responded ${res.status}`, text.slice(0, 500));
     }
-    if (!res.body) throw httpError(502, 'ai_error', 'LLM response carried no body');
+    if (!res.body) throw upstreamAiError(502, 'ai_error', 'LLM response carried no body');
 
     const acc = new ChatAccumulator();
     for await (const line of sseLines(res.body)) {

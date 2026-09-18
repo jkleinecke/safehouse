@@ -2,7 +2,14 @@
  * Housekeeping screen (FR3.6): the pending ledger queue. Players propose
  * karma/nuyen spends; nothing moves a balance until the GM approves it here.
  * Balances are sums of approved entries — no free-floating numbers.
+ *
+ * One entry in the queue does more than move a number: a career advance
+ * (FR3.7) carries the sheet change it pays for, and approving it writes that
+ * change as a revision. Such a row says so, and says the training time the
+ * player was quoted (`queue.ts`); a refusal at approval — the sheet moved
+ * under the spend — arrives in the error note below the list.
  */
+import { advanceNote } from './queue.js';
 import { ErrorNote, SectionTitle, Spinner } from '../ui.js';
 import {
   useApproveLedger,
@@ -57,6 +64,11 @@ export default function Housekeeping({ campaignId }: HousekeepingProps) {
                 {entry.characterName ?? entry.characterId}
                 {entry.createdAt ? ` · ${entry.createdAt.slice(0, 10)}` : ''}
               </span>
+              {advanceNote(entry) && (
+                <span className="mono-label block text-cyan" data-testid="advance-note">
+                  {advanceNote(entry)}
+                </span>
+              )}
             </span>
             <button
               className="btn px-2.5 py-1 text-ok"

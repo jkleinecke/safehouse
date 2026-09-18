@@ -4,7 +4,7 @@
  * invented (§14).
  */
 import { describe, expect, it } from 'vitest';
-import { SheetV1Schema, type SheetV1 } from '@safehouse/contracts';
+import { SheetQualitySchema, SheetV1Schema, type SheetV1 } from '@safehouse/contracts';
 import { customHit, listFor, rangeCatFor, skillFor, statsLine, toSheetItem, withCatalogueItem, withoutItem, type CatalogueHit } from './toSheet.js';
 
 const hit = (over: Partial<CatalogueHit>): CatalogueHit => ({
@@ -103,6 +103,8 @@ describe('toSheetItem', () => {
       name: 'Lucky Streak',
       mods: [],
       ref: { book: 'SR5', page: 426 },
+      type: 'positive',
+      karma: 12,
       note: '12 karma · positive',
     });
     expect(toSheetItem(hit({ kind: 'electronics', category: 'COMMLINKS', name: 'Pocket Link', stats: { 'DEVICE RATING': '3' }, avail: '6', cost: 1000 }))).toEqual({
@@ -111,6 +113,21 @@ describe('toSheetItem', () => {
     });
     expect(toSheetItem(hit({ kind: 'gear', category: 'TOOLS', name: 'Damping Kit', stats: { RATING: '4' }, avail: '10R', costText: 'Rating x 500¥' })).item).toMatchObject({ qty: 1, rating: 4 });
   });
+  it("records a quality's type, Karma and rating — a rated one at rating 1, a band with no Karma chosen", () => {
+    const rated = toSheetItem(hit({ kind: 'quality', name: 'Iron Calm', stats: { KARMA: '4', PER: 'rating', MAX: '3', TYPE: 'positive' } }));
+    expect(rated).toEqual({
+      list: 'qualities',
+      item: { name: 'Iron Calm', mods: [], ref: { book: 'SR5', page: 426 }, type: 'positive', karma: 4, rating: 1, note: '4 karma per rating (max 3) · positive' },
+    });
+    expect(SheetQualitySchema.parse(rated.item)).toMatchObject({ type: 'positive', karma: 4, rating: 1 });
+    const band = toSheetItem(hit({ kind: 'quality', name: 'Bad Nerves', stats: { KARMA: '4-20', TYPE: 'negative' } })).item;
+    expect(band).toMatchObject({ type: 'negative', note: '4-20 karma · negative' });
+    expect(band).not.toHaveProperty('karma');
+    expect(band).not.toHaveProperty('rating');
+    const unpriced = toSheetItem(hit({ kind: 'quality', name: 'Odd Habit', stats: {} })).item;
+    expect(unpriced).toEqual({ name: 'Odd Habit', mods: [], ref: { book: 'SR5', page: 426 } });
+  });
+
   it('every item it makes satisfies the sheet contract', () => {
     const rows: CatalogueHit[] = [
       hit({ kind: 'weapon', category: 'SUBMACHINE GUNS', name: 'Buzz', stats: { ACC: '4', DAMAGE: '7P', AP: '—', MODE: 'SA / BF / FA', RC: '(1)', AMMO: '30 (c)' } }),

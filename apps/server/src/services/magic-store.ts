@@ -1,8 +1,8 @@
 /**
  * The magic toolkit's stored shapes and its shelf (M8: FR8.3/FR8.4).
  *
- * Storage: **no new table.** Spirits, foci and reagent counters live under
- * `campaigns.settings.magic`, the same JSONB shelf the library bookmarks
+ * Storage: **no new table.** Spirits, registered sprites, foci and reagent
+ * counters live under `campaigns.settings.magic`, the same JSONB shelf the library bookmarks
  * (FR11.6) and the pinned timeline use. Everything is validated on the way in
  * *and* on the way out, so a hand-edited settings blob degrades to "no
  * spirits", never to a 500.
@@ -22,7 +22,7 @@ import {
   type Visibility,
 } from '@safehouse/contracts';
 import { campaigns, type Db } from '@safehouse/db';
-import type { Hub } from '../hub.js';
+import type { EventTx, Hub } from '../hub.js';
 import { httpError } from './auth.js';
 import { forgetCampaignSettings } from './discord.js';
 
@@ -83,17 +83,44 @@ export const FocusRecordSchema = z.object({
 });
 export type FocusRecord = z.infer<typeof FocusRecordSchema>;
 
+/**
+ * A sprite a technomancer registered (FR3.9: the builder's Karma spend, SR5
+ * p.98; docs/CHARGEN.md §8.2). It sits beside `spirits` and is bounded the
+ * same way — type 80 characters, tasks 999, Level the Resonance it was
+ * registered at — so what an approved build compiles always fits. Always a
+ * player's: a registered sprite has a technomancer, never a GM-side owner, so
+ * there is no hidden variant to filter. The list defaults to empty, which is
+ * what every stored shelf written before it existed reads as, and every write
+ * spreads the parsed state it read, so no existing writer drops it.
+ */
+export const SpriteRecordSchema = z.object({
+  id: z.string().min(1),
+  characterId: z.string().uuid(),
+  name: z.string().min(1).max(120),
+  /** The player's own label for the kind of sprite — the app ships no tables (§14). */
+  spriteType: z.string().min(1).max(80),
+  level: ForceSchema,
+  registered: z.boolean().default(true),
+  tasks: NonNegInt.max(999).default(0),
+  tasksInitial: NonNegInt.max(999).default(0),
+  note: z.string().max(500).default(''),
+  createdAt: z.string(),
+});
+export type SpriteRecord = z.infer<typeof SpriteRecordSchema>;
+
 export const MagicStateSchema = z.object({
   spirits: z.array(SpiritRecordSchema).default([]),
+  sprites: z.array(SpriteRecordSchema).default([]),
   foci: z.array(FocusRecordSchema).default([]),
   /** characterId → drams on hand. */
   reagents: z.record(z.string(), NonNegInt.max(99_999)).default({}),
 });
 export type MagicState = z.infer<typeof MagicStateSchema>;
 
-export const EMPTY_MAGIC: MagicState = { spirits: [], foci: [], reagents: {} };
+export const EMPTY_MAGIC: MagicState = { spirits: [], sprites: [], foci: [], reagents: {} };
 
 export const MAX_SPIRITS = 80;
+export const MAX_SPRITES = 80;
 export const MAX_FOCI = 60;
 
 // ---------------------------------------------------------------------------
@@ -173,6 +200,13 @@ export function spiritVisibility(spirit: Pick<SpiritRecord, 'characterId'>): Vis
  * The `settings` read is hoisted OUT of the block on purpose: PGlite is a
  * single embedded connection, so a query through `db` while the transaction is
  * open waits forever (the deadlock rule on `Hub.atomic`).
+ *
+ * Handed a `tx` it joins that block instead (`atomicIn`) and reads through
+ * `tx.db` — how a build's approval lands its bound spirits, registered sprites
+ * and bonded foci under the same fate as the character they belong to. The
+ * settings cache is forgotten here either way; a caller that joined a bigger
+ * block forgets it again after that block commits, because a read between
+ * this line and the outer COMMIT could re-cache the old shelf.
  */
 export async function commitMagicState(
   db: Db,
@@ -180,12 +214,13 @@ export async function commitMagicState(
   campaignId: string,
   next: MagicState,
   announce: { payload: Record<string, unknown>; visibility?: Visibility },
+  tx?: EventTx,
 ): Promise<MagicState> {
-  const settings = await loadSettings(db, campaignId);
+  const settings = await loadSettings(tx?.db ?? db, campaignId);
   settings['magic'] = next;
-  await hub.atomic(campaignId, async (tx) => {
-    await tx.db.update(campaigns).set({ settings }).where(eq(campaigns.id, campaignId));
-    await tx.emit({
+  await hub.atomicIn(campaignId, tx, async (itx) => {
+    await itx.db.update(campaigns).set({ settings }).where(eq(campaigns.id, campaignId));
+    await itx.emit({
       type: 'magic.updated',
       payload: announce.payload,
       visibility: announce.visibility ?? 'public',
@@ -216,6 +251,11 @@ export function fociFor(state: MagicState, characterId: string): FocusRecord[] {
 
 export function reagentsFor(state: MagicState, characterId: string): number {
   return state.reagents[characterId] ?? 0;
+}
+
+/** Sprites a technomancer registered. */
+export function spritesOf(state: MagicState, characterId: string): SpriteRecord[] {
+  return state.sprites.filter((s) => s.characterId === characterId);
 }
 
 /** Live spirits a character summoned — the ones that can be holding a spell. */

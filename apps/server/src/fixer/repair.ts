@@ -25,17 +25,19 @@ import { httpError } from '../services/auth.js';
 import type { ChatMessage, ChatOptions, ChatRequest, ChatTurn } from './llm.js';
 import { parseModelJson, unwrapEnvelope } from './vision.js';
 
-type Rec = Record<string, unknown>;
-const isRec = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !Array.isArray(v);
+// The bending helpers are exported for the lanes whose coercion lives beside
+// their own schema (fixer/build-draft.ts), so there is one copy of each.
+export type Rec = Record<string, unknown>;
+export const isRec = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-const str = (v: unknown, max: number): string | undefined => {
+export const str = (v: unknown, max: number): string | undefined => {
   if (typeof v === 'number' && Number.isFinite(v)) v = String(v);
   if (typeof v !== 'string') return undefined;
   const t = v.trim();
   return t.length === 0 ? undefined : t.length > max ? t.slice(0, max).trimEnd() : t;
 };
 
-const strList = (v: unknown, max: number, each: number): string[] => {
+export const strList = (v: unknown, max: number, each: number): string[] => {
   if (typeof v === 'string') v = [v];
   if (!Array.isArray(v)) return [];
   const out: string[] = [];
@@ -47,7 +49,7 @@ const strList = (v: unknown, max: number, each: number): string[] => {
   return out;
 };
 
-const int = (v: unknown, lo: number, hi: number, fallback?: number): number | undefined => {
+export const int = (v: unknown, lo: number, hi: number, fallback?: number): number | undefined => {
   const n = typeof v === 'string' ? Number(v) : v;
   if (typeof n !== 'number' || !Number.isFinite(n)) return fallback;
   return Math.min(hi, Math.max(lo, Math.round(n)));

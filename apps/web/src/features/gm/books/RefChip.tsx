@@ -35,7 +35,7 @@ export function RefChip({ refValue, className }: RefChipProps) {
     <>
       <button
         type="button"
-        className={`chip cursor-pointer border-cyan-dim/60 text-cyan hover:border-cyan ${className ?? ''}`}
+        className={`chip cursor-pointer border-cyan-dim/60 text-cyan hover:border-cyan pointer-coarse:min-h-10 ${className ?? ''}`}
         onClick={() => setOpen(true)}
         title={refValue.note ?? `Open ${refValue.book} p.${refValue.page}`}
       >

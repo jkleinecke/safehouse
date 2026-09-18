@@ -47,6 +47,9 @@ function sheet(opts: {
       res: 0,
     },
     skills: [{ id: opts.skill.id, rating: opts.skill.rating, attr: 'agi' }],
+    knowledge: [],
+    languages: [],
+    awakening: { kind: 'mundane', aspect: null, tradition: null, drain: null, mentor: null, powerPoints: 0, grade: 0 },
     qualities: [],
     augments: [],
     weapons: [

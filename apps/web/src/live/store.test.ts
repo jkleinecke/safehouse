@@ -105,6 +105,44 @@ describe('live store', () => {
     });
   });
 
+  /**
+   * `build.saved` is never stored, so an open build on a second device (the
+   * GM's, the player's tablet) only learns the record moved from this ping.
+   */
+  it('keeps the last build.saved ping, numbered so two saves of one build differ', () => {
+    const s = useLiveStore.getState();
+    s.handleEphemeral({ type: 'build.saved', payload: { buildId: 'b1', updatedAt: '2026-09-14T10:00:01.000Z', by: 'u1' }, ephemeral: true });
+    const first = useLiveStore.getState().buildSaved;
+    expect(first).toMatchObject({ buildId: 'b1', updatedAt: '2026-09-14T10:00:01.000Z', by: 'u1' });
+    s.handleEphemeral({ type: 'build.saved', payload: { buildId: 'b1' }, ephemeral: true });
+    const second = useLiveStore.getState().buildSaved;
+    expect(second).toMatchObject({ buildId: 'b1', updatedAt: null, by: null });
+    expect(second!.seq).toBeGreaterThan(first!.seq);
+    s.handleEphemeral({ type: 'build.saved', payload: { nope: true }, ephemeral: true });
+    expect(useLiveStore.getState().buildSaved).toBe(second);
+  });
+
+  /**
+   * `chargen.updated` is the GM writing the creation rules. Nothing about a
+   * past write is worth replaying, so it is relayed — which makes this ping the
+   * only way an open builder hears that its copy of the rules is stale.
+   */
+  it('keeps the last chargen.updated ping, numbered so two writes differ', () => {
+    const s = useLiveStore.getState();
+    s.handleEphemeral({ type: 'chargen.updated', payload: { campaignId: 'c1', level: 'street', table: 'sr5', by: 'u-gm' }, ephemeral: true });
+    const first = useLiveStore.getState().chargenUpdated;
+    expect(first).toMatchObject({ level: 'street', table: 'sr5', by: 'u-gm' });
+    // The same write twice still counts twice: the payload can be identical.
+    s.handleEphemeral({ type: 'chargen.updated', payload: { campaignId: 'c1', level: 'street', table: 'sr5', by: 'u-gm' }, ephemeral: true });
+    const second = useLiveStore.getState().chargenUpdated;
+    expect(second!.seq).toBe(first!.seq + 1);
+    // A payload with nothing readable in it still says the rules moved.
+    s.handleEphemeral({ type: 'chargen.updated', payload: {}, ephemeral: true });
+    const third = useLiveStore.getState().chargenUpdated;
+    expect(third).toMatchObject({ level: null, table: null, by: null });
+    expect(third!.seq).toBe(second!.seq + 1);
+  });
+
   it('falls back to the wire type when a mark carries no kind', () => {
     const s = useLiveStore.getState();
     s.handleEphemeral({ type: 'pointer', payload: { x: 1, y: 2 }, ephemeral: true });

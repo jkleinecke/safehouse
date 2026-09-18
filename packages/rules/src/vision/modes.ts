@@ -1,15 +1,19 @@
 /**
  * Which eyes a runner has (docs/VISION.md §3, §4.3, §4.5).
  *
- * Derived from the sheet, never typed in: metatype gives elves, dwarfs and
- * orks low-light and trolls thermographic; augments and gear add the rest by
- * name ("cybereyes … thermographic", "low-light goggles", "ultrasound
- * sensor"). Pure and name-based on purpose — the catalogue rows a sheet
- * carries are the GM's own items, and the words on them are the contract.
+ * Derived from the sheet, never typed in: metatype gives elves and orks
+ * low-light and dwarfs and trolls thermographic (SR5 p. 66), read off the
+ * chargen metatype table so Run Faster's metavariants see with the eyes their
+ * rows give them; augments and gear add the rest by name ("cybereyes …
+ * thermographic", "low-light goggles", "ultrasound sensor"). Pure and
+ * name-based on purpose — the catalogue rows a sheet carries are the GM's own
+ * items, and the words on them are the contract.
  *
  * The first slice of vision: the modes and a player-side view switch. Light
  * rows, heat maps and per-mode shrouds come after (VISION.md §4).
  */
+import { hasRacialTrait, metatypeRow } from '../chargen/metatypes.js';
+
 export type VisionMode = 'normal' | 'lowlight' | 'thermographic' | 'ultrasound' | 'astral';
 
 /** The slice of a sheet the derivation reads — structural, so a partial NPC statblock fits too. */
@@ -28,12 +32,19 @@ export const VISION_MODE_LABELS: Record<VisionMode, string> = {
   astral: 'astral',
 };
 
-/** What each metatype is born seeing with (SR5 core, the metatype table). */
+/**
+ * What each metatype is born seeing with — its racial traits on the metatype
+ * table (SR5 p. 66; RF pp. 104–105). Dwarfs are thermographic, not low-light.
+ * An unknown metatype string sees normally.
+ */
 export function metatypeVision(metatype: string | undefined): VisionMode[] {
-  const m = (metatype ?? '').trim().toLowerCase();
-  if (m === 'troll') return ['thermographic'];
-  if (m === 'elf' || m === 'dwarf' || m === 'ork' || m === 'orc') return ['lowlight'];
-  return [];
+  const row = metatypeRow(metatype);
+  if (!row) return [];
+  const modes: VisionMode[] = [];
+  if (hasRacialTrait(row, 'lowLight')) modes.push('lowlight');
+  if (hasRacialTrait(row, 'thermographic')) modes.push('thermographic');
+  if (hasRacialTrait(row, 'astralPerception')) modes.push('astral');
+  return modes;
 }
 
 const NAME_RULES: ReadonlyArray<{ test: RegExp; mode: VisionMode }> = [

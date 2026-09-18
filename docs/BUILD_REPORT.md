@@ -311,6 +311,45 @@ FR7.1–7.6: not built. This is also the only thing holding FR3.2 at `partial`.
 | FR8.4 foci bonding/toggles and reagent counters | **done** | `services/magic-foci.ts`; `GET/POST /api/characters/:id/foci`, `PATCH/DELETE …/foci/:focusId`, `POST …/reagents`, `GET …/magic/derived`. An unbonded focus is inert however switched-on it looks — bonding and activation are separate gates, and an active bonded focus contributes real `Modifier` rows so the pool moves **with provenance**. `e2e/magic.spec.ts` asserts exactly that. `get_magic_state` now reports tracked foci first and only then name-matches gear that looks like one, flagged `tracked: false`. |
 | FR8.5 adept powers as passive/toggled modifier sources | done | Modifier pipeline; a Quickened Reflexes power contributes an initiative die through staging as well as through `addCombatant`. |
 
+### M13 — The character builder and career advancement *(FR3.9, FR3.7)*
+
+A player can build a runner in the app, from a concept card to a sheet on the
+roster, and spend Karma on that sheet afterwards. Chummer stays a way in; it is
+no longer the only one. The plan and the record of what shipped are in
+`docs/CHARGEN.md` (§9 is the status).
+
+| FR | Status | Where |
+| --- | --- | --- |
+| FR3.9 priority creation, street/experienced/prime, five metatypes and the Run Faster rows, magic and resonance, qualities, skills, gear, leftover Karma, contacts | **done** | `packages/rules/src/chargen/` (22 modules: the priority and metatype tables, skills, grades, foci, traditions, lifestyles, quality rules, costs, levels, concepts, then ratings, budgets, eligibility, validate, steps, compile, advance). Numbers, ids and `{ book, page }` refs only (DESIGN §14, and §14's new numeric-mechanics line). |
+| FR3.9 the build as its own record | **done** | `packages/contracts/src/build.ts`; `builds` table and `characters.build` (migration `0006`). The record is decisions, not results, so every budget is recomputable and every refusal honest. |
+| FR3.9 live validation | **done** | 135 validator rules, each with a code, a step, a severity, our own sentence and its page; one test per rule, named for the rule it enforces. The p.101 checklist is the Finish screen, rendered from the same issues. |
+| FR3.9 the walkthrough | **done** | `apps/web/src/features/build/`: the shell (progress strip, rail of pools, issues list, guided and free modes, autosave with stale-write recovery), a step kit (catalogue picker, pool lines, cost quotes, refusing steppers), and nine step screens. A step never re-derives a rule; `steps/types.ts` is the contract. |
+| FR3.9 GM approval | **done** | Submit freezes the build; the GM decides each approval item, returns it with a note pinned to a step, or approves. Approval is one `hub.atomic`: the character, revision 1, contacts rows, spirits/sprites/foci on the magic shelf, the Karma and nuyen ledgers, and the starting-nuyen roll on the record. |
+| FR3.9 sourcebook and house-rule settings | **done** | `GET/PUT /api/campaigns/:id/chargen` and the GM's "Character creation" panel: level, priority printing, caps, carry-over, allowed books, Sum to Ten, metavariants, AI drafts. |
+| FR3.9 a build from a sentence | **done** | `apps/server/src/fixer/build-draft.ts` — a constrained-JSON lane, resolved against the campaign's own books, validated before anyone sees it, and never written by the server. Step 1's "describe your runner" accepts or discards it. |
+| FR3.7 advancement with training time | **done** | `chargen/advance.ts` prices every row of the p.107 table; `POST /api/characters/:id/advance` writes a pending Karma ledger entry carrying the mutation (migration `0007`), and approving that entry applies it as a revision. Training time is shown, not enforced. |
+
+**Proofs.** The book's three worked characters are golden tests, re-entered with
+invented aliases, asserting every total the chapter prints — and, where the
+chapter disagrees with itself, what the rules produce, with the page named in a
+comment. Every validator rule has a violating and a legal case. `apps/web/e2e/build.spec.ts`
+walks the whole loop at laptop and phone widths: build, submit, the GM's return
+with a note, the fix, approval, the character on the roster with its ledgers
+opened and the nuyen roll on the record.
+
+**What it cost to get right.** Four review passes found and closed 90-odd
+defects, the instructive ones being: a mundane could buy Magic with Karma; a
+player could self-approve by sending `approvals` in a PATCH; two devices editing
+one draft was last-write-wins; an approval survived an edit to the line it
+approved; unbounded spend fields let a player exhaust the server inside the
+advance transaction; and the root `.gitignore`'s `build/` rule hid the entire web
+builder from git while the tests passed on files that would never have been
+committed.
+
+**Not done.** No `.chum5` export, Karma build or Life Modules; no gear slotting;
+the p.105–106 downtime ceilings are shown nowhere; four p.107 rows cannot be
+bought in play; and no table has played with it yet.
+
 ### Phase reading against §18
 
 | Phase | State |
@@ -320,8 +359,8 @@ FR7.1–7.6: not built. This is also the only thing holding FR3.2 at `partial`.
 | P2 The Grid | **Done.** Map on the TV, geometry and pins authoring, pointer and focus across the wire, and both lanes of FR12.11 including map vision. |
 | P3 Opposition Kit | **Done.** FR10.10 hints were the last row and they shipped off by default, as the FR requires. |
 | P4 Campaign memory | **Done.** M5 codex, runs, calendar, contacts, handouts; M6 sessions; FR3.6 approvals; FR5.6 template↔codex linkage; FR12.12 AI recap drafting. |
-| P5 Deep SR5 | **Done bar FR3.7 and FR12.10.** FR8.1–8.5 all ship. The advancement editor and stagecraft audio remain deliberately unbuilt. |
-| P6 Stretch | Deferred as designed: M7, FR9.16, FR9.17, FR3.9, image adapter, PWA, export. |
+| P5 Deep SR5 | **Done bar FR12.10.** FR8.1–8.5 all ship; FR3.7 advancement landed with the builder (M13). Stagecraft audio remains deliberately unbuilt. |
+| P6 Stretch | **FR3.9 shipped** (M13). Still deferred as designed: M7, FR9.16, FR9.17, image adapter, PWA, export. |
 
 **A note on these six "Done"s, since one of them just moved.** A phase was
 marked Done when its FRs were. FRs were marked done when the server was. That is

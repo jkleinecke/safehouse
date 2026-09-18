@@ -8,9 +8,11 @@ import {
   type SheetV1Input,
 } from '@safehouse/contracts';
 import {
+  AUGMENTATION_BONUS_CAP,
   dedupeSceneModifiers,
   deriveCharacter,
   environment,
+  skillPoolKey,
   woundModifierFor,
 } from '../src/index.js';
 
@@ -50,6 +52,24 @@ function makeSheet(over: Partial<SheetV1Input> = {}): SheetV1 {
 
 function sumBreakdown(v: DerivedValue | { total: number; breakdown: { value: number }[] }): number {
   return v.breakdown.reduce((s, e) => s + e.value, 0);
+}
+
+type AttributesInput = SheetV1Input['attributes'];
+
+/** makeSheet's attributes with a few changed. */
+function attrs(over: Partial<AttributesInput> = {}): AttributesInput {
+  return {
+    bod: 4,
+    agi: 5,
+    rea: 4,
+    str: 3,
+    wil: 4,
+    log: 3,
+    int: 4,
+    cha: 2,
+    edg: { max: 3, current: 3 },
+    ...over,
+  };
 }
 
 describe('deriveCharacter: limits (§10.2)', () => {
@@ -362,7 +382,9 @@ describe('deriveCharacter: pipeline properties (§17.1)', () => {
   it('is order-independent within a phase', () => {
     const m1 = mod({ target: 'attr.rea', value: 1, note: 'a' });
     const m2 = mod({ target: 'attr.rea', value: 2, note: 'b' });
-    const m3 = mod({ target: 'attr.rea', op: 'set', value: 6, note: 'c' });
+    // Set 5 rather than 6: +5 would meet the +4 augmentation cap, which has
+    // its own tests below; this one is about set/add order alone.
+    const m3 = mod({ target: 'attr.rea', op: 'set', value: 5, note: 'c' });
     const forward = deriveCharacter(
       makeSheet({ augments: [{ name: 'X', essence: 0, mods: [m1, m2, m3] }] }),
     );
@@ -370,7 +392,7 @@ describe('deriveCharacter: pipeline properties (§17.1)', () => {
       makeSheet({ augments: [{ name: 'X', essence: 0, mods: [m3, m2, m1] }] }),
     );
     expect(forward.attributes['rea']?.value).toBe(reversed.attributes['rea']?.value);
-    expect(forward.attributes['rea']?.value).toBe(9); // set 6, then +1+2
+    expect(forward.attributes['rea']?.value).toBe(8); // set 5, then +1+2
   });
 
   it('cap op clamps and records the clip', () => {
@@ -452,6 +474,272 @@ describe('deriveCharacter: pipeline properties (§17.1)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// The +4 augmentation bonus cap (SR5 p.94)
+// ---------------------------------------------------------------------------
+
+describe('deriveCharacter: +4 augmentation bonus cap (SR5 p.94)', () => {
+  const capLine = (v: DerivedValue) => v.breakdown.find((e) => e.label.includes('augmentation bonus cap'));
+
+  it('is four points', () => {
+    expect(AUGMENTATION_BONUS_CAP).toBe(4);
+  });
+
+  it('a natural Strength 4 with muscle augmentation 2 records as Strength 4 (6) (SR5 p.95)', () => {
+    const sheet = makeSheet({
+      attributes: attrs({ str: 4 }),
+      augments: [
+        { name: 'Muscle augmentation 2', essence: 0.4, mods: [mod({ target: 'attr.str', value: 2 })] },
+      ],
+    });
+    const d = deriveCharacter(sheet);
+    // The book's "4 (6)": the natural rating stays on the sheet, the augmented one is derived.
+    expect(sheet.attributes.str).toBe(4);
+    expect(d.attributes['str']?.value).toBe(6);
+    expect(capLine(d.attributes['str']!)).toBeUndefined();
+  });
+
+  it('holds a stack of two augmentations to +4, with the clip on the receipt', () => {
+    const d = deriveCharacter(
+      makeSheet({
+        attributes: attrs({ str: 4 }),
+        augments: [
+          { name: 'Muscle augmentation 3', essence: 0.6, mods: [mod({ target: 'attr.str', value: 3, note: 'Muscle augmentation 3' })] },
+          { name: 'Cyberarm strength 2', essence: 0, mods: [mod({ target: 'attr.str', value: 2, note: 'Cyberarm strength 2' })] },
+        ],
+      }),
+    );
+    const str = d.attributes['str']!;
+    expect(str.value).toBe(8); // 4 + 5, held to 4 + 4
+    expect(capLine(str)).toEqual({ label: 'augmentation bonus cap (+4)', value: -1, source: 'engine' });
+    expect(sumBreakdown(str)).toBe(8);
+    // Everything downstream reads the capped rating.
+    expect(d.limits.physical.value).toBe(Math.ceil((8 * 2 + 4 + 4) / 3));
+  });
+
+  it('counts every source together: implant, adept power and spell (SR5 p.94 "combination of sources")', () => {
+    const d = deriveCharacter(
+      makeSheet({
+        augments: [{ name: 'Wired reflexes 2', essence: 3, mods: [mod({ target: 'attr.rea', value: 2 })] }],
+        powers: [
+          {
+            name: 'Improved reflexes 1',
+            mods: [mod({ target: 'attr.rea', value: 1, source: { kind: 'power' } })],
+          },
+          {
+            name: 'Sustained quickening',
+            mods: [mod({ target: 'attr.rea', value: 3, source: { kind: 'spell' } })],
+          },
+        ],
+      }),
+    );
+    expect(d.attributes['rea']?.value).toBe(4 + 4); // +6 held to +4
+    expect(capLine(d.attributes['rea']!)?.value).toBe(-2);
+    expect(d.initiative.physical.base.value).toBe(8 + 4); // REA 8 + INT 4
+    expect(d.pools['defense']?.total).toBe(8 + 4);
+  });
+
+  it('takes a penalty off the capped rating, not out of the excess', () => {
+    const d = deriveCharacter(
+      makeSheet({
+        attributes: attrs({ agi: 4 }),
+        augments: [{ name: 'Muscle toner 4 and cyberarm', essence: 0, mods: [mod({ target: 'attr.agi', value: 6 })] }],
+        powers: [
+          {
+            name: 'Nerve stall',
+            mods: [mod({ target: 'attr.agi', value: -2, source: { kind: 'status' }, note: 'nerve stall' })],
+          },
+        ],
+      }),
+    );
+    const agi = d.attributes['agi']!;
+    expect(agi.value).toBe(4 + 4 - 2);
+    expect(sumBreakdown(agi)).toBe(agi.value);
+  });
+
+  it('measures from the natural rating, which includes qualities', () => {
+    const d = deriveCharacter(
+      makeSheet({
+        qualities: [
+          { name: 'Hand-entered trait', mods: [mod({ target: 'attr.bod', value: 1, source: { kind: 'quality' } })] },
+        ],
+        augments: [{ name: 'Bone density 4', essence: 1.2, mods: [mod({ target: 'attr.bod', value: 4 })] }],
+      }),
+    );
+    expect(d.attributes['bod']?.value).toBe(4 + 1 + 4);
+    expect(capLine(d.attributes['bod']!)).toBeUndefined();
+  });
+
+  it('leaves the GM the last word: overrides apply after the cap (Principle 2)', () => {
+    const chromed = [{ name: 'Prototype limbs', essence: 2, mods: [mod({ target: 'attr.agi', value: 6 })] }];
+    const added = deriveCharacter(
+      makeSheet({
+        augments: chromed,
+        overrides: [mod({ target: 'attr.agi', value: 1, source: { kind: 'override' }, note: 'GM: prototype' })],
+      }),
+    );
+    expect(added.attributes['agi']?.value).toBe(5 + 4 + 1);
+    const breakdown = added.attributes['agi']!.breakdown;
+    const capAt = breakdown.findIndex((e) => e.source === 'engine');
+    const overrideAt = breakdown.findIndex((e) => e.source === 'override');
+    expect(capAt).toBeGreaterThan(-1);
+    expect(overrideAt).toBeGreaterThan(capAt);
+    expect(sumBreakdown(added.attributes['agi']!)).toBe(10);
+
+    const set = deriveCharacter(
+      makeSheet({
+        augments: chromed,
+        overrides: [mod({ target: 'attr.agi', op: 'set', value: 11, source: { kind: 'override' } })],
+      }),
+    );
+    expect(set.attributes['agi']?.value).toBe(11);
+  });
+
+  it('does not touch Magic, Resonance or Essence', () => {
+    const d = deriveCharacter(
+      makeSheet({
+        attributes: attrs({ mag: 3 }),
+        powers: [{ name: 'Table rule', mods: [mod({ target: 'attr.mag', value: 5, source: { kind: 'power' } })] }],
+      }),
+    );
+    expect(d.attributes['mag']?.value).toBe(8);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Living persona (SR5 p.101, p.250)
+// ---------------------------------------------------------------------------
+
+describe('deriveCharacter: living persona (SR5 p.101, p.250)', () => {
+  // Original fiction only — no book content. An invented technomancer.
+  const emerged = (over: Partial<SheetV1Input> = {}): SheetV1 =>
+    makeSheet({
+      identity: { alias: 'Lattice' },
+      attributes: attrs({ cha: 3, int: 4, log: 4, wil: 3, res: 6 }),
+      ...over,
+    });
+
+  it('reads Attack CHA, Sleaze INT, Data Processing LOG, Firewall WIL, Device Rating RES', () => {
+    const d = deriveCharacter(emerged());
+    const p = d.livingPersona;
+    expect(p).not.toBeNull();
+    expect(p?.attack.value).toBe(3);
+    expect(p?.sleaze.value).toBe(4);
+    expect(p?.dataProcessing.value).toBe(4);
+    expect(p?.firewall.value).toBe(3);
+    expect(p?.deviceRating.value).toBe(6);
+    for (const v of Object.values(p!)) expect(sumBreakdown(v)).toBe(v.value);
+    expect(() => DerivedCharacterSchema.parse(d)).not.toThrow();
+  });
+
+  it('is null for someone with no Resonance', () => {
+    const d = deriveCharacter(makeSheet());
+    expect(d.livingPersona).toBeNull();
+    expect(DerivedCharacterSchema.parse(d).livingPersona).toBeNull();
+  });
+
+  it('counts Resonance alone, so an imported sheet with a mundane awakening block still has one', () => {
+    const sheet = emerged({ attributes: attrs({ res: 3 }) });
+    expect(sheet.awakening.kind).toBe('mundane');
+    expect(deriveCharacter(sheet).livingPersona?.deviceRating.value).toBe(3);
+  });
+
+  it('keeps the persona of a technomancer whose Resonance has burned out, at Device Rating 0', () => {
+    const d = deriveCharacter(
+      emerged({
+        attributes: attrs({ res: 2 }),
+        awakening: { kind: 'technomancer' },
+        augments: [{ name: 'Heavy chrome', essence: 2.5, mods: [] }],
+      }),
+    );
+    expect(d.attributes['res']?.value).toBe(0);
+    expect(d.livingPersona?.deviceRating.value).toBe(0);
+  });
+
+  it('VR initiative uses the persona Data Processing when there is no deck', () => {
+    const d = deriveCharacter(emerged());
+    expect(d.initiative.vrCold.base.value).toBe(4 + 4); // DP (LOG) + INT
+    expect(d.initiative.vrCold.dice.value).toBe(3);
+    expect(d.initiative.vrHot.base.value).toBe(8);
+    expect(d.initiative.vrHot.dice.value).toBe(4);
+    expect(d.initiative.vrCold.base.breakdown[0]?.label).toBe('Data Processing (living persona)');
+    // AR is meat initiative; the persona does not touch it.
+    expect(d.initiative.matrixAR.base.value).toBe(4 + 4); // REA + INT
+  });
+
+  it('a deck, when there is one, still supplies the Data Processing', () => {
+    const d = deriveCharacter(
+      emerged({ matrix: { deck: { name: 'Deck', asdf: [4, 3, 5, 2], programs: [] } } }),
+    );
+    expect(d.initiative.vrCold.base.value).toBe(5 + 4);
+    expect(d.initiative.vrCold.base.breakdown[0]?.label).toBe('Data Processing');
+    expect(d.livingPersona?.dataProcessing.value).toBe(4);
+  });
+
+  it('follows augmented attributes and takes echoes as persona.<attribute> modifiers (SR5 p.257)', () => {
+    const d = deriveCharacter(
+      emerged({
+        augments: [{ name: 'Cerebral booster 2', essence: 0.4, mods: [mod({ target: 'attr.log', value: 2 })] }],
+        qualities: [
+          {
+            name: 'Attack upgrade',
+            mods: [mod({ target: 'persona.attack', value: 1, source: { kind: 'power' }, note: 'echo' })],
+          },
+        ],
+      }),
+    );
+    expect(d.livingPersona?.dataProcessing.value).toBe(6);
+    expect(d.livingPersona?.attack.value).toBe(4);
+    expect(d.livingPersona?.attack.breakdown.at(-1)).toEqual({ label: 'echo', value: 1, source: 'power' });
+    expect(d.initiative.vrHot.base.value).toBe(6 + 4);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Racial armor (SR5 p.66)
+// ---------------------------------------------------------------------------
+
+describe('deriveCharacter: racial dermal armor (SR5 p.66)', () => {
+  const racialLine = (d: ReturnType<typeof deriveCharacter>) =>
+    d.pools['armor']?.breakdown.find((e) => e.source === 'racial');
+
+  it('a troll adds +1 dermal armor to what is worn, and it reaches soak', () => {
+    const d = deriveCharacter(
+      makeSheet({
+        identity: { alias: 'Slab', metatype: 'troll' },
+        armor: [{ name: 'Armor jacket', rating: 12, worn: true }],
+      }),
+    );
+    expect(d.pools['armor']?.total).toBe(13);
+    expect(racialLine(d)).toEqual({ label: 'dermal armor (troll)', value: 1, source: 'racial' });
+    expect(d.pools['soak']?.total).toBe(4 + 13);
+    expect(sumBreakdown(d.pools['armor']!)).toBe(13);
+  });
+
+  it('with nothing worn the skin is still armor, whatever the metatype is spelled', () => {
+    const d = deriveCharacter(makeSheet({ identity: { alias: 'Slab', metatype: 'Troll' } }));
+    expect(d.pools['armor']?.total).toBe(1);
+  });
+
+  it('orthoskin replaces the natural dermal deposits and their bonus (SR5 p.94)', () => {
+    const d = deriveCharacter(
+      makeSheet({
+        identity: { alias: 'Slab', metatype: 'troll' },
+        augments: [{ name: 'Orthoskin 2', essence: 0.5, mods: [mod({ target: 'armor', value: 2, note: 'Orthoskin 2' })] }],
+      }),
+    );
+    expect(racialLine(d)).toBeUndefined();
+    expect(d.pools['armor']?.total).toBe(2);
+  });
+
+  it('nobody else is born armored', () => {
+    for (const metatype of ['human', 'elf', 'dwarf', 'ork', 'spirit']) {
+      const d = deriveCharacter(makeSheet({ identity: { alias: 'Case', metatype } }));
+      expect(d.pools['armor']?.total, metatype).toBe(0);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // One authority per scene modifier (LIVE-2)
 // ---------------------------------------------------------------------------
 
@@ -514,5 +802,60 @@ describe('scene modifiers are counted exactly once', () => {
       mod({ target: 'pool.all', value: -2, source: { kind: 'situational' } }),
     ]);
     expect(mixed.map((m) => m.source.kind)).toEqual(['situational', 'scene', 'situational']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Skills that name a target (Exotic Ranged, Exotic Melee, Pilot Exotic Vehicle)
+// ---------------------------------------------------------------------------
+
+/**
+ * `SheetSkillSchema.target` says "one skill per target, so two exotic weapons
+ * are two rows with one id", and the builder's validator lets both through.
+ * Keying the pool by the id alone made the second row overwrite the first, so
+ * a runner with two exotic weapons had one pool — whichever row came last.
+ */
+describe('a skill row with a target gets a pool of its own', () => {
+  const sheet = makeSheet({
+    skills: [
+      { id: 'exotic-ranged-weapon', rating: 4, attr: 'agi', target: 'Dart pistol' },
+      { id: 'exotic-ranged-weapon', rating: 1, attr: 'agi', target: 'Blowgun' },
+      { id: 'perception', rating: 3, attr: 'int' },
+    ],
+  });
+
+  it('gives each target its own key and its own number', () => {
+    const d = deriveCharacter(sheet);
+    expect(d.pools['skill.exotic-ranged-weapon::dart-pistol']?.total).toBe(5 + 4);
+    expect(d.pools['skill.exotic-ranged-weapon::blowgun']?.total).toBe(5 + 1);
+    // The bare key is not claimed by either row, so nothing reads one row's
+    // number for the other.
+    expect(d.pools['skill.exotic-ranged-weapon']).toBeUndefined();
+    // An untargeted skill keeps the key everything already reads.
+    expect(d.pools['skill.perception']?.total).toBe(4 + 3);
+  });
+
+  it('exposes the key builder so every reader spells it the same way', () => {
+    expect(skillPoolKey('exotic-ranged-weapon', 'Dart pistol')).toBe(
+      'skill.exotic-ranged-weapon::dart-pistol',
+    );
+    expect(skillPoolKey('perception')).toBe('skill.perception');
+    expect(skillPoolKey('perception', '   ')).toBe('skill.perception');
+  });
+
+  it('takes a modifier aimed at the pair, and one aimed at the skill for every target', () => {
+    const d = deriveCharacter(sheet, {
+      situational: [
+        mod({ target: 'pool.skill.exotic-ranged-weapon::dart-pistol', value: 2, source: { kind: 'power' } }),
+      ],
+    });
+    expect(d.pools['skill.exotic-ranged-weapon::dart-pistol']?.total).toBe(5 + 4 + 2);
+    expect(d.pools['skill.exotic-ranged-weapon::blowgun']?.total).toBe(5 + 1);
+
+    const both = deriveCharacter(sheet, {
+      situational: [mod({ target: 'pool.skill.exotic-ranged-weapon', value: 1, source: { kind: 'power' } })],
+    });
+    expect(both.pools['skill.exotic-ranged-weapon::dart-pistol']?.total).toBe(5 + 4 + 1);
+    expect(both.pools['skill.exotic-ranged-weapon::blowgun']?.total).toBe(5 + 1 + 1);
   });
 });

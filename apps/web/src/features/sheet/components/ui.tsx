@@ -101,7 +101,7 @@ export function Sheet({
             </div>
             <button
               type="button"
-              className="text-dim hover:text-ink"
+              className="inline-flex shrink-0 items-center justify-center text-dim hover:text-ink pointer-coarse:min-h-10 pointer-coarse:min-w-10"
               onClick={onClose}
               aria-label="Close"
             >

@@ -14,6 +14,7 @@
 import { useState } from 'react';
 import type { ProvenanceEntry, SheetSpell } from '@safehouse/contracts';
 import { drainValue, isPowerActive, setPowerActive, signed } from '../lib.js';
+import { drainAttrOf } from '../rows.js';
 import { spellRowLabel } from '../a11y.js';
 import { useSheetPlayStore, type DrainAttr } from '../playState.js';
 import { BreakdownButton } from '../components/Provenance.js';
@@ -47,7 +48,11 @@ export default function SpellBook(props: SpellBookProps) {
   const isHeld = (name: string) => held.has(name.toLowerCase());
 
   const attr = (code: string): number => derived.attributes[code]?.value ?? 0;
-  const drainAttr = useSheetPlayStore((s) => s.drainAttr[character.id] ?? 'cha');
+  // The tradition the build recorded (`awakening.drain` = [WIL, the
+  // tradition's attribute], §8.3) is the default; the store keeps the
+  // player's own pick, so a GM's house tradition still wins. A sheet with no
+  // tradition — an import, or one made before the builder — falls back to CHA.
+  const drainAttr = useSheetPlayStore((s) => s.drainAttr[character.id]) ?? drainAttrOf(sheet);
   const setDrainAttr = useSheetPlayStore((s) => s.setDrainAttr);
 
   /** The linked Drain resistance roll (FR8.1) — WIL + the tradition attribute. */
@@ -119,7 +124,20 @@ export default function SpellBook(props: SpellBookProps) {
 
       <div className="flex items-center justify-between gap-2">
         <SectionLabel>Spells</SectionLabel>
-        <AddFromBooks characterId={character.id} sheet={sheet} patchSheet={patchSheet} kinds={['spell']} derived={derived} characterName={character.name} testId="add-spell" />
+        <div className="flex items-center gap-2">
+          {/* Stated rather than assumed: a hermetic resists Drain with
+              WIL + LOG and a shaman with WIL + CHA, and a pool that is one
+              attribute wrong looks exactly as right as the correct one. */}
+          {sheet.awakening.grade > 0 && (
+            <span className="chip text-dim" aria-label={`Initiate grade ${sheet.awakening.grade}`}>
+              <span aria-hidden>grade {sheet.awakening.grade}</span>
+            </span>
+          )}
+          <span className="chip text-dim" aria-label={`Drain resistance pool: Willpower plus ${drainAttr.toUpperCase()}`}>
+            <span aria-hidden>drain WIL + {drainAttr.toUpperCase()}</span>
+          </span>
+          <AddFromBooks characterId={character.id} sheet={sheet} patchSheet={patchSheet} kinds={['spell']} derived={derived} characterName={character.name} testId="add-spell" />
+        </div>
       </div>
       {sheet.spells.length === 0 && <Empty>No spells entered — add one from the books, write your own, or import the sheet.</Empty>}
       <ul className="divide-y divide-edge/60">

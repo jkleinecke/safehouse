@@ -239,7 +239,9 @@ export function rollRefs(input: RollRefInput): RuleRef[] {
   const tail = rest.join('.');
 
   if (input.drain) add(RULE_REFS.drain);
-  else if (head === 'skill' && tail) add(skillRef(tail));
+  // `skill.exotic-ranged-weapon::dart-pistol` is one skill with a target
+  // (`skillPoolKey`); the page is the skill's, so the target comes off first.
+  else if (head === 'skill' && tail) add(skillRef(tail.split('::')[0] ?? tail));
   else if (head === 'weapon') {
     if (input.skillId) add(skillRef(input.skillId));
     add(input.melee === true ? RULE_REFS.meleeCombat : input.melee === false ? RULE_REFS.rangedCombat : null);

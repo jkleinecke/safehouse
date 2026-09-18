@@ -84,10 +84,54 @@ export const characters = pgTable(
     sheetVersion: integer('sheet_version').notNull().default(1),
     /** Raw Chummer import (.chum5 XML), kept verbatim. */
     chummerBlob: text('chummer_blob'),
+    /**
+     * The CharacterBuild the native builder approved into this row (FR3.9,
+     * docs/CHARGEN.md §4.1): how the runner was paid for, kept as history so
+     * the sheet can say "built with Priority B/A/E/C/D". Null for a Chummer
+     * import or a hand-typed sheet. Nothing in play reads it.
+     */
+    build: jsonb('build'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('characters_campaign_idx').on(t.campaignId)],
+);
+
+/**
+ * A runner being built (FR3.9, docs/CHARGEN.md §4.3/§8.5) — its own table, not
+ * a `characters` row with a status, so a half-built draft can never appear on
+ * the party roster, in an encounter picker or in the Fixer's party read: every
+ * reader of `characters` is safe by construction rather than by a filter each
+ * one has to remember.
+ *
+ * `build` is the player-writable record (contracts `BuildWritableSchema`). The
+ * fields only the GM or the server may set — the life-cycle `state`, the
+ * return `notes` and the step they are pinned to, the per-item `approvals` —
+ * are columns, never keys of that JSON, so no autosave body can carry them in;
+ * the server copies them onto the DTO's build when it reads a row.
+ * `character_id` is the character approval created (ON DELETE SET NULL: the
+ * build is history and outlives a retired runner).
+ */
+export const builds = pgTable(
+  'builds',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    campaignId: uuid('campaign_id')
+      .notNull()
+      .references(() => campaigns.id, { onDelete: 'cascade' }),
+    ownerUserId: uuid('owner_user_id')
+      .notNull()
+      .references(() => users.id),
+    state: text('state').$type<'draft' | 'submitted' | 'returned' | 'approved'>().notNull().default('draft'),
+    build: jsonb('build').notNull(),
+    notes: text('notes'),
+    returnedStep: integer('returned_step'),
+    approvals: jsonb('approvals').$type<Record<string, 'approved' | 'denied'>>().notNull().default({}),
+    characterId: uuid('character_id').references(() => characters.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('builds_campaign_owner_idx').on(t.campaignId, t.ownerUserId)],
 );
 
 export const characterRevisions = pgTable(
@@ -121,6 +165,13 @@ export const ledgerEntries = pgTable(
     createdBy: uuid('created_by').references(() => users.id),
     approvedBy: uuid('approved_by').references(() => users.id),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /**
+     * What approving this entry also does (FR3.7, migration 0007): a Karma
+     * spend that improves a runner carries the change it pays for
+     * (`AdvanceMutation`), applied to the sheet when the entry is approved.
+     * Null on every other entry.
+     */
+    payload: jsonb('payload'),
   },
   (t) => [index('ledger_entries_character_idx').on(t.characterId)],
 );

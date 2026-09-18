@@ -9,10 +9,12 @@
  * voice (an NPC token selected), each the same component that used to live
  * on its screen. Backtick opens and closes it from anywhere.
  *
- * Mounted once in CampaignLayout so it follows the GM. Hides entirely for
+ * Mounted once in CampaignLayout so it follows the GM, floating clear of the
+ * bars a screen pins to its bottom edge (`dockPlacement`). Hides entirely for
  * non-GM devices and when no LLM is configured (NG7).
  */
 import { Suspense, lazy, useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { levelTiles } from '@safehouse/rules';
 import { getSession } from '../../../api/session.js';
 import { useScene } from '../../grid/api.js';
@@ -20,6 +22,7 @@ import BuildWithAi from '../../grid/gm/BuildWithAi.js';
 import { DEFAULT_TILESET_ID, useGridStore } from '../../grid/store.js';
 import { aiDisabledFrom, useFixerStatus } from './api.js';
 import { contextChips, contextLine, useAiContext, useAiPage } from './aiContext.js';
+import { dockPlacement } from './dockPlacement.js';
 
 // The codex is a lazy chunk (§15): its page workshop is pulled in only when
 // the dock actually shows it, never on every screen the dock floats over.
@@ -49,6 +52,7 @@ export default function FixerDock({ campaignId, sessionLive }: FixerDockProps) {
   const [tab, setTab] = useState<DockTab>('chat');
   const [seed, setSeed] = useState<{ text: string; send: boolean; nonce: number } | null>(null);
   const ctx = useAiContext(campaignId);
+  const placement = dockPlacement(useLocation().pathname);
   const scene = useScene(tab === 'floor' && ctx.sceneId ? ctx.sceneId : null);
   const paletteTileset = useGridStore((s) => s.tilesetId);
   const page = useAiPage(tab === 'page' ? ctx.pageId : undefined);
@@ -91,7 +95,7 @@ export default function FixerDock({ campaignId, sessionLive }: FixerDockProps) {
   if (!open) {
     return (
       <button
-        className="btn fixed bottom-4 right-4 z-40"
+        className={`btn fixed z-40 ${placement}`}
         onClick={toggle}
         aria-label="Open the Fixer"
         title="Ask the Fixer about what you are looking at (`)"
@@ -123,7 +127,7 @@ export default function FixerDock({ campaignId, sessionLive }: FixerDockProps) {
 
   return (
     <div
-      className="fixed bottom-4 right-4 z-40 flex max-h-[76vh] w-[min(28rem,calc(100vw-2rem))] flex-col rounded-md border border-edge bg-deck/95 p-2 shadow-lg backdrop-blur"
+      className={`fixed z-40 flex max-h-[76vh] w-[min(28rem,calc(100vw-2rem))] flex-col rounded-md border border-edge bg-deck/95 p-2 shadow-lg backdrop-blur ${placement}`}
       data-testid="fixer-dock"
     >
       <div className="flex items-center justify-between gap-2 pb-1">

@@ -91,7 +91,9 @@ export function validitySweep(sheet: SheetV1): ValidityResult {
 /**
  * Default skill → linked attribute mapping for common SR5 active skill ids
  * (lowercase, hyphenated). Templates may use any id; unknown ids fall back
- * to 'agi'. Mechanics knowledge, not book text (§14).
+ * to 'agi'. Mechanics knowledge, not book text (§14). The canonical skill
+ * list is `chargen/skills.ts`; `chargen-tables.test.ts` holds this map to all
+ * 75 of its skills.
  */
 export const DEFAULT_SKILL_ATTRS: Readonly<Record<string, SkillAttr>> = {
   // Combat
@@ -123,6 +125,7 @@ export const DEFAULT_SKILL_ATTRS: Readonly<Record<string, SkillAttr>> = {
   'pilot-watercraft': 'rea',
   'pilot-walker': 'rea',
   'pilot-exotic-vehicle': 'rea',
+  'pilot-aerospace': 'rea',
   // Social
   con: 'cha',
   etiquette: 'cha',
@@ -165,9 +168,11 @@ export const DEFAULT_SKILL_ATTRS: Readonly<Record<string, SkillAttr>> = {
   survival: 'wil',
   // Magic
   alchemy: 'mag',
+  artificing: 'mag',
   banishing: 'mag',
   binding: 'mag',
   counterspelling: 'mag',
+  disenchanting: 'mag',
   'ritual-spellcasting': 'mag',
   spellcasting: 'mag',
   summoning: 'mag',

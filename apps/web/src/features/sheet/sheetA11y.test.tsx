@@ -31,7 +31,9 @@ import ContactsPanel from './components/ContactsPanel.js';
 import EdgeControl from './components/EdgeControl.js';
 import MonitorRow from './components/MonitorRow.js';
 import RollDialog from './components/RollDialog.js';
+import BackgroundTab from './tabs/BackgroundTab.js';
 import CombatTab from './tabs/CombatTab.js';
+import GearTab from './tabs/GearTab.js';
 import MagicTab from './tabs/MagicTab.js';
 import SkillsTab from './tabs/SkillsTab.js';
 import type { TabProps } from './tabs/shared.js';
@@ -380,5 +382,131 @@ describe('the contacts tab (FR3.2)', () => {
     );
     expect(html).toContain('role="alert"');
     expect(html).toContain('only the owner or the GM may read this');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// What the builder writes and the sheet used to swallow
+// ---------------------------------------------------------------------------
+
+/**
+ * Every field the native creator added to `SheetV1` in §8.3 — knowledge
+ * skills and languages (a mandatory pool at creation, so every approved
+ * character has them), a skill row's `target`, an implant's grade and rating,
+ * a quality's side/Karma/rating, the Awakened block's drain pair, and who the
+ * runner is behind the alias. The builder's own last screen shows all of it;
+ * the sheet in play showed none of it, so this record is the tripwire.
+ */
+const BUILT_SHEET: SheetV1 = SheetV1Schema.parse({
+  v: 1,
+  identity: { alias: 'Halfmoon', metatype: 'elf', realName: 'Ilse Brandt', age: 29, sex: 'female' },
+  attributes: {
+    bod: 3,
+    agi: 4,
+    rea: 3,
+    str: 2,
+    wil: 5,
+    log: 6,
+    int: 4,
+    cha: 3,
+    edg: { max: 3, current: 3 },
+    ess: 5.2,
+    mag: 5,
+    res: 0,
+  },
+  skills: [
+    { id: 'spellcasting', rating: 6, attr: 'mag' },
+    { id: 'exotic-ranged-weapon', rating: 4, attr: 'agi', target: 'Dart pistol' },
+    { id: 'exotic-ranged-weapon', rating: 1, attr: 'agi', target: 'Blowgun' },
+  ],
+  knowledge: [
+    { name: 'Thaumaturgical law', category: 'academic', rating: 4, spec: 'licensing' },
+    { name: 'Bar owners', category: 'street', rating: 2 },
+  ],
+  languages: [
+    { name: 'Sperethiel', native: true },
+    { name: 'Salish', rating: 3 },
+  ],
+  qualities: [
+    { name: 'Focused Concentration', type: 'positive', karma: 12, rating: 3 },
+    { name: 'Bad Luck', type: 'negative', karma: 12 },
+  ],
+  augments: [{ name: 'Datajack', essence: 0.08, grade: 'alphaware', rating: 2 }],
+  awakening: { kind: 'magician', tradition: 'hermetic', drain: ['wil', 'log'], powerPoints: 0, grade: 2 },
+} satisfies Record<string, unknown>);
+
+const BUILT_DERIVED: DerivedCharacter = deriveCharacter(BUILT_SHEET);
+
+function builtProps(): TabProps {
+  return tabProps({
+    character: { ...makeCharacter(), id: 'char-2', name: 'Halfmoon', sheet: BUILT_SHEET },
+    derived: BUILT_DERIVED,
+  });
+}
+
+describe('knowledge skills and languages reach the sheet (§4.1, Step 5)', () => {
+  const html = renderWithQuery(<SkillsTab {...builtProps()} />);
+
+  it('lists them where the skills are, as the last screen before submit does', () => {
+    expect(labels(html)).toContain('Knowledge skills and languages');
+    expect(html).toContain('Thaumaturgical law');
+    expect(html).toContain('academic 4');
+    expect(html).toContain('licensing');
+    expect(html).toContain('Bar owners');
+  });
+
+  it('writes a native language as N rather than as a rating of 0', () => {
+    expect(html).toContain('Sperethiel');
+    expect(html).toContain('language N');
+    expect(html).toContain('Salish');
+    expect(html).toContain('language 3');
+  });
+});
+
+describe('two skill rows with one id are two rows (§8.3 target)', () => {
+  const html = renderWithQuery(<SkillsTab {...builtProps()} />);
+
+  it('gives each its own pool number and says which weapon it is for', () => {
+    const rows = labels(html).filter((l) => l.startsWith('Roll exotic-ranged-weapon'));
+    expect(rows).toHaveLength(2);
+    expect(rows.some((l) => l.includes('(Dart pistol)') && l.includes('pool 8'))).toBe(true);
+    expect(rows.some((l) => l.includes('(Blowgun)') && l.includes('pool 5'))).toBe(true);
+  });
+});
+
+describe('the grade, the Karma and the name behind the alias are shown', () => {
+  it('says what grade and rating an implant is, because both were paid for', () => {
+    const html = render(<GearTab {...builtProps()} />);
+    expect(html).toContain('alphaware');
+    expect(html).toContain('rating 2');
+  });
+
+  it('tells a positive quality from a negative one, with what it cost', () => {
+    const html = render(<BackgroundTab {...builtProps()} />);
+    expect(html).toContain('costs 12 Karma');
+    expect(html).toContain('rating 3');
+    expect(html).toContain('gives 12 Karma');
+  });
+
+  it('shows the real name, age and sex when the build recorded them', () => {
+    const html = render(<BackgroundTab {...builtProps()} />);
+    expect(html).toContain('Ilse Brandt');
+    expect(html).toContain('29');
+    expect(html).toContain('female');
+  });
+});
+
+describe("the tradition the build recorded is the drain pool's second half", () => {
+  it('reads LOG for a hermetic magician with no tap on the chip', () => {
+    const html = render(<MagicTab {...builtProps()} />);
+    // WIL 5 + LOG 6 — not WIL 5 + CHA 3, which is what a CHA default gives.
+    expect(html).toContain('WIL + LOG');
+    expect(html).not.toContain('WIL + CHA');
+  });
+
+  it('shows the initiate grade the build paid Karma for', () => {
+    expect(labels(render(<MagicTab {...builtProps()} />))).toContain('Initiate grade 2');
+    // A caster who took none is not told they are grade 0.
+    expect(labels(render(<MagicTab {...tabProps()} />)).some((l) => l.startsWith('Initiate grade'))).toBe(false);
   });
 });

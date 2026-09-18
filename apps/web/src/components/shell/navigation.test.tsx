@@ -10,7 +10,10 @@
  *      route with an element, not to the 404 catch-all;
  *   2. the prep screens behind those links render no placeholder copy;
  *   3. every empty surface ships a working control, not a shrug;
- *   4. the roster links to each sheet by href, so nobody types an id.
+ *   4. the roster links to each sheet by href, so nobody types an id;
+ *   5. the character builder (FR3.9) is a real route, reachable from the
+ *      roster, the player's home and the console — and only for the roles
+ *      that build.
  *
  * There is no DOM in this package (no jsdom, no testing-library), so the
  * components are rendered to static markup and asserted on as markup — the
@@ -114,6 +117,20 @@ describe('no dead links', () => {
     }
   });
 
+  it('the builder list and a build resolve to their lazy routes, not the 404', () => {
+    for (const href of [`/c/${CAMPAIGN}/build`, `/c/${CAMPAIGN}/build/0b8d7c1e-5f7a-4c41-9d33-2a6c0e1f4b21`]) {
+      const matched = matchRoutes(routes, href);
+      expect(matched, href).not.toBeNull();
+      const leaf = matched!.at(-1)!;
+      expect(leaf.route.path, href).not.toBe('*');
+      expect(leaf.route.element, href).toBeTruthy();
+      // A lazy chunk statically renders its Suspense fallback — which proves
+      // the boundary is there.
+      const html = renderToStaticMarkup(<>{leaf.route.element as ReactNode}</>);
+      expect(html).toContain('loading…');
+    }
+  });
+
   // The sidebar asks /healthz for the build stamp now, so it needs a query
   // client like every other data-bearing shell piece.
   const sidebar = () =>
@@ -212,6 +229,8 @@ describe('empty states hand over the control that fixes them', () => {
     expect(html).toContain('new blank sheet');
     // A control, not prose about one.
     expect(html).toMatch(/<button[^>]*>new blank sheet<\/button>/);
+    // The native builder sits beside the Chummer import (FR3.9, §6 decision 3).
+    expect(html).toMatch(/<button[^>]*data-testid="build-runner"[^>]*>build a runner<\/button>/);
   });
 
   it('an empty shared library says who can fix it and links back', () => {
@@ -267,6 +286,36 @@ describe('empty states hand over the control that fixes them', () => {
     // And the console names every screen rather than listing bare chips.
     expect(html).toContain('data-nav-card="generator"');
     expect(html).toContain('data-nav-card="sessions"');
+    // Runners in the making, with the ones waiting for review one tap away.
+    expect(html).toContain('data-testid="builds-waiting-card"');
+    expect(html).toContain(`href="/c/${CAMPAIGN}/build"`);
+  });
+
+  it('the console counts builds waiting for review and links to that filter', () => {
+    const entry = GM_NAV.find((e) => e.key === 'overview')!;
+    const leaf = matchRoutes(routes, gmHref(CAMPAIGN, entry))!.at(-1)!;
+    const build = (id: string, state: string) => ({
+      id,
+      campaignId: CAMPAIGN,
+      ownerUserId: 'u-player',
+      state,
+      notes: null,
+      createdAt: '2026-09-14T10:00:00.000Z',
+      updatedAt: '2026-09-14T10:00:00.000Z',
+      characterId: null,
+      build: { v: 1, identity: { alias: 'Kestrel Vane' }, state },
+    });
+    const html = renderAs('gm', leaf.route.element as ReactNode, {
+      path: `/c/${CAMPAIGN}/gm`,
+      pattern: '/c/:campaignId/gm',
+      seed: [
+        [['characters', CAMPAIGN], []],
+        [['campaign', CAMPAIGN, 'devices'], []],
+        [['campaign', CAMPAIGN, 'builds'], { campaignId: CAMPAIGN, builds: [build('b1', 'submitted'), build('b2', 'draft')], unreadable: 0 }],
+      ],
+    });
+    expect(html).toContain('data-waiting="1"');
+    expect(html).toContain(`href="/c/${CAMPAIGN}/build?filter=waiting"`);
   });
 });
 
@@ -349,5 +398,13 @@ describe('player wayfinding', () => {
     expect(html).toContain('data-testid="no-character-note"');
     expect(html).toMatch(/Party roster/);
     expect(html).toContain(`href="/c/${CAMPAIGN}/books"`);
+    // …or build one: the player's home now has the builder's door.
+    expect(html).toContain('data-testid="player-builds-card"');
+    expect(html).toContain(`href="/c/${CAMPAIGN}/build"`);
+  });
+
+  it("the builder's door on the home screen is a player's, not the GM's", () => {
+    const html = renderAs('gm', <CampaignHome />, { seed: [[['characters', CAMPAIGN], []]] });
+    expect(html).not.toContain('data-testid="player-builds-card"');
   });
 });

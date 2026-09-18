@@ -23,7 +23,8 @@ import { acquisitionReason } from './acquire.js';
 import AcquirePanel from './AcquirePanel.js';
 import { KIND_LABEL, useCatalogueSearch, type CatalogueKind } from './api.js';
 import CustomItemForm from './CustomItemForm.js';
-import { statsLine, withCatalogueItem, type CatalogueHit } from './toSheet.js';
+import HitSummary from './HitSummary.js';
+import { withCatalogueItem, type CatalogueHit } from './toSheet.js';
 
 export interface AddFromBooksProps {
   characterId: string;
@@ -136,13 +137,7 @@ export function AddFromBooksView(p: AddFromBooksViewProps) {
           <ul className="mt-3 divide-y divide-edge/60" data-testid={`${p.testId}-hits`}>
             {p.hits.map((hit) => (
               <li key={hit.id} className="flex flex-wrap items-center gap-2 py-2" data-testid={`${p.testId}-hit`} data-kind={hit.kind}>
-                <div className="min-w-0 flex-1 basis-40">
-                  <div className="flex flex-wrap items-baseline gap-x-2">
-                    <span className="text-sm text-ink">{hit.name}</span>
-                    <span className="mono-label text-faint">{hit.category.toLowerCase() || KIND_LABEL[hit.kind as CatalogueKind] || hit.kind}</span>
-                  </div>
-                  <div className="mono-label truncate text-dim">{statsLine(hit)}</div>
-                </div>
+                <HitSummary hit={hit} />
                 <RefChip refInfo={hit.ref} />
                 <label className="flex items-center gap-1">
                   <span className="mono-label text-faint">¥</span>

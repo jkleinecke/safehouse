@@ -29,6 +29,17 @@ export interface IdentityStripProps {
    * to the strip that lays it out.
    */
   portrait?: ReactNode;
+  /**
+   * "built with Priority B/A/E/C/D" for a runner the native builder made
+   * (FR3.9 §4.1, `career.ts`), with the long form a screen reader hears.
+   * Absent for an imported or hand-typed sheet.
+   */
+  buildLine?: { text: string; detail: string } | null;
+  /**
+   * Career actions the page decides on — Improve with Karma for the owner or
+   * the GM (FR3.7), nothing for an observer or the display.
+   */
+  actions?: ReactNode;
 }
 
 export default function IdentityStrip({
@@ -40,6 +51,8 @@ export default function IdentityStrip({
   busy,
   edgeActions,
   portrait,
+  buildLine,
+  actions,
 }: IdentityStripProps) {
   const { sheet, condition } = character;
   const physMax = Math.max(0, derived.monitors.physical.value);
@@ -68,6 +81,18 @@ export default function IdentityStrip({
           <span aria-hidden>wounds {signed(wound)}</span>
         </span>
       </div>
+
+      {(buildLine || actions) && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          {buildLine && (
+            <p className="mono-label min-w-0 flex-1 text-faint" data-testid="sheet-build-line">
+              <span aria-hidden>{buildLine.text}</span>
+              <span className="sr-only">{buildLine.detail}</span>
+            </p>
+          )}
+          {actions}
+        </div>
+      )}
 
       <div className="mt-2 space-y-1.5">
         <MonitorRow

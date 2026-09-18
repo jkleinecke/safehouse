@@ -19,8 +19,10 @@
  */
 import { and, eq, sql } from 'drizzle-orm';
 import {
+  CharacterBuildSummarySchema,
   SceneEnvironmentSchema,
   SheetV1Schema,
+  type CharacterBuildSummary,
   type CombatantMonitors,
   type DerivedCharacter,
   type Modifier,
@@ -89,6 +91,13 @@ export interface CharacterRecord {
   play: PlayState;
   sheetVersion: number;
   hasChummerBlob: boolean;
+  /**
+   * How the runner was built, when the native builder made it (FR3.9 §4.1):
+   * the summary the sheet shows as "built with Priority B/A/E/C/D". Null for
+   * an import or a hand-typed sheet; absent on a record built by hand in a
+   * test or a tool, which reads the same.
+   */
+  build?: CharacterBuildSummary | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -104,6 +113,27 @@ export function splitStoredSheet(raw: unknown): { sheet: SheetV1; play: PlayStat
   return { sheet: parsed.data, play: play.success ? play.data : EMPTY_PLAY };
 }
 
+/**
+ * The build summary of a character row's `build` (the approved build, kept as
+ * history): its method, level, printing, priorities, metatype and magic type.
+ * Null when there is no build or it does not read as one — a summary is a
+ * courtesy on the sheet, never a reason a character fails to load.
+ */
+export function buildSummaryOf(raw: unknown): CharacterBuildSummary | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const b = raw as Record<string, unknown>;
+  const magic = (typeof b['magic'] === 'object' && b['magic'] !== null ? b['magic'] : {}) as Record<string, unknown>;
+  const parsed = CharacterBuildSummarySchema.safeParse({
+    method: b['method'] ?? 'priority',
+    level: b['level'] ?? 'experienced',
+    table: b['table'] ?? 'sr5',
+    priorities: b['priorities'] ?? {},
+    metatype: typeof b['metatype'] === 'string' ? b['metatype'] : null,
+    magic: magic['kind'] ?? 'mundane',
+  });
+  return parsed.success ? parsed.data : null;
+}
+
 function toRecord(row: typeof characters.$inferSelect): CharacterRecord {
   const { sheet, play } = splitStoredSheet(row.sheet);
   return {
@@ -116,6 +146,7 @@ function toRecord(row: typeof characters.$inferSelect): CharacterRecord {
     play,
     sheetVersion: row.sheetVersion,
     hasChummerBlob: row.chummerBlob != null && row.chummerBlob.length > 0,
+    build: buildSummaryOf(row.build),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -431,6 +462,8 @@ export function characterDto(
     /** FR3.6: karma/nuyen are ledger sums — never free-floating sheet numbers. */
     balances,
     hasChummerBlob: rec.hasChummerBlob,
+    /** "built with Priority B/A/E/C/D" on the sheet (FR3.9 §4.1); null for an import. */
+    build: rec.build ?? null,
     createdAt: rec.createdAt,
     updatedAt: rec.updatedAt,
   };
