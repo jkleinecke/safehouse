@@ -10,7 +10,6 @@ import {
   SHORTCUTS,
   shortcutAction,
   shortcutFor,
-  TOOL_HINTS,
 } from './modes.js';
 
 const ALL_TOOLS: GridTool[] = [
@@ -80,7 +79,4 @@ describe('single-key tools', () => {
     expect(isTypingTarget({ tagName: 'DIV', isContentEditable: true } as unknown as EventTarget)).toBe(true);
   });
 
-  it('have one hint line for every tool', () => {
-    for (const tool of ALL_TOOLS) expect(TOOL_HINTS[tool].length, tool).toBeGreaterThan(10);
-  });
 });

@@ -213,6 +213,83 @@ camera or note is one click, or the Delete key (2026-09-11): it is an undo
 step, and a "sure?" on something Ctrl+Z can fix is a tax. Von Restorff: the
 button that changes what the players see is the one that looks different.
 
+### 3.7 No label that lists what the thing already shows
+
+A control that switches between things does not also need a line naming the
+things it switches between. When **Build · Prep · Play** moved onto their own
+row (2026-09-19), the row first carried a line under the chosen mode — "the
+map itself: image, floors, tiles, walls, doors, pins". It was cut the same
+day, and the rule it broke is general:
+
+- **It is redundant.** The mode's contents are on screen already — the
+  toolbar's tools and the panel's sections *are* the list, and they are the
+  live version of it. The label is a second, worse copy.
+- **It is confusing.** Prose that names things reads like a set of controls
+  in a UI made of controls. A GM scans "walls, doors, pins", looks for them in
+  that row, and finds nothing clickable. Worse, the two lists drift: add a
+  tool and the sentence is quietly wrong.
+- **It costs the row its shape.** A three-word segmented control is read at a
+  glance (Law of Prägnanz); a sentence beside it turns a header into a
+  paragraph and invites more text later.
+
+So: a mode switch, a tab strip, a filter row and the like carry their labels
+and nothing else. If a control genuinely needs explaining, the explanation
+goes in its `title` tooltip — on demand, for the GM who wants it, costing
+nothing to the GM who does not.
+
+The same day this rule went in, the toolbar's own hint line — the sentence
+under the tool row saying what the tool in hand wants — went out for the same
+reason, and the tool buttons became icons alone. The chain is the point: the
+tool's name, what it does and its key all fit in one tooltip, so the row is
+sixteen icons and no prose, and the map keeps the pixels. A header that
+explains itself in sentences is a header that has stopped being a header.
+
+### 3.8 The row reads in the order the GM decides
+
+Building a square is two decisions, and they happen in one order every time:
+**what am I placing · how do I draw it**. The toolbar used to answer them in
+no order at all — the shapes sat on the canvas, the category row and the tile
+palette sat two clicks away in the GM panel — so a GM pressed *Room*,
+dragged, and learnt what Room had been armed with by looking at what
+appeared.
+
+Build mode's row is now those two decisions, left to right, behind Select:
+
+    [ Select Erase ] | [ Ground▾  Wall▾  Door▾  Stairs▾  Interior▾  Decor▾ ] | [ Room Area Brush  Wall line Doorway Zone Pin ]
+
+**Select and Erase lead the row, apart from the rest.** Neither answers "what
+am I placing": one puts the tools down and picks things up, the other takes
+things off the map. Among the tools they read as two more of them. Select
+leads every mode's row this way; Erase joins it in Build, which is the only
+mode that has one.
+
+**The other divider is on the one boundary left that matters.** The subjects
+are what goes on the map; the tools are what does the putting. The tools were
+first drawn as two runs — the tile shapes, then the markers that are drawn
+rather than laid — and that divider was taken out again: it implied a split
+the GM never has to think about, and competed with the ones that matter.
+Three notes on the rest of it:
+
+- **Which tile is not a separate step.** Each subject is a split button: the
+  face starts laying that kind of thing, the caret picks which one — Ground,
+  then concrete; Wall, then chain-link. One standalone tile dropdown beside
+  the subjects was tried first and was worse: it asked the GM to look in two
+  places to answer one question, and it showed the tiles of whichever subject
+  happened to be in hand. The armed tile then rides on the button's face as
+  its swatch, so what the next drag lays is legible without opening anything.
+- **The subjects are the tileset's own categories**, except that `building`
+  splits into **Wall** and **Door**, because that is how a GM says it and
+  "building" is not. Every subject has a caret, because every one of them
+  lays something.
+- **Nothing is stored twice.** The chosen subject is read back out of the
+  tool, the category and the armed tile, so the row and the panel's palette
+  cannot drift apart. Wall and Door arm the set's first wall or first door,
+  since an armed tile is the only thing that tells those two halves apart.
+
+Tooltips throughout are the control's **name and its key, nothing else** — a
+row of icons should not be a reading exercise (§3.7 again). How a tool works
+is learnt by using it.
+
 ---
 
 ## 4. Beyond the builder — the same laws elsewhere

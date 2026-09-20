@@ -17,9 +17,9 @@ import type { GridTool } from '../types.js';
 export type GridMode = 'build' | 'prep' | 'play';
 
 export const MODES: ReadonlyArray<{ id: GridMode; label: string; hint: string }> = [
-  { id: 'build', label: 'Build', hint: 'The map itself: image, floors, tiles, walls, doors, pins' },
-  { id: 'prep', label: 'Prep', hint: 'What only you know: fog, cameras, notes, hidden tokens, the weather' },
-  { id: 'play', label: 'Play', hint: 'Friday night: tokens, measuring, the fight, the TV' },
+  { id: 'build', label: 'Build', hint: 'Build the map' },
+  { id: 'prep', label: 'Prep', hint: 'Prep what only you know' },
+  { id: 'play', label: 'Play', hint: 'Run the session' },
 ];
 
 /** Which panel sections each mode shows, in order. Scenes is first in all three. */
@@ -35,6 +35,34 @@ export const MODE_TOOLS: Record<GridMode, readonly GridTool[]> = {
   prep: ['select', 'fogdef', 'camera', 'note'],
   play: ['select', 'ruler', 'aoe', 'pointer', 'focus'],
 };
+
+/**
+ * Build mode's tools: the ways of putting something on the map, in one run.
+ *
+ * The row asks two questions, not three (docs/UX_MAP_BUILDER.md §3.8) — what
+ * am I placing, and how do I put it down — so there is one divider, between
+ * the subjects and these. The shapes come first because they are what a
+ * floor is built out of; the markers follow, and a divider between the two
+ * was tried and taken out again: it implied a distinction the GM does not
+ * have to make, and competed with the one that matters.
+ *
+ * Erase is not among them. It takes things off the map rather than putting
+ * them on, so it keeps Select company at the head of the row — those two are
+ * what a GM reaches for when the answer to "what am I placing" is nothing.
+ *
+ * `MODE_TOOLS.build` stays the whole list, including Select and Erase,
+ * because which mode owns a tool is a separate question from where it sits
+ * on the row.
+ */
+export const BUILD_TOOLS: readonly GridTool[] = [
+  'tile-room',
+  'tile-area',
+  'tile',
+  'wall',
+  'door',
+  'zone',
+  'pin',
+];
 
 /** The tools a player has — the same in every mode, because players have no modes. */
 export const PLAYER_TOOLS: readonly GridTool[] = ['select', 'ruler', 'aoe', 'pointer'];
@@ -110,23 +138,3 @@ export function isTypingTarget(target: EventTarget | null): boolean {
   const tag = el.tagName.toUpperCase();
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable === true;
 }
-
-/** One line under the toolbar: what the tool in hand wants from the GM. */
-export const TOOL_HINTS: Record<GridTool, string> = {
-  select: 'Drag a token to move it. Click a wall, door, zone, pin, camera or note to edit it in the panel. Double-tap to ping. Delete removes what is selected.',
-  ruler: 'Drag to measure in metres; start on a token to see its walk and run.',
-  aoe: 'Click to place the circle; set its radius in the measure panel.',
-  pointer: 'Drag to draw a pointer trail everyone sees.',
-  fogdef: 'Click the corners of a fog region, then save it on the Fog section.',
-  focus: 'Click to pull every screen to that spot, once.',
-  wall: 'Drag along the wall. Shift for a free angle. Esc when done.',
-  door: 'Drag across the doorway. Click a door’s knob later to open or shut it.',
-  zone: 'Click the corners of a named area, then save and name it on the Layout tab.',
-  pin: 'Click to drop a pin; it opens in the panel, where you name and link it.',
-  camera: 'Click to mount a camera; it opens in the panel, where you aim it. Only you see it.',
-  note: 'Click to drop a note only you ever see; it opens in the panel to write on.',
-  tile: 'Drag to paint with the chosen material; Auto reads the square, and a second pass picks the next thing that fits.',
-  'tile-area': 'Drag a rectangle of floor.',
-  'tile-room': 'Drag a rectangle: floor inside, walls around it.',
-  'tile-erase': 'Drag to take the top thing out of each square — a prop first, then the wall, then the floor.',
-};

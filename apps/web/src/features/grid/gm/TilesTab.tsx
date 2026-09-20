@@ -23,6 +23,12 @@ import type { Scene } from '@safehouse/contracts';
 import { sceneLevels } from '@safehouse/rules';
 import { useSwitchTileset, useTilesets, usePaintTiles, type TilesetDef } from '../api.js';
 import { useGridStore } from '../store.js';
+import {
+  CATEGORY_HINT,
+  CATEGORY_LABEL,
+  CATEGORY_ORDER,
+  categoryOf,
+} from '../tileCategories.js';
 import ConfirmButton from './ConfirmButton.js';
 import Swatch from './Swatch.js';
 
@@ -57,34 +63,6 @@ export function stairAdvice(
 
 export interface TilesTabProps {
   scene: Scene;
-}
-
-const CATEGORY_ORDER = ['ground', 'building', 'stairs', 'interior', 'decoration'] as const;
-type ToolCategory = (typeof CATEGORY_ORDER)[number];
-
-const CATEGORY_LABEL: Record<ToolCategory, string> = {
-  ground: 'Ground',
-  building: 'Building',
-  interior: 'Interior',
-  decoration: 'Decor',
-  stairs: 'Stairs',
-};
-
-/** What each category does on a single click, in the GM's terms — the tooltip. */
-const CATEGORY_HINT: Record<ToolCategory, string> = {
-  ground: 'What the square is made of — pick a surface and drag. Drag again for the next surface in the set.',
-  building: 'Click empty ground for a wall; click a wall again for a window, then a door.',
-  interior: 'Furniture. Against a wall it picks something with a back to it; drag again for the next thing that fits.',
-  decoration: 'Props. It reads the ground — trees on grass, drains on the road; drag again for another that fits.',
-  stairs:
-    'Stairs. Which way they lead follows from the floors this scene has — up if there is one above.',
-};
-
-/** Fallback for a set that predates categories; mirrors `categoryOf` in rules. */
-function kindCategory(kind: string): ToolCategory {
-  if (kind === 'floor') return 'ground';
-  if (kind === 'wall' || kind === 'door') return 'building';
-  return 'decoration';
 }
 
 /**
@@ -203,7 +181,7 @@ export default function TilesTab({ scene }: TilesTabProps) {
   if (isLoading) return <p className="p-3 text-sm text-dim">Loading tilesets…</p>;
   if (!tileset) return <p className="p-3 text-sm text-dim">No tilesets available.</p>;
 
-  const tiles = tileset.tiles.filter((t) => (t.category ?? kindCategory(t.kind)) === tileCategory);
+  const tiles = tileset.tiles.filter((t) => categoryOf(t) === tileCategory);
 
   return (
     <div className="flex flex-col gap-3 p-3" data-testid="tiles-tab" data-tileset={tileset.id}>

@@ -1,168 +1,174 @@
 /**
- * The canvas toolbar: the mode switch, the mode's tools, and one hint line.
+ * The tool row: the current mode's tools, as icons.
  *
- * Build · Prep · Play (docs/UX_MAP_BUILDER.md §3.1): a GM picks what they are
- * doing once, and the row shows only that mode's tools — five or six, never
- * fourteen. Every tool has a single key (§3.3), named in its tooltip, and the
- * line under the row says the one thing the tool in hand wants.
+ * It sits directly under the mode row (`ModeBar`), the two of them forming
+ * the Map's header — mode above, that mode's tools below it. The map itself
+ * carries no toolbar: what is drawn on the canvas is the scene.
+ *
+ * The mode — Build · Prep · Play (docs/UX_MAP_BUILDER.md §3.1) — is not a
+ * tool: it decides what this row and the panel offer at all, so it is picked
+ * a row up. What is left here is only what the GM does to the map, five or
+ * six of them, never fourteen. Each button is its icon alone; its name, what
+ * it does and the single key that picks it (§3.3) are in the tooltip, on
+ * demand, rather than written out under the row (§3.7).
  *
  * Players get select / ruler / AoE / pointer in every mode, because players
- * have no modes. The view controls — snap, zoom, fit, Plan/Iso, the panel —
- * are not tools and live in `ViewControls`, on the canvas's other corner.
+ * have no modes — for them this row is the whole header. The view controls —
+ * snap, zoom, fit, Plan/Iso, the panel — are not tools and live in
+ * `ViewControls`, over the canvas's top-right corner, and undo and redo are
+ * in the mode row above — they are not tools either.
  */
 import type { GridProjection } from '@safehouse/contracts';
+import HudButton, { HudIcon } from './HudButton.js';
 import type { GridTool, ViewProjection } from '../types.js';
-import { MODE_TOOLS, MODES, PLAYER_TOOLS, shortcutFor, TOOL_HINTS, type GridMode } from './modes.js';
+import {
+  BUILD_TOOLS,
+  MODE_TOOLS,
+  PLAYER_TOOLS,
+  shortcutFor,
+  type GridMode,
+} from './modes.js';
 
 interface ToolDef {
   id: GridTool;
   label: string;
   glyph: string;
-  hint: string;
 }
 
 const TOOL_DEFS: Record<GridTool, Omit<ToolDef, 'id'>> = {
-  select: { label: 'Select', glyph: '⬚', hint: 'Select, drag tokens, open doors, pan' },
-  ruler: { label: 'Measure', glyph: '📏', hint: 'Measure in metres' },
-  aoe: { label: 'AoE', glyph: '◎', hint: 'Place a circle template' },
-  pointer: { label: 'Point', glyph: '✳', hint: 'Pointer trail for everyone' },
-  focus: { label: 'Focus', glyph: '⊕', hint: 'Pull every screen here, once' },
-  'tile-room': { label: 'Room', glyph: '▣', hint: 'Drag a room: floor inside, walls around' },
-  'tile-area': { label: 'Area', glyph: '▦', hint: 'Drag a rectangle of floor' },
-  tile: { label: 'Brush', glyph: '🖌', hint: 'Paint squares with the chosen material' },
-  'tile-erase': { label: 'Erase', glyph: '◫', hint: 'Clear painted squares' },
-  wall: { label: 'Wall', glyph: '▬', hint: 'Drag to draw a wall' },
-  door: { label: 'Door', glyph: '⌷', hint: 'Drag to place a door' },
-  zone: { label: 'Zone', glyph: '▱', hint: 'Click corners for a named area' },
-  pin: { label: 'Pin', glyph: '⚑', hint: 'Drop a map pin' },
-  fogdef: { label: 'Fog', glyph: '⬡', hint: 'Click corners for a fog region' },
-  camera: { label: 'Camera', glyph: '◉', hint: 'Mount a security camera only you see' },
-  note: { label: 'Note', glyph: '🗒', hint: 'Drop a note only you ever see' },
+  select: { label: 'Select', glyph: '↖' },
+  ruler: { label: 'Measure', glyph: '📏' },
+  aoe: { label: 'AoE', glyph: '◎' },
+  pointer: { label: 'Point', glyph: '☞' },
+  focus: { label: 'Focus', glyph: '⌖' },
+  'tile-room': { label: 'Room', glyph: '▣' },
+  'tile-area': { label: 'Area', glyph: '▭' },
+  tile: { label: 'Brush', glyph: '🖌' },
+  'tile-erase': { label: 'Erase', glyph: '⌫' },
+  wall: { label: 'Wall line', glyph: '⟋' },
+  door: { label: 'Doorway', glyph: '⌷' },
+  zone: { label: 'Zone', glyph: '▱' },
+  pin: { label: 'Pin', glyph: '⚑' },
+  fogdef: { label: 'Fog', glyph: '⬡' },
+  camera: { label: 'Camera', glyph: '◉' },
+  note: { label: 'Note', glyph: '🗒' },
 };
 
-/** The tooltip: what the tool does, and the key that picks it. */
+/**
+ * The tooltip: the tool's name and the key that picks it, and nothing more.
+ *
+ * It used to carry a sentence of explanation as well, which made hovering a
+ * row of icons a reading exercise. A name is what the icon is missing; how
+ * the tool works is learnt by using it.
+ *
+ * It is the `aria-label` too — what a screen reader reads out, and what a
+ * test asks for by name.
+ */
 export function toolTitle(tool: GridTool): string {
+  const { label } = TOOL_DEFS[tool];
   const key = shortcutFor(tool);
-  return key ? `${TOOL_DEFS[tool].hint} (${key})` : TOOL_DEFS[tool].hint;
+  return key ? `${label} (${key})` : label;
 }
 
 export interface ToolbarProps {
   isGm: boolean;
+  /** Which mode's tools to show; the mode itself is switched in `ModeBar`. */
   mode: GridMode;
   tool: GridTool;
-  onMode: (mode: GridMode) => void;
   onTool: (tool: GridTool) => void;
-  /** Undo and redo, for a GM building or prepping; absent for a player. */
-  history?: ToolbarHistory;
+  /**
+   * Build mode's first step — what is being placed, each subject carrying the
+   * tile it will lay. Supplied by the page rather than built here, because it
+   * reads the tileset catalogue and the store while this row stays a pure
+   * render of its props. Absent for a player, and in Prep and Play.
+   */
+  placing?: React.ReactNode;
 }
 
-function Btn({
-  active,
-  title,
-  onClick,
-  children,
-  testId,
-  disabled,
+/** A labelled run of tool buttons. The label is for a screen reader; the eye gets the gap. */
+function ToolGroup({
+  label,
+  tools,
+  tool,
+  onTool,
 }: {
-  active?: boolean;
-  title: string;
-  onClick: () => void;
-  children: React.ReactNode;
-  testId?: string;
-  disabled?: boolean;
+  label: string;
+  tools: readonly GridTool[];
+  tool: GridTool;
+  onTool: (tool: GridTool) => void;
 }) {
   return (
-    <button
-      type="button"
-      title={title}
-      aria-label={title}
-      aria-pressed={active ?? false}
-      disabled={disabled}
-      onClick={onClick}
-      data-testid={testId}
-      className={
-        'btn px-2.5 py-1.5 text-[0.7rem] disabled:opacity-40 ' +
-        (active ? 'border-cyan text-cyan shadow-glow-cyan' : 'text-dim')
-      }
-    >
-      {children}
-    </button>
+    <div className="flex items-center gap-1.5" role="group" aria-label={label}>
+      {tools.map((id) => (
+        <HudButton
+          key={id}
+          active={tool === id}
+          title={toolTitle(id)}
+          onClick={() => onTool(id)}
+          testId={`tool-${id}`}
+        >
+          {/* Icon alone — the name and what it does are in the tooltip. */}
+          <HudIcon>{TOOL_DEFS[id].glyph}</HudIcon>
+        </HudButton>
+      ))}
+    </div>
   );
 }
 
-/** The next step each way, for the toolbar's Undo and Redo. */
-export interface ToolbarHistory {
-  undoLabel: string | null;
-  redoLabel: string | null;
-  busy: boolean;
-  onUndo: () => void;
-  onRedo: () => void;
+/** The one break in the row, between what goes on the map and what puts it there. */
+function Divider() {
+  return <span className="mx-2.5 h-7 w-px shrink-0 bg-edge-bright" aria-hidden />;
 }
 
 export default function Toolbar(props: ToolbarProps) {
-  const tools = props.isGm ? MODE_TOOLS[props.mode] : PLAYER_TOOLS;
+  /*
+    Build mode reads left to right as the sentence does (hud/subjects.ts):
+
+      select · erase   |   what am I placing (and which one)   |   how do I put it down
+
+    Select and Erase first and apart — one stops building and picks things
+    up, the other takes things off — then the two halves of building: the
+    subjects are what goes on the map, the tools are what does the putting. Prep and Play ask only the last
+    question, so they keep one run of tools after Select, and so does a
+    player.
+  */
+  const build = props.isGm && props.mode === 'build';
+  /*
+    Select, and in Build mode Erase, lead the row apart from everything else:
+    one puts the tools down and the other takes things off the map, and
+    neither is an answer to "what am I placing". Among the tools they read as
+    two more of them.
+  */
+  const lead: readonly GridTool[] = build ? ['select', 'tile-erase'] : ['select'];
+  const rest = (props.isGm ? MODE_TOOLS[props.mode] : PLAYER_TOOLS).filter(
+    (t) => !lead.includes(t),
+  );
   return (
-    // Positioned by the caller, not by itself. It used to place itself at the
-    // canvas's top-left, and as the tool row grew it silently spread under the
+    // A row in the header, not a card floating on the canvas. It used to sit
+    // at the canvas's top-left, and as the tool row grew it spread under the
     // notice stack in the top-right corner and swallowed its clicks — the
-    // take-the-stairs button was on screen, correct, and unpressable.
-    <div className="pointer-events-auto flex min-w-0 max-w-full flex-col gap-1 rounded-lg border border-edge bg-panel/92 p-1.5 backdrop-blur">
+    // take-the-stairs button was on screen, correct, and unpressable. Docked
+    // under the mode row it has the whole width, overlaps nothing, and the
+    // map underneath is never covered by its own controls.
+    <div className="flex w-full min-w-0 border-b border-edge bg-panel px-3 py-1.5">
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-        {props.isGm && (
+        <ToolGroup
+          label={build ? 'Select and erase' : 'Select'}
+          tools={lead}
+          tool={props.tool}
+          onTool={props.onTool}
+        />
+        <Divider />
+        {build ? (
           <>
-            <div role="group" aria-label="Mode" className="flex items-center gap-0.5" data-testid="mode-switch">
-              {MODES.map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  title={m.hint}
-                  aria-pressed={props.mode === m.id}
-                  onClick={() => props.onMode(m.id)}
-                  className={
-                    'min-h-9 rounded px-2 py-1 font-label text-[0.7rem] uppercase tracking-wide ' +
-                    (props.mode === m.id ? 'bg-raised text-cyan' : 'text-faint hover:text-ink')
-                  }
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
-            <span className="mx-0.5 h-5 w-px bg-edge" aria-hidden />
+            {props.placing}
+            <Divider />
+            <ToolGroup label="Tools" tools={BUILD_TOOLS} tool={props.tool} onTool={props.onTool} />
           </>
-        )}
-        {tools.map((id) => (
-          <Btn key={id} active={props.tool === id} title={toolTitle(id)} onClick={() => props.onTool(id)} testId={`tool-${id}`}>
-            <span aria-hidden>{TOOL_DEFS[id].glyph}</span>
-            <span className="hidden sm:inline">{TOOL_DEFS[id].label}</span>
-          </Btn>
-        ))}
-        {props.isGm && props.mode !== 'play' && props.history && (
-          <>
-            <span className="mx-0.5 h-5 w-px bg-edge" aria-hidden />
-            <Btn
-              title={props.history.undoLabel ? `Undo: ${props.history.undoLabel} (Ctrl+Z)` : 'Nothing to undo'}
-              disabled={props.history.busy || props.history.undoLabel === null}
-              onClick={props.history.onUndo}
-              testId="undo"
-            >
-              <span aria-hidden>↶</span>
-              <span className="hidden sm:inline">Undo</span>
-            </Btn>
-            <Btn
-              title={props.history.redoLabel ? `Redo: ${props.history.redoLabel} (Ctrl+Shift+Z)` : 'Nothing to redo'}
-              disabled={props.history.busy || props.history.redoLabel === null}
-              onClick={props.history.onRedo}
-              testId="redo"
-            >
-              <span aria-hidden>↷</span>
-              <span className="hidden sm:inline">Redo</span>
-            </Btn>
-          </>
+        ) : (
+          <ToolGroup label="Tools" tools={rest} tool={props.tool} onTool={props.onTool} />
         )}
       </div>
-      <p className="mono-label hidden px-1 text-faint sm:block" data-testid="tool-hint">
-        {TOOL_HINTS[props.tool]}
-      </p>
     </div>
   );
 }
@@ -190,22 +196,22 @@ export function ViewControls(props: ViewControlsProps) {
       role="group"
       aria-label="View"
     >
-      <Btn
+      <HudButton
         active={props.snapEnabled}
-        title="Grid snap on drop (hold Shift to bypass for one drag)"
+        title="Snap to grid"
         onClick={props.onToggleSnap}
       >
         <span aria-hidden>⌗</span>
-      </Btn>
-      <Btn title="Zoom in" onClick={() => props.onZoom(1.25)}>
+      </HudButton>
+      <HudButton title="Zoom in" onClick={() => props.onZoom(1.25)}>
         +
-      </Btn>
-      <Btn title="Zoom out" onClick={() => props.onZoom(0.8)}>
+      </HudButton>
+      <HudButton title="Zoom out" onClick={() => props.onZoom(0.8)}>
         −
-      </Btn>
-      <Btn title="Fit the whole scene" onClick={props.onFit}>
+      </HudButton>
+      <HudButton title="Fit" onClick={props.onFit}>
         <span aria-hidden>⤢</span>
-      </Btn>
+      </HudButton>
 
       {/*
         Plan or isometric, one click apart, for anyone at the table. It is
@@ -226,9 +232,9 @@ export function ViewControls(props: ViewControlsProps) {
       )}
       {props.isGm && (
         <>
-          <Btn active={props.gmPanelOpen} title="GM authoring panel" onClick={props.onToggleGmPanel}>
+          <HudButton active={props.gmPanelOpen} title="Panel" onClick={props.onToggleGmPanel}>
             <span aria-hidden>▤</span>
-          </Btn>
+          </HudButton>
         </>
       )}
     </div>
@@ -260,14 +266,10 @@ function ViewToggle({
       {choices.map((c) => {
         const tableSees = c.id === sceneProjection;
         return (
-          <Btn
+          <HudButton
             key={c.id}
             active={effective === c.id}
-            title={
-              tableSees
-                ? `${c.label} view — what the table sees`
-                : `${c.label} view on this screen only; the table stays on ${sceneProjection === 'iso' ? 'iso' : 'plan'}`
-            }
+            title={tableSees ? `${c.label} (table)` : `${c.label} (this screen)`}
             // Picking the scene's own projection drops the override rather
             // than pinning it, so a later change in Setup ▸ View is followed.
             onClick={() => onView(c.id === sceneProjection ? 'scene' : c.id)}
@@ -275,7 +277,7 @@ function ViewToggle({
             <span aria-hidden>{c.id === 'iso' ? '◈' : '▦'}</span>
             <span className="hidden sm:inline">{c.label}</span>
             {tableSees && <span className="sr-only">(table)</span>}
-          </Btn>
+          </HudButton>
         );
       })}
     </div>

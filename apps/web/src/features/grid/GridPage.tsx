@@ -49,6 +49,8 @@ import { contextMenuItems, type ContextMenuActions, type ContextMenuInput } from
 import MeasurePanel from './hud/MeasurePanel.js';
 import PlayRail from './hud/PlayRail.js';
 import { availableModes, clampMode } from './hud/eyes.js';
+import ModeBar from './hud/ModeBar.js';
+import PlacingGroup from './hud/PlacingGroup.js';
 import Toolbar, { ViewControls } from './hud/Toolbar.js';
 import BuildProgress from './gm/BuildProgress.js';
 import { useGridShortcuts } from './hud/useGridShortcuts.js';
@@ -748,7 +750,39 @@ export default function GridPage() {
   }
 
   return (
-    <div className="flex h-full min-h-[70dvh] w-full flex-col xl:flex-row">
+    /*
+      The header first — the mode row with that mode's tools attached under
+      it — then the map and its panels below. Build · Prep · Play change what
+      everything else offers, so they get the full width and nothing shares
+      their row (docs/UX_MAP_BUILDER.md §3.1); the tools follow directly
+      beneath, where the choice that produced them is still in view.
+    */
+    <div className="flex h-full min-h-[70dvh] w-full flex-col">
+      <header className="z-20 flex shrink-0 flex-col">
+        {isGm && (
+          <ModeBar
+            mode={store.mode}
+            onMode={store.setMode}
+            history={{
+              undoLabel: steps.undo?.label ?? null,
+              redoLabel: steps.redo?.label ?? null,
+              busy: historyBusy,
+              onUndo: () => void useHistory.getState().undo(),
+              onRedo: () => void useHistory.getState().redo(),
+            }}
+          />
+        )}
+        <Toolbar
+          isGm={isGm}
+          mode={store.mode}
+          tool={store.tool}
+          onTool={store.setTool}
+          // What is being placed, each subject carrying the tile it lays:
+          // Build mode's first step, and only a GM building has it.
+          placing={isGm ? <PlacingGroup /> : undefined}
+        />
+      </header>
+      <div className="flex min-h-0 w-full flex-1 flex-col xl:flex-row">
       <div className="relative min-h-[52dvh] flex-1 overflow-hidden bg-ground">
         <div ref={hostRef} className="absolute inset-0" />
 
@@ -764,34 +798,14 @@ export default function GridPage() {
         )}
 
         {/*
-          ONE top row, so the tools and the notices cannot overlap. They used to
-          position themselves independently — left-3 and right-3 of the same
-          corner — which worked until the tool row grew enough to reach across
-          and cover the notices. A chip that is visible and unclickable is the
-          worst of both: the GM can read the offer and nothing happens.
+          What is left on the canvas: the view controls and the notices, in one
+          column down the top-right. The tools moved into the header, so
+          nothing here can be covered by a tool row that grew — a chip that is
+          visible and unclickable is the worst of both, the GM reads the offer
+          and nothing happens.
         */}
-        <div className="pointer-events-none absolute inset-x-3 top-3 z-10 flex flex-wrap items-start justify-between gap-2 sm:flex-nowrap">
-          <Toolbar
-            isGm={isGm}
-            mode={store.mode}
-            tool={store.tool}
-            onMode={store.setMode}
-            onTool={store.setTool}
-            history={{
-              undoLabel: steps.undo?.label ?? null,
-              redoLabel: steps.redo?.label ?? null,
-              busy: historyBusy,
-              onUndo: () => void useHistory.getState().undo(),
-              onRedo: () => void useHistory.getState().redo(),
-            }}
-          />
-
-          {/*
-            The right column may take at most six tenths of the row and wraps
-            inside itself, so the toolbar always keeps room for its mode switch
-            and cannot be drawn under the view controls.
-          */}
-          <div className="flex min-w-0 max-w-[62%] shrink flex-col items-end gap-1.5">
+        <div className="pointer-events-none absolute inset-x-3 top-3 z-10 flex flex-wrap items-start justify-end gap-2 sm:flex-nowrap">
+          <div className="flex min-w-0 max-w-full shrink flex-col items-end gap-1.5">
             <div className="flex flex-wrap items-center justify-end gap-1.5">
               <ViewControls
                 isGm={isGm}
@@ -1015,6 +1029,7 @@ export default function GridPage() {
           onCenter={(x, y) => api?.centerOn(x, y)}
         />
       )}
+      </div>
     </div>
   );
 }
