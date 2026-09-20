@@ -2,7 +2,7 @@
  * /c/:campaignId/gm/npcs — the NPC manager (UX proposal 4.3).
  *
  * NPCs used to be spread over the codex, the generator and the Fixer page.
- * This is the one screen for them: summary cards on the left, one NPC on the
+ * This is the one screen for them: a roster table on the left, one NPC on the
  * right with the GM's private notes, the persona, the register they speak
  * in, and the same in-character voice the dock offers — so "what would
  * Ratchet say" is a click from the card, not a screen change.
@@ -240,30 +240,48 @@ export default function NpcsPage() {
               onChange={(e) => setQuery(e.target.value)}
               data-testid="npc-search"
             />
-            <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2" data-testid="npc-cards">
-              {list.map((t) => {
-                const p = personaOf(t);
-                const on = t.id === selectedId;
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    className={`panel flex flex-col items-start gap-1 p-3 text-left hover:border-cyan/60 ${on ? 'border-cyan' : ''}`}
-                    aria-pressed={on}
-                    onClick={() => setSelectedId(t.id)}
-                  >
-                    <span className="flex w-full items-baseline justify-between gap-2">
-                      <span className="truncate text-ink">{t.name}</span>
-                      {dialectLabel(p.dialect) && <span className="chip shrink-0 text-faint">{dialectLabel(p.dialect)}</span>}
-                    </span>
-                    <span className="mono-label text-dim">{roleLine(t)}</span>
-                    {p.voice && <span className="line-clamp-2 text-xs text-dim">{p.voice}</span>}
-                    <Counts p={p} />
-                  </button>
-                );
-              })}
+            <div className="panel mt-3 overflow-x-auto px-4 py-2">
+              <table className="w-full min-w-[34rem] text-left" data-testid="npc-table">
+                <thead>
+                  <tr className="mono-label text-faint">
+                    <th className="py-2 pr-3 font-normal">name</th>
+                    <th className="py-2 pr-3 font-normal">role</th>
+                    <th className="py-2 pr-3 font-normal">dialect</th>
+                    <th className="py-2 pr-3 font-normal">voice</th>
+                    <th className="py-2 font-normal">persona</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {list.map((t) => {
+                    const p = personaOf(t);
+                    const on = t.id === selectedId;
+                    return (
+                      <tr
+                        key={t.id}
+                        className={`cursor-pointer border-t border-edge hover:bg-edge/40 ${on ? 'bg-edge/60' : ''}`}
+                        aria-selected={on}
+                        onClick={() => setSelectedId(t.id)}
+                      >
+                        <td className="py-2 pr-3">
+                          <button type="button" className={`text-left ${on ? 'text-cyan' : 'text-ink'}`}>
+                            {t.name}
+                          </button>
+                        </td>
+                        <td className="mono-label py-2 pr-3 text-dim">{roleLine(t)}</td>
+                        <td className="py-2 pr-3">
+                          {dialectLabel(p.dialect) ? <span className="chip text-faint">{dialectLabel(p.dialect)}</span> : null}
+                        </td>
+                        <td className="max-w-[16rem] truncate py-2 pr-3 text-xs text-dim">{p.voice ?? ''}</td>
+                        <td className="py-2">
+                          <Counts p={p} />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
               {templates.isSuccess && list.length === 0 && (
-                <p className="text-sm text-faint">No NPC matches. The generator and the Architect both create them.</p>
+                <p className="py-2 text-sm text-faint">No NPC matches. The generator and the Architect both create them.</p>
               )}
             </div>
           </div>
