@@ -23,6 +23,10 @@ import NotFound from './components/shell/NotFound.js';
 import BooksPage from './features/gm/BooksPage.js';
 import AiPage from './features/gm/AiPage.js';
 import ArchitectPage from './features/gm/ArchitectPage.js';
+// How runners are built in this campaign. It was the tallest panel on the GM
+// console and the least often touched; it is a screen of its own now, and it
+// keeps the builder's engine behind its own `lazy()` (router.chunks.test.ts).
+import ChargenPage from './features/gm/ChargenPage.js';
 import FixerPage from './features/gm/FixerPage.js';
 import GeneratorPage from './features/gm/GeneratorPage.js';
 import NpcsPage from './features/gm/npcs/NpcsPage.js';
@@ -121,6 +125,8 @@ export const routes: RouteObject[] = [
           { path: 'party', element: <PartyPage /> },
           // Which AI the Fixer talks to — its own screen, so it can be found.
           { path: 'ai', element: <AiPage /> },
+          // Creation level, caps, books, optional rules — set once, off the overview.
+          { path: 'chargen', element: <ChargenPage /> },
           // RunsBoard lives under features/codex/, so it rides that chunk.
           { path: 'runs', element: <Chunk><RunsBoard /></Chunk> },
           { path: 'scenes', element: <ScenesPage /> },

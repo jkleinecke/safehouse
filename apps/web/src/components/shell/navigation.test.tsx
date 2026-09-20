@@ -148,6 +148,7 @@ describe('no dead links', () => {
     expect(order).toEqual([
       'overview',
       'party',
+      'chargen',
       'ai',
       'table',
       'grid',

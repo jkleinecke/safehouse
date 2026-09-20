@@ -56,6 +56,14 @@ export const GM_NAV: readonly GmNavEntry[] = [
     blurb: 'Every player character: open a sheet, hand one to a phone, add a new runner.',
   },
   {
+    key: 'chargen',
+    label: 'Character creation',
+    to: '/gm/chargen',
+    section: 'campaign',
+    glyph: '✎',
+    blurb: 'How runners are built here: creation level, caps, which books, and the optional rules.',
+  },
+  {
     key: 'ai',
     label: 'AI',
     to: '/gm/ai',

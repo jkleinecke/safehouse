@@ -10,15 +10,17 @@
  *   2. the party, because who is at the table comes before everything else —
  *      and beside it the runners still being built, with the ones waiting for
  *      review counted (FR3.9);
- *   3. campaign settings (FR5.7 clock, FR6.3 webhook) and how runners are
- *      built here (FR3.9: level, caps, books, optional rules);
+ *   3. campaign settings (FR5.7 clock, FR6.3 webhook), with a way through to
+ *      how runners are built here — that form is its own screen now (FR3.9:
+ *      level, caps, books, optional rules), because it is set once and then
+ *      left alone while this page is read every session;
  *   4. how devices get here (invites, pairing, revoke — FR1.1/1.3);
  *   5. every other screen, named and described, in the order a GM works.
  *
  * The screen list is `GM_NAV`, the same list the sidebar renders, so a surface
  * can never exist in one and be invisible in the other.
  */
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { Role } from '@safehouse/contracts';
 import { useCampaign } from '../../../api/campaigns.js';
@@ -37,11 +39,6 @@ import { useCreateInvite, useDevices, useRevokeDevice, useUpdateCampaign, type I
 import PartyPanel from './PartyPanel.js';
 import SetupChecklist from './SetupChecklist.js';
 import TransferPanel from './TransferPanel.js';
-
-// The campaign's character creation settings (FR3.9, docs/CHARGEN.md §8.3)
-// live with the builder and read its engine, so they load as their own chunk
-// rather than through the builder's two static doors (router.chunks.test.ts).
-const ChargenSettingsPanel = lazy(() => import('../../build/settings/ChargenSettingsPanel.js'));
 
 function SettingsPanel({ campaignId }: { campaignId: string }) {
   const { data: campaign } = useCampaign(campaignId);
@@ -237,6 +234,32 @@ function DevicesPanel({ campaignId, onShowQr }: { campaignId: string; onShowQr: 
   );
 }
 
+/**
+ * Character creation is a whole form — level, caps, books, optional rules —
+ * and it used to render inline here, where it was the tallest thing on the
+ * console and the least often read: a GM sets it once when the campaign
+ * starts. The console now carries only what it is currently set to do and the
+ * way in; the form lives on `/gm/chargen`.
+ */
+function ChargenLink({ campaignId }: { campaignId: string }) {
+  return (
+    <div className="panel p-4" data-testid="chargen-link">
+      <SectionTitle hint="set once, then left alone">Character creation</SectionTitle>
+      <p className="mt-2 text-sm text-dim">
+        The creation level and its caps, which printing of the priority table, which of the table's
+        shared books the builder draws on, and the optional rules — everything the walkthrough reads
+        on every device.
+      </p>
+      <Link
+        className="btn btn-accent mt-3 inline-block px-3 py-1.5"
+        to={gmHref(campaignId, { to: '/gm/chargen' })}
+      >
+        set creation rules
+      </Link>
+    </div>
+  );
+}
+
 function ScreenCard({ campaignId, entry }: { campaignId: string; entry: GmNavEntry }) {
   return (
     <Link
@@ -285,9 +308,7 @@ export default function GmHome() {
             />
             <BuildsWaitingCard campaignId={campaignId} />
             <SettingsPanel campaignId={campaignId} />
-            <Suspense fallback={<div className="panel p-4"><Spinner label="loading creation settings" /></div>}>
-              <ChargenSettingsPanel campaignId={campaignId} />
-            </Suspense>
+            <ChargenLink campaignId={campaignId} />
             <TransferPanel campaignId={campaignId} />
           </div>
           <div className="space-y-4">
