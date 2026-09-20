@@ -4,8 +4,7 @@
  * Twelve tabs and fourteen tools at one level was twenty-six choices before a
  * GM had decided what they were doing (docs/UX_MAP_BUILDER.md §2, Hick's Law).
  * A mode is that decision, made once: the toolbar shows only the mode's
- * tools and the panel only its sections. Scenes sit in every mode, because
- * switching scenes is not a mode.
+ * tools and the panel only its sections.
  *
  * Pure, so the store and the tests can agree on it without a DOM. Picking a
  * tool or a tab that belongs to another mode switches to that mode — the GM
@@ -22,11 +21,19 @@ export const MODES: ReadonlyArray<{ id: GridMode; label: string; hint: string }>
   { id: 'play', label: 'Play', hint: 'Run the session' },
 ];
 
-/** Which panel sections each mode shows, in order. Scenes is first in all three. */
+/**
+ * Which panel sections each mode shows, in order.
+ *
+ * Scenes, Layout and Tiles were dropped (2026-09-19/20): scenes and their
+ * fights are their own page; Layout listed what the canvas already shows;
+ * and Tiles was left with nothing to do once the toolbar took the palette
+ * and the mode bar took the set and the clear. Build is calibration now —
+ * everything else about a floor is done on the floor.
+ */
 export const MODE_TABS: Record<GridMode, readonly GmTab[]> = {
-  build: ['scenes', 'map', 'tiles', 'geo'],
-  prep: ['scenes', 'tokens', 'fog', 'cameras', 'env', 'los'],
-  play: ['scenes', 'tokens', 'los', 'tv'],
+  build: ['map'],
+  prep: ['tokens', 'fog', 'cameras', 'env', 'los'],
+  play: ['tokens', 'los', 'tv'],
 };
 
 /** Which tools each mode's toolbar offers a GM, in order. */

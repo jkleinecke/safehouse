@@ -7,7 +7,7 @@
  * could already do and the browser could not reach.
  *
  * A fight is made here in two ways: a new empty one to fill by hand, or the
- * scene's tokens from the Grid (Scenes ▸ Fight) and the Generator's parts —
+ * the Generator's parts —
  * those two live on their own screens and are linked from the empty state.
  */
 import { useState } from 'react';
@@ -111,8 +111,7 @@ export default function FightMenu({ campaignId, encounter, onPick, onClose }: Fi
           </button>
         </div>
         <p className="text-xs text-faint">
-          Or start one from a scene’s tokens on the Grid (Scenes ▸ Fight), or roll the opposition in
-          the Generator and save it there.
+          Or roll the opposition in the Generator and save it there.
         </p>
       </section>
 

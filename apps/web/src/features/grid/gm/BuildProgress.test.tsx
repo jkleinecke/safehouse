@@ -28,7 +28,9 @@ const done = (s: Scene) => Object.fromEntries(buildSteps(s).map((x) => [x.id, x.
 describe('buildSteps', () => {
   it('starts with nothing ticked but the grid, which has nothing to line up with', () => {
     expect(done(scene())).toEqual({ map: false, grid: true, walls: false, fog: false });
-    expect(buildSteps(scene()).find((s) => s.id === 'map')?.tab).toBe('tiles');
+    // Painting a floor is done on the floor now, so the map step opens Setup
+    // rather than a Tiles tab that no longer exists (2026-09-20).
+    expect(buildSteps(scene()).find((s) => s.id === 'map')?.tab).toBe('map');
   });
 
   it('ticks the map from an image or from paint, and the grid once it is touched', () => {

@@ -30,7 +30,7 @@ describe('the three modes', () => {
     for (const m of ['build', 'prep', 'play'] as const) {
       expect(MODE_TOOLS[m].length).toBeLessThanOrEqual(9);
       expect(MODE_TABS[m].length).toBeLessThanOrEqual(7);
-      expect(MODE_TABS[m][0]).toBe('scenes');
+      expect(MODE_TABS[m].length).toBeGreaterThan(0);
     }
   });
 
@@ -46,7 +46,9 @@ describe('the three modes', () => {
     expect(modeOfTab('fog', 'build')).toBe('prep');
     expect(modeOfTab('tokens', 'play')).toBe('play');
     expect(modeOfTab('tokens', 'build')).toBe('prep');
-    expect(modeOfTab('scenes', 'play')).toBe('play');
+    // A tab only one mode has takes the GM to that mode.
+    expect(modeOfTab('map', 'play')).toBe('build');
+    expect(modeOfTab('tv', 'build')).toBe('play');
   });
 });
 

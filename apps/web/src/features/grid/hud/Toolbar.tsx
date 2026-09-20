@@ -20,7 +20,7 @@
  */
 import type { GridProjection } from '@safehouse/contracts';
 import HudButton, { HudIcon } from './HudButton.js';
-import type { GridTool, ViewProjection } from '../types.js';
+import type { GridTool } from '../types.js';
 import {
   BUILD_TOOLS,
   MODE_TOOLS,
@@ -177,18 +177,23 @@ export interface ViewControlsProps {
   isGm: boolean;
   snapEnabled: boolean;
   gmPanelOpen: boolean;
-  /** This screen's own view of the map — see `ViewProjection`. */
-  viewProjection?: ViewProjection;
-  /** What the scene is saved as, i.e. what the table sees. */
-  sceneProjection?: GridProjection;
-  onView?: (view: ViewProjection) => void;
+  /**
+   * Plan or isometric, as this viewer can set it: for a GM that is the
+   * SCENE's own projection — what the table and every player's phone draw —
+   * and for a player it is their own screen, which is the only thing they
+   * can change. One control each, doing the one thing that viewer can do.
+   */
+  projection?: GridProjection;
+  onProjection?: (projection: GridProjection) => void;
+  /** What the dropdown's tooltip should say it is changing. */
+  projectionTitle?: string;
   onToggleSnap: () => void;
   onToggleGmPanel: () => void;
   onZoom: (factor: number) => void;
   onFit: () => void;
 }
 
-/** Snap, zoom, fit, Plan/Iso and the panel toggle: how the map is looked at, not what is done to it. */
+/** Snap, zoom, fit, the view and the panel toggle: how the map is looked at, not what is done to it. */
 export function ViewControls(props: ViewControlsProps) {
   return (
     <div
@@ -196,11 +201,7 @@ export function ViewControls(props: ViewControlsProps) {
       role="group"
       aria-label="View"
     >
-      <HudButton
-        active={props.snapEnabled}
-        title="Snap to grid"
-        onClick={props.onToggleSnap}
-      >
+      <HudButton active={props.snapEnabled} title="Snap to grid" onClick={props.onToggleSnap}>
         <span aria-hidden>⌗</span>
       </HudButton>
       <HudButton title="Zoom in" onClick={() => props.onZoom(1.25)}>
@@ -214,72 +215,31 @@ export function ViewControls(props: ViewControlsProps) {
       </HudButton>
 
       {/*
-        Plan or isometric, one click apart, for anyone at the table. It is
-        this screen's OWN view: flipping it never touches the scene, so the
-        GM laying rooms out in plan does not flip a player's phone, and a
-        player who prefers plan does not flip anyone else. The scene's
-        default is set in Setup ▸ View.
+        Top-down or isometric, as one choice rather than two buttons: it is a
+        setting with a current value, which a dropdown says and a pair of
+        pressed-state buttons only implies.
       */}
-      {props.onView && (
+      {props.onProjection && (
         <>
           <span className="mx-0.5 h-5 w-px bg-edge" aria-hidden />
-          <ViewToggle
-            view={props.viewProjection ?? 'scene'}
-            sceneProjection={props.sceneProjection ?? 'topdown'}
-            onView={props.onView}
-          />
+          <select
+            aria-label="View"
+            data-testid="view-select"
+            title={props.projectionTitle ?? 'How this map is drawn'}
+            value={props.projection ?? 'topdown'}
+            onChange={(e) => props.onProjection?.(e.target.value as GridProjection)}
+            className="min-h-9 rounded border border-edge bg-deck px-1.5 py-1 text-[0.7rem] text-ink"
+          >
+            <option value="topdown">Top</option>
+            <option value="iso">Iso</option>
+          </select>
         </>
       )}
       {props.isGm && (
-        <>
-          <HudButton active={props.gmPanelOpen} title="Panel" onClick={props.onToggleGmPanel}>
-            <span aria-hidden>▤</span>
-          </HudButton>
-        </>
+        <HudButton active={props.gmPanelOpen} title="Panel" onClick={props.onToggleGmPanel}>
+          <span aria-hidden>▤</span>
+        </HudButton>
       )}
-    </div>
-  );
-}
-
-/** Plan / Iso, showing which one the table is on. */
-function ViewToggle({
-  view,
-  sceneProjection,
-  onView,
-}: {
-  view: ViewProjection;
-  sceneProjection: GridProjection;
-  onView: (view: ViewProjection) => void;
-}) {
-  const effective: GridProjection = view === 'scene' ? sceneProjection : view;
-  const choices: Array<{ id: GridProjection; label: string }> = [
-    { id: 'topdown', label: 'Plan' },
-    { id: 'iso', label: 'Iso' },
-  ];
-  return (
-    <div
-      role="group"
-      aria-label="Your view of the map"
-      className="flex items-center gap-1"
-      data-testid="view-toggle"
-    >
-      {choices.map((c) => {
-        const tableSees = c.id === sceneProjection;
-        return (
-          <HudButton
-            key={c.id}
-            active={effective === c.id}
-            title={tableSees ? `${c.label} (table)` : `${c.label} (this screen)`}
-            // Picking the scene's own projection drops the override rather
-            // than pinning it, so a later change in Setup ▸ View is followed.
-            onClick={() => onView(c.id === sceneProjection ? 'scene' : c.id)}
-          >
-            <span aria-hidden>{c.id === 'iso' ? '◈' : '▦'}</span>
-            <span className="hidden sm:inline">{c.label}</span>
-            {tableSees && <span className="sr-only">(table)</span>}
-          </HudButton>
-        );
-      })}
     </div>
   );
 }

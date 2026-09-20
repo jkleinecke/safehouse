@@ -82,3 +82,34 @@ export function useStairOffer(
 ): StairOffer | null {
   return useMemo(() => stairOfferFor(scene, token, tilesets), [scene, token, tilesets]);
 }
+
+/**
+ * Where a stair painted on `level` could lead, in words the map can show.
+ *
+ * The Stairs tool used to read the building silently: with one floor, Auto
+ * had nowhere to send a flight and painted nothing, and a GM clicking a dead
+ * tool had no way to learn that the missing piece was a floor and not a
+ * click. It said so on the Tiles tab until that tab went (2026-09-20); it is
+ * a notice on the canvas now, where the GM with the stairs in hand is
+ * looking.
+ */
+export function stairAdvice(
+  scene: Scene,
+  level: number,
+): { up: boolean; down: boolean; text: string } {
+  const floors = sceneLevels(scene);
+  const up = level < floors.length - 1;
+  const down = level > 0;
+  const here = floors[level]?.name ?? 'this floor';
+  let text: string;
+  if (!up && !down) {
+    text = `${here} is the only floor, so a stair here has nowhere to go. Add a floor first — Setup ▸ Floors — then paint the flight that leads to it.`;
+  } else if (up && down) {
+    text = `From ${here} a stair can lead up to ${floors[level + 1]?.name ?? 'the floor above'} or down to ${floors[level - 1]?.name ?? 'the floor below'}. Auto picks up.`;
+  } else if (up) {
+    text = `From ${here} a stair leads up to ${floors[level + 1]?.name ?? 'the floor above'}.`;
+  } else {
+    text = `${here} is the top floor, so a stair here leads down to ${floors[level - 1]?.name ?? 'the floor below'}.`;
+  }
+  return { up, down, text };
+}

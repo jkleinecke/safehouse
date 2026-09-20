@@ -9,7 +9,7 @@
  */
 import type { Scene } from '@safehouse/contracts';
 import type { GmTab } from '../store.js';
-import { paintedCells } from './TilesTab.js';
+import { paintedCells } from '../tilesetChoice.js';
 
 export interface BuildStep {
   id: 'map' | 'grid' | 'walls' | 'fog';
@@ -21,7 +21,7 @@ export interface BuildStep {
   hint: string;
 }
 
-/** What `ScenesTab` creates a scene with; a grid still at these has not been calibrated. */
+/** What a new scene is created with; a grid still at these has not been calibrated. */
 const CREATED_GRID = { cols: 40, rows: 30, unitM: 1 };
 
 /** The steps, ticked from the scene alone — no state of its own to get stale. */
@@ -44,8 +44,8 @@ export function buildSteps(scene: Scene): BuildStep[] {
       id: 'map',
       label: 'Map',
       done: map,
-      tab: map ? 'map' : 'tiles',
-      hint: map ? 'The map is on the canvas' : 'Upload a floor plan on Setup, or paint one on Tiles',
+      tab: 'map',
+      hint: map ? 'The map is on the canvas' : 'Upload a floor plan on Setup, or paint one: pick Ground and drag a room',
     },
     {
       id: 'grid',
@@ -62,8 +62,10 @@ export function buildSteps(scene: Scene): BuildStep[] {
       id: 'walls',
       label: 'Walls',
       done: walls,
-      tab: 'geo',
-      hint: walls ? 'Sight lines have something to stop them' : 'Draw walls and doors (W, D), or paint them from Building',
+      tab: 'map',
+      hint: walls
+        ? 'Painted walls stop a sightline; movement is still your call'
+        : 'Paint walls and doors, or draw a wall line (W, D)',
     },
     {
       id: 'fog',

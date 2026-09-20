@@ -1,10 +1,16 @@
 /**
- * Map image upload, per-image scan controls and grid calibration (FR9.1/9.2).
+ * Map image upload, per-image scan controls, floors and how the scene is
+ * drawn (FR9.1/9.2).
  *
- * Calibration is "tune cols/rows/offset until the drawn grid sits on the
- * image's own squares". The scan controls — rotate, crop, contrast/brightness
- * (Q10: hand-drawn maps arrive as phone photos) — ride on the image ref and
- * persist with the scene; see `../mapImage.ts` for the encoding.
+ * The scan controls — rotate, crop, contrast/brightness (Q10: hand-drawn maps
+ * arrive as phone photos) — ride on the image ref and persist with the scene;
+ * see `../mapImage.ts` for the encoding.
+ *
+ * Calibration — cols, rows, offset — moved to the gear on the mode bar
+ * (2026-09-20): lining a grid up with a scan is done by nudging a number and
+ * looking at the canvas, which wants to be over the canvas rather than in a
+ * panel taking width away from it. Plan or isometric went the same day, to
+ * the one dropdown on the canvas: it was two controls for one field.
  */
 import { useRef, useState } from 'react';
 import LevelsPanel from './LevelsPanel.js';
@@ -139,62 +145,6 @@ export default function MapTab({ scene }: { scene: Scene }) {
         <LevelsPanel scene={scene} />
       </PanelSection>
 
-      <PanelSection title="View" hint="how this scene is drawn — changes nothing about the rules">
-        <Row label="Projection">
-          <select
-            value={grid.projection ?? 'topdown'}
-            aria-label="Grid projection"
-            data-testid="projection-select"
-            className="w-full rounded border border-edge bg-deck px-2 py-1 text-sm"
-            onChange={(e) => setGrid({ projection: e.target.value as 'topdown' | 'iso' })}
-          >
-            <option value="topdown">Top-down (plan)</option>
-            <option value="iso">Isometric</option>
-          </select>
-        </Row>
-        <p className="mt-1 text-xs text-faint">
-          Isometric extrudes anything with height, so walls and cover read as solid objects
-          instead of a slightly different shade of floor. Tokens, distances and line of sight
-          are unchanged — this is only how the table sees it.
-        </p>
-      </PanelSection>
-
-      <PanelSection title="Calibrate" hint="1 m per square by default">
-        <Row label="Columns">
-          <Num value={grid.cols} min={1} onChange={(n) => setGrid({ cols: Math.max(1, Math.round(n)) })} />
-        </Row>
-        <Row label="Rows">
-          <Num value={grid.rows} min={1} onChange={(n) => setGrid({ rows: Math.max(1, Math.round(n)) })} />
-        </Row>
-        <Row label="Metres">
-          <Num
-            value={grid.unitM}
-            min={0.1}
-            step={0.5}
-            title="Metres per square"
-            onChange={(n) => setGrid({ unitM: n > 0 ? n : 1 })}
-          />
-        </Row>
-        <Row label="Offset X">
-          <Num value={grid.offset.x} step={0.05} onChange={(n) => setGrid({ offset: { ...grid.offset, x: n } })} />
-        </Row>
-        <Row label="Offset Y">
-          <Num value={grid.offset.y} step={0.05} onChange={(n) => setGrid({ offset: { ...grid.offset, y: n } })} />
-        </Row>
-        <Row label="Opacity">
-          <Num
-            value={grid.opacity ?? 0.35}
-            step={0.05}
-            min={0}
-            max={1}
-            onChange={(n) => setGrid({ opacity: Math.max(0, Math.min(1, n)) })}
-          />
-        </Row>
-        <p className="mono-label text-faint">
-          {grid.cols}×{grid.rows} squares = {(grid.cols * grid.unitM).toFixed(0)}×
-          {(grid.rows * grid.unitM).toFixed(0)} m
-        </p>
-      </PanelSection>
     </>
   );
 }

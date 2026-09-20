@@ -76,6 +76,16 @@ export function segmentLength(a: Point, b: Point): number {
   return gridDist(a, b);
 }
 
+/**
+ * A segment's length in metres, the way the ruler says it. Lived on the
+ * Layout tab until that tab went (2026-09-19); it is a formatting rule about
+ * geometry, so it belongs beside the geometry.
+ */
+export function metres(a: Point, b: Point, unitM: number): string {
+  const n = segmentLength(a, b) * unitM;
+  return `${Number.isInteger(n) ? n : n.toFixed(1)} m`;
+}
+
 function roundPoint(p: Point, places = 3): Point {
   const f = 10 ** places;
   return { x: Math.round(p.x * f) / f, y: Math.round(p.y * f) / f };

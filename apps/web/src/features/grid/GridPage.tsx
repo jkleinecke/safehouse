@@ -19,6 +19,7 @@ import {
   useDoorOp,
   useGridLiveSync,
   usePatchGeometry,
+  usePatchScene,
   usePatchToken,
   useRefetchOnReconnect,
   useScene,
@@ -51,6 +52,7 @@ import PlayRail from './hud/PlayRail.js';
 import { availableModes, clampMode } from './hud/eyes.js';
 import ModeBar from './hud/ModeBar.js';
 import PlacingGroup from './hud/PlacingGroup.js';
+import TilesetBar from './hud/TilesetBar.js';
 import Toolbar, { ViewControls } from './hud/Toolbar.js';
 import BuildProgress from './gm/BuildProgress.js';
 import { useGridShortcuts } from './hud/useGridShortcuts.js';
@@ -66,7 +68,7 @@ import { autoTileFor, topLayerAt } from './autoPlace.js';
 import { roomPlan, roomTileIds } from './roomFill.js';
 import { useCameraCones } from './useCameraCones.js';
 import { useShroud } from './useShroud.js';
-import { useStairOffer } from './useStairs.js';
+import { stairAdvice, useStairOffer } from './useStairs.js';
 import { historyFor, useHistory } from './history.js';
 import { useGridStore } from './store.js';
 import {
@@ -265,7 +267,14 @@ export default function GridPage() {
     [tokens, store.selectedTokenId],
   );
   const stairOffer = useStairOffer(scene, selectedToken, tilesets);
+  // Where a stair painted here could lead — only while the stairs are in
+  // hand, which is the only time it answers anything.
+  const stairs =
+    scene && store.mode === 'build' && store.tileCategory === 'stairs'
+      ? stairAdvice(scene, store.activeLevel)
+      : null;
   const patchToken = usePatchToken(sceneId);
+  const patchScene = usePatchScene();
 
   const takeStairs = useCallback(() => {
     if (!stairOffer || selectedToken === undefined) return;
@@ -322,7 +331,6 @@ export default function GridPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [historyPast, historyFuture, scene?.id],
   );
-  const tilesetName = (tilesets ?? []).find((t) => t.id === store.tilesetId)?.name ?? null;
 
   const stageState: StageSceneState | null = useMemo(
     () =>
@@ -739,7 +747,7 @@ export default function GridPage() {
         title="No active scene"
         body={
           isGm
-            ? 'Create a scene and activate it from the GM panel to put a map on the table.'
+            ? 'Create a scene on the Scenes page, then open it on the Map.'
             : 'The GM has not put a scene on the table yet.'
         }
       />
@@ -763,6 +771,13 @@ export default function GridPage() {
           <ModeBar
             mode={store.mode}
             onMode={store.setMode}
+            scene={
+              <span className="chip max-w-56 bg-panel/90 text-ink" data-testid="scene-chip">
+                <span className="truncate">{scene?.name ?? '…'}</span>
+                {scene && scene.id !== activeSceneId && <span className="text-warn">staging</span>}
+              </span>
+            }
+            tileset={store.mode === 'build' && scene ? <TilesetBar scene={scene} /> : undefined}
             history={{
               undoLabel: steps.undo?.label ?? null,
               redoLabel: steps.redo?.label ?? null,
@@ -811,39 +826,31 @@ export default function GridPage() {
                 isGm={isGm}
                 snapEnabled={store.snapEnabled}
                 gmPanelOpen={store.gmPanelOpen}
-                viewProjection={store.viewProjection}
-                sceneProjection={scene?.grid.projection ?? 'topdown'}
-                onView={store.setViewProjection}
+                // The GM sets the scene's own projection — the table follows
+                // it. A player sets their own screen, which is the only thing
+                // they can change; the two never meant the same thing and now
+                // there is one control each rather than one of each.
+                projection={viewScene?.grid.projection ?? 'topdown'}
+                projectionTitle={isGm ? 'How the table draws this scene' : 'How this screen draws the map'}
+                onProjection={
+                  scene
+                    ? (projection) => {
+                        if (isGm) {
+                          patchScene.mutate({
+                            sceneId: scene.id,
+                            patch: { grid: { ...scene.grid, projection } },
+                          });
+                        } else {
+                          store.setViewProjection(projection);
+                        }
+                      }
+                    : undefined
+                }
                 onToggleSnap={store.toggleSnap}
                 onToggleGmPanel={store.toggleGmPanel}
                 onZoom={(f) => api?.zoomBy(f)}
                 onFit={() => api?.fitScene()}
               />
-              <span className="chip pointer-events-auto bg-panel/90 text-ink">
-              {scene?.name ?? '…'}
-              {scene && scene.id !== activeSceneId && (
-                <span className="text-warn">staging</span>
-              )}
-              </span>
-              {/*
-                Which set the map draws from, where the GM is looking. It was
-                only on the Tiles tab, and a GM two tabs away had no way to
-                tell. Clicking it opens the tab where it is changed.
-              */}
-              {isGm && store.mode === 'build' && tilesetName && (
-                <button
-                  type="button"
-                  data-testid="tileset-chip"
-                  className="chip pointer-events-auto bg-panel/90 text-dim hover:text-ink"
-                  title="The tileset every floor of this scene draws from — change it on the Tiles tab and the map redraws in the new set"
-                  onClick={() => {
-                    store.setGmTab('tiles');
-                    store.openGmPanel();
-                  }}
-                >
-                  set · {tilesetName}
-                </button>
-              )}
             </div>
             {/*
               Which floor is on screen, right on the canvas. The Map tab has the
@@ -909,32 +916,31 @@ export default function GridPage() {
             */}
             {eyes.length > 1 && (
               <div
-                className="pointer-events-auto flex flex-wrap justify-end gap-1"
-                role="group"
-                aria-label="Eyes"
+                className="pointer-events-auto flex items-center gap-1"
                 data-testid="eyes-switch"
               >
-                <span className="chip bg-panel/90 text-faint">eyes</span>
-                {eyes.map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    aria-pressed={m === viewMode}
-                    onClick={() => store.setViewMode(m)}
-                    className={'chip bg-panel/90 ' + (m === viewMode ? 'border-cyan text-cyan' : 'text-dim hover:text-ink')}
-                    title={
-                      m === 'thermographic'
-                        ? 'Heat, not light: the floor in false colour, bodies warm'
-                        : m === 'lowlight'
-                          ? 'Dim light lifted; colour drained'
-                          : m === 'ultrasound'
-                            ? 'Shape without colour'
-                            : 'Plain sight'
-                    }
-                  >
-                    {VISION_MODE_LABELS[m]}
-                  </button>
-                ))}
+                <span className="chip bg-panel/90 text-faint" aria-hidden>
+                  eyes
+                </span>
+                {/*
+                  One control with a current value, not a row of chips that
+                  grew with every cyberware option: a runner with thermo,
+                  low-light and ultrasound had four to read across.
+                */}
+                <select
+                  aria-label="Eyes"
+                  data-testid="eyes-select"
+                  title="Which eyes you are looking through"
+                  value={viewMode}
+                  onChange={(e) => store.setViewMode(e.target.value as typeof viewMode)}
+                  className="min-h-8 rounded border border-edge bg-panel/90 px-1.5 py-0.5 text-[0.7rem] text-ink"
+                >
+                  {eyes.map((m) => (
+                    <option key={m} value={m}>
+                      {VISION_MODE_LABELS[m]}
+                    </option>
+                  ))}
+                </select>
               </div>
             )}
             {!store.playRailOpen && (isGm ? store.mode === 'play' : true) && (
@@ -968,6 +974,20 @@ export default function GridPage() {
             {tileNotice && (
               <span data-testid="tile-notice" className="chip bg-panel/90 text-danger">
                 {tileNotice}
+              </span>
+            )}
+            {/*
+              Where a stair here could lead — and, on a one-floor scene, that
+              it can lead nowhere at all, which is the difference between a
+              dead tool and a missing floor. Only while the stairs are in
+              hand, which is the only time it is an answer to anything.
+            */}
+            {isGm && stairs && (
+              <span
+                data-testid="stair-advice"
+                className={'chip max-w-80 bg-panel/90 ' + (stairs.up || stairs.down ? 'text-dim' : 'text-warn')}
+              >
+                {stairs.text}
               </span>
             )}
           </div>

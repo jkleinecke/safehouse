@@ -244,6 +244,88 @@ tool's name, what it does and its key all fit in one tooltip, so the row is
 sixteen icons and no prose, and the map keeps the pixels. A header that
 explains itself in sentences is a header that has stopped being a header.
 
+### 3.7a Two tabs that were a list of what the canvas already shows
+
+Scenes and Layout left the panel (2026-09-19).
+
+**Layout** was every wall, door, zone and pin on one line each — and clicking
+a row opened the same inspector a click on the thing itself opens. It was a
+finder for things the GM is already looking at. Its one irreplaceable part,
+the zone tool's drafting controls (a polygon is saved when the GM says so,
+not on a click), moved out of the tabs entirely and sits beside the inspector
+while the zone tool is in hand, where it is in view whichever section is
+open.
+
+**Scenes** was a second copy of the Scenes page, which does more and is a
+click away. The map builder is for building a map; picking which map is a
+different job. The fight section it carried is not replaced yet — that is
+known and deliberate, to be given a home in the Play rail later.
+
+The panel is now Setup and Tiles in Build, and every remaining section is
+something the canvas cannot show by itself.
+
+### 3.7b One control per decision, and the panel keeps what is left
+
+With the row carrying the subjects and their tiles, the panel was holding a
+second copy of choices the map already offers. A second copy is not
+redundancy, it is a second answer: two controls for one store field drift
+apart on screen, and the GM has to work out which one is telling the truth.
+So the duplicates went (2026-09-19):
+
+| Gone from the panel | Because the map has |
+| --- | --- |
+| Tiles ▸ the category row | the placing subjects on the toolbar |
+| Tiles ▸ the tile palette | each subject's own caret, narrowed to that subject |
+| Tiles ▸ "Draw a room" | the Room tool, one press away on the row |
+| Setup ▸ Floors, the floor buttons | the floor chips on the canvas |
+
+The floors list keeps its names and its remove buttons — adding and removing
+a storey is a fact about the building, not a thing you do while looking at
+one square — but it no longer switches floors. The chips do that, on the
+canvas, where a GM already is.
+
+Then the same question was asked of the mode bar, which had three buttons and
+a lot of empty row. Three things moved onto it, because all three are about
+the map as a whole rather than the square under the cursor:
+
+    [ Build Prep Play ] | [ Loading dock ] [ Docklands ▾ ] [ ⚙ ] [ 🗑 ]   [ ↶ ↷ ]
+
+- **Which scene** — it was a chip on the canvas among the notices, and it is
+  not a notice. It is the answer to "what am I looking at", and it keeps the
+  *staging* marker that says the table is not seeing this yet.
+- **Which set the scene is drawn in** — changing it redraws every square, so
+  it is a decision one step below the mode and a long way above a tile. Two
+  clicks into a panel section, a GM could paint for a minute before noticing
+  they had the wrong set's concrete.
+- **Clear floor**, as a bin — the other thing that happens to a whole floor
+  at once. It still arms and asks first, and when armed it says in words what
+  is about to go, because an icon cannot say "forty squares".
+- **Calibration**, behind a gear — cols, rows, metres, offset, opacity.
+  Lining a drawn grid up with a scanned one is nudge a number, look at the
+  canvas, nudge again; a panel section took width from the very thing the GM
+  was looking at. Behind the gear the six numbers sit over the canvas, and
+  they are shut the rest of the time, which is most of the time.
+
+Which left the Tiles section holding three sentences, so it went too
+(2026-09-20). Its set's blurb is the dropdown's tooltip; its stair advice is
+a notice on the canvas, where a GM with the stairs in hand is looking; and
+what a painted wall does is said by the build checklist's Walls step, which
+is read while building rather than after.
+
+Build's panel is one section now — **Setup**: the map images with their scan
+adjustments, and the floors. Everything else about a floor is done on the
+floor.
+
+Top and Iso went the same way (2026-09-20). They were two controls for one
+field — a pair of pressed-state buttons on the canvas for *this screen*, and
+a dropdown in Setup for *the scene* — which is how a GM flips to iso, checks
+the table, and finds it still in plan. Now there is one dropdown on the
+canvas and it changes the only projection that viewer owns: the scene's for
+a GM, their own screen's for a player. A dropdown also says which one is
+current, which two buttons with a pressed state only imply. The top-down
+option is labelled **Top**, not Plan: it is the word for what the camera is
+doing, and it sits beside Iso as its opposite number.
+
 ### 3.8 The row reads in the order the GM decides
 
 Building a square is two decisions, and they happen in one order every time:

@@ -7,7 +7,14 @@
  * above them the inspector for whatever the GM has picked on the map — a
  * wall, a door, a zone, a pin, a camera, a note. The inspector sits outside
  * the tab's scroll, so it is in view whichever tab is open and however far
- * down it is.
+ * down it is; the zone tool's drafting controls sit there for the same
+ * reason.
+ *
+ * Scenes, Layout and Tiles are not here (2026-09-19/20). Scenes and their
+ * fights are their own page; Layout was a list of what the canvas already
+ * shows, and the inspector — which a click on the thing opens — was the only
+ * part of it that did anything; Tiles was emptied by the toolbar and the
+ * mode bar taking its palette, its set and its clear.
  */
 import type { Scene, Token } from '@safehouse/contracts';
 import type { GridCommands } from '../commands.js';
@@ -17,19 +24,14 @@ import CamerasTab from './CamerasTab.js';
 import DisplayTab from './DisplayTab.js';
 import EnvTab from './EnvTab.js';
 import FogTab from './FogTab.js';
-import GeometryTab from './GeometryTab.js';
 import Inspector from './Inspector.js';
+import ZoneDraft from './ZoneDraft.js';
 import MapTab from './MapTab.js';
-import ScenesTab from './ScenesTab.js';
-import TilesTab from './TilesTab.js';
 import LosTab from './LosTab.js';
 import TokensTab from './TokensTab.js';
 
 const TABS: Array<{ id: GmTab; label: string }> = [
-  { id: 'scenes', label: 'Scenes' },
   { id: 'map', label: 'Setup' },
-  { id: 'tiles', label: 'Tiles' },
-  { id: 'geo', label: 'Layout' },
   { id: 'tokens', label: 'Tokens' },
   { id: 'fog', label: 'Fog' },
   { id: 'cameras', label: 'Cams & notes' },
@@ -87,6 +89,17 @@ export default function GmPanel(props: GmPanelProps) {
         </button>
       </div>
 
+      {/*
+        A zone is saved when the GM says so, not on a click, so the zone
+        tool's drafting controls sit outside the tabs — in view whichever
+        section is open, for as long as the tool is in hand.
+      */}
+      {tool === 'zone' && (
+        <div className="shrink-0 border-b border-edge">
+          <ZoneDraft scene={props.scene} />
+        </div>
+      )}
+
       {selected && (
         <div className="max-h-96 shrink-0 overflow-y-auto border-b border-edge">
           <Inspector
@@ -99,15 +112,7 @@ export default function GmPanel(props: GmPanelProps) {
       )}
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {tab === 'scenes' && (
-          <ScenesTab
-            campaignId={props.campaignId}
-            scene={props.scene}
-            activeSceneId={props.activeSceneId}
-          />
-        )}
         {tab === 'map' && <MapTab scene={props.scene} />}
-        {tab === 'tiles' && <TilesTab scene={props.scene} />}
         {tab === 'los' && <LosTab scene={props.scene} tokens={props.tokens} />}
         {tab === 'tokens' && (
           <TokensTab
@@ -117,7 +122,6 @@ export default function GmPanel(props: GmPanelProps) {
             onCenter={props.onCenter}
           />
         )}
-        {tab === 'geo' && <GeometryTab scene={props.scene} selected={selected} tool={tool} />}
         {tab === 'cameras' && <CamerasTab scene={props.scene} selected={selected} lens={lens} />}
         {tab === 'fog' && <FogTab scene={props.scene} commands={props.commands} />}
         {tab === 'env' && <EnvTab scene={props.scene} />}

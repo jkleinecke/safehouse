@@ -5,9 +5,16 @@
  * The GM's words: "To delete something on the map, I should be able to select
  * it and hit the delete key. Don't bother asking if I'm sure, it's easy to fix
  * and the undo stack is better." So the spec is exactly that sentence: pick a
- * wall from the Layout list, press Delete, and check the server's own
- * geometry — a row that vanished from a list is not a deletion until the
- * scene no longer holds the wall. Then Ctrl+Z, and the server holds it again.
+ * wall, press Delete, and check the server's own geometry — a wall that
+ * vanished from the canvas is not a deletion until the scene no longer holds
+ * it. Then Ctrl+Z, and the server holds it again.
+ *
+ * The wall is picked by clicking it on the canvas. It used to be picked from
+ * the Layout tab's list, which went when that tab did (2026-09-19) — the list
+ * only opened the same inspector a click on the thing opens. So the wall this
+ * spec stages is laid across the MIDDLE of the scene, and the spec fits the
+ * scene before clicking its centre: after a fit the scene's centre is the
+ * canvas's centre, whatever the viewport.
  *
  * The inspector's own delete is one click for the same reason; the spec reads
  * its label to make sure the second "— sure?" click never came back.
@@ -27,9 +34,22 @@ interface Geometry {
   walls: Wall[];
   [k: string]: unknown;
 }
+interface Grid {
+  cols: number;
+  rows: number;
+}
+
+async function sceneOf(
+  api: Api,
+  sceneId: string,
+  token: string,
+): Promise<{ geometry: Geometry; grid: Grid }> {
+  return (await api.get<{ scene: { geometry: Geometry; grid: Grid } }>(`/api/scenes/${sceneId}`, token))
+    .scene;
+}
 
 async function geometryOf(api: Api, sceneId: string, token: string): Promise<Geometry> {
-  return (await api.get<{ scene: { geometry: Geometry } }>(`/api/scenes/${sceneId}`, token)).scene.geometry;
+  return (await sceneOf(api, sceneId, token)).geometry;
 }
 
 test.describe('Delete on the map', () => {
@@ -46,37 +66,53 @@ test.describe('Delete on the map', () => {
 
   test('select a wall, press Delete, it is gone from the scene; Ctrl+Z brings it back', async ({ page, world, api }) => {
     const gm = world.gm.token;
-    const before = await geometryOf(api, world.sceneId, gm);
+    const { geometry: before, grid } = await sceneOf(api, world.sceneId, gm);
+    // Across the middle, so the fitted scene's centre lands on it.
+    const midY = Math.round(grid.rows / 2);
+    const quarter = Math.round(grid.cols / 4);
     await api.request('PATCH', `/api/scenes/${world.sceneId}`, {
       token: gm,
-      body: { geometry: { ...before, walls: [...before.walls, { id: WALL_ID, a: { x: 2, y: 2 }, b: { x: 6, y: 2 } }] } },
+      body: {
+        geometry: {
+          ...before,
+          walls: [
+            ...before.walls,
+            { id: WALL_ID, a: { x: quarter, y: midY }, b: { x: grid.cols - quarter, y: midY } },
+          ],
+        },
+      },
     });
     expect((await geometryOf(api, world.sceneId, gm)).walls.some((w) => w.id === WALL_ID), 'the wall was staged').toBe(true);
 
     await signInWithToken(page, world.gm);
     await page.goto(`/c/${world.campaignId}/grid`);
     await page.getByTestId('mode-switch').getByRole('button', { name: 'Build' }).click();
-    await page.getByRole('tab', { name: 'Layout' }).click();
 
-    const row = page.getByTestId('wall-list').locator(`[data-row="${WALL_ID}"]`);
-    await expect(row).toBeVisible();
-    await row.click();
-    await expect(row).toHaveAttribute('aria-pressed', 'true');
+    const canvas = page.locator('canvas').first();
+    await expect(canvas).toBeVisible({ timeout: 30_000 });
+    await page.getByRole('button', { name: 'Fit', exact: true }).click();
+    // Select, not a tile tool: a click with the brush in hand paints.
+    await page.getByTestId('tool-select').click();
+
+    const box = await canvas.boundingBox();
+    if (!box) throw new Error('the Grid canvas has no box — the stage did not mount');
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+
     // The inspector opens on it, and its delete is one click — no "sure?".
-    await expect(page.getByTestId('inspector')).toBeVisible();
+    const inspector = page.getByTestId('inspector');
+    await expect(inspector).toBeVisible();
+    await expect(inspector).toContainText('wall', { ignoreCase: true });
     await expect(page.getByTestId('inspector-delete')).toHaveText('delete');
 
     await page.keyboard.press('Delete');
-    await expect(row).toHaveCount(0);
     await expect
       .poll(async () => (await geometryOf(api, world.sceneId, gm)).walls.some((w) => w.id === WALL_ID), {
-        message: 'the wall must leave the server, not just the list',
+        message: 'the wall must leave the server, not just the canvas',
       })
       .toBe(false);
 
     // Undo is the safety net the confirmation used to be.
     await page.keyboard.press('Control+z');
-    await expect(row).toBeVisible();
     await expect
       .poll(async () => (await geometryOf(api, world.sceneId, gm)).walls.some((w) => w.id === WALL_ID), {
         message: 'Ctrl+Z must put the wall back on the server',

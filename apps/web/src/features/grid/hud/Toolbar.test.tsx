@@ -85,9 +85,8 @@ describe('<ViewControls>', () => {
         isGm
         snapEnabled
         gmPanelOpen
-        viewProjection="scene"
-        sceneProjection="topdown"
-        onView={() => undefined}
+        projection="topdown"
+        onProjection={() => undefined}
         onToggleSnap={() => undefined}
         onToggleGmPanel={() => undefined}
         onZoom={() => undefined}
@@ -95,16 +94,19 @@ describe('<ViewControls>', () => {
       />,
     );
     expect(gm).toContain('title="Fit"');
-    expect(gm).toContain('data-testid="view-toggle"');
     expect(gm).toContain('title="Panel"');
+    // One control with a value, not two buttons with a pressed state.
+    expect(gm).toContain('data-testid="view-select"');
+    expect(gm).toContain('>Top<');
+    expect(gm).toContain('>Iso<');
+
     const player = renderToStaticMarkup(
       <ViewControls
         isGm={false}
         snapEnabled={false}
         gmPanelOpen={false}
-        viewProjection="scene"
-        sceneProjection="iso"
-        onView={() => undefined}
+        projection="iso"
+        onProjection={() => undefined}
         onToggleSnap={() => undefined}
         onToggleGmPanel={() => undefined}
         onZoom={() => undefined}
@@ -112,8 +114,9 @@ describe('<ViewControls>', () => {
       />,
     );
     expect(player).toContain('Zoom in');
-    // A player flips plan / iso on their own screen too.
-    expect(player).toContain('data-testid="view-toggle"');
     expect(player).not.toContain('title="Panel"');
+    // A player gets the same one control, pointed at their own screen.
+    expect(player).toContain('data-testid="view-select"');
+    expect(player).toContain('value="iso"');
   });
 });

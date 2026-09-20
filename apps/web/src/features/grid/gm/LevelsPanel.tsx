@@ -1,6 +1,9 @@
 /**
  * Floors (FR9.22) — add a catwalk, a first storey, a sub-basement.
  *
+ * Adding and removing only: which floor is on screen is chosen from the
+ * chips on the canvas (2026-09-19), where the GM is looking.
+ *
  * Lives in the Map tab beside the grid's dimensions, because that is what it
  * is: a fact about the shape of the building rather than a thing you paint.
  *
@@ -57,18 +60,23 @@ export default function LevelsPanel({ scene }: LevelsPanelProps) {
           const active = i === activeLevel;
           return (
             <div key={i} className="flex items-center gap-1">
-              <button
-                type="button"
+              {/*
+                A name and a way to remove it — not a floor switcher. The
+                canvas carries the floor chips, which are on screen whichever
+                section is open and wherever the panel is, so a second set of
+                them here was two answers to "which floor am I on" that could
+                show different things while the panel was scrolled away.
+              */}
+              <span
                 data-level-index={i}
-                aria-pressed={active}
-                onClick={() => setActiveLevel(i)}
+                data-active={active ? 'true' : undefined}
                 className={
                   'flex-1 rounded border px-2 py-1 text-left text-xs ' +
-                  (active ? 'border-cyan text-cyan' : 'border-edge text-ink hover:border-dim')
+                  (active ? 'border-cyan text-cyan' : 'border-edge text-ink')
                 }
               >
                 {name}
-              </button>
+              </span>
               {i > 0 && (
                 <ConfirmButton
                   label="×"

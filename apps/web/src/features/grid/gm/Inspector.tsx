@@ -28,6 +28,7 @@ import {
   removeNote,
   removePin,
   removeWall,
+  metres,
   removeZone,
   updateCamera,
   updateDoor,
@@ -43,7 +44,7 @@ import { useGridStore } from '../store.js';
 import type { GeometrySelection } from '../types.js';
 import { cameraLensId } from '../useShroud.js';
 import { Empty, inputCls, Num, Row } from './ui.js';
-import { metres } from './GeometryTab.js';
+
 
 export interface InspectorProps {
   campaignId: string;

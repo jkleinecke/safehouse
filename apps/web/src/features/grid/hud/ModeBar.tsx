@@ -10,9 +10,10 @@
  * the toolbar and the panel below already show exactly that (see
  * docs/UX_MAP_BUILDER.md §3.7).
  *
- * Undo and redo ride along at the row's other end: not modes either, but
- * like the modes they are about the map as a whole rather than about the
- * square under the cursor.
+ * Undo and redo ride along at the row's other end, and in Build the set the
+ * scene is drawn from rides beside the modes: not modes either, but like the
+ * modes they are about the map as a whole rather than about the square under
+ * the cursor.
  *
  * A player never sees this row — players have no modes.
  */
@@ -33,6 +34,19 @@ export interface ModeBarProps {
   onMode: (mode: GridMode) => void;
   /** Undo and redo, for a GM building or prepping; absent in Play. */
   history?: ModeHistory;
+  /**
+   * Which scene is on the canvas, and whether it is staged or on the table.
+   * It was a chip on the canvas, among the notices; it is not a notice, it is
+   * the answer to "what am I looking at", which belongs where the other
+   * map-wide answers are.
+   */
+  scene?: React.ReactNode;
+  /**
+   * Map-wide moves that belong at the mode's altitude rather than in a panel
+   * — the tileset the scene is drawn in, and clearing a floor. Supplied by
+   * the page, which has the scene; absent outside Build.
+   */
+  tileset?: React.ReactNode;
 }
 
 export default function ModeBar(props: ModeBarProps) {
@@ -61,6 +75,15 @@ export default function ModeBar(props: ModeBarProps) {
           </button>
         ))}
       </div>
+      {/*
+        Which scene, then what it is drawn from: one step below the mode in
+        scope each time, and a long way above a tile.
+      */}
+      {(props.scene || props.tileset) && (
+        <span className="mx-1 h-6 w-px shrink-0 bg-edge" aria-hidden />
+      )}
+      {props.scene}
+      {props.tileset}
       {/*
         Undo and redo at the far end of the mode row. They belong here rather
         than among the tools: you do not pick one up and then use it, and in

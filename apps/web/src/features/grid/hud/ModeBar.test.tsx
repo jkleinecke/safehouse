@@ -56,3 +56,25 @@ describe('<ModeBar> undo and redo', () => {
     expect(render('build')).not.toContain('data-testid="undo"');
   });
 });
+
+describe('<ModeBar> the scene and its set', () => {
+  it('carries what the page gives it, between the modes and undo', () => {
+    const html = renderToStaticMarkup(
+      <ModeBar
+        mode="build"
+        onMode={() => undefined}
+        scene={<span data-testid="scene-chip">Loading dock</span>}
+        tileset={<span data-testid="tileset-bar">Docklands</span>}
+      />,
+    );
+    expect(html).toContain('data-testid="scene-chip"');
+    expect(html).toContain('data-testid="tileset-bar"');
+    // The scene comes first: which map, then what it is drawn from.
+    expect(html.indexOf('scene-chip')).toBeLessThan(html.indexOf('tileset-bar'));
+  });
+
+  it('draws no divider for controls it was not given', () => {
+    // Prep and Play get no tileset; a rule with nothing after it is noise.
+    expect(render('play')).not.toContain('w-px');
+  });
+});

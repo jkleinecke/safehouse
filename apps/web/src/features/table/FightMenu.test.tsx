@@ -22,12 +22,13 @@ function render(encounter: Encounter | null): string {
 }
 
 describe('<FightMenu>', () => {
-  it('always offers a new fight, and points at the two other ways to make one', () => {
+  it('always offers a new fight, and points at the other way to make one', () => {
     const html = render(null);
     expect(html).toContain('aria-label="New fight name"');
     expect(html).toContain('>create<');
-    expect(html).toMatch(/Grid \(Scenes ▸ Fight\)/);
     expect(html).toMatch(/Generator/);
+    // The Map's Scenes tab is gone (2026-09-19), so nothing points at it.
+    expect(html).not.toMatch(/Scenes ▸ Fight/);
     // Nothing to rename, add to or delete without a fight.
     expect(html).not.toContain('Fight name');
     expect(html).not.toContain('Delete this fight');

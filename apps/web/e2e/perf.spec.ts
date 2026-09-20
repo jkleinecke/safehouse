@@ -544,16 +544,23 @@ async function installDrawCounter(page: Page): Promise<void> {
  */
 async function stageBenchScene(page: Page, profile: Profile): Promise<void> {
   await signInWithToken(page, world.gm);
-  await page.goto(`/c/${world.campaignId}/grid`);
-  await expect(page.locator('canvas').first()).toBeVisible({ timeout: 30_000 });
 
-  // The GM panel opens on the scenes tab; the scene's own button stages it.
-  await page.getByRole('button', { name: SCENE_NAME, exact: true }).click();
+  // Scenes are their own page since the Map's Scenes tab went (2026-09-19):
+  // "open on the Map" on a scene that is not live stages it privately, which
+  // is what this bench wants — the other specs share this campaign and must
+  // find the table exactly where they left it.
+  await page.goto(`/c/${world.campaignId}/scenes`);
+  await page
+    .getByTestId('scene-card')
+    .filter({ hasText: SCENE_NAME })
+    .getByTestId('open-in-grid')
+    .click();
+  await expect(page.locator('canvas').first()).toBeVisible({ timeout: 30_000 });
   await expect(page.locator('span.chip', { hasText: SCENE_NAME })).toBeVisible({ timeout: 30_000 });
 
   // Close the panel so the canvas is the whole width — the fill-rate worst case,
   // and the shape the map is in for most of a session.
-  await page.getByRole('button', { name: 'GM authoring panel' }).click();
+  await page.getByRole('button', { name: 'Panel', exact: true }).click();
 
   // Then nudge the WINDOW by a pixel. Pixi's `resizeTo: host` only recomputes
   // the renderer on a window `resize`, so an element-only resize (which is all
@@ -564,7 +571,7 @@ async function stageBenchScene(page: Page, profile: Profile): Promise<void> {
   // this line the drag phase grabs empty floor and silently measures a pan.
   await page.setViewportSize({ width: profile.width, height: profile.height - 1 });
   await page.waitForTimeout(400);
-  await page.getByRole('button', { name: 'Fit the whole scene' }).click();
+  await page.getByRole('button', { name: 'Fit', exact: true }).click();
 
   // Art loads, layers settle, the first fog tessellation happens: none of that
   // is a steady-state frame time and none of it belongs in the sample.

@@ -70,8 +70,8 @@ export function TrackerEmptyLine({
   return (
     <li className="p-4 text-center text-sm text-faint">
       {hasEncounter
-        ? 'No combatants yet — start a fight from a scene on the Grid, or build one in the Generator.'
-        : 'No fight yet. Start one from a scene on the Grid (Scenes ▸ Fight), or build one in the Generator.'}
+        ? 'No combatants yet — build one in the Generator.'
+        : 'No fight yet. Build one in the Generator.'}
     </li>
   );
 }

@@ -25,9 +25,10 @@ describe('grid modes in the store', () => {
   it('follows a tab into its mode, and keeps the mode when the tab is shared', () => {
     s().setGmTab('fog');
     expect(s().mode).toBe('prep');
-    s().setGmTab('scenes');
+    // Tokens is in prep and play both, so it keeps the mode it is asked from.
+    s().setGmTab('tokens');
     expect(s().mode).toBe('prep');
-    s().setGmTab('geo');
+    s().setGmTab('map');
     expect(s().mode).toBe('build');
   });
 
@@ -38,9 +39,10 @@ describe('grid modes in the store', () => {
     expect(s().gmTab).toBe('tokens');
     s().setMode('build');
     expect(s().gmTab).toBe('map');
-    s().setGmTab('scenes');
+    s().setGmTab('los');
+    // LOS is in prep too, so the mode change keeps it.
     s().setMode('prep');
-    expect(s().gmTab).toBe('scenes');
+    expect(s().gmTab).toBe('los');
   });
 });
 
