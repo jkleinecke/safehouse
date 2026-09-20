@@ -49,7 +49,7 @@ export default function RecapEditor({
   return (
     <div className="panel p-4">
       <div className="flex flex-wrap items-center gap-2">
-        <SectionTitle hint="players' only window between sessions">Recap</SectionTitle>
+        <SectionTitle>Recap</SectionTitle>
         <span className="chip text-faint">{session.date}</span>
         <button
           className="btn ml-auto px-2.5 py-1"

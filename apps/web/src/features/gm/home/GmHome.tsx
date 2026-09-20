@@ -14,23 +14,17 @@
  *      how runners are built here — that form is its own screen now (FR3.9:
  *      level, caps, books, optional rules), because it is set once and then
  *      left alone while this page is read every session;
- *   4. how devices get here (invites, pairing, revoke — FR1.1/1.3);
- *   5. every other screen, named and described, in the order a GM works.
+ *   4. how devices get here (invites, pairing, revoke — FR1.1/1.3).
  *
- * The screen list is `GM_NAV`, the same list the sidebar renders, so a surface
- * can never exist in one and be invisible in the other.
+ * Every other screen is reached from the sidebar (`GM_NAV`); this page does not
+ * repeat that list.
  */
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { Role } from '@safehouse/contracts';
 import { useCampaign } from '../../../api/campaigns.js';
 import JoinQrModal from '../../../components/shell/JoinQrModal.js';
-import {
-  GM_NAV,
-  GM_NAV_SECTIONS,
-  gmHref,
-  type GmNavEntry,
-} from '../../../components/shell/gmNav.js';
+import { gmHref } from '../../../components/shell/gmNav.js';
 import { addDays } from '../common.js';
 import { EmptyState, ErrorNote, Field, GmGuard, inputClass, SectionTitle, Spinner } from '../ui.js';
 import { BuildsWaitingCard } from '../../build/entry.js';
@@ -133,7 +127,7 @@ function InvitePanel({
 
   return (
     <div className="panel p-4">
-      <SectionTitle hint="nobody ever types an IP">Invites & join QR</SectionTitle>
+      <SectionTitle>Invites & join QR</SectionTitle>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <select
           className={`${inputClass} w-auto`}
@@ -158,9 +152,6 @@ function InvitePanel({
           show join QR
         </button>
       </div>
-      <p className="mono-label mt-2 text-faint">
-        A joined phone still has no sheet until you hand it one on the Party roster.
-      </p>
       <ErrorNote error={create.error} />
       {minted.length > 0 && (
         <ul className="mt-3 space-y-1.5">
@@ -186,7 +177,7 @@ function DevicesPanel({ campaignId, onShowQr }: { campaignId: string; onShowQr: 
 
   return (
     <div className="panel p-4">
-      <SectionTitle hint="lost phone? revoke it">Devices</SectionTitle>
+      <SectionTitle>Devices</SectionTitle>
       {devices.isLoading && (
         <div className="mt-3">
           <Spinner label="loading devices" />
@@ -244,7 +235,7 @@ function DevicesPanel({ campaignId, onShowQr }: { campaignId: string; onShowQr: 
 function ChargenLink({ campaignId }: { campaignId: string }) {
   return (
     <div className="panel p-4" data-testid="chargen-link">
-      <SectionTitle hint="set once, then left alone">Character creation</SectionTitle>
+      <SectionTitle>Character creation</SectionTitle>
       <p className="mt-2 text-sm text-dim">
         The creation level and its caps, which printing of the priority table, which of the table's
         shared books the builder draws on, and the optional rules — everything the walkthrough reads
@@ -260,19 +251,6 @@ function ChargenLink({ campaignId }: { campaignId: string }) {
   );
 }
 
-function ScreenCard({ campaignId, entry }: { campaignId: string; entry: GmNavEntry }) {
-  return (
-    <Link
-      to={gmHref(campaignId, entry)}
-      data-nav-card={entry.key}
-      className="panel block p-3 transition-colors hover:border-cyan"
-    >
-      <div className="font-label text-xs uppercase tracking-widest text-cyan">{entry.label}</div>
-      <p className="mt-1 text-xs leading-snug text-dim">{entry.blurb}</p>
-    </Link>
-  );
-}
-
 export default function GmHome() {
   const { campaignId } = useParams<{ campaignId: string }>();
   const { data: campaign } = useCampaign(campaignId);
@@ -284,16 +262,11 @@ export default function GmHome() {
   return (
     <GmGuard>
       <div className="p-6">
-        <SectionTitle hint="prep between sessions, run the table during them">GM console</SectionTitle>
+        <SectionTitle>GM console</SectionTitle>
         {/* Deliberately not an <h1> carrying the campaign name: the shell
             header already is one, and two headings with the same accessible
             name make every "the campaign heading is visible" assertion
             ambiguous. */}
-        <p className="mt-1 text-sm text-dim">
-          Everything this table has, in the order you use it — who is playing, what is set up, and
-          where each tool lives.
-        </p>
-
         <div className="mt-4 max-w-5xl">
           <SetupChecklist campaignId={campaignId} named={named} />
         </div>
@@ -319,26 +292,6 @@ export default function GmHome() {
               onShowQr={() => setQr({ open: true, role: 'player' })}
             />
           </div>
-        </div>
-
-        <div className="mt-6">
-          <SectionTitle hint="every screen this console has">Where everything lives</SectionTitle>
-          {GM_NAV_SECTIONS.map((section) => {
-            const entries = GM_NAV.filter((e) => e.section === section.id && e.key !== 'overview');
-            if (entries.length === 0) return null;
-            return (
-              <div key={section.id} className="mt-3">
-                <div className="mono-label text-faint">
-                  {section.label} — {section.hint}
-                </div>
-                <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                  {entries.map((entry) => (
-                    <ScreenCard key={entry.key} campaignId={campaignId} entry={entry} />
-                  ))}
-                </div>
-              </div>
-            );
-          })}
         </div>
 
         <JoinQrModal

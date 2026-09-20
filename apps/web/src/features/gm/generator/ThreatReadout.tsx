@@ -45,19 +45,17 @@ function Cell({ row }: { row: ReadoutRow }) {
 
 function Matrix({
   title,
-  hint,
   attackers,
   defenders,
 }: {
   title: string;
-  hint: string;
   attackers: readonly SideProfile[];
   defenders: readonly SideProfile[];
 }) {
   if (attackers.length === 0 || defenders.length === 0) {
     return (
       <div>
-        <SectionTitle hint={hint}>{title}</SectionTitle>
+        <SectionTitle>{title}</SectionTitle>
         <p className="mt-2 text-sm text-faint">
           {attackers.length === 0 ? 'No attackers on this side yet.' : 'No targets on the other side yet.'}
         </p>
@@ -74,7 +72,7 @@ function Matrix({
   return (
     <div>
       <div className="flex items-center gap-2">
-        <SectionTitle hint={hint}>{title}</SectionTitle>
+        <SectionTitle>{title}</SectionTitle>
         <EstBadge />
       </div>
       <div className="mt-2 overflow-x-auto">
@@ -152,10 +150,7 @@ export default function ThreatReadout({ party, opposition, pendingCount = 0 }: T
         )}
       </div>
 
-      <p className="text-xs text-dim">
-        Estimates the GM tunes, not promises — move the levers and the whole table recomputes.
-        Hover any cell for its receipt.
-      </p>
+      <p className="text-xs text-dim">Hover any cell for its receipt.</p>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <EconomyCard label="Party action economy" profiles={party} />
@@ -164,13 +159,11 @@ export default function ThreatReadout({ party, opposition, pendingCount = 0 }: T
 
       <Matrix
         title="Opposition → party"
-        hint="their attack vs each PC's defense and soak"
         attackers={opposition}
         defenders={party}
       />
       <Matrix
         title="Party → opposition"
-        hint="and the reverse — how fast the PCs chew through them"
         attackers={party}
         defenders={opposition}
       />

@@ -227,7 +227,7 @@ export default function NpcsPage() {
     <GmGuard>
       <div className="p-6">
         <div className="flex flex-wrap items-center gap-2">
-          <SectionTitle hint="every NPC, your notes, and their voice">NPCs</SectionTitle>
+          <SectionTitle>NPCs</SectionTitle>
           <span className="mono-label text-faint">{templates.data?.length ?? 0}</span>
         </div>
 

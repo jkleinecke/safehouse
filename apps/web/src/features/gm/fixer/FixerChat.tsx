@@ -113,7 +113,7 @@ export default function FixerChat({ campaignId, dense, fill, context, seed }: Fi
   if (disabled) {
     return (
       <div className="panel p-5">
-        <SectionTitle hint="NG7 — the app plays fine without it">The Fixer is offline</SectionTitle>
+        <SectionTitle>The Fixer is offline</SectionTitle>
         <p className="mt-2 text-sm text-dim">
           Nothing is chosen yet. Pick a provider under{' '}
           <Link className="text-cyan underline" to={`/c/${campaignId}/gm/ai`}>

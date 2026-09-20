@@ -31,10 +31,10 @@ export interface GmNavEntry {
 }
 
 /** Section headings, in render order. */
-export const GM_NAV_SECTIONS: ReadonlyArray<{ id: GmNavSection; label: string; hint: string }> = [
-  { id: 'campaign', label: 'Campaign', hint: 'who is at the table' },
-  { id: 'table', label: 'At the table', hint: 'what runs on Friday night' },
-  { id: 'prep', label: 'Prep', hint: 'what feeds Friday night' },
+export const GM_NAV_SECTIONS: ReadonlyArray<{ id: GmNavSection; label: string }> = [
+  { id: 'campaign', label: 'Campaign' },
+  { id: 'table', label: 'At the table' },
+  { id: 'prep', label: 'Prep' },
 ];
 
 export const GM_NAV: readonly GmNavEntry[] = [

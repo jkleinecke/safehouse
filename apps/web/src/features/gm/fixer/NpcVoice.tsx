@@ -113,7 +113,7 @@ export default function NpcVoice({ campaignId, npcId: initialNpcId }: NpcVoicePr
   if (disabled) {
     return (
       <div className="panel p-4" data-testid="npc-voice-offline">
-        <SectionTitle hint="NG7 — needs the Fixer's inference endpoint">Speak as an NPC</SectionTitle>
+        <SectionTitle>Speak as an NPC</SectionTitle>
         <p className="mt-2 text-sm text-dim">
           Comes back with the Fixer: point{' '}
           <Link className="text-cyan underline" to={`/c/${campaignId}/gm/ai`}>
@@ -128,7 +128,7 @@ export default function NpcVoice({ campaignId, npcId: initialNpcId }: NpcVoicePr
   return (
     <div className="panel flex min-h-0 flex-col p-4" data-testid="npc-voice">
       <div className="flex flex-wrap items-center gap-2">
-        <SectionTitle hint="in character, inside what they know — for you to read aloud">
+        <SectionTitle>
           Speak as an NPC
         </SectionTitle>
         <button

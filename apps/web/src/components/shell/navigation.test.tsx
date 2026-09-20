@@ -284,9 +284,8 @@ describe('empty states hand over the control that fixes them', () => {
     // row `?tab=library` was a URL nothing in the app ever produced.
     expect(html).toContain('data-check="opposition"');
     expect(html).toContain(`href="/c/${CAMPAIGN}/gm/generator?tab=library"`);
-    // And the console names every screen rather than listing bare chips.
-    expect(html).toContain('data-nav-card="generator"');
-    expect(html).toContain('data-nav-card="sessions"');
+    // The console does not repeat the sidebar's screen list.
+    expect(html).not.toContain('data-nav-card=');
     // Runners in the making, with the ones waiting for review one tap away.
     expect(html).toContain('data-testid="builds-waiting-card"');
     expect(html).toContain(`href="/c/${CAMPAIGN}/build"`);

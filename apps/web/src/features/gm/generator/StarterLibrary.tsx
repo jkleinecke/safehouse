@@ -138,7 +138,7 @@ export default function StarterLibrary({
   return (
     <div className="panel space-y-4 p-4">
       <div className="flex flex-wrap items-center gap-3">
-        <SectionTitle hint="original archetypes, not book stat blocks">
+        <SectionTitle>
           Starter library
         </SectionTitle>
       </div>

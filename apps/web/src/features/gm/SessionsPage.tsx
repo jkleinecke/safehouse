@@ -35,7 +35,7 @@ export default function SessionsPage() {
     <GmGuard>
       <div className="p-6">
         <div className="flex flex-wrap items-center gap-2">
-          <SectionTitle hint="run the night, then close the books">Sessions</SectionTitle>
+          <SectionTitle>Sessions</SectionTitle>
           {campaign?.ingameDate && (
             <span className="chip text-faint">in-game {campaign.ingameDate}</span>
           )}

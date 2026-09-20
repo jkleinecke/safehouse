@@ -56,7 +56,7 @@ export default function TransferPanel({ campaignId }: { campaignId: string }) {
 
   return (
     <div className="panel p-4" data-testid="transfer-panel">
-      <SectionTitle hint="the table's log says who did it">Hand the campaign over</SectionTitle>
+      <SectionTitle>Hand the campaign over</SectionTitle>
       <p className="mt-2 text-sm text-dim">
         The new owner becomes the GM everywhere at once — the record, the seats, every signed-in
         device. You keep a seat as a player.

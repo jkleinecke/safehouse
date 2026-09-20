@@ -45,7 +45,7 @@ export default function ArchitectPage() {
   return (
     <GmGuard>
       <div className="p-6">
-        <SectionTitle hint="one brief → pages, NPCs and mapped scenes, as drafts">Architect</SectionTitle>
+        <SectionTitle>Architect</SectionTitle>
         <h1 className="mt-1 text-lg font-semibold">Rough out a stretch of the campaign</h1>
         <p className="mt-1 max-w-2xl text-sm text-dim">
           Describe what you need — a run, an arc, a district — and the Architect answers with an

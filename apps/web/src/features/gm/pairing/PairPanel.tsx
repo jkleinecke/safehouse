@@ -41,7 +41,7 @@ export default function PairPanel({ campaignId }: PairPanelProps) {
 
   return (
     <div className="panel p-4">
-      <SectionTitle hint="a second GM machine, without a console hack">
+      <SectionTitle>
         Pair a GM device
       </SectionTitle>
 

@@ -81,7 +81,7 @@ export function SharedShelf({ campaignId }: { campaignId: string }) {
 
   return (
     <div className="p-4 md:p-6">
-      <SectionTitle hint="what the GM shared with the table">Rules library</SectionTitle>
+      <SectionTitle>Rules library</SectionTitle>
       <h1 className="mt-1 text-lg font-semibold">Books</h1>
 
       {/* Look it up, and what the table looked up (FR12.14, FR11.6). */}

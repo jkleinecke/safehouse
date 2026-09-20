@@ -116,7 +116,7 @@ export default function DraftsInbox({ campaignId }: DraftsInboxProps) {
   return (
     <div className="panel p-4">
       <div className="flex items-center gap-2">
-        <SectionTitle hint="nothing the AI writes applies itself">Drafts inbox</SectionTitle>
+        <SectionTitle>Drafts inbox</SectionTitle>
         {rows.length > 0 && <span className="chip border-cyan-dim text-cyan">{rows.length}</span>}
         {drafts.isFetching && <Spinner />}
       </div>

@@ -23,7 +23,7 @@ export default function FixerPage() {
     <GmGuard>
       <div className="p-6">
         <div className="flex flex-wrap items-center gap-2">
-          <SectionTitle hint="GM-only, drafts before anything reaches the table">
+          <SectionTitle>
             The Fixer
           </SectionTitle>
           {sessionLive && (

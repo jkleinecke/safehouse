@@ -76,7 +76,7 @@ function TierForm({ tier, onChange }: { tier: GenTier; onChange: (tier: GenTier)
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div>
-          <SectionTitle hint="sampled per NPC">Attribute ranges</SectionTitle>
+          <SectionTitle>Attribute ranges</SectionTitle>
           <div className="mt-2">
             <RangeMapEditor
               entries={tier.attributes}
@@ -87,7 +87,7 @@ function TierForm({ tier, onChange }: { tier: GenTier; onChange: (tier: GenTier)
           </div>
         </div>
         <div>
-          <SectionTitle hint="skill id → rating range">Skill ranges</SectionTitle>
+          <SectionTitle>Skill ranges</SectionTitle>
           <div className="mt-2">
             <RangeMapEditor
               entries={tier.skills}
@@ -107,7 +107,7 @@ function TierForm({ tier, onChange }: { tier: GenTier; onChange: (tier: GenTier)
           </div>
         </div>
         <div>
-          <SectionTitle hint="your own gear records, by name">Loadout slots</SectionTitle>
+          <SectionTitle>Loadout slots</SectionTitle>
           <div className="mt-2">
             <LoadoutEditor
               slots={tier.loadout}
@@ -277,7 +277,7 @@ export default function TemplateEditor({
           </div>
 
           <div>
-            <SectionTitle hint="labels are yours — street / seasoned / pro / elite / prime">
+            <SectionTitle>
               Tier dial
             </SectionTitle>
             <div className="mt-2 flex flex-wrap items-center gap-2">

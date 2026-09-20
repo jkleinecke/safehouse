@@ -30,7 +30,7 @@ export default function PartyPage() {
   return (
     <GmGuard>
       <div className="p-6">
-        <SectionTitle hint="a sheet, the phone holding it, and the numbers on it">
+        <SectionTitle>
           The crew
         </SectionTitle>
         <h1 className="mt-1 text-lg font-semibold">Party</h1>

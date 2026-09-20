@@ -17,7 +17,7 @@ export default function AiPage() {
   return (
     <GmGuard>
       <div className="p-6">
-        <SectionTitle hint="a box on the LAN, or a provider — saved per campaign">AI</SectionTitle>
+        <SectionTitle>AI</SectionTitle>
         <h1 className="mt-1 text-lg font-semibold">Which AI the Fixer talks to</h1>
         <p className="mt-1 max-w-2xl text-sm text-dim">
           Everything the Fixer does — the chat, NPC voices, drafts, reading a map, building a floor —

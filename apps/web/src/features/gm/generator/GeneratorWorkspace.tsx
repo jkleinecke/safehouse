@@ -81,7 +81,7 @@ export default function GeneratorWorkspace({
 
   return (
     <div className="p-6">
-      <SectionTitle hint="build opposition in minutes, balance it against the real party">
+      <SectionTitle>
         Opposition kit
       </SectionTitle>
 

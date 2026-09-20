@@ -101,7 +101,7 @@ export default function EncounterBuilder({
   return (
     <div className="space-y-4">
       <div className="panel p-4">
-        <SectionTitle hint="parts, not snapshots: the server re-rolls from template+tier+seed">
+        <SectionTitle>
           Encounter
         </SectionTitle>
 

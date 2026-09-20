@@ -352,7 +352,7 @@ export default function RunsBoard() {
 
   return (
     <div className="p-6">
-      <SectionTitle hint="Johnson, objectives, payout, awards, recap">Runs</SectionTitle>
+      <SectionTitle>Runs</SectionTitle>
 
       {isGm && (
         <form

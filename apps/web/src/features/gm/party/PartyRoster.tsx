@@ -115,7 +115,7 @@ export default function PartyRoster({ campaignId }: PartyRosterProps) {
 
   return (
     <div className="panel p-4" data-testid="party-roster">
-      <SectionTitle hint="condition, Edge, pools, ledger">Party</SectionTitle>
+      <SectionTitle>Party</SectionTitle>
 
       {members.length > 0 && (
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">

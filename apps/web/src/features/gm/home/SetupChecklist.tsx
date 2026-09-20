@@ -88,7 +88,7 @@ export function checklistRows(input: {
       detail:
         (input.devices ?? 0) > 0
           ? 'phones and screens paired to this table'
-          : 'show the join QR — nobody ever types an IP',
+          : 'show the join QR',
       to: `${c}/gm`,
       cta: 'invites',
     },

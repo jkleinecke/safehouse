@@ -240,7 +240,7 @@ export function BuildListView(props: BuildListViewProps) {
   return (
     <div className="mx-auto max-w-3xl space-y-4 p-4 pb-8 sm:p-6" data-testid="build-list-page">
       <div>
-        <SectionTitle hint={isGm ? 'every runner in the making' : 'your runners in the making'}>Builds</SectionTitle>
+        <SectionTitle>Builds</SectionTitle>
         <p className="mt-1 text-sm text-dim">
           A runner built step by step through the book's nine steps, checked as you go, then sent to the GM for approval.
           A build that is not finished waits here until you come back to it.

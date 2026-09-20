@@ -26,7 +26,7 @@ export default function ChargenPage() {
   return (
     <GmGuard>
       <div className="p-6">
-        <SectionTitle hint="set once when the campaign starts">Character creation</SectionTitle>
+        <SectionTitle>Character creation</SectionTitle>
         <h1 className="mt-1 text-lg font-semibold">How runners are built here</h1>
         <p className="mt-1 max-w-2xl text-sm text-dim">
           The creation level and the caps it presets, which printing of the priority table, which of

@@ -180,7 +180,7 @@ export default function GeneratePanel({
   return (
     <div className="space-y-4">
       <div className="panel p-4">
-        <SectionTitle hint="seeded, so the same squad comes back identical">
+        <SectionTitle>
           Generate
         </SectionTitle>
 

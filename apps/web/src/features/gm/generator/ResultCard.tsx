@@ -172,7 +172,7 @@ export default function ResultCard({
 
           {Object.keys(npc.loadout).length > 0 && (
             <div>
-              <SectionTitle hint="picked from the tier's slots">Loadout</SectionTitle>
+              <SectionTitle>Loadout</SectionTitle>
               <ul className="mt-1.5 space-y-0.5 text-sm text-dim">
                 {Object.entries(npc.loadout).map(([slot, picks]) => (
                   <li key={slot}>
@@ -187,7 +187,7 @@ export default function ResultCard({
 
         <div className="space-y-3">
           <div>
-            <SectionTitle hint="original flavor tables">Face</SectionTitle>
+            <SectionTitle>Face</SectionTitle>
             <dl className="mt-1.5 space-y-1 text-sm">
               <div className="flex gap-2">
                 <dt className="mono-label w-24 shrink-0 text-faint">quirk</dt>
@@ -205,7 +205,7 @@ export default function ResultCard({
           </div>
 
           <div className="rounded-md border border-edge bg-deck p-3">
-            <SectionTitle hint="the Fixer expands this">Persona stub</SectionTitle>
+            <SectionTitle>Persona stub</SectionTitle>
             <div className="mt-2 space-y-2">
               <List label="traits" items={persona.traits ?? []} />
               <List label="goals" items={persona.goals ?? []} />

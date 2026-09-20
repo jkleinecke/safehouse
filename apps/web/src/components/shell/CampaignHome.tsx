@@ -41,7 +41,7 @@ export default function CampaignHome() {
         <Card
           to={`${c}/gm`}
           title="GM console"
-          blurb="Party, settings, invites — and every prep tool, named and described."
+          blurb="Party, settings, invites, and every paired device."
         />
       )}
 
