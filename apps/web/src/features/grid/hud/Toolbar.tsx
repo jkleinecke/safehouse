@@ -19,6 +19,7 @@
  * in the mode row above — they are not tools either.
  */
 import type { GridProjection } from '@safehouse/contracts';
+import Icon from '../../../components/Icon.js';
 import HudButton, { HudIcon } from './HudButton.js';
 import type { GridTool } from '../types.js';
 import {
@@ -83,6 +84,12 @@ export interface ToolbarProps {
    * render of its props. Absent for a player, and in Prep and Play.
    */
   placing?: React.ReactNode;
+  /**
+   * Uploading a floor plan — the other way to get a map (FR9.1), and the
+   * only one that is not a tool you hold. It rides beside Select and Erase,
+   * which is where the things that are not "what am I placing" live.
+   */
+  mapImage?: React.ReactNode;
 }
 
 /** A labelled run of tool buttons. The label is for a screen reader; the eye gets the gap. */
@@ -158,6 +165,7 @@ export default function Toolbar(props: ToolbarProps) {
           tool={props.tool}
           onTool={props.onTool}
         />
+        {build && props.mapImage}
         <Divider />
         {build ? (
           <>
@@ -205,10 +213,10 @@ export function ViewControls(props: ViewControlsProps) {
         <span aria-hidden>⌗</span>
       </HudButton>
       <HudButton title="Zoom in" onClick={() => props.onZoom(1.25)}>
-        +
+        <Icon name="zoom_in" size={16} />
       </HudButton>
       <HudButton title="Zoom out" onClick={() => props.onZoom(0.8)}>
-        −
+        <Icon name="zoom_out" size={16} />
       </HudButton>
       <HudButton title="Fit" onClick={props.onFit}>
         <span aria-hidden>⤢</span>

@@ -10,7 +10,7 @@ const s = () => useGridStore.getState();
 
 describe('grid modes in the store', () => {
   beforeEach(() => {
-    useGridStore.setState({ mode: 'build', gmTab: 'map', tool: 'select' });
+    useGridStore.setState({ mode: 'build', gmTab: 'tokens', tool: 'select' });
   });
 
   it('follows the tool into its mode', () => {
@@ -28,8 +28,9 @@ describe('grid modes in the store', () => {
     // Tokens is in prep and play both, so it keeps the mode it is asked from.
     s().setGmTab('tokens');
     expect(s().mode).toBe('prep');
-    s().setGmTab('map');
-    expect(s().mode).toBe('build');
+    // Build has no sections at all now, so every tab belongs to prep or play.
+    s().setGmTab('tv');
+    expect(s().mode).toBe('play');
   });
 
   it('drops a foreign tool and lands on a real tab when the mode changes', () => {
@@ -37,8 +38,9 @@ describe('grid modes in the store', () => {
     s().setMode('play');
     expect(s().tool).toBe('select');
     expect(s().gmTab).toBe('tokens');
+    // Build offers no tab, so the one in hand is left alone.
     s().setMode('build');
-    expect(s().gmTab).toBe('map');
+    expect(s().gmTab).toBe('tokens');
     s().setGmTab('los');
     // LOS is in prep too, so the mode change keeps it.
     s().setMode('prep');
@@ -48,7 +50,7 @@ describe('grid modes in the store', () => {
 
 describe('the inspector’s selection (docs/UX_MAP_BUILDER.md §3.2)', () => {
   beforeEach(() => {
-    useGridStore.setState({ mode: 'build', gmTab: 'map', tool: 'select', selected: null, selectedTokenId: null });
+    useGridStore.setState({ mode: 'build', gmTab: 'tokens', tool: 'select', selected: null, selectedTokenId: null });
   });
 
   it('is one thing at a time, of any kind', () => {

@@ -51,10 +51,11 @@ import MeasurePanel from './hud/MeasurePanel.js';
 import PlayRail from './hud/PlayRail.js';
 import { availableModes, clampMode } from './hud/eyes.js';
 import ModeBar from './hud/ModeBar.js';
+import FloorMenu from './hud/FloorMenu.js';
+import MapImageButton from './hud/MapImageButton.js';
 import PlacingGroup from './hud/PlacingGroup.js';
 import TilesetBar from './hud/TilesetBar.js';
 import Toolbar, { ViewControls } from './hud/Toolbar.js';
-import BuildProgress from './gm/BuildProgress.js';
 import { useGridShortcuts } from './hud/useGridShortcuts.js';
 import { composeStageState, resolveSceneId } from './hydration.js';
 import { useCharacter } from '../sheet/api.js';
@@ -777,6 +778,8 @@ export default function GridPage() {
                 {scene && scene.id !== activeSceneId && <span className="text-warn">staging</span>}
               </span>
             }
+            floor={scene ? <FloorMenu scene={scene} /> : undefined}
+            live={!!scene && scene.id === activeSceneId}
             tileset={store.mode === 'build' && scene ? <TilesetBar scene={scene} /> : undefined}
             history={{
               undoLabel: steps.undo?.label ?? null,
@@ -795,6 +798,7 @@ export default function GridPage() {
           // What is being placed, each subject carrying the tile it lays:
           // Build mode's first step, and only a GM building has it.
           placing={isGm ? <PlacingGroup /> : undefined}
+          mapImage={isGm && scene ? <MapImageButton scene={scene} /> : undefined}
         />
       </header>
       <div className="flex min-h-0 w-full flex-1 flex-col xl:flex-row">
@@ -853,52 +857,19 @@ export default function GridPage() {
               />
             </div>
             {/*
-              Which floor is on screen, right on the canvas. The Map tab has the
-              full list, but a GM two tabs away from it had no way to tell the
-              catwalk from the warehouse below except by what was painted on
-              it — and an empty new floor is painted with nothing.
+              Putting the scene on the table, where the scene's own name is.
+              It used to head a checklist of Map / Grid / Walls / Fog chips,
+              which read as filters rather than as steps, and sat beside a
+              "✓ on the table" chip that said the same thing the Live chip
+              now says once, on the mode bar (2026-09-20).
             */}
-            {isGm && scene && (scene.levels ?? []).length > 0 && (
-              <div
-                className="pointer-events-auto flex flex-wrap justify-end gap-1"
-                role="group"
-                aria-label="Floor on screen"
-                data-testid="floor-chips"
-              >
-                {[GROUND_LEVEL_NAME, ...(scene.levels ?? []).map((l) => l.name)].map(
-                  (name, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      aria-pressed={i === store.activeLevel}
-                      onClick={() => store.setActiveLevel(i)}
-                      className={
-                        'chip bg-panel/90 ' +
-                        (i === store.activeLevel ? 'border-cyan text-cyan' : 'text-dim')
-                      }
-                    >
-                      {name}
-                    </button>
-                  ),
-                )}
-              </div>
-            )}
-            {/*
-              The build checklist (docs/UX_MAP_BUILDER.md §3.4), Build mode only:
-              what is done, what is left, and the finish line — activate — where
-              the GM is already looking.
-            */}
-            {isGm && scene && campaignId && store.mode === 'build' && (
-              <BuildProgress
-                scene={scene}
-                campaignId={campaignId}
-                activeSceneId={activeSceneId}
-                activating={activateScene.isPending}
-                onStep={(tab) => {
-                  store.setGmTab(tab);
-                  store.openGmPanel();
-                }}
-                onActivate={() =>
+            {isGm && scene && campaignId && scene.id !== activeSceneId && (
+              <button
+                type="button"
+                data-testid="activate-scene"
+                disabled={activateScene.isPending}
+                title="Push this scene to every player device and the TV"
+                onClick={() =>
                   activateScene.mutate(scene.id, {
                     onSuccess: () => {
                       setFocusNotice('scene pushed to the table');
@@ -906,7 +877,10 @@ export default function GridPage() {
                     },
                   })
                 }
-              />
+                className="chip pointer-events-auto border-cyan bg-panel/90 text-cyan disabled:opacity-50"
+              >
+                put on the table →
+              </button>
             )}
             {focusNotice && <span className="chip bg-panel/90 text-cyan">{focusNotice}</span>}
             {/*

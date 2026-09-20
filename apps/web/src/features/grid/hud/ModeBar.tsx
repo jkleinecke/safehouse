@@ -41,6 +41,14 @@ export interface ModeBarProps {
    * map-wide answers are.
    */
   scene?: React.ReactNode;
+  /** Which floor is on screen. */
+  floor?: React.ReactNode;
+  /**
+   * True when this scene is the one the table is looking at. Shown as one
+   * chip beside undo and redo — the map either is live or it is not, and
+   * that is worth a word in the corner the GM already watches.
+   */
+  live?: boolean;
   /**
    * Map-wide moves that belong at the mode's altitude rather than in a panel
    * — the tileset the scene is drawn in, and clearing a floor. Supplied by
@@ -79,10 +87,11 @@ export default function ModeBar(props: ModeBarProps) {
         Which scene, then what it is drawn from: one step below the mode in
         scope each time, and a long way above a tile.
       */}
-      {(props.scene || props.tileset) && (
+      {(props.scene || props.floor || props.tileset) && (
         <span className="mx-1 h-6 w-px shrink-0 bg-edge" aria-hidden />
       )}
       {props.scene}
+      {props.floor}
       {props.tileset}
       {/*
         Undo and redo at the far end of the mode row. They belong here rather
@@ -92,8 +101,23 @@ export default function ModeBar(props: ModeBarProps) {
         tools below change with the mode, and the whitespace between is the
         separator (Law of Proximity).
       */}
+      {props.live && (
+        <span
+          className="chip ml-auto shrink-0 border-ok/60 text-ok"
+          data-testid="live-chip"
+          title="The table is looking at this scene"
+        >
+          Live
+        </span>
+      )}
       {props.history && props.mode !== 'play' && (
-        <div className="ml-auto flex shrink-0 items-center gap-1.5" role="group" aria-label="History">
+        <div
+          className={
+            'flex shrink-0 items-center gap-1.5 ' + (props.live ? 'ml-1.5' : 'ml-auto')
+          }
+          role="group"
+          aria-label="History"
+        >
           <HudButton
             title={props.history.undoLabel ? `Undo: ${props.history.undoLabel} (Ctrl+Z)` : 'Nothing to undo'}
             disabled={props.history.busy || props.history.undoLabel === null}

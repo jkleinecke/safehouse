@@ -24,14 +24,16 @@ export const MODES: ReadonlyArray<{ id: GridMode; label: string; hint: string }>
 /**
  * Which panel sections each mode shows, in order.
  *
- * Scenes, Layout and Tiles were dropped (2026-09-19/20): scenes and their
- * fights are their own page; Layout listed what the canvas already shows;
- * and Tiles was left with nothing to do once the toolbar took the palette
- * and the mode bar took the set and the clear. Build is calibration now —
- * everything else about a floor is done on the floor.
+ * Build has none (2026-09-19/20). Scenes and their fights are their own
+ * page; Layout listed what the canvas already shows; Tiles was left with
+ * nothing to do once the toolbar took the palette and the mode bar took the
+ * set and the clear; and Setup followed it, calibration to the gear, floors
+ * to the floor dropdown, images to the toolbar. Everything about a floor is
+ * done on the floor. The panel still opens in Build — the inspector and the
+ * zone draft sit above the tabs — it simply has no sections.
  */
 export const MODE_TABS: Record<GridMode, readonly GmTab[]> = {
-  build: ['map'],
+  build: [],
   prep: ['tokens', 'fog', 'cameras', 'env', 'los'],
   play: ['tokens', 'los', 'tv'],
 };

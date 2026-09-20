@@ -57,7 +57,7 @@ export {
 };
 
 /** GM authoring side-panel tabs; which show depends on the mode (hud/modes.ts). */
-export type GmTab = 'map' | 'tokens' | 'cameras' | 'fog' | 'env' | 'los' | 'tv';
+export type GmTab = 'tokens' | 'cameras' | 'fog' | 'env' | 'los' | 'tv';
 
 /** GM steering of the table display (FR9.21) — mirrors the TV's `TvControls`. */
 export interface DisplayControls {
@@ -243,7 +243,7 @@ export const useGridStore = create<GridUiState>()((set) => ({
   playRailOpen: true,
   viewMode: 'normal',
   placeAt: null,
-  gmTab: 'map',
+  gmTab: 'tokens',
   mode: readStoredMode(),
   viewSceneId: null,
   pendingRollMod: null,
@@ -262,7 +262,7 @@ export const useGridStore = create<GridUiState>()((set) => ({
       const owner = modeOfTool(s.tool);
       return {
         mode,
-        gmTab: MODE_TABS[mode].includes(s.gmTab) ? s.gmTab : (MODE_TABS[mode][0] ?? 'map'),
+        gmTab: MODE_TABS[mode].includes(s.gmTab) ? s.gmTab : (MODE_TABS[mode][0] ?? s.gmTab),
         ...(owner !== null && owner !== mode ? toolPatch(s, 'select') : {}),
         // A new job: whatever was open in the inspector belonged to the old one.
         selected: null,

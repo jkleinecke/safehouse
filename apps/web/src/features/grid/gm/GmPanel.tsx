@@ -10,11 +10,14 @@
  * down it is; the zone tool's drafting controls sit there for the same
  * reason.
  *
- * Scenes, Layout and Tiles are not here (2026-09-19/20). Scenes and their
- * fights are their own page; Layout was a list of what the canvas already
- * shows, and the inspector — which a click on the thing opens — was the only
- * part of it that did anything; Tiles was emptied by the toolbar and the
- * mode bar taking its palette, its set and its clear.
+ * Scenes, Layout, Tiles and Setup are not here (2026-09-19/20). Scenes and
+ * their fights are their own page; Layout was a list of what the canvas
+ * already shows, and the inspector — which a click on the thing opens — was
+ * the only part of it that did anything; Tiles was emptied by the toolbar
+ * and the mode bar taking its palette, its set and its clear; and Setup went
+ * the same way, its calibration to the gear, its floors to the floor
+ * dropdown and its images to the toolbar. Build's authoring is all on the
+ * map now, and this panel serves Prep and Play.
  */
 import type { Scene, Token } from '@safehouse/contracts';
 import type { GridCommands } from '../commands.js';
@@ -26,12 +29,10 @@ import EnvTab from './EnvTab.js';
 import FogTab from './FogTab.js';
 import Inspector from './Inspector.js';
 import ZoneDraft from './ZoneDraft.js';
-import MapTab from './MapTab.js';
 import LosTab from './LosTab.js';
 import TokensTab from './TokensTab.js';
 
 const TABS: Array<{ id: GmTab; label: string }> = [
-  { id: 'map', label: 'Setup' },
   { id: 'tokens', label: 'Tokens' },
   { id: 'fog', label: 'Fog' },
   { id: 'cameras', label: 'Cams & notes' },
@@ -66,6 +67,12 @@ export default function GmPanel(props: GmPanelProps) {
       data-testid="gm-panel"
       className="flex w-full shrink-0 flex-col border-t border-edge bg-panel xl:h-full xl:w-80 xl:border-l xl:border-t-0"
     >
+      {/*
+        Build has no sections left — everything about a floor is done on the
+        floor now — so the strip draws only when the mode has tabs. The panel
+        itself stays: the inspector and the zone draft live above the tabs,
+        and both are Build work.
+      */}
       <div className="flex items-center gap-1 border-b border-edge px-2 py-1.5">
         <div className="flex min-w-0 flex-1 flex-wrap gap-1" role="tablist" aria-label="GM tools">
           {tabs.map((t) => (
@@ -112,7 +119,6 @@ export default function GmPanel(props: GmPanelProps) {
       )}
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {tab === 'map' && <MapTab scene={props.scene} />}
         {tab === 'los' && <LosTab scene={props.scene} tokens={props.tokens} />}
         {tab === 'tokens' && (
           <TokensTab
