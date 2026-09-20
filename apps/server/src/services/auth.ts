@@ -178,6 +178,11 @@ export class AuthService {
       .limit(1);
     const row = rows[0];
     if (!row || row.device.revokedAt) return null;
+    // Stamp the device's last-seen so the GM console can show recency.
+    await this.db
+      .update(devices)
+      .set({ lastSeenAt: new Date() })
+      .where(eq(devices.id, row.device.id));
     return {
       userId: row.user.id,
       deviceId: row.device.id,

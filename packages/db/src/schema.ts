@@ -731,6 +731,7 @@ export const devices = pgTable(
     label: text('label').notNull().default(''),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
   },
   (t) => [uniqueIndex('devices_token_hash_idx').on(t.tokenHash)],
 );

@@ -18,6 +18,10 @@ export interface GmSidebarProps {
   onShowQr: () => void;
   /** Opens the join QR already switched to the display role (the table TV). */
   onShowDisplayQr?: () => void;
+  /** Whether the rail is collapsed to icon-only width. */
+  collapsed?: boolean;
+  /** Toggle the collapsed state. */
+  onToggle?: () => void;
 }
 
 const linkClass = ({ isActive }: { isActive: boolean }) =>
@@ -34,63 +38,115 @@ function Section({ label, children }: { label: string; children: React.ReactNode
   );
 }
 
-export default function GmSidebar({ campaignId, onShowQr, onShowDisplayQr }: GmSidebarProps) {
+export default function GmSidebar({
+  campaignId,
+  onShowQr,
+  onShowDisplayQr,
+  collapsed = false,
+  onToggle,
+}: GmSidebarProps) {
   return (
-    <aside className="hidden w-52 shrink-0 flex-col border-r border-edge bg-deck md:flex">
-      <div className="border-b border-edge px-4 py-4">
-        <div className="font-label text-sm tracking-[0.3em] text-cyan">SAFEHOUSE</div>
-        <div className="mono-label mt-1 text-faint">GM console</div>
-      </div>
-
-      <nav className="flex-1 overflow-y-auto px-2 pb-4" aria-label="GM console">
-        {GM_NAV_SECTIONS.map((section) => (
-          <Section key={section.id} label={section.label}>
-            {GM_NAV.filter((e) => e.section === section.id).map((entry) => (
-              <NavLink
-                key={entry.key}
-                to={gmHref(campaignId, entry)}
-                end={entry.end}
-                data-nav={entry.key}
-                title={entry.blurb}
-                className={linkClass}
-              >
-                {entry.label}
-              </NavLink>
-            ))}
-          </Section>
-        ))}
-
-        <Section label="Table display">
+    <aside
+      className={`hidden shrink-0 flex-col border-r border-edge bg-deck transition-[width] duration-200 ease-in-out md:flex ${
+        collapsed ? 'w-12' : 'w-52'
+      }`}
+    >
+      {/* Header: hamburger toggle + brand (brand hidden when collapsed) */}
+      <div className={`flex items-center border-b border-edge py-3 ${collapsed ? 'justify-center px-1' : 'gap-2 px-3'}`}>
+        {onToggle && (
           <button
             type="button"
-            data-nav="display-qr"
-            className="block w-full rounded-md px-3 py-1.5 text-left font-label text-xs uppercase tracking-widest text-dim transition-colors hover:bg-panel hover:text-ink"
-            onClick={onShowDisplayQr ?? onShowQr}
+            onClick={onToggle}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-expanded={!collapsed}
+            data-testid="sidebar-toggle"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-lg text-dim transition-colors hover:bg-panel hover:text-ink"
           >
-            Pair the TV
+            {collapsed ? '☰' : '✕'}
           </button>
-          <p className="px-3 pt-1 text-[0.7rem] leading-snug text-faint">
-            The TV needs its own display invite — open the kiosk on that screen and scan.
-          </p>
-          <a
-            href={`/tv/${campaignId}`}
-            target="_blank"
-            rel="noreferrer"
-            data-nav="tv-preview"
-            className="block rounded-md px-3 py-1.5 font-label text-xs uppercase tracking-widest text-dim transition-colors hover:bg-panel hover:text-ink"
-          >
-            Preview kiosk ↗
-          </a>
-        </Section>
-      </nav>
-
-      <div className="border-t border-edge p-3">
-        <button className="btn w-full" onClick={onShowQr}>
-          Show join QR
-        </button>
-        {/* Which build is running — the answer to "is my change in here?". */}
-        <BuildBadge className="mt-2.5 px-1" />
+        )}
+        {!collapsed && (
+          <div className="min-w-0">
+            <div className="font-label text-sm tracking-[0.3em] text-cyan">SAFEHOUSE</div>
+            <div className="mono-label mt-1 text-faint">GM console</div>
+          </div>
+        )}
       </div>
+
+      {/* Nav: full when expanded, icon-only rail when collapsed */}
+      {collapsed ? (
+        <nav className="flex flex-1 flex-col items-center gap-1 overflow-y-auto py-2" aria-label="GM console">
+          {GM_NAV.map((entry) => (
+            <NavLink
+              key={entry.key}
+              to={gmHref(campaignId, entry)}
+              end={entry.end}
+              data-nav={entry.key}
+              title={entry.label}
+              className={({ isActive }) =>
+                `flex h-9 w-9 items-center justify-center rounded-md text-xs transition-colors ${
+                  isActive ? 'bg-raised text-cyan' : 'text-dim hover:bg-panel hover:text-ink'
+                }`
+              }
+            >
+              {entry.glyph ?? entry.label.charAt(0)}
+            </NavLink>
+          ))}
+        </nav>
+      ) : (
+        <nav className="flex-1 overflow-y-auto px-2 pb-4" aria-label="GM console">
+          {GM_NAV_SECTIONS.map((section) => (
+            <Section key={section.id} label={section.label}>
+              {GM_NAV.filter((e) => e.section === section.id).map((entry) => (
+                <NavLink
+                  key={entry.key}
+                  to={gmHref(campaignId, entry)}
+                  end={entry.end}
+                  data-nav={entry.key}
+                  title={entry.blurb}
+                  className={linkClass}
+                >
+                  {entry.label}
+                </NavLink>
+              ))}
+            </Section>
+          ))}
+
+          <Section label="Table display">
+            <button
+              type="button"
+              data-nav="display-qr"
+              className="block w-full rounded-md px-3 py-1.5 text-left font-label text-xs uppercase tracking-widest text-dim transition-colors hover:bg-panel hover:text-ink"
+              onClick={onShowDisplayQr ?? onShowQr}
+            >
+              Pair the TV
+            </button>
+            <p className="px-3 pt-1 text-[0.7rem] leading-snug text-faint">
+              The TV needs its own display invite — open the kiosk on that screen and scan.
+            </p>
+            <a
+              href={`/tv/${campaignId}`}
+              target="_blank"
+              rel="noreferrer"
+              data-nav="tv-preview"
+              className="block rounded-md px-3 py-1.5 font-label text-xs uppercase tracking-widest text-dim transition-colors hover:bg-panel hover:text-ink"
+            >
+              Preview kiosk ↗
+            </a>
+          </Section>
+        </nav>
+      )}
+
+      {/* Footer: join QR + build badge (hidden when collapsed) */}
+      {!collapsed && (
+        <div className="border-t border-edge p-3">
+          <button className="btn w-full" onClick={onShowQr}>
+            Show join QR
+          </button>
+          {/* Which build is running — the answer to "is my change in here?". */}
+          <BuildBadge className="mt-2.5 px-1" />
+        </div>
+      )}
     </aside>
   );
 }

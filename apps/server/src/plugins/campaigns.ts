@@ -200,6 +200,7 @@ export default async function campaignsPlugin(app: FastifyInstance): Promise<voi
         userName: users.displayName,
         createdAt: devices.createdAt,
         revokedAt: devices.revokedAt,
+        lastSeenAt: devices.lastSeenAt,
       })
       .from(devices)
       .leftJoin(users, eq(users.id, devices.userId))
@@ -213,6 +214,7 @@ export default async function campaignsPlugin(app: FastifyInstance): Promise<voi
         userName: r.userName ?? '',
         createdAt: r.createdAt.toISOString(),
         revokedAt: r.revokedAt ? r.revokedAt.toISOString() : null,
+        lastSeenAt: r.lastSeenAt ? r.lastSeenAt.toISOString() : null,
       })),
     );
   });

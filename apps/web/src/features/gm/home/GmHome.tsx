@@ -183,6 +183,10 @@ function DevicesPanel({ campaignId, onShowQr }: { campaignId: string; onShowQr: 
   const devices = useDevices(campaignId);
   const revoke = useRevokeDevice(campaignId);
 
+  // Revoked devices are hidden entirely — the list is "who is here", not
+  // "who was ever here".
+  const active = (devices.data ?? []).filter((d) => !d.revokedAt);
+
   return (
     <div className="panel p-4">
       <SectionTitle hint="lost phone? revoke it">Devices</SectionTitle>
@@ -192,7 +196,7 @@ function DevicesPanel({ campaignId, onShowQr }: { campaignId: string; onShowQr: 
         </div>
       )}
       <ErrorNote error={devices.error} />
-      {devices.data && devices.data.length === 0 && (
+      {devices.data && active.length === 0 && (
         <div className="mt-3">
           <EmptyState
             testId="devices-empty"
@@ -207,31 +211,26 @@ function DevicesPanel({ campaignId, onShowQr }: { campaignId: string; onShowQr: 
         </div>
       )}
       <ul className="mt-3 divide-y divide-edge">
-        {(devices.data ?? []).map((d) => {
-          const revoked = Boolean(d.revokedAt);
-          return (
-            <li key={d.id} className={`flex items-center gap-3 py-2 ${revoked ? 'opacity-50' : ''}`}>
-              <span className="chip">{d.role}</span>
-              <span className="min-w-0 flex-1 truncate text-sm">
-                {d.label ?? d.userName ?? d.id}
-                {d.lastSeenAt && (
-                  <span className="mono-label ml-2 text-faint">seen {d.lastSeenAt.slice(0, 10)}</span>
-                )}
-              </span>
-              {revoked ? (
-                <span className="mono-label text-danger">revoked</span>
-              ) : (
-                <button
-                  className="btn px-2.5 py-1 text-danger"
-                  disabled={revoke.isPending}
-                  onClick={() => revoke.mutate(d.id)}
-                >
-                  revoke
-                </button>
+        {active.map((d) => (
+          <li key={d.id} className="flex items-center gap-3 py-2">
+            <span className="chip">{d.role}</span>
+            <span className="min-w-0 flex-1 truncate text-sm">
+              {d.label ?? d.userName ?? d.id}
+              {d.lastSeenAt && (
+                <span className="mono-label ml-2 text-faint">
+                  seen {new Date(d.lastSeenAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
+                </span>
               )}
-            </li>
-          );
-        })}
+            </span>
+            <button
+              className="btn px-2.5 py-1 text-danger"
+              disabled={revoke.isPending}
+              onClick={() => revoke.mutate(d.id)}
+            >
+              revoke
+            </button>
+          </li>
+        ))}
       </ul>
       <ErrorNote error={revoke.error} />
     </div>

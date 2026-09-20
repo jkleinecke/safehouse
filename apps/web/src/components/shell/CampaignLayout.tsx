@@ -45,6 +45,7 @@ export default function CampaignLayout() {
   const { data: campaign } = useCampaign(campaignId);
   const myCharacterId = useMyCharacterId(campaignId);
   const [qr, setQr] = useState<{ open: boolean; role: Role }>({ open: false, role: 'player' });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // A token the server has revoked used to render this whole shell in silence
   // while every call 401'd. Now it retires itself and this tab goes back to
   // the front door, where the campaign picker still has the sessions that work.
@@ -67,6 +68,8 @@ export default function CampaignLayout() {
           campaignId={campaignId}
           onShowQr={() => setQr({ open: true, role: 'player' })}
           onShowDisplayQr={() => setQr({ open: true, role: 'display' })}
+          collapsed={sidebarCollapsed}
+          onToggle={() => setSidebarCollapsed((c) => !c)}
         />
       )}
 

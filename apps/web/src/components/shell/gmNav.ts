@@ -26,6 +26,8 @@ export interface GmNavEntry {
   section: GmNavSection;
   /** NavLink `end` — only the index route should match exactly. */
   end?: boolean;
+  /** Glyph for the collapsed sidebar rail. */
+  glyph?: string;
 }
 
 /** Section headings, in render order. */
@@ -42,6 +44,7 @@ export const GM_NAV: readonly GmNavEntry[] = [
     to: '/gm',
     end: true,
     section: 'campaign',
+    glyph: '⌂',
     blurb: 'Campaign name, the in-game clock, the join QR, and every paired device.',
   },
   {
@@ -49,6 +52,7 @@ export const GM_NAV: readonly GmNavEntry[] = [
     label: 'Party',
     to: '/gm/party',
     section: 'campaign',
+    glyph: '👥',
     blurb: 'Every player character: open a sheet, hand one to a phone, add a new runner.',
   },
   {
@@ -56,6 +60,7 @@ export const GM_NAV: readonly GmNavEntry[] = [
     label: 'AI',
     to: '/gm/ai',
     section: 'campaign',
+    glyph: '⚡',
     blurb: 'Which model the Fixer talks to — a box on your own machine or a provider — and whether it is reachable.',
   },
   {
@@ -63,6 +68,7 @@ export const GM_NAV: readonly GmNavEntry[] = [
     label: 'Table',
     to: '/table',
     section: 'table',
+    glyph: '⬡',
     blurb: 'The shared roll log and the initiative tracker — the screen you run combat from.',
   },
   {
@@ -70,6 +76,7 @@ export const GM_NAV: readonly GmNavEntry[] = [
     label: 'Map',
     to: '/grid',
     section: 'table',
+    glyph: '▦',
     blurb: 'The tactical map: tokens, fog, pings, and the GM panel that authors scenes.',
   },
   {
@@ -77,6 +84,7 @@ export const GM_NAV: readonly GmNavEntry[] = [
     label: 'Scenes',
     to: '/gm/scenes',
     section: 'table',
+    glyph: '🎬',
     blurb: 'Every scene in the campaign — activate one, or open it on the Map to author it.',
   },
   {
@@ -84,6 +92,7 @@ export const GM_NAV: readonly GmNavEntry[] = [
     label: 'Codex',
     to: '/codex',
     section: 'table',
+    glyph: '❖',
     blurb: 'NPCs, factions, locations, lore — and exactly how much of it the players can see.',
   },
   {
@@ -91,6 +100,7 @@ export const GM_NAV: readonly GmNavEntry[] = [
     label: 'Calendar',
     to: '/calendar',
     section: 'table',
+    glyph: '📅',
     blurb: 'The Sixth World clock: runs, sessions, and rent coming due.',
   },
   {
@@ -98,6 +108,7 @@ export const GM_NAV: readonly GmNavEntry[] = [
     label: 'Runs',
     to: '/gm/runs',
     section: 'prep',
+    glyph: '🎯',
     blurb: 'Draft the job — Johnson, objectives, payout — and pay it out when it lands.',
   },
   {
@@ -105,6 +116,7 @@ export const GM_NAV: readonly GmNavEntry[] = [
     label: 'Generator',
     to: '/gm/generator',
     section: 'prep',
+    glyph: '🎲',
     blurb: 'Roll opposition from archetype tiers, then check the threat math against the party.',
   },
   {
@@ -112,6 +124,7 @@ export const GM_NAV: readonly GmNavEntry[] = [
     label: 'NPCs',
     to: '/gm/npcs',
     section: 'prep',
+    glyph: '🧑',
     blurb: 'Every NPC on one screen: who they are, your notes on them, and a way to talk to them in their own voice.',
   },
   {
@@ -119,6 +132,7 @@ export const GM_NAV: readonly GmNavEntry[] = [
     label: 'Fixer',
     to: '/gm/fixer',
     section: 'prep',
+    glyph: '🔧',
     blurb: 'The AI copilot. Everything it writes arrives as a draft you accept or bin.',
   },
   {
@@ -126,6 +140,7 @@ export const GM_NAV: readonly GmNavEntry[] = [
     label: 'Architect',
     to: '/gm/architect',
     section: 'prep',
+    glyph: '📐',
     blurb: 'One brief becomes an outline — codex pages, NPCs, mapped scenes — and each item you tick is built as a draft.',
   },
   {
@@ -133,6 +148,7 @@ export const GM_NAV: readonly GmNavEntry[] = [
     label: 'Books',
     to: '/books',
     section: 'prep',
+    glyph: '▤',
     blurb: 'The rules library: printed-page calibration, and what the table is allowed to open.',
   },
   {
@@ -140,6 +156,7 @@ export const GM_NAV: readonly GmNavEntry[] = [
     label: 'Sessions',
     to: '/gm/sessions',
     section: 'prep',
+    glyph: '📋',
     blurb: 'Attendance, the recap, and the end-of-session housekeeping beat.',
   },
 ];
