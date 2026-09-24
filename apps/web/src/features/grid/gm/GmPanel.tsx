@@ -22,6 +22,8 @@
 import type { Scene, Token } from '@safehouse/contracts';
 import type { GridCommands } from '../commands.js';
 import { useGridStore, type GmTab } from '../store.js';
+import { usePaintBatch } from '../api.js';
+import { copySet, describeSet, eraseBodies } from '../cellSelection.js';
 import { MODE_TABS } from '../hud/modes.js';
 import CamerasTab from './CamerasTab.js';
 import DisplayTab from './DisplayTab.js';
@@ -58,43 +60,74 @@ export default function GmPanel(props: GmPanelProps) {
   const lens = useGridStore((s) => s.losTokenId);
   const setTab = useGridStore((s) => s.setGmTab);
   const toggle = useGridStore((s) => s.toggleGmPanel);
+  const select = useGridStore((s) => s.select);
+  const cellSelection = useGridStore((s) => s.cellSelection);
+  const setCellSelection = useGridStore((s) => s.setCellSelection);
   // Only the current mode's sections (§3.1): a GM laying a floor is not shown
   // the TV controls, and a GM running a fight is not shown calibration.
   const tabs = MODE_TABS[mode].map((id) => TABS.find((t) => t.id === id)!).filter(Boolean);
+  const showTab = MODE_TABS[mode].includes(tab);
+
+  /*
+    Build has no sections: everything about a floor is done on the floor. So
+    in Build the panel is the properties of what is picked on the map and
+    nothing else — it appears when something is selected (or a zone is being
+    drafted), and it is gone the rest of the time, giving the canvas its
+    width back.
+  */
+  const build = mode === 'build';
+  if (build && !selected && !cellSelection && tool !== 'zone') return null;
 
   return (
     <aside
       data-testid="gm-panel"
       className="flex w-full shrink-0 flex-col border-t border-edge bg-panel xl:h-full xl:w-80 xl:border-l xl:border-t-0"
     >
-      {/*
-        Build has no sections left — everything about a floor is done on the
-        floor now — so the strip draws only when the mode has tabs. The panel
-        itself stays: the inspector and the zone draft live above the tabs,
-        and both are Build work.
-      */}
-      <div className="flex items-center gap-1 border-b border-edge px-2 py-1.5">
-        <div className="flex min-w-0 flex-1 flex-wrap gap-1" role="tablist" aria-label="GM tools">
-          {tabs.map((t) => (
+      {build ? (
+        <div className="flex items-center gap-1 border-b border-edge px-3 py-1.5">
+          <span className="mono-label flex-1 text-dim">Properties</span>
+          {/*
+            Closing it lets go of the thing: in Build the panel IS the
+            selection, so there is nothing left for it to show.
+          */}
+          {(selected || cellSelection) && (
             <button
-              key={t.id}
               type="button"
-              role="tab"
-              aria-selected={tab === t.id}
-              onClick={() => setTab(t.id)}
-              className={
-                'mono-label rounded px-2 py-1 ' +
-                (tab === t.id ? 'bg-raised text-cyan' : 'text-dim hover:text-ink')
-              }
+              className="btn px-2 py-1"
+              title="Deselect"
+              onClick={() => {
+                select(null);
+                setCellSelection(null);
+              }}
             >
-              {t.label}
+              ✕
             </button>
-          ))}
+          )}
         </div>
-        <button type="button" className="btn px-2 py-1" title="Close panel" onClick={toggle}>
-          ✕
-        </button>
-      </div>
+      ) : (
+        <div className="flex items-center gap-1 border-b border-edge px-2 py-1.5">
+          <div className="flex min-w-0 flex-1 flex-wrap gap-1" role="tablist" aria-label="GM tools">
+            {tabs.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={tab === t.id}
+                onClick={() => setTab(t.id)}
+                className={
+                  'mono-label rounded px-2 py-1 ' +
+                  (tab === t.id ? 'bg-raised text-cyan' : 'text-dim hover:text-ink')
+                }
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          <button type="button" className="btn px-2 py-1" title="Close panel" onClick={toggle}>
+            ✕
+          </button>
+        </div>
+      )}
 
       {/*
         A zone is saved when the GM says so, not on a click, so the zone
@@ -107,8 +140,16 @@ export default function GmPanel(props: GmPanelProps) {
         </div>
       )}
 
+      {build && cellSelection && <SelectionInspector scene={props.scene} />}
+
       {selected && (
-        <div className="max-h-96 shrink-0 overflow-y-auto border-b border-edge">
+        <div
+          className={
+            build
+              ? 'min-h-0 flex-1 overflow-y-auto'
+              : 'max-h-96 shrink-0 overflow-y-auto border-b border-edge'
+          }
+        >
           <Inspector
             campaignId={props.campaignId}
             scene={props.scene}
@@ -118,6 +159,11 @@ export default function GmPanel(props: GmPanelProps) {
         </div>
       )}
 
+      {/*
+        Only a section this mode has. The tab in hand outlives a switch into
+        Build (which has none), and must not draw there regardless.
+      */}
+      {!build && showTab && (
       <div className="min-h-0 flex-1 overflow-y-auto">
         {tab === 'los' && <LosTab scene={props.scene} tokens={props.tokens} />}
         {tab === 'tokens' && (
@@ -133,6 +179,57 @@ export default function GmPanel(props: GmPanelProps) {
         {tab === 'env' && <EnvTab scene={props.scene} />}
         {tab === 'tv' && <DisplayTab commands={props.commands} />}
       </div>
+      )}
     </aside>
+  );
+}
+
+/**
+ * A multi-selection's properties: how much is in it, and the two things a
+ * GM does to a set of squares that are not a drag — copy it, or take it out.
+ * Ctrl+C and Delete do the same; the buttons are for the GM who has not
+ * learnt the keys yet, which is most GMs.
+ */
+function SelectionInspector({ scene }: { scene: Scene }) {
+  const sel = useGridStore((s) => s.cellSelection);
+  const setCellSelection = useGridStore((s) => s.setCellSelection);
+  const setClipboard = useGridStore((s) => s.setClipboard);
+  const clipboard = useGridStore((s) => s.clipboard);
+  const batch = usePaintBatch();
+  if (!sel) return null;
+  return (
+    <section data-testid="selection-inspector" className="bg-raised/40 px-3 py-3" aria-label="Selection">
+      <div className="flex items-center gap-2">
+        <span className="mono-label text-magenta">Selection</span>
+        <span className="mono-label min-w-0 flex-1 truncate text-faint">{describeSet(sel)}</span>
+      </div>
+      <div className="mt-2 flex justify-end gap-2">
+        <button
+          type="button"
+          className="btn py-1"
+          data-testid="selection-copy"
+          title="Copy (Ctrl+C) — then Ctrl+V and click where it goes"
+          onClick={() => {
+            const clip = copySet(scene, sel);
+            if (clip) setClipboard(clip);
+          }}
+        >
+          {clipboard ? 'copy again' : 'copy'}
+        </button>
+        <button
+          type="button"
+          className="btn py-1 text-danger"
+          data-testid="selection-delete"
+          title="Delete (Del) — Ctrl+Z puts it back"
+          onClick={() => {
+            const bodies = eraseBodies(scene, sel);
+            setCellSelection(null);
+            if (bodies.length > 0) batch.mutate({ sceneId: scene.id, bodies, label: 'delete the selection' });
+          }}
+        >
+          delete
+        </button>
+      </div>
+    </section>
   );
 }

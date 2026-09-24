@@ -16,7 +16,8 @@
 import { useRef, useState, type ReactNode } from 'react';
 import type { Camera, Door, Note, Pin, Point, Scene, Wall, Zone } from '@safehouse/contracts';
 import { sceneLevels } from '@safehouse/rules';
-import { fileUrl, useDoorOp, usePatchGeometry, useUploadAttachment, useWikiPages } from '../api.js';
+import { fileUrl, useDoorOp, usePaintTiles, usePatchGeometry, useUploadAttachment, useWikiPages } from '../api.js';
+import { objectForSelection, type PaintedRole } from '../paintedObjects.js';
 import {
   camerasOf,
   convertWallToDoor,
@@ -63,6 +64,7 @@ const TITLES: Record<GeometrySelection['kind'], string> = {
   pin: 'Pin',
   camera: 'Camera',
   note: 'Note',
+  painted: 'Painted',
 };
 
 /** A few papers to pick from; the contract takes any hex. */
@@ -90,7 +92,15 @@ const centroid = (poly: readonly Point[]): Point =>
         y: poly.reduce((s, p) => s + p.y, 0) / poly.length,
       };
 
-export default function Inspector({ campaignId, scene, selection, onCenter }: InspectorProps) {
+export default function Inspector(props: InspectorProps) {
+  // A painted wall, door or prop is squares on a layer, not a geometry
+  // record, so it has an inspector of its own — and none of the geometry
+  // fields, which describe things it does not have.
+  if (props.selection.kind === 'painted') return <PaintedInspector {...props} />;
+  return <GeometryInspector {...props} />;
+}
+
+function GeometryInspector({ campaignId, scene, selection, onCenter }: InspectorProps) {
   const patch = usePatchGeometry();
   const select = useGridStore((s) => s.select);
   const geo = scene.geometry;
@@ -203,6 +213,8 @@ export function find(geo: Geo, sel: GeometrySelection): Found | null {
       const item = by(camerasOf(geo));
       return item ? { kind: 'camera', item } : null;
     }
+    case 'painted':
+      return null;
     case 'note': {
       const item = by(notesOf(geo));
       return item ? { kind: 'note', item } : null;
@@ -237,6 +249,79 @@ function Endpoints({ a, b, onChange }: { a: Point; b: Point; onChange: (p: { a?:
  * (history.ts), so a second "sure?" click is a tax on something the GM can
  * take back with Ctrl+Z — the Delete key does the same (docs/UX_MAP_BUILDER.md §3.6).
  */
+/** What a painted object is called in its inspector's header. */
+const PAINTED_TITLE: Record<PaintedRole, string> = { wall: 'Wall', door: 'Door', prop: 'Object' };
+
+/**
+ * A painted wall, door or prop: what it is, how big, and a way to take it out.
+ *
+ * Moving and resizing are done on the canvas — drag it, or drag the handles
+ * at its ends — so this carries only what the canvas cannot say. Delete
+ * erases exactly its own squares on its own layer: the floor under a deleted
+ * bench stays floor, and one undo puts the bench back.
+ */
+function PaintedInspector({ scene, selection, onCenter }: InspectorProps) {
+  const paint = usePaintTiles();
+  const level = useGridStore((s) => s.activeLevel);
+  const select = useGridStore((s) => s.select);
+  const obj = objectForSelection(scene, level, selection.id);
+  if (!obj) return null;
+
+  const n = obj.cells.length;
+  const size =
+    obj.role === 'prop'
+      ? `${obj.max.col - obj.min.col + 1}×${obj.max.row - obj.min.row + 1} squares`
+      : `${(n * scene.grid.unitM).toFixed(n * scene.grid.unitM < 10 ? 1 : 0).replace(/\.0$/, '')} m`;
+  const centre = { x: (obj.min.col + obj.max.col + 1) / 2, y: (obj.min.row + obj.max.row + 1) / 2 };
+
+  return (
+    <section
+      data-testid="inspector"
+      data-kind="painted"
+      data-id={selection.id}
+      className="bg-raised/40 px-3 py-3"
+      aria-label={`${PAINTED_TITLE[obj.role]} inspector`}
+    >
+      <div className="flex items-center gap-2">
+        <span className="mono-label text-magenta">{PAINTED_TITLE[obj.role]}</span>
+        <span className="mono-label min-w-0 flex-1 truncate text-faint">{size}</span>
+        <button
+          type="button"
+          className="btn px-2 py-0.5"
+          title="Centre the map on it"
+          onClick={() => onCenter(centre.x, centre.y)}
+        >
+          ⌖
+        </button>
+        <button type="button" className="btn px-2 py-0.5" title="Close (Esc)" onClick={() => select(null)}>
+          ✕
+        </button>
+      </div>
+      <div className="mt-2 space-y-2">
+        <p className="text-sm text-ink" data-testid="painted-name">
+          {obj.label}
+        </p>
+        <div className="flex justify-end">
+          <DeleteButton
+            onClick={() => {
+              select(null);
+              paint.mutate({
+                sceneId: scene.id,
+                tilesetId: obj.tilesetId,
+                level,
+                paint: {},
+                erase: obj.cells,
+                layer: obj.layer,
+              });
+            }}
+          />
+        </div>
+      </div>
+      {paint.isError && <p className="mono-label text-danger">not saved — retry</p>}
+    </section>
+  );
+}
+
 function DeleteButton({ onClick, label = 'delete' }: { onClick: () => void; label?: string }) {
   return (
     <button

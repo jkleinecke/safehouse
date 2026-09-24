@@ -12,8 +12,7 @@ import {
   rulerSegments,
   sceneWorldSize,
   worldFromGrid,
-  type SceneMetrics,
-} from '../geometry.js';
+  type SceneMetrics, cellCorners } from '../geometry.js';
 import type {
   AoeTemplate,
   FogDraft,
@@ -70,12 +69,24 @@ export class FxLayer {
   private readonly fogDraft = new Graphics();
   private readonly segment = new Graphics();
   private readonly rectDraft = new Graphics();
+  /** The painted object the GM has selected in Build, and its handles. */
+  private readonly paintedSel = new Graphics();
+  /** Where a dragged painted object will land. */
+  private readonly paintedGhost = new Graphics();
   private readonly pings: PoolItem[];
   private readonly trail: PoolItem[];
 
   constructor() {
     this.root.eventMode = 'none';
-    this.root.addChild(this.aoe, this.fogDraft, this.segment, this.rectDraft, this.ruler);
+    this.root.addChild(
+      this.aoe,
+      this.fogDraft,
+      this.segment,
+      this.rectDraft,
+      this.paintedSel,
+      this.paintedGhost,
+      this.ruler,
+    );
     this.trail = makePool(this.root, TRAIL_POOL, (g) => g.circle(0, 0, 4).fill({ color: C.cyan, alpha: 0.9 }));
     this.pings = makePool(this.root, PING_POOL, (g) =>
       g.circle(0, 0, 26).stroke({ width: 4, color: C.magenta, alpha: 1 }),
@@ -233,6 +244,47 @@ export class FxLayer {
 
   clearRectDraft(): void {
     this.rectDraft.clear();
+  }
+
+  /**
+   * Ring every cell of a selected painted object, and draw its handles.
+   * Per cell rather than one bounding box: a wall run is a line and a prop
+   * can be an L, and a box around either would claim squares it does not
+   * hold. Handles are world points — the ends of a run, a prop's corner.
+   */
+  setPaintedSelection(m: SceneMetrics, cells: readonly string[], handles: readonly Point[]): void {
+    const g = this.paintedSel;
+    g.clear();
+    for (const k of cells) {
+      const [c, r] = k.split(',').map(Number) as [number, number];
+      const corners = cellCorners(m, c, r).flatMap((p) => [p.x, p.y]);
+      g.poly(corners).fill({ color: C.magenta, alpha: 0.12 });
+      g.poly(corners).stroke({ width: 2, color: C.magenta, alpha: 0.85 });
+    }
+    for (const h of handles) {
+      g.circle(h.x, h.y, 6).fill({ color: C.ground, alpha: 0.95 });
+      g.circle(h.x, h.y, 6).stroke({ width: 2, color: C.magenta, alpha: 1 });
+    }
+  }
+
+  clearPaintedSelection(): void {
+    this.paintedSel.clear();
+  }
+
+  /** Where the dragged object will land — dashed-looking by being faint. */
+  setPaintedGhost(m: SceneMetrics, cells: readonly string[]): void {
+    const g = this.paintedGhost;
+    g.clear();
+    for (const k of cells) {
+      const [c, r] = k.split(',').map(Number) as [number, number];
+      const corners = cellCorners(m, c, r).flatMap((p) => [p.x, p.y]);
+      g.poly(corners).fill({ color: C.cyan, alpha: 0.18 });
+      g.poly(corners).stroke({ width: 2, color: C.cyan, alpha: 0.9 });
+    }
+  }
+
+  clearPaintedGhost(): void {
+    this.paintedGhost.clear();
   }
 
   /** Double-tap flash (FR9.15) — world px. */

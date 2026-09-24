@@ -52,14 +52,13 @@ function render(s: Scene, tokens: Token[]): string {
 }
 
 describe('<TokensTab> layers', () => {
-  it('offers to add a layer and says what one is for', () => {
+  it('manages no layers: the stack icon on the map does that now', () => {
     const html = render(scene(), []);
-    expect(html).toContain('data-testid="layer-add"');
-    expect(html).toMatch(/no layers yet/i);
-    expect(html).toMatch(/hide the ambush/i);
+    expect(html).not.toContain('data-testid="layer-add"');
+    expect(html).not.toMatch(/hide the ambush/i);
   });
 
-  it('lists each layer with its switch, and badges the tokens a hidden one holds back', () => {
+  it('badges the tokens a hidden layer holds back, and puts each on a layer', () => {
     const html = render(
       scene([
         { id: 'layer_1', name: 'Ambush', hidden: true, tokenIds: ['t1'] },
@@ -67,11 +66,9 @@ describe('<TokensTab> layers', () => {
       ]),
       [token('t1', 'Halloweener'), token('t2', 'Rent-a-cop'), token('t3', 'Wraith', true)],
     );
-    expect(html).toContain('data-layer="layer_1"');
-    expect(html).toContain('data-hidden="yes"');
-    expect(html).toContain('data-testid="layer-toggle-layer_1"');
-    expect(html).toMatch(/layer-toggle-layer_1[^>]*>show</);
-    expect(html).toMatch(/layer-toggle-layer_2[^>]*>hide</);
+    // The switch itself is on the map; what stays here is what the list
+    // says about a token whose layer is off.
+    expect(html).not.toContain('data-testid="layer-toggle-layer_1"');
     // The ganger is off the table by layer; the wraith by its own flag.
     expect(html).toMatch(/Halloweener.*layer hidden/s);
     expect(html).not.toMatch(/Rent-a-cop<[^>]*>[^<]*<span[^>]*>layer hidden/);

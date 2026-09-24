@@ -43,6 +43,8 @@ export interface ModeBarProps {
   scene?: React.ReactNode;
   /** Which floor is on screen. */
   floor?: React.ReactNode;
+  /** The scene's token layers, and which of them the table can see. */
+  tokenLayers?: React.ReactNode;
   /**
    * True when this scene is the one the table is looking at. Shown as one
    * chip beside undo and redo — the map either is live or it is not, and
@@ -87,11 +89,12 @@ export default function ModeBar(props: ModeBarProps) {
         Which scene, then what it is drawn from: one step below the mode in
         scope each time, and a long way above a tile.
       */}
-      {(props.scene || props.floor || props.tileset) && (
+      {(props.scene || props.floor || props.tokenLayers || props.tileset) && (
         <span className="mx-1 h-6 w-px shrink-0 bg-edge" aria-hidden />
       )}
       {props.scene}
       {props.floor}
+      {props.tokenLayers}
       {props.tileset}
       {/*
         Undo and redo at the far end of the mode row. They belong here rather

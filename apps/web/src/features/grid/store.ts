@@ -5,6 +5,7 @@
 import { create } from 'zustand';
 import type { Point } from '@safehouse/contracts';
 import { TILESETS, type VisionMode } from '@safehouse/rules';
+import type { CellSet, Clipboard } from './cellSelection.js';
 import {
   PENDING_ROLL_MOD_EVENT,
   PENDING_ROLL_MOD_KEY,
@@ -192,6 +193,19 @@ export interface GridUiState {
   setViewSceneId: (id: string | null) => void;
   setPendingRollMod: (mod: PendingRollMod | null) => void;
   select: (selected: GeometrySelection | null) => void;
+  /**
+   * A multi-selection of painted squares (Build): a box, or objects
+   * Shift-clicked in and out (`cellSelection.ts`). One selection at a time:
+   * setting this lets go of `selected`, and `select` lets go of this.
+   */
+  cellSelection: CellSet | null;
+  setCellSelection: (sel: CellSet | null) => void;
+  /** What Ctrl+C copied, until the next copy. */
+  clipboard: Clipboard | null;
+  setClipboard: (clip: Clipboard | null) => void;
+  /** Ctrl+V is waiting for a click to say where the copy goes. */
+  pasting: boolean;
+  setPasting: (on: boolean) => void;
   setZoneName: (name: string) => void;
   setDisplay: (patch: Partial<DisplayControls>) => void;
 }
@@ -346,7 +360,14 @@ export const useGridStore = create<GridUiState>()((set) => ({
     publishPendingRollMod(pendingRollMod);
     set({ pendingRollMod });
   },
-  select: (selected) => set({ selected }),
+  select: (selected) => set(selected ? { selected, cellSelection: null } : { selected }),
+  cellSelection: null,
+  setCellSelection: (cellSelection) =>
+    set(cellSelection ? { cellSelection, selected: null } : { cellSelection }),
+  clipboard: null,
+  setClipboard: (clipboard) => set({ clipboard }),
+  pasting: false,
+  setPasting: (pasting) => set({ pasting }),
   setZoneName: (zoneName) => set({ zoneName }),
   setDisplay: (patch) => set((s) => ({ display: { ...s.display, ...patch } })),
 }));

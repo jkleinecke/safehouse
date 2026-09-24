@@ -89,6 +89,12 @@ export function useStage(params: UseStageParams): UseStageResult {
       onTileStrokeEnd: () => cbRef.current.onTileStrokeEnd?.(),
       onTileRect: (c0, r0, c1, r1, mode) => cbRef.current.onTileRect?.(c0, r0, c1, r1, mode),
       onContextMenu: (request) => cbRef.current.onContextMenu?.(request),
+      onPaintedSelect: (id) => cbRef.current.onPaintedSelect?.(id),
+      onPaintedEdit: (delta, anchorId, tilesetId) => cbRef.current.onPaintedEdit?.(delta, anchorId, tilesetId),
+      onBoxSelect: (a, b) => cbRef.current.onBoxSelect?.(a, b),
+      onPaintedToggle: (id) => cbRef.current.onPaintedToggle?.(id),
+      onCellSelectionMove: (dc, dr) => cbRef.current.onCellSelectionMove?.(dc, dr),
+      onPaste: (at) => cbRef.current.onPaste?.(at),
     };
 
     void import('./stage/index.js')

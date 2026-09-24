@@ -18,14 +18,10 @@ import {
 } from '../api.js';
 import { useGridStore } from '../store.js';
 import {
-  addLayer,
   assignToken,
   hiddenLayerTokenIds,
   layerOfToken,
   layersOf,
-  removeLayer,
-  renameLayer,
-  setLayerHidden,
   type TokenLayers,
 } from '../tokenLayers.js';
 import { Empty, inputCls, Num, PanelSection, Row } from './ui.js';
@@ -58,7 +54,6 @@ export default function TokensTab({
   const [sourceId, setSourceId] = useState('');
   const [propName, setPropName] = useState('');
   const [size, setSize] = useState(1);
-  const [newLayerName, setNewLayerName] = useState('');
 
   const characters = useCharacters(campaignId, kind === 'character');
   const templates = useNpcTemplates(campaignId, kind === 'npc_template');
@@ -155,75 +150,6 @@ export default function TokensTab({
         {kind === 'npc_template' && templates.isError && (
           <Empty>no NPC template endpoint yet — place a prop instead</Empty>
         )}
-      </PanelSection>
-
-      <PanelSection title="Layers" hint={`${layers.length}`}>
-        <Empty>
-          a layer is a set of tokens behind one switch — hide the ambush, show it when the shooting
-          starts. A token on a hidden layer is off the players&apos; table however its own flag is set.
-        </Empty>
-        {layers.length === 0 && <Empty>no layers yet</Empty>}
-        <ul className="space-y-1" data-testid="layer-list">
-          {layers.map((layer) => (
-            <li
-              key={layer.id}
-              data-layer={layer.id}
-              data-hidden={layer.hidden ? 'yes' : 'no'}
-              className={
-                'flex items-center gap-1.5 rounded border px-2 py-1 ' +
-                (layer.hidden ? 'border-magenta/60' : 'border-edge')
-              }
-            >
-              <input
-                className={inputCls + ' min-w-0 flex-1'}
-                value={layer.name}
-                aria-label="layer name"
-                onChange={(e) => saveLayers(renameLayer(layers, layer.id, e.target.value))}
-              />
-              <span className="mono-label text-faint">{layer.tokenIds.length}</span>
-              <button
-                type="button"
-                className={'btn px-2 py-1 ' + (layer.hidden ? 'border-warn text-warn' : '')}
-                aria-pressed={layer.hidden}
-                data-testid={`layer-toggle-${layer.id}`}
-                title={layer.hidden ? 'Show every token on this layer' : 'Hide every token on this layer'}
-                onClick={() => saveLayers(setLayerHidden(layers, layer.id, !layer.hidden))}
-              >
-                {layer.hidden ? 'show' : 'hide'}
-              </button>
-              <button
-                type="button"
-                className="btn px-2 py-1"
-                title="Delete the layer (its tokens stay on the map)"
-                onClick={() => saveLayers(removeLayer(layers, layer.id))}
-              >
-                ✕
-              </button>
-            </li>
-          ))}
-        </ul>
-        <div className="flex gap-1.5">
-          <input
-            className={inputCls + ' min-w-0 flex-1'}
-            value={newLayerName}
-            placeholder="Ambush, second wave, HTR team…"
-            aria-label="new layer name"
-            onChange={(e) => setNewLayerName(e.target.value)}
-          />
-          <button
-            type="button"
-            className="btn px-2 py-1"
-            data-testid="layer-add"
-            disabled={patchScene.isPending}
-            onClick={() => {
-              saveLayers(addLayer(layers, newLayerName));
-              setNewLayerName('');
-            }}
-          >
-            add layer
-          </button>
-        </div>
-        {patchScene.isError && <p className="mono-label text-danger">layers not saved — retry</p>}
       </PanelSection>
 
       <PanelSection title="On this scene" hint={`${tokens.length}`}>

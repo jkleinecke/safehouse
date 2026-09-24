@@ -42,6 +42,8 @@ export interface ContextMenuActions {
   revealRegion(regionId: string): void;
   hideRegion(regionId: string): void;
   wallToDoor(wallId: string): void;
+  /** Take one square out of a painted wall, splitting it in two. */
+  breakWall(cell: string, level: number): void;
   removeWall(wallId: string): void;
   removeDoor(doorId: string): void;
 }
@@ -56,6 +58,11 @@ export interface ContextMenuInput {
   /** The viewer's own runner, when they are a player with a sheet. */
   myCharacterId: string | null;
   actions: ContextMenuActions;
+  /**
+   * The GM's mode. Build is the map itself — tokens are placed while prepping
+   * the scene and its encounter, not while laying the floor they stand on.
+   */
+  mode?: 'build' | 'prep' | 'play';
 }
 
 /** The painted door in `cell` on `level`, or null when nothing is painted there. */
@@ -143,8 +150,15 @@ function floorItems(input: ContextMenuInput): MenuItem[] {
           },
     );
   }
+  if (input.mode !== 'build') {
+    items.push({
+      id: 'place',
+      label: 'Place a token here',
+      hint: 'opens the roster with this square filled in',
+      run: () => actions.placeTokenHere(x, y),
+    });
+  }
   items.push(
-    { id: 'place', label: 'Place a token here', hint: 'opens the roster with this square filled in', run: () => actions.placeTokenHere(x, y) },
     { id: 'pin', label: 'Pin here', run: () => actions.pinHere(x, y) },
     { id: 'note', label: 'Note here', hint: 'GM only', run: () => actions.noteHere(x, y) },
     { id: 'camera', label: 'Camera here', run: () => actions.cameraHere(x, y) },
@@ -209,6 +223,25 @@ function wallItems(input: ContextMenuInput, wallId: string): MenuItem[] {
   ];
 }
 
+/**
+ * One square of a painted wall, while building. Breaking it takes out that
+ * square alone, so the run it was in becomes two — which is how a room is
+ * re-cut quickly: break the wall where the new corner goes, then slide the
+ * half that should move.
+ */
+function paintedWallItems(input: ContextMenuInput, cell: string, level: number): MenuItem[] {
+  if (input.role !== 'gm') return [];
+  return [
+    {
+      id: 'wall-break',
+      label: 'Break the wall here',
+      hint: 'takes out this square; Ctrl+Z puts it back',
+      danger: true,
+      run: () => input.actions.breakWall(cell, level),
+    },
+  ];
+}
+
 /** The menu for this pointer, this viewer, this target. Empty means: no menu. */
 export function contextMenuItems(input: ContextMenuInput): MenuItem[] {
   if (input.role === 'observer' || input.role === 'display') return [];
@@ -224,6 +257,8 @@ export function contextMenuItems(input: ContextMenuInput): MenuItem[] {
       return tileDoorItems(input, t.cell, t.level);
     case 'wall':
       return wallItems(input, t.id);
+    case 'paintedWall':
+      return paintedWallItems(input, t.cell, t.level);
     case 'floor':
       return floorItems(input);
     default:

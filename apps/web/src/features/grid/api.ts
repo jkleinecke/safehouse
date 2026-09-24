@@ -36,6 +36,7 @@ import {
   sendTileset,
   snapshotBefore,
   useHistory,
+  type PaintBody,
   type TileLayerName,
 } from './history.js';
 import { mapImageId } from './mapImage.js';
@@ -661,6 +662,52 @@ export function usePaintTiles() {
       queryClient.setQueryData<ComposedScene>(['scene', sceneId], (old) =>
         old ? { ...old, scene } : old,
       );
+      void queryClient.invalidateQueries({ queryKey: ['scenes'] });
+    },
+  });
+}
+
+/**
+ * Several paint bodies as ONE edit — one undo step, one entry in the history.
+ *
+ * A multi-selection that holds a wall and the crate in front of it needs a
+ * request per layer (`cellSelection.ts`), and the GM did one thing: moved
+ * it, pasted it, deleted it. So the squares are snapshotted before the
+ * first body goes, the bodies go in order, and the history gets one step
+ * whose undo puts every touched square back on every layer.
+ */
+export function usePaintBatch() {
+  return useMutation({
+    mutationFn: async ({ sceneId, bodies }: { sceneId: string; bodies: PaintBody[]; label: string }) => {
+      const scene = queryClient.getQueryData<ComposedScene>(['scene', sceneId])?.scene;
+      const level = bodies[0]?.level ?? 0;
+      // Every square every body touches, as it was before ANY of them ran.
+      const before = scene ? Object.assign({}, ...bodies.map((b) => snapshotBefore(scene, b))) : null;
+      const tilesetBefore = (scene && levelTiles(scene, level)?.tilesetId) ?? bodies[0]?.tilesetId ?? '';
+      let last: Scene | null = null;
+      for (const b of bodies) {
+        last = (await apiPost<{ scene: Scene; painted: number }>(`/api/scenes/${sceneId}/tiles`, b)).scene;
+      }
+      return { last, before, tilesetBefore, level };
+    },
+    onSuccess: ({ last, before, tilesetBefore, level }, { sceneId, bodies, label }) => {
+      if (before) {
+        const undoBodies = restoreBodies(before, tilesetBefore, level);
+        useHistory.getState().push({
+          sceneId,
+          label,
+          undo: async () => {
+            for (const b of undoBodies) await sendPaint(sceneId, b);
+          },
+          redo: async () => {
+            for (const b of bodies) await sendPaint(sceneId, b);
+          },
+        });
+      }
+      if (last) {
+        const scene = last;
+        queryClient.setQueryData<ComposedScene>(['scene', sceneId], (old) => (old ? { ...old, scene } : old));
+      }
       void queryClient.invalidateQueries({ queryKey: ['scenes'] });
     },
   });

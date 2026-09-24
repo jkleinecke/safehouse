@@ -32,6 +32,17 @@ import {
   worldTolerance,
   type TapRecord,
 } from './hit.js';
+import {
+  applyEdit,
+  handlesOf,
+  objectForSelection,
+  paintedId,
+  pickPainted,
+  type EditOp,
+  type EditResult,
+  type PaintedObject,
+} from '../paintedObjects.js';
+import { allCells, containsCell, pastedSet, shiftSet } from '../cellSelection.js';
 
 type Mode =
   | 'idle'
@@ -42,7 +53,10 @@ type Mode =
   | 'pinch'
   | 'segment'
   | 'painting'
-  | 'rect';
+  | 'rect'
+  | 'painted'
+  | 'marquee'
+  | 'group';
 
 /** React-facing ruler updates are rate-limited; the pixi line is not. */
 const RULER_REPORT_MS = 50;
@@ -65,6 +79,8 @@ export interface PointerHost {
   /** The cell rectangle a room/area drag is about to fill (FR9.2). */
   drawRect?(mode: TileRectMode, from: Cell, to: Cell): void;
   clearRect?(): void;
+  /** Where a painted object will land while it is being dragged (Build). */
+  drawPaintedGhost?(cells: readonly string[] | null): void;
 }
 
 interface ActivePointer {
@@ -136,6 +152,8 @@ export class PointerController {
   /** 'mouse' | 'pen' | 'touch' of the pointer that started the gesture. */
   private pointerType: string | undefined;
   private moved = false;
+  /** Shift was held at the press — Shift+click toggles a painted object. */
+  private shiftDown = false;
   /** The gesture began with the right button: a still release opens the menu. */
   private rightButton = false;
   /** A finger held still this long opens the menu too — phones have no right button. */
@@ -156,6 +174,19 @@ export class PointerController {
   private segmentKind: 'wall' | 'door' = 'wall';
   private segmentFrom: Point = { x: 0, y: 0 };
   private segmentTo: Point = { x: 0, y: 0 };
+
+  // a painted wall, door or prop being dragged (Build) — nothing is sent
+  // until release, so a GM who changes their mind mid-drag has changed nothing
+  private paintedObj: PaintedObject | null = null;
+  private paintedOp: EditOp = { kind: 'move' };
+  private paintedFrom: Cell = { col: 0, row: 0 };
+  private paintedResult: EditResult | null = null;
+
+  // a box being dragged on open floor, and a multi-selection being moved
+  // (Build) — both in whole squares
+  private boxFrom: Cell = { col: 0, row: 0 };
+  private boxTo: Cell = { col: 0, row: 0 };
+  private groupDelta: Cell = { col: 0, row: 0 };
 
   // room/area rectangle (FR9.2) — in CELLS, not grid units: a rectangle of
   // tiles is a set of whole squares, and snapping happens at the corner the
@@ -284,6 +315,7 @@ export class PointerController {
     if (this.pointers.size > 2) return;
 
     this.moved = false;
+    this.shiftDown = e.shiftKey;
     const state = this.host.state();
     const m = this.host.metrics();
     const grid = this.toGrid(screen);
@@ -325,6 +357,15 @@ export class PointerController {
     // Middle/right button always pans, whatever tool is selected.
     if (e.button === 1 || e.button === 2) {
       this.mode = 'pan';
+      return;
+    }
+
+    // Ctrl+V is waiting: this press says where the copy goes, whatever tool
+    // is in hand — the GM asked to paste, not to use the tool.
+    if (state.role === 'gm' && state.paintEdit && state.pasting) {
+      this.mode = 'idle';
+      this.host.drawPaintedGhost?.(null);
+      this.host.callbacks.onPaste?.(this.cellAt(grid));
       return;
     }
 
@@ -428,6 +469,31 @@ export class PointerController {
   }
 
   private beginSelect(grid: Point, state: StageSceneState, m: SceneMetrics): void {
+    // A selected painted object's handles, before anything else: they are
+    // small, deliberate targets on its outer edge, and a GM reaching for one
+    // meant it rather than the token standing next to the wall.
+    if (state.role === 'gm' && state.paintEdit && this.beginPaintedHandle(grid, state, m)) return;
+
+    if (state.role === 'gm' && state.paintEdit) {
+      const cell = this.cellAt(grid);
+      // Shift+click puts an object in or takes it out of the multi-selection.
+      if (this.shiftDown) {
+        const obj = pickPainted(state.scene, state.level ?? 0, cell);
+        if (obj) {
+          this.mode = 'idle';
+          this.host.callbacks.onPaintedToggle?.(paintedId(obj.layer, cell));
+          return;
+        }
+      }
+      // A press inside the multi-selection picks the whole of it up.
+      if (!this.shiftDown && containsCell(state.cellSelection ?? null, cell)) {
+        this.mode = 'group';
+        this.boxFrom = cell;
+        this.groupDelta = { col: 0, row: 0 };
+        return;
+      }
+    }
+
     // A pin head sits above the tokens it annotates — check it first, and only
     // for the GM (players' payloads only ever contain public pins anyway).
     if (state.role === 'gm' && this.host.callbacks.onPinSelect) {
@@ -496,7 +562,10 @@ export class PointerController {
         return;
       }
       const level = state.level ?? 0;
-      const cell = hitTileDoor(state.scene, grid, level);
+      // While building, a painted door is a thing to pick up and stretch,
+      // not a door to walk through — so it is left to the painted-object
+      // check below rather than opened.
+      const cell = state.paintEdit ? null : hitTileDoor(state.scene, grid, level);
       if (cell && this.host.callbacks.onTileDoorToggle) {
         this.mode = 'idle';
         this.host.callbacks.onTileDoorToggle(cell, level);
@@ -515,7 +584,70 @@ export class PointerController {
         return;
       }
     }
+    // A painted wall, door or piece of furniture (Build). Last, because it is
+    // a whole square: every thinner target above it had to miss first.
+    if (state.role === 'gm' && state.paintEdit && this.beginPaintedBody(grid, state)) return;
+    // Open floor while building: a drag draws a selection box. Right- and
+    // middle-drag still pan, and a click without a drag still clears.
+    if (state.role === 'gm' && state.paintEdit) {
+      this.mode = 'marquee';
+      this.boxFrom = this.cellAt(grid);
+      this.boxTo = this.boxFrom;
+      return;
+    }
     this.mode = 'pan';
+  }
+
+  /** The cell a grid point falls in. */
+  private cellAt(grid: Point): Cell {
+    return { col: Math.floor(grid.x), row: Math.floor(grid.y) };
+  }
+
+  /** Grab a handle of the selected painted object, if the pointer is on one. */
+  private beginPaintedHandle(grid: Point, state: StageSceneState, m: SceneMetrics): boolean {
+    const sel = state.selection;
+    if (sel?.kind !== 'painted') return false;
+    const level = state.level ?? 0;
+    const obj = objectForSelection(state.scene, level, sel.id);
+    if (!obj) return false;
+    const tol = Math.max(10, worldTolerance(this.host.camera.scale, 10));
+    const at = worldFromGrid(m, grid);
+    for (const h of handlesOf(obj)) {
+      const hw = worldFromGrid(m, h.at);
+      if (Math.hypot(hw.x - at.x, hw.y - at.y) > tol) continue;
+      this.startPaintedDrag(
+        obj,
+        h.id === 'corner' ? { kind: 'resize' } : { kind: 'stretch', handle: h.id },
+        this.cellAt(grid),
+      );
+      return true;
+    }
+    return false;
+  }
+
+  /** Pick up the painted object under the pointer, if there is one. */
+  private beginPaintedBody(grid: Point, state: StageSceneState): boolean {
+    const level = state.level ?? 0;
+    const cell = this.cellAt(grid);
+    const obj = pickPainted(state.scene, level, cell);
+    if (!obj) return false;
+    this.host.callbacks.onPaintedSelect?.(paintedId(obj.layer, cell));
+    // A door's body does not move — a door lives where its wall is. Its
+    // handles widen it; pressing it only selects it.
+    if (obj.role === 'door') {
+      this.mode = 'idle';
+      return true;
+    }
+    this.startPaintedDrag(obj, obj.role === 'wall' ? { kind: 'slide' } : { kind: 'move' }, cell);
+    return true;
+  }
+
+  private startPaintedDrag(obj: PaintedObject, op: EditOp, from: Cell): void {
+    this.mode = 'painted';
+    this.paintedObj = obj;
+    this.paintedOp = op;
+    this.paintedFrom = from;
+    this.paintedResult = null;
   }
 
   /**
@@ -544,7 +676,15 @@ export class PointerController {
 
   private handleMove(e: PointerEvent): void {
     const tracked = this.pointers.get(e.pointerId);
-    if (!tracked) return;
+    if (!tracked) {
+      // No button held: the only thing a hover does is carry a paste around.
+      const state = this.host.state();
+      if (state.role === 'gm' && state.paintEdit && state.pasting) {
+        const at = this.cellAt(this.toGrid(this.local(e)));
+        this.host.drawPaintedGhost?.(allCells(pastedSet(state.pasting, at, state.level ?? 0)));
+      }
+      return;
+    }
     const screen = this.local(e);
     const dx = screen.x - tracked.x;
     const dy = screen.y - tracked.y;
@@ -590,6 +730,36 @@ export class PointerController {
         const grid = this.toGrid(screen);
         this.rectTo = { col: Math.floor(grid.x), row: Math.floor(grid.y) };
         this.host.drawRect?.(this.rectMode, this.rectFrom, this.rectTo);
+        return;
+      }
+      case 'marquee': {
+        if (!this.moved) return;
+        this.boxTo = this.cellAt(this.toGrid(screen));
+        this.host.drawRect?.('area', this.boxFrom, this.boxTo);
+        return;
+      }
+      case 'group': {
+        const sel = this.host.state().cellSelection;
+        if (!sel) return;
+        const at = this.cellAt(this.toGrid(screen));
+        this.groupDelta = { col: at.col - this.boxFrom.col, row: at.row - this.boxFrom.row };
+        const { col, row } = this.groupDelta;
+        this.host.drawPaintedGhost?.(col === 0 && row === 0 ? null : allCells(shiftSet(sel, col, row)));
+        return;
+      }
+      case 'painted': {
+        if (!this.paintedObj) return;
+        const state = this.host.state();
+        const result = applyEdit(
+          state.scene,
+          state.level ?? 0,
+          this.paintedObj,
+          this.paintedOp,
+          this.paintedFrom,
+          this.cellAt(this.toGrid(screen)),
+        );
+        this.paintedResult = result;
+        this.host.drawPaintedGhost?.(result.noop ? null : result.cells);
         return;
       }
       default:
@@ -667,6 +837,33 @@ export class PointerController {
       // pointerup, pointercancel and pointerleave all land here, so a stroke
       // that ends off-canvas still flushes and still returns to 'idle'.
       this.endStroke();
+    } else if (this.mode === 'marquee') {
+      this.host.clearRect?.();
+      if (this.moved) {
+        this.host.callbacks.onBoxSelect?.(this.boxFrom, this.boxTo);
+      } else {
+        // A click on open floor, not a box: let go of everything, as before.
+        this.host.callbacks.onSelectToken(null);
+        this.clickOnFloor(e);
+      }
+    } else if (this.mode === 'group') {
+      this.host.drawPaintedGhost?.(null);
+      const { col, row } = this.groupDelta;
+      if (this.moved && (col !== 0 || row !== 0)) this.host.callbacks.onCellSelectionMove?.(col, row);
+    } else if (this.mode === 'painted') {
+      this.host.drawPaintedGhost?.(null);
+      const obj = this.paintedObj;
+      const result = this.paintedResult;
+      this.paintedObj = null;
+      this.paintedResult = null;
+      // A press that never moved was a select, and it already happened.
+      if (obj && result && this.moved && !result.noop) {
+        this.host.callbacks.onPaintedEdit?.(
+          result.delta,
+          paintedId(obj.layer, result.anchor),
+          obj.tilesetId,
+        );
+      }
     } else if (this.mode === 'rect') {
       this.host.clearRect?.();
       const b = this.rectBounds();
@@ -716,6 +913,15 @@ export class PointerController {
     if (state.role === 'gm') {
       const wallId = hitWall(m, state.scene, grid, tol);
       if (wallId) return { kind: 'wall', id: wallId };
+      // A painted wall's square, while building — last, because it is a
+      // whole cell and every thinner target above had to miss first.
+      if (state.paintEdit) {
+        const obj = pickPainted(state.scene, level, this.cellAt(grid), 'structure');
+        if (obj?.role === 'wall') {
+          const c = this.cellAt(grid);
+          return { kind: 'paintedWall', cell: `${c.col},${c.row}`, level };
+        }
+      }
     }
     return { kind: 'floor' };
   }
@@ -746,6 +952,12 @@ export class PointerController {
     // A rectangle is abandoned, not filled: unlike a stroke it has laid
     // nothing down yet, so a pinch simply takes it away.
     if (this.mode === 'rect') this.host.clearRect?.();
+    if (this.mode === 'painted' || this.mode === 'group') {
+      this.host.drawPaintedGhost?.(null);
+      this.paintedObj = null;
+      this.paintedResult = null;
+    }
+    if (this.mode === 'marquee') this.host.clearRect?.();
     // A second finger ends the stroke rather than abandoning its cells: the
     // GM painted them, and pinching to zoom mid-floor is a normal thing to do.
     if (this.mode === 'painting') this.endStroke();

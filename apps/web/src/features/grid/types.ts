@@ -3,6 +3,8 @@
  * so the main bundle stays lean; the stage subtree is loaded lazily.
  */
 import type { Point, Role, Scene, Token } from '@safehouse/contracts';
+import type { PaintDelta } from './paintedObjects.js';
+import type { CellSet, Clipboard } from './cellSelection.js';
 import type { TileCut, TileLiquid, TilePattern, TileProp, TileShore, VisionMode } from '@safehouse/rules';
 import { slotOf, slotUniverse, tileBySlot } from '@safehouse/rules';
 
@@ -240,6 +242,8 @@ export type ContextTarget =
   | { kind: 'door'; id: string }
   | { kind: 'tileDoor'; cell: string; level: number }
   | { kind: 'wall'; id: string }
+  /** One square of a painted wall, while building (the menu can break it). */
+  | { kind: 'paintedWall'; cell: string; level: number }
   | { kind: 'floor' };
 
 export interface ContextMenuRequest {
@@ -333,7 +337,12 @@ export interface ShroudState {
  * inspector shows one thing, so the canvas rings one thing.
  */
 export interface GeometrySelection {
-  kind: 'wall' | 'door' | 'zone' | 'pin' | 'camera' | 'note';
+  /**
+   * `painted` is a wall, door or prop laid with a tile rather than drawn as
+   * geometry; its id is `"<layer>:<col>,<row>"` for one cell of it, and the
+   * whole object is read back from that cell (`paintedObjects.ts`).
+   */
+  kind: 'wall' | 'door' | 'zone' | 'pin' | 'camera' | 'note' | 'painted';
   id: string;
 }
 
@@ -378,6 +387,16 @@ export interface StageSceneState {
    * floor a flat scene has.
    */
   level?: number;
+  /**
+   * The GM is building: painted walls, doors and furniture are picked up and
+   * dragged rather than used. A painted door SELECTS instead of opening, and
+   * nothing else on the table changes. Absent or false everywhere but Build.
+   */
+  paintEdit?: boolean;
+  /** A multi-selection of painted squares (Build) — box or Shift+click. */
+  cellSelection?: CellSet | null;
+  /** Ctrl+V is waiting for a click: the copy follows the pointer. */
+  pasting?: Clipboard | null;
 }
 
 /** Callbacks the stage raises back into React land. */
@@ -456,6 +475,21 @@ export interface StageCallbacks {
    * shut it. `cell` is the `"col,row"` key on floor `level`.
    */
   onTileDoorToggle?(cell: string, level: number): void;
+  /** Build mode: a painted wall, door or prop was clicked — select it. */
+  onPaintedSelect?(id: string): void;
+  /**
+   * Build mode: a painted object was dragged to somewhere new. One delta, one
+   * request, one undo step; `anchorId` keeps the object selected afterwards.
+   */
+  onPaintedEdit?(delta: PaintDelta, anchorId: string, tilesetId: string): void;
+  /** Build: a box was dragged on open floor, corners inclusive. */
+  onBoxSelect?(a: { col: number; row: number }, b: { col: number; row: number }): void;
+  /** Build: Shift+click on a painted object — in or out of the selection. */
+  onPaintedToggle?(id: string): void;
+  /** Build: the multi-selection was dragged by whole squares. */
+  onCellSelectionMove?(dc: number, dr: number): void;
+  /** Build: a paste was placed, clipboard top-left at this square. */
+  onPaste?(at: { col: number; row: number }): void;
 }
 
 /** The cells one security camera covers on the floor being drawn (FR9.23). */

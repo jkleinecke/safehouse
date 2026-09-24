@@ -7,6 +7,8 @@
  * so a pan/zoom or a token move never re-tessellates the grid, fog or geometry.
  */
 import type { GeometrySelection } from '../types.js';
+import { handlesOf, objectForSelection } from '../paintedObjects.js';
+import { allCells } from '../cellSelection.js';
 import { Application, Assets, ColorMatrixFilter, Container, Graphics, Text, type Texture } from 'pixi.js';
 import type { VisionMode } from '@safehouse/rules';
 import type { Point, Token } from '@safehouse/contracts';
@@ -192,6 +194,8 @@ class Stage implements StageApi, PointerHost {
   private lastMapKey = '';
   private lastAoeKey = '';
   private lastFogDraftKey = '';
+  private lastPaintedSelKey = '';
+  private wasPasting = false;
   private framedSceneId = '';
 
   private pointer: PointerController | null = null;
@@ -255,6 +259,14 @@ class Stage implements StageApi, PointerHost {
 
     if (typeof ResizeObserver !== 'undefined') {
       this.resizeObserver = new ResizeObserver(() => {
+        // Pixi's `resizeTo: host` only listens to the WINDOW. When the host
+        // alone changes size — the GM panel opening beside the canvas, which
+        // in Build happens on every select and deselect — the drawing buffer
+        // kept its old size and CSS stretched it into the new box: the map
+        // lurched sideways, and every click after it mapped through a camera
+        // fitted to a canvas that was no longer there. Resize it here, from
+        // the element that actually changed.
+        this.app.resize();
         this.pointer?.invalidateRect();
         this.camera.dirty = true;
         // The mount-time fit measured whatever size the host had before the
@@ -325,6 +337,11 @@ class Stage implements StageApi, PointerHost {
 
   clearRect(): void {
     this.fx.clearRectDraft();
+  }
+
+  drawPaintedGhost(cells: readonly string[] | null): void {
+    if (cells === null) this.fx.clearPaintedGhost();
+    else this.fx.setPaintedGhost(this.m, cells);
   }
 
   // -- StageApi --------------------------------------------------------------
@@ -440,6 +457,43 @@ class Stage implements StageApi, PointerHost {
         this.tiles.update(m, tileDrawInput(tiles, this.tileDefs), next.scene.id, level);
       } else {
         this.tiles.clear();
+      }
+    }
+
+    // A paste that was waiting and no longer is — placed, or Esc — takes its
+    // ghost with it rather than leaving it until the pointer next moves.
+    const pasting = Boolean(next.pasting);
+    if (this.wasPasting && !pasting) this.fx.clearPaintedGhost();
+    this.wasPasting = pasting;
+
+    // The painted object selected in Build: a ring on each of its cells, and
+    // the handles that stretch or resize it. Re-read from the scene every
+    // update, so a slide the server has just written moves the ring with it.
+    const psel = next.selection?.kind === 'painted' && next.paintEdit
+      ? objectForSelection(next.scene, level, next.selection.id)
+      : null;
+    // A multi-selection rings its squares the same way, without handles:
+    // stretching is a thing one object does, not a box of them.
+    const multi = next.paintEdit && next.cellSelection && next.cellSelection.level === level
+      ? allCells(next.cellSelection)
+      : null;
+    const pselKey = multi
+      ? `M|${level}|${multi.join(';')}|${metricsKey(m)}`
+      : psel
+        ? `${level}|${psel.cells.join(';')}|${metricsKey(m)}`
+        : '';
+    if (pselKey !== this.lastPaintedSelKey) {
+      this.lastPaintedSelKey = pselKey;
+      if (multi) {
+        this.fx.setPaintedSelection(m, multi, []);
+      } else if (psel) {
+        this.fx.setPaintedSelection(
+          m,
+          psel.cells,
+          handlesOf(psel).map((h) => worldFromGrid(m, h.at)),
+        );
+      } else {
+        this.fx.clearPaintedSelection();
       }
     }
 

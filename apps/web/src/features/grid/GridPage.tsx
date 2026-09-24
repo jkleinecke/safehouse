@@ -25,6 +25,7 @@ import {
   useScene,
   useSceneTokens,
   useScenes,
+  usePaintBatch,
   usePaintTiles,
   useTilesets,
   useActivateScene,
@@ -53,6 +54,7 @@ import { availableModes, clampMode } from './hud/eyes.js';
 import ModeBar from './hud/ModeBar.js';
 import FloorMenu from './hud/FloorMenu.js';
 import MapImageButton from './hud/MapImageButton.js';
+import TokenLayersMenu from './hud/TokenLayersMenu.js';
 import PlacingGroup from './hud/PlacingGroup.js';
 import TilesetBar from './hud/TilesetBar.js';
 import Toolbar, { ViewControls } from './hud/Toolbar.js';
@@ -72,6 +74,17 @@ import { useShroud } from './useShroud.js';
 import { stairAdvice, useStairOffer } from './useStairs.js';
 import { historyFor, useHistory } from './history.js';
 import { useGridStore } from './store.js';
+import {
+  boxSelect,
+  moveBodies,
+  pasteBodies,
+  pastedSet,
+  setOfObject,
+  shiftSet,
+  tilesetOf,
+  toggleObject,
+} from './cellSelection.js';
+import { objectForSelection, parsePaintedId, pickPainted } from './paintedObjects.js';
 import {
   type ContextMenuRequest,
   type RulerState,
@@ -164,6 +177,11 @@ export default function GridPage() {
   const patchGeometry = usePatchGeometry();
   const doorOp = useDoorOp(scene?.id);
   const paintTiles = usePaintTiles();
+  // Stable across renders, so the stage callbacks can hold it without going stale.
+  const paintMutate = paintTiles.mutate;
+  // A move, paste or delete of a multi-selection: a request per layer, one
+  // undo step (`usePaintBatch`).
+  const paintBatch = usePaintBatch().mutate;
   const { data: tilesets } = useTilesets();
 
   /** The palette the canvas paints with (FR9.2) — see `tileDefsFrom`. */
@@ -334,8 +352,8 @@ export default function GridPage() {
   );
 
   const stageState: StageSceneState | null = useMemo(
-    () =>
-      composeStageState({
+    () => {
+      const composed = composeStageState({
         scene: viewScene,
         tokens,
         viewer,
@@ -350,8 +368,26 @@ export default function GridPage() {
         cameraCones,
         shroud,
         level: viewLevel,
-      }),
+      });
+      // Building: painted walls, doors and furniture are picked up and
+      // dragged rather than used. Nowhere else — a painted door in Play is
+      // a door, and clicking it opens it.
+      const building = isGm && store.mode === 'build';
+      return composed
+        ? {
+            ...composed,
+            paintEdit: building,
+            cellSelection: building ? store.cellSelection : null,
+            pasting: building && store.pasting ? store.clipboard : null,
+          }
+        : composed;
+    },
     [
+      isGm,
+      store.mode,
+      store.cellSelection,
+      store.pasting,
+      store.clipboard,
       viewScene,
       tokens,
       viewer,
@@ -545,8 +581,100 @@ export default function GridPage() {
         s.select({ kind: 'zone', id: zoneId });
         s.openGmPanel();
       },
-      onSelectClear: () => useGridStore.getState().select(null),
+      onSelectClear: () => {
+        const s = useGridStore.getState();
+        s.select(null);
+        s.setCellSelection(null);
+      },
       onContextMenu: (request) => setMenu(request),
+      // -- Multi-selection, copy and paste (Build) ----------------------------
+      onBoxSelect: (a, b) => {
+        if (!scene) return;
+        const s = useGridStore.getState();
+        // A box over nothing painted lets go, like a click on open floor.
+        const sel = boxSelect(scene, s.activeLevel, a, b);
+        s.setCellSelection(sel);
+        if (!sel) s.select(null);
+        else s.openGmPanel();
+      },
+      onPaintedToggle: (id) => {
+        if (!scene) return;
+        const s = useGridStore.getState();
+        const parsed = parsePaintedId(id);
+        const obj = parsed ? pickPainted(scene, s.activeLevel, parsed.cell, parsed.layer) : null;
+        if (!obj) return;
+        // A single object already selected joins the set first, so Shift+
+        // clicking a second wall means "these two", not "only the second".
+        let base = s.cellSelection;
+        if (!base && s.selected?.kind === 'painted') {
+          const first = objectForSelection(scene, s.activeLevel, s.selected.id);
+          if (first) base = setOfObject(first, s.activeLevel);
+        }
+        const next = toggleObject(base, obj, s.activeLevel);
+        if (next) s.setCellSelection(next);
+        else {
+          s.setCellSelection(null);
+          s.select(null);
+        }
+        s.openGmPanel();
+      },
+      onCellSelectionMove: (dc, dr) => {
+        if (!scene || !isGm) return;
+        const s = useGridStore.getState();
+        const sel = s.cellSelection;
+        if (!sel) return;
+        const bodies = moveBodies(scene, sel, dc, dr);
+        if (bodies.length === 0) return;
+        paintBatch(
+          { sceneId: scene.id, bodies, label: 'move the selection' },
+          // Keep hold of what moved, where it went.
+          { onSuccess: () => useGridStore.getState().setCellSelection(shiftSet(sel, dc, dr)) },
+        );
+      },
+      onPaste: (at) => {
+        if (!scene || !isGm) return;
+        const s = useGridStore.getState();
+        const clip = s.clipboard;
+        s.setPasting(false);
+        const tilesetId = tilesetOf(scene, s.activeLevel);
+        if (!clip || !tilesetId) return;
+        const bodies = pasteBodies(clip, at, s.activeLevel, tilesetId);
+        if (bodies.length === 0) return;
+        const landed = pastedSet(clip, at, s.activeLevel);
+        paintBatch(
+          { sceneId: scene.id, bodies, label: 'paste' },
+          // What was just pasted is what is selected: a paste is usually
+          // followed by a nudge into place.
+          { onSuccess: () => useGridStore.getState().setCellSelection(landed) },
+        );
+      },
+      // -- Painted walls, doors and furniture (Build) -------------------------
+      onPaintedSelect: (id) => {
+        const s = useGridStore.getState();
+        s.select({ kind: 'painted', id });
+        s.openGmPanel();
+      },
+      // One drag, one request, one undo step: the delta erases where it was
+      // and paints where it went, in a single stroke the history can reverse.
+      onPaintedEdit: (delta, anchorId, tilesetId) => {
+        if (!scene || !isGm) return;
+        const level = useGridStore.getState().activeLevel;
+        paintMutate(
+          {
+            sceneId: scene.id,
+            tilesetId,
+            level,
+            paint: delta.paint,
+            erase: delta.erase,
+            layer: delta.layer,
+          },
+          {
+            // Keep hold of what was moved: the old anchor may now be empty
+            // floor, and a GM who slid a wall wants to slide it again.
+            onSuccess: () => useGridStore.getState().select({ kind: 'painted', id: anchorId }),
+          },
+        );
+      },
       // -- Security cameras (FR9.23) -----------------------------------------
       onCameraPlace: (x, y) => {
         if (!scene || !isGm) return;
@@ -580,7 +708,7 @@ export default function GridPage() {
         s.openGmPanel();
       },
     }),
-    [commands, scene, isGm, patchGeometry, tilesets, doorOp, showDoorNotice],
+    [commands, scene, isGm, patchGeometry, tilesets, doorOp, showDoorNotice, paintMutate, paintBatch],
   );
 
   const urlFor = useCallback((id: string) => fileUrl(id), []);
@@ -641,6 +769,18 @@ export default function GridPage() {
     removeDoor: (doorId) => {
       if (scene) patchGeometry.mutate({ sceneId: scene.id, geometry: removeDoor(scene.geometry, doorId) });
     },
+    // One square out of a painted wall: the run it was in becomes two, each
+    // of which can then be selected and slid on its own.
+    breakWall: (cell, level) => {
+      if (!scene) return;
+      const tilesetId = levelTiles(scene, level)?.tilesetId;
+      if (!tilesetId) return;
+      // What was selected may have been the run just cut in two; its anchor
+      // could now be the gap. Let go rather than ring half a wall.
+      const s = useGridStore.getState();
+      if (s.selected?.kind === 'painted') s.select(null);
+      paintMutate({ sceneId: scene.id, tilesetId, level, paint: {}, erase: [cell], layer: 'structure' });
+    },
   };
   // The canvas draws for the chosen eyes; a mode the sheet stops granting
   // falls back to normal rather than lingering as a thermal view.
@@ -662,6 +802,7 @@ export default function GridPage() {
           selectedTokenId: store.selectedTokenId,
           myCharacterId: myCharacterId ?? null,
           actions: menuActions,
+          ...(isGm ? { mode: store.mode } : {}),
         })
       : [];
   const menuAbout = (() => {
@@ -779,6 +920,9 @@ export default function GridPage() {
               </span>
             }
             floor={scene ? <FloorMenu scene={scene} /> : undefined}
+            // Tokens are prep work — placed with the scene's encounter, not
+            // while the floor they stand on is being laid.
+            tokenLayers={scene && store.mode !== 'build' ? <TokenLayersMenu scene={scene} /> : undefined}
             live={!!scene && scene.id === activeSceneId}
             tileset={store.mode === 'build' && scene ? <TilesetBar scene={scene} /> : undefined}
             history={{
@@ -827,7 +971,9 @@ export default function GridPage() {
           <div className="flex min-w-0 max-w-full shrink flex-col items-end gap-1.5">
             <div className="flex flex-wrap items-center justify-end gap-1.5">
               <ViewControls
-                isGm={isGm}
+                // No panel toggle in Build: there the panel follows the
+                // selection, and a button that opens it empty does nothing.
+                isGm={isGm && store.mode !== 'build'}
                 snapEnabled={store.snapEnabled}
                 gmPanelOpen={store.gmPanelOpen}
                 // The GM sets the scene's own projection — the table follows
