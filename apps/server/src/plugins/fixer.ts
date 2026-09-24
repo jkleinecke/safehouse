@@ -17,7 +17,7 @@ import { z } from 'zod';
 import { aiGenerations, campaigns, type Db } from '@safehouse/db';
 import { and, eq } from 'drizzle-orm';
 import { assertCampaign, httpError, requireRole } from '../services/auth.js';
-import { AiSettingsWriteSchema } from '@safehouse/contracts';
+import { AiEffortSchema, AiSettingsWriteSchema, effortSupport } from '@safehouse/contracts';
 import { LlmClient, modelsUrl } from '../fixer/llm.js';
 import { buildInfoFrom } from '../version.js';
 import {
@@ -81,6 +81,8 @@ const ChatStreamBody = z
     conversationId: z.string().optional(),
     slot: z.enum(['primary', 'fast']).optional(),
     context: AiContextSchema.optional(),
+    /** The effort picked on the chat's input bar, for this turn; absent means the saved setting. */
+    effort: AiEffortSchema.optional(),
     /** A new GM message… */
     message: ChatStreamMessage.optional(),
     /** …or the GM's answer to the question the last reply stopped at (`ask_gm`). */
@@ -325,6 +327,8 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
       models: config ? { primary: config.primary, fast: config.fast } : null,
       /** How hard the model is asked to think — the chat's input bar names it. */
       effort: config?.effort ?? 'default',
+      /** Which efforts mean anything to this provider — what the bar's menu offers. */
+      effortSupport: config ? effortSupport(config.provider ?? 'openai-compatible') : 'none',
       maxToolRounds: 8,
       /** What the AI is doing for this campaign right now, if anything. */
       activity: currentRun(campaignId),
@@ -407,8 +411,9 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
   app.post('/api/fixer/chat/stream', async (req, reply) => {
     const body = parseBody(ChatStreamBody, req.body);
     const campaignId = gmFor(req, body.campaignId);
-    const config = resolveLlmConfig(await settingsOf(app.db, campaignId));
-    if (!config) return disabled(reply);
+    const saved = resolveLlmConfig(await settingsOf(app.db, campaignId));
+    if (!saved) return disabled(reply);
+    const config = body.effort ? { ...saved, effort: body.effort } : saved;
     try {
       await streamFixerTurn({ db: app.db, hub: app.hub }, reply, {
         campaignId,

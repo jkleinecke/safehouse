@@ -420,16 +420,15 @@ export class ChatAccumulator {
 /**
  * The reasoning knob, for a Chat Completions server.
  *
- * TWO knobs, because the hosted providers and a local box do not share one.
- * OpenAI and xAI read `reasoning_effort`. A llama.cpp router accepts that
- * field, returns 200, and ignores it completely — measured: identical
- * reasoning length with and without. What actually moves the number there is
- * the chat template's own `enable_thinking`, which is a boolean, so a local
- * model gets thinking on or off and nothing in between.
- *
- * Both are sent. A server that does not know a field ignores it, which is the
- * behaviour we are relying on either way, and sending the pair means one
- * setting works on all three without the GM having to know which is which.
+ * TWO places, because the hosted providers and a local box do not share one.
+ * OpenAI and xAI read a top-level `reasoning_effort`. A local server (a
+ * llama.cpp router, TabbyAPI) accepts that field and ignores it — measured:
+ * identical reasoning length with and without — because on a local box the
+ * CHAT TEMPLATE decides how the model thinks. So the setting also goes in
+ * `chat_template_kwargs`: `enable_thinking` for on or off, and the level as
+ * `reasoning_effort`, which current Qwen templates read. A template that does
+ * not know a variable ignores it, as does a server that does not know a field,
+ * so one setting works everywhere without the GM having to know which is which.
  */
 export function openAiEffort(config: LlmConfig): Record<string, unknown> {
   const effort = config.effort ?? 'default';
@@ -443,7 +442,7 @@ export function openAiEffort(config: LlmConfig): Record<string, unknown> {
       chat_template_kwargs: { enable_thinking: false },
     };
   }
-  return { reasoning_effort: effort, chat_template_kwargs: { enable_thinking: true } };
+  return { reasoning_effort: effort, chat_template_kwargs: { enable_thinking: true, reasoning_effort: effort } };
 }
 
 /**

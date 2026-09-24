@@ -37,7 +37,8 @@ const memory = (over: Partial<ConversationMemory> = {}): ConversationMemory => (
 
 const base = {
   instructions: 'You are the Fixer.',
-  tools: {} as ToolSet,
+  // The tools the transcript calls: a call to a tool that no longer exists is only ever a receipt.
+  tools: { get_scene: {}, get_npc: {} } as unknown as ToolSet,
   toolChars: 0,
   vision: false,
   loadImage: async () => null,

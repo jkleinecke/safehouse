@@ -270,11 +270,11 @@ export default function AiSettings({ campaignId }: { campaignId: string }) {
               <option value="high">High</option>
             </select>
             <span className="mt-1 block text-[0.7rem] text-dim">
-              {support === 'on-off'
-                ? 'A local server only understands on or off — the three levels all mean on.'
-                : support === 'levels'
-                  ? 'Reasoning models spend tokens before answering. Less thinking is faster and cheaper.'
-                  : ''}
+              {support === 'levels'
+                ? isLocal
+                  ? "Sent to the model's chat template. A template that knows only thinking on or off treats every level as on."
+                  : 'Reasoning models spend tokens before answering. Less thinking is faster and cheaper.'
+                : ''}
             </span>
           </label>
 

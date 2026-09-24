@@ -330,13 +330,11 @@ describe('the reasoning cap', () => {
     expect(anthropicEffort('default')).toEqual({});
   });
 
-  it('sends BOTH knobs to a Chat Completions server, because they disagree', () => {
-    // Measured against a real llama.cpp router: it accepts `reasoning_effort`,
-    // returns 200, and ignores it completely — identical reasoning length with
-    // and without. The only control that moves the number there is the chat
-    // template's `enable_thinking`. OpenAI and xAI read the other one. A
-    // server ignores the field it does not know, so one setting works on all
-    // three without the GM having to know which is which.
+  it('sends the level to a Chat Completions server AND to its chat template', () => {
+    // A local server ignores a top-level `reasoning_effort` (measured on a
+    // llama.cpp router); its chat template decides — `enable_thinking`, and
+    // the level itself for a Qwen template that reads one. OpenAI and xAI
+    // read the top-level field. Whoever does not know a name ignores it.
     const off = openAiEffort({ baseUrl: '', primary: '', fast: '', effort: 'off' });
     expect(off).toEqual({
       reasoning_effort: 'minimal',
@@ -346,7 +344,7 @@ describe('the reasoning cap', () => {
     const low = openAiEffort({ baseUrl: '', primary: '', fast: '', effort: 'low' });
     expect(low).toEqual({
       reasoning_effort: 'low',
-      chat_template_kwargs: { enable_thinking: true },
+      chat_template_kwargs: { enable_thinking: true, reasoning_effort: 'low' },
     });
   });
 
@@ -384,7 +382,7 @@ describe('the reasoning cap', () => {
     expect(effortSupport('anthropic')).toBe('levels');
     expect(effortSupport('openai')).toBe('levels');
     expect(effortSupport('xai')).toBe('levels');
-    expect(effortSupport('openai-compatible')).toBe('on-off');
+    expect(effortSupport('openai-compatible')).toBe('levels');
     expect(effortSupport('off')).toBe('none');
   });
 

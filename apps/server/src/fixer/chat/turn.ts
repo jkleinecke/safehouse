@@ -50,14 +50,16 @@ import {
   type ConversationMemory,
 } from './memory.js';
 import { contextWindowFor, languageModelFor, modelIdFor, providerOptionsFor } from './model.js';
+import { newFloorTurn } from './floor-draft.js';
 import { RetryLedger, chatTools, toolDefinitionChars } from './tools.js';
 
 /**
- * Model calls per turn. Eight tool rounds as before (FR12.17), and room on
- * top for the retries a failed tool is owed (tools.ts, `TOOL_RETRIES`) — so
- * a retry never costs the turn a round it needed for something else.
+ * Model calls per turn. Drawing a floor is many small edits — start it, a
+ * few rooms at a time, the doors, each room's furniture, the outside, a look
+ * and a fix or two (floor-draft.ts) — with room on top for the retries a
+ * failed tool is owed (tools.ts, `TOOL_RETRIES`).
  */
-export const MAX_STEPS = 12;
+export const MAX_STEPS = 40;
 
 /**
  * Silence, not duration (fixer/llm.ts). The first chunk waits for the box to
@@ -209,6 +211,8 @@ export async function streamFixerTurn(
     };
     /** This turn's tool failures, for the retry policy (tools.ts). */
     const ledger = new RetryLedger();
+    /** This turn's floor drawing (floor-draft.ts). */
+    const floor = newFloorTurn();
     /**
      * Everything the context panel shows about this turn: the window and the
      * budget, the estimate by layer, what the model itself counted for each
@@ -242,6 +246,7 @@ export async function streamFixerTurn(
             transcript: messages,
             memory,
             ledger,
+            floor,
           });
         const build = () => {
           const tools = toolsNow();

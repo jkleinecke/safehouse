@@ -7,8 +7,8 @@
  * Two wire shapes, as before (fixer/llm.ts): Anthropic's Messages API, and
  * the Chat Completions shape spoken by OpenAI, xAI and every self-hosted
  * server (llama.cpp, TabbyAPI, vLLM, LM Studio). The effort setting rides
- * along the same way it always has — `chat_template_kwargs.enable_thinking`
- * for a Qwen-style template, adaptive thinking for Claude — so moving the
+ * along the same way it always has — `chat_template_kwargs` (`enable_thinking`
+ * and the level) for a Qwen-style template, adaptive thinking for Claude — so moving the
  * chat onto the SDK changes nothing a GM can see in their settings.
  *
  * Nothing here touches the internet on its own: the only destination is the

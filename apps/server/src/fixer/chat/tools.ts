@@ -8,13 +8,11 @@
  * and try again), and a result over 24k characters is cut rather than sent
  * whole.
  *
- * Three tools are new, and exist because the chat is now the one place the
- * GM asks for things:
+ * The rest are new, and exist because the chat is now the one place the GM
+ * asks for things:
  *
- * - `draft_floor` does what the dock's "draft a floor" tab did. The plan it
- *   returns carries every painted square, which the chat's plan card needs
- *   for its Build button and the model does not: `toModelOutput` hands the
- *   model a one-line summary instead.
+ * - The floor tools (`start_floor`, `add_rooms` … `clear_floor`) draw a
+ *   floor on the map one small edit at a time (floor-draft.ts).
  * - `recall_conversation` reads the whole transcript back, folded turns
  *   included — the other half of keeping only a brief in context.
  * - `read_attachment` searches a text file too long to carry every turn.
@@ -25,12 +23,10 @@
  */
 import { tool, type ToolSet, type UIMessage } from 'ai';
 import { z } from 'zod';
-import { levelTiles } from '@safehouse/rules';
-import { ScenesService, serializeScene } from '../../services/scenes.js';
-import { proposeFloor, type CompiledFloor } from '../floor-plan.js';
 import type { FixerTool, ToolContext } from '../tools.js';
 import type { AiContext } from '../context.js';
 import { searchText } from './attachments.js';
+import { floorTools, type FloorTurn } from './floor-draft.js';
 import { messageText, type ConversationMemory } from './memory.js';
 
 const MAX_TOOL_RESULT_CHARS = 24_000;
@@ -105,9 +101,6 @@ function refused(tool: string) {
   };
 }
 
-/** Every set a scene can be drawn in has an id; this is the one a blank scene starts in. */
-const FALLBACK_TILESET = 'docklands';
-
 export interface ChatToolDeps {
   ctx: ToolContext;
   /** Where the GM is looking — the scene and floor "this floor" means. */
@@ -117,6 +110,8 @@ export interface ChatToolDeps {
   memory: ConversationMemory;
   /** This turn's tool failures, shared by every tool and read by the loop. */
   ledger: RetryLedger;
+  /** This turn's floor drawing: which floor, and its edits one at a time. */
+  floor: FloorTurn;
 }
 
 /** One catalog tool, runnable by the SDK — under the retry policy. */
@@ -139,153 +134,26 @@ function wrap(t: FixerTool, ctx: ToolContext, ledger: RetryLedger) {
   });
 }
 
-/**
- * Whether a failed floor was cut off by thinking — the one cause the tool can
- * fix itself, because the model cannot switch its own thinking off.
- */
-function cutOffByThinking(err: unknown): boolean {
-  const d = (err as { details?: Record<string, unknown> } | null)?.details;
-  if (!d || d['finishReason'] !== 'length') return false;
-  return /spent thinking/.test((err as { message?: string }).message ?? '');
-}
-
-/**
- * The tokens a tool's OWN model call used — not the chat's. `draft_floor`
- * asks the model separately, with its own prompt and its own output limit,
- * so its numbers never show in the chat's context; the panel reads them here.
- */
-export interface SubCallUsage {
-  model?: string;
-  promptTokens: number;
-  completionTokens: number;
-  maxOutputTokens?: number;
-  latencyMs?: number;
-  finishReason?: string | null;
-}
-
-/** What the chat's plan card receives from `draft_floor`. */
-export interface FloorPlanOutput {
-  kind: 'floor-plan';
-  sceneId: string;
-  level: number;
-  plan: CompiledFloor;
-  usage: SubCallUsage;
-}
-
-/** A failed tool that still reports what its own model call spent. */
-function failure(err: unknown): { error: string; usage?: SubCallUsage } {
-  const e = err as { message?: string; details?: Record<string, unknown> } | null;
-  const d = e?.details ?? {};
-  const u = d['usage'] as { promptTokens?: number; completionTokens?: number } | undefined;
-  return {
-    error: e?.message ?? String(err),
-    ...(u
-      ? {
-          usage: {
-            promptTokens: u.promptTokens ?? 0,
-            completionTokens: u.completionTokens ?? 0,
-            ...(typeof d['maxOutputTokens'] === 'number' ? { maxOutputTokens: d['maxOutputTokens'] } : {}),
-            ...(typeof d['model'] === 'string' ? { model: d['model'] } : {}),
-            ...(typeof d['finishReason'] === 'string' ? { finishReason: d['finishReason'] } : {}),
-          },
-        }
-      : {}),
-  };
-}
-
-/** The set a floor is painted in, or the scene's, or the one a blank scene starts in. */
-async function tilesetFor(ctx: ToolContext, sceneId: string, level: number): Promise<string> {
-  const row = await new ScenesService(ctx.db).sceneRow(sceneId).catch(() => null);
-  if (!row || row.campaignId !== ctx.campaignId) throw new Error(`no scene [${sceneId}] in this campaign`);
-  const scene = serializeScene(row);
-  return levelTiles(scene, level)?.tilesetId ?? scene.tiles?.tilesetId ?? FALLBACK_TILESET;
-}
-
-function planSummary(out: FloorPlanOutput): string {
-  const p = out.plan;
-  const c = p.counts;
-  const rooms = p.rooms.map((r) => `${r.name} (${r.kind}, ${r.rect.w}×${r.rect.h})`).join('; ');
-  return [
-    `Drafted "${p.title}" for scene [${out.sceneId}] floor ${out.level}: ${p.rooms.length} rooms — ${rooms}.`,
-    `${c.floor} floor squares, ${c.wall} wall, ${c.door} doors, ${c.window} windows, ${c.prop} props, ${c.stair} stairs.`,
-    p.warnings.length > 0 ? `Warnings: ${p.warnings.join(' | ')}` : '',
-    'It is being built on the map now, as one step the GM can undo with Ctrl+Z. Say briefly what you laid out and why; do not repeat the square counts, and do not ask whether to build it.',
-  ]
-    .filter(Boolean)
-    .join('\n');
-}
-
 export function chatTools(catalog: readonly FixerTool[], deps: ChatToolDeps): ToolSet {
   const { ctx } = deps;
   const tools: ToolSet = {};
   const { ledger } = deps;
   for (const t of catalog) tools[t.name] = wrap(t, ctx, ledger);
 
-  tools['draft_floor'] = tool({
-    description:
-      "Lay out one floor of a scene from a description — rooms with their walls, doors, windows, furniture and stairs, in the scene's own tileset — and build it on the map. Use it when the GM asks for a floor, a building, a room layout or a map to be drawn. Leave sceneId and level out to use the scene and floor the GM is looking at. It is built straight away, as one step the GM can undo with Ctrl+Z.",
-    inputSchema: z.object({
-      description: z
-        .string()
-        .min(3)
-        .describe('What the floor is, in the GM\'s words plus anything this chat has settled — rooms, what connects to what, locked doors, the feel.'),
-      sceneId: z.string().optional().describe('Scene id; defaults to the scene on the GM\'s screen.'),
-      level: z.number().int().min(0).optional().describe('Floor index, 0 for the ground; defaults to the floor on screen.'),
-    }),
-    execute: async ({ description, sceneId, level }, options) => {
-      const sid = sceneId ?? deps.where?.sceneId;
-      if (!sid) {
-        // Not a failure to retry: nothing the model changes will open a scene.
-        return { error: 'No scene to draw on: the GM is not looking at one. Ask which scene, or to open it on the Map.' };
-      }
-      const lvl = level ?? deps.where?.level ?? 0;
-      if (ledger.exhausted('draft_floor')) return refused('draft_floor');
+  // Drawing a floor: small edits to a plan kept in memory (floor-draft.ts).
+  Object.assign(
+    tools,
+    floorTools({ ctx, where: deps.where, memory: deps.memory, turn: deps.floor }, async (name, run) => {
+      if (ledger.exhausted(name)) return refused(name);
       try {
-        const tilesetId = await tilesetFor(ctx, sid, lvl);
-        const ask = {
-          campaignId: ctx.campaignId,
-          sceneId: sid,
-          level: lvl,
-          tilesetId,
-          prompt: description,
-          ...(options.abortSignal ? { signal: options.abortSignal } : {}),
-        };
-        let result;
-        try {
-          result = await proposeFloor(ctx.db, ctx.llm ?? null, ask);
-        } catch (err) {
-          // Cut off because thinking ate the room: the one fix the model
-          // cannot make, so the tool makes it — the same floor, thinking off.
-          if (!cutOffByThinking(err) || !ctx.llm) throw err;
-          result = await proposeFloor(ctx.db, { ...ctx.llm, effort: 'off' }, ask);
-        }
-        ledger.succeeded('draft_floor');
-        const out: FloorPlanOutput = {
-          kind: 'floor-plan',
-          sceneId: sid,
-          level: result.level,
-          plan: result.plan,
-          usage: {
-            model: result.model,
-            promptTokens: result.usage.promptTokens,
-            completionTokens: result.usage.completionTokens,
-            latencyMs: result.latencyMs,
-          },
-        };
+        const out = await run();
+        ledger.succeeded(name);
         return out;
       } catch (err) {
-        return withGuidance('draft_floor', ledger, failure(err));
+        return withGuidance(name, ledger, { error: err instanceof Error ? err.message : String(err) });
       }
-    },
-    // The plan's squares are for the Build button, not for the model.
-    toModelOutput: ({ output }) => {
-      const o = output as FloorPlanOutput | { error: string; guidance?: string };
-      // The retry instructions ride with the error — without them the model
-      // reads only "it failed" and gives up.
-      if ('error' in o) return { type: 'error-text', value: [o.error, o.guidance].filter(Boolean).join('\n') };
-      return { type: 'text', value: planSummary(o) };
-    },
-  });
+    }),
+  );
 
   tools['recall_conversation'] = tool({
     description:

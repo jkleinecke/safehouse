@@ -24,6 +24,8 @@ export interface FixerStatus {
   models: { primary: string; fast: string } | null;
   /** How hard the model is asked to think: default, off, low, medium, high. */
   effort?: string;
+  /** Whether this provider takes an effort at all. */
+  effortSupport?: 'levels' | 'none';
   /** Cap on tool rounds per turn (FR12.17). */
   maxToolRounds?: number;
   /** What the AI is doing right now, if anything (fixer/activity.ts). */

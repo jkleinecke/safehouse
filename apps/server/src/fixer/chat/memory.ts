@@ -27,6 +27,7 @@
  * tested without a model or a disk.
  */
 import { convertToModelMessages, type ModelMessage, type ToolSet, type UIMessage } from 'ai';
+import type { FloorPlan } from '../floor-plan.js';
 import type { ChatMessage } from '../llm.js';
 
 // ---------------------------------------------------------------------------
@@ -44,6 +45,16 @@ export interface AttachedFile {
   tokens?: number;
 }
 
+/** A floor the chat is drawing, one edit at a time (floor-draft.ts). */
+export interface FloorDraft {
+  sceneId: string;
+  level: number;
+  tilesetId: string;
+  /** The grid the plan was last compiled on — what its last edit painted. */
+  grid: { cols: number; rows: number };
+  plan: FloorPlan;
+}
+
 export interface ConversationMemory {
   version: 1;
   /** Everything folded so far, as a structured brief. Empty until the first fold. */
@@ -54,6 +65,10 @@ export interface ConversationMemory {
   files: Record<string, AttachedFile>;
   /** Characters per token, calibrated against the box's own counts. */
   charsPerToken: number;
+  /** Floors this chat has drawn, by `sceneId:level` — so a later turn edits the same plan. */
+  floors: Record<string, FloorDraft>;
+  /** The floor drawn last: where an edit lands when nothing says otherwise. */
+  activeFloor?: string;
 }
 
 export const EMPTY_MEMORY: ConversationMemory = {
@@ -62,11 +77,12 @@ export const EMPTY_MEMORY: ConversationMemory = {
   foldedCount: 0,
   files: {},
   charsPerToken: 3.5,
+  floors: {},
 };
 
 /** Whatever is in the column, as a memory — a new or older row reads as empty. */
 export function readMemory(raw: unknown): ConversationMemory {
-  if (typeof raw !== 'object' || raw === null) return { ...EMPTY_MEMORY, files: {} };
+  if (typeof raw !== 'object' || raw === null) return { ...EMPTY_MEMORY, files: {}, floors: {} };
   const r = raw as Partial<ConversationMemory>;
   return {
     version: 1,
@@ -75,6 +91,8 @@ export function readMemory(raw: unknown): ConversationMemory {
     files: typeof r.files === 'object' && r.files !== null ? r.files : {},
     charsPerToken:
       typeof r.charsPerToken === 'number' && r.charsPerToken > 1 && r.charsPerToken < 8 ? r.charsPerToken : 3.5,
+    floors: typeof r.floors === 'object' && r.floors !== null ? r.floors : {},
+    ...(typeof r.activeFloor === 'string' ? { activeFloor: r.activeFloor } : {}),
   };
 }
 
@@ -307,8 +325,10 @@ async function prepareWindow(
     for (const part of message.parts) {
       if (part.type === 'reasoning' || part.type === 'step-start' || part.type.startsWith('data-')) continue;
       if (isToolPart(part)) {
-        // Recent tool calls stay whole; older ones become a line of text.
-        if (age < FULL_TOOL_TURNS) parts.push(part);
+        // Recent tool calls stay whole; older ones become a line of text —
+        // and so does a call to a tool that no longer exists, whose whole
+        // output the model has no way to read (a retired draft_floor's plan).
+        if (age < FULL_TOOL_TURNS && toolNameOf(part) in input.tools) parts.push(part);
         else parts.push({ type: 'text', text: receipt(part) });
         continue;
       }

@@ -145,11 +145,12 @@ export function aiProviderInfo(id: AiProvider): AiProviderInfo {
  *
  * ## What each provider actually does with it
  *
- * Measured, not assumed — a local llama.cpp router accepts `reasoning_effort`
- * and `reasoning_budget` and SILENTLY IGNORES BOTH; the only control that
- * moves the number is the chat template's own `enable_thinking`, which is a
- * boolean. So a local box gets on or off and nothing in between, and this
- * enum promises no more than that.
+ * A local box reads the level through its chat template: current Qwen
+ * templates take a `reasoning_effort` alongside `enable_thinking`, and both
+ * go in `chat_template_kwargs` (fixer/llm.ts, `openAiEffort`). An older
+ * template that only knows `enable_thinking` treats every level as "on" —
+ * measured on a llama.cpp router, which also ignores a top-level
+ * `reasoning_effort` — so there the levels cost nothing but mean nothing.
  *
  * `default` sends nothing at all and lets the model do whatever it does today
  * — the setting has to start somewhere, and changing how everybody's existing
@@ -158,12 +159,11 @@ export function aiProviderInfo(id: AiProvider): AiProviderInfo {
 export const AiEffortSchema = z.enum(['default', 'off', 'low', 'medium', 'high']);
 export type AiEffort = z.infer<typeof AiEffortSchema>;
 
-/** What a given provider can actually honour, for the GM's screen to say. */
-export function effortSupport(provider: AiProvider): 'levels' | 'on-off' | 'none' {
+/** Whether a provider takes the effort setting at all, for the GM's screen to offer it. */
+export function effortSupport(provider: AiProvider): 'levels' | 'none' {
   const dialect = aiProviderInfo(provider).dialect;
   if (dialect === 'anthropic') return 'levels';
-  if (provider === 'openai' || provider === 'xai') return 'levels';
-  if (provider === 'openai-compatible') return 'on-off';
+  if (provider === 'openai' || provider === 'xai' || provider === 'openai-compatible') return 'levels';
   return 'none';
 }
 

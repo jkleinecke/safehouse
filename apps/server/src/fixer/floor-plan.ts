@@ -149,6 +149,15 @@ export type FloorPlan = z.infer<typeof FloorPlanSchema>;
 export type FloorPlanInput = z.input<typeof FloorPlanSchema>;
 
 /**
+ * A plan the chat is still drawing (chat/floor-draft.ts): the same plan, but
+ * it may have no rooms yet — a floor that has only been started is just its
+ * outside ground.
+ */
+export const DraftPlanSchema = FloorPlanSchema.extend({
+  rooms: z.array(FloorRoomSchema).max(60).default([]),
+});
+
+/**
  * The first pass: the building without its furniture. Everything the plan
  * says except the props — which is most of what used to make a plan long
  * enough to be cut off.
@@ -274,8 +283,15 @@ export function compileFloorPlan(
   raw: FloorPlanInput,
   grid: { cols: number; rows: number },
   set: Tileset,
+  /**
+   * `draft`: a plan the chat is drawing one edit at a time. It may have no
+   * rooms yet, and the compiler adds nothing of its own — no furniture in a
+   * bare room, no scatter the plan did not name — because the Fixer is still
+   * going, and furniture that appears and vanishes between edits is noise.
+   */
+  opts: { draft?: boolean } = {},
 ): CompiledFloor {
-  const plan = FloorPlanSchema.parse(raw);
+  const plan = opts.draft ? DraftPlanSchema.parse(raw) : FloorPlanSchema.parse(raw);
   const warnings: string[] = [];
   const ground: Record<string, string> = {};
   const structure: Record<string, string> = {};
@@ -331,7 +347,9 @@ export function compileFloorPlan(
     if (byName.has(lower)) warnings.push(`two rooms are called "${room.name}" — openings will attach to the first`);
     else byName.set(lower, compiled);
   }
-  if (rooms.length === 0) warnings.push('no room survived clamping — nothing to build');
+  if (rooms.length === 0 && (plan.rooms.length > 0 || !opts.draft)) {
+    warnings.push('no room survived clamping — nothing to build');
+  }
 
   // Two rooms that share a wall overlap by one square; more than that is a
   // room inside a room, which the GM should hear about.
@@ -509,7 +527,9 @@ export function compileFloorPlan(
   const scatterPool = (
     named.length > 0
       ? named
-      : set.tiles.filter((t) => categoryOf(t) === 'decoration' && t.emissive === undefined && !t.placement?.againstWall)
+      : opts.draft
+        ? []
+        : set.tiles.filter((t) => categoryOf(t) === 'decoration' && t.emissive === undefined && !t.placement?.againstWall)
   ).filter(fitsSomewhere);
   // How much to scatter comes from the squares something can stand on, not
   // from the whole outside: a grid that is mostly harbour must not pack all
@@ -537,7 +557,7 @@ export function compileFloorPlan(
   const furniture = set.tiles.filter((t) => categoryOf(t) === 'interior' && t.emissive === undefined && !t.placement?.on);
   const wallSide = furniture.filter((t) => t.placement?.againstWall === true);
   const open = furniture.filter((t) => t.placement?.againstWall !== true && t.footprint !== 'wall');
-  if (furniture.length > 0) {
+  if (furniture.length > 0 && !opts.draft) {
     for (const room of rooms) {
       const { x, y, w, h } = room.rect;
       const cells: string[] = [];

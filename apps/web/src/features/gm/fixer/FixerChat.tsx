@@ -26,12 +26,12 @@ import { Link } from 'react-router-dom';
 import { apiGet } from '../../../api/client.js';
 import Icon from '../../../components/Icon.js';
 import { getToken } from '../../../api/session.js';
-import FloorPlanCard from '../../grid/gm/FloorPlanCard.js';
-import { fileUrl, type FloorPlanResult } from '../../grid/api.js';
+import { fileUrl } from '../../grid/api.js';
 import { fmtLatency, fmtTokens } from '../common.js';
 import { SectionTitle } from '../ui.js';
 import { aiDisabledFrom, useCancelAi, useFixerStatus } from './api.js';
 import type { AiContext } from './aiContext.js';
+import { useFloorEdits } from './floorEdits.js';
 
 // ---------------------------------------------------------------------------
 // Message shape
@@ -87,17 +87,6 @@ export type FixerUIMessage = UIMessage<FixerMetadata, FixerData>;
 
 type Part = FixerUIMessage['parts'][number];
 
-interface FloorPlanOutput {
-  kind: 'floor-plan';
-  sceneId: string;
-  level: number;
-  plan: FloorPlanResult['plan'];
-}
-
-function isFloorPlan(v: unknown): v is FloorPlanOutput {
-  return typeof v === 'object' && v !== null && (v as { kind?: unknown }).kind === 'floor-plan';
-}
-
 /** The attachment id behind a `/files/<id>` link. */
 function attachmentIdOf(url: string): string | null {
   const m = /\/files\/([0-9a-f-]{8,})/i.exec(url);
@@ -148,9 +137,13 @@ function ToolChip({ part }: { part: Part }) {
     (p.state === 'output-available' && typeof p.output === 'object' && p.output !== null && 'error' in p.output);
   const running = p.state === 'input-streaming' || p.state === 'input-available';
   const tone = failed ? 'border-danger/50 text-danger' : running ? 'border-cyan-dim text-cyan animate-pulse' : 'border-edge text-dim';
+  // A floor edit says what it did; the chip's tooltip carries it.
+  const summary = (p.output as { summary?: unknown } | undefined)?.summary;
   const detail = failed
     ? (p.errorText ?? String((p.output as { error?: unknown }).error ?? 'failed'))
-    : undefined;
+    : typeof summary === 'string'
+      ? summary
+      : undefined;
   return (
     <span className={`chip ${tone}`} title={detail ?? name}>
       {running ? '▮' : failed ? '✕' : '✓'} {name}
@@ -288,13 +281,10 @@ function FileChip({ part }: { part: FileUIPart }) {
 function MessageView({
   message,
   streaming,
-  historic,
   onAnswer,
 }: {
   message: FixerUIMessage;
   streaming: boolean;
-  /** Read back from the server — its plans are shown, never built again. */
-  historic: boolean;
   /** Answer a question on this message (`ask_gm`); absent while nothing can be sent. */
   onAnswer?: (toolCallId: string, out: AskGmOutput) => void;
 }) {
@@ -322,7 +312,6 @@ function MessageView({
     } else if (part.type === 'file') {
       body.push(<FileChip key={i} part={part} />);
     } else if (part.type.startsWith('tool-') || part.type === 'dynamic-tool') {
-      const p = part as { state: string; output?: unknown };
       // A question is asked, not chipped.
       if (part.type === 'tool-ask_gm') {
         const q = part as { toolCallId: string; state: string; input?: unknown; output?: unknown };
@@ -339,21 +328,7 @@ function MessageView({
         }
         return;
       }
-      // A drafted floor is shown, not chipped: it is the answer.
-      if (part.type === 'tool-draft_floor' && p.state === 'output-available' && isFloorPlan(p.output)) {
-        const callId = (part as { toolCallId: string }).toolCallId;
-        body.push(
-          <FloorPlanCard
-            key={i}
-            sceneId={p.output.sceneId}
-            level={p.output.level}
-            plan={p.output.plan}
-            {...(historic ? {} : { autoBuildKey: callId })}
-          />,
-        );
-      } else {
-        chips.push(part);
-      }
+      chips.push(part);
     }
   });
 
@@ -383,8 +358,94 @@ function MessageView({
   );
 }
 
-/** What the effort setting is called on the bar; `default` says nothing. */
-const EFFORT_LABEL: Record<string, string> = { off: 'Off', low: 'Low', medium: 'Medium', high: 'High' };
+/** What each effort is called on the bar. */
+const EFFORT_LABEL: Record<string, string> = { default: 'Default', off: 'Off', low: 'Low', medium: 'Medium', high: 'High' };
+
+const EFFORT_KEY = (campaignId: string) => `safehouse:fixer-effort:${campaignId}`;
+
+function readEffort(campaignId: string): string | undefined {
+  try {
+    return localStorage.getItem(EFFORT_KEY(campaignId)) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeEffort(campaignId: string, effort: string): void {
+  try {
+    localStorage.setItem(EFFORT_KEY(campaignId), effort);
+  } catch {
+    // storage blocked: the pick lasts until the page reloads
+  }
+}
+
+/** The effort on the input bar, and a menu to change it. */
+function EffortMenu({ value, onPick }: { value: string; onPick: (effort: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const away = (e: MouseEvent) => {
+      if (!boxRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', away);
+    document.addEventListener('keydown', key);
+    return () => {
+      document.removeEventListener('mousedown', away);
+      document.removeEventListener('keydown', key);
+    };
+  }, [open]);
+
+  const options = ['default', 'off', 'low', 'medium', 'high'].map((v) => ({ value: v, label: EFFORT_LABEL[v]! }));
+  const label = EFFORT_LABEL[value] ?? value;
+  const current = value;
+
+  return (
+    <div ref={boxRef} className="relative">
+      <button
+        type="button"
+        className="flex items-center gap-0.5 hover:text-ink"
+        title="Thinking effort"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        data-testid="fixer-effort"
+      >
+        {label}
+        <Icon name="keyboard_arrow_down" size={14} />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute bottom-full right-0 z-30 mb-1 min-w-32 rounded-lg border border-edge bg-panel py-1 shadow-lg"
+          data-testid="fixer-effort-menu"
+        >
+          <div className="mono-label px-3 py-1 text-faint">Thinking</div>
+          {options.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              role="menuitemradio"
+              aria-checked={o.value === current}
+              className="flex w-full items-center gap-2 px-3 py-1 text-left text-sm text-ink hover:bg-raised"
+              onClick={() => {
+                onPick(o.value);
+                setOpen(false);
+              }}
+            >
+              <span className="w-4 text-cyan">{o.value === current ? <Icon name="check" size={14} /> : null}</span>
+              {o.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const n = (v: number | undefined) => (v === undefined ? '—' : v.toLocaleString('en-US'));
 
@@ -634,6 +695,10 @@ export default function FixerChat({ campaignId, dense, fill, context, seed }: Fi
   const status = useFixerStatus();
   const cancel = useCancelAi(campaignId);
   const [conversationId, setConversationId] = useState<string | undefined>(() => readThread(campaignId));
+  // The bar's effort pick, kept per browser; absent means the saved setting.
+  const [effortPick, setEffortPick] = useState<string | undefined>(() => readEffort(campaignId));
+  const effort = effortPick ?? status.data?.effort ?? 'default';
+  const effortSupport = status.data?.effortSupport ?? 'none';
   const [snapshot, setSnapshot] = useState<string | null>(null);
   const [working, setWorking] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -653,8 +718,8 @@ export default function FixerChat({ campaignId, dense, fill, context, seed }: Fi
   }, [draft]);
 
   // The transport reads these at send time, so it never needs rebuilding.
-  const live = useRef({ campaignId, conversationId, context });
-  live.current = { campaignId, conversationId, context };
+  const live = useRef({ campaignId, conversationId, context, effortPick });
+  live.current = { campaignId, conversationId, context, effortPick };
 
   const transport = useMemo(
     () =>
@@ -673,6 +738,7 @@ export default function FixerChat({ campaignId, dense, fill, context, seed }: Fi
             campaignId: live.current.campaignId,
             ...(live.current.conversationId ? { conversationId: live.current.conversationId } : {}),
             ...(live.current.context ? { context: live.current.context } : {}),
+            ...(live.current.effortPick ? { effort: live.current.effortPick } : {}),
           };
           if (last?.role === 'assistant') {
             const answered = [...last.parts].reverse().find(
@@ -723,7 +789,7 @@ export default function FixerChat({ campaignId, dense, fill, context, seed }: Fi
   };
 
   // A thread kept for this tab comes back as it was drawn — and what came
-  // back is history: its floor plans were built (or not) the first time.
+  // back is history: its floor edits were painted (or undone) the first time.
   const reopened = useRef(false);
   const historic = useRef(new Set<string>());
   useEffect(() => {
@@ -740,6 +806,9 @@ export default function FixerChat({ campaignId, dense, fill, context, seed }: Fi
         writeThread(campaignId, undefined);
       });
   }, [conversationId, messages.length, setMessages, campaignId]);
+
+  // The Fixer's floor edits go onto the map as they arrive.
+  useFloorEdits(messages, historic.current, busy);
 
   useEffect(() => {
     const el = scroller.current;
@@ -892,7 +961,6 @@ export default function FixerChat({ campaignId, dense, fill, context, seed }: Fi
             key={m.id}
             message={m}
             streaming={busy && m.id === lastId && m.role === 'assistant'}
-            historic={historic.current.has(m.id)}
             {...(question ? { onAnswer: answer } : {})}
           />
         ))}
@@ -1021,8 +1089,14 @@ export default function FixerChat({ campaignId, dense, fill, context, seed }: Fi
               {status.data.models.primary}
             </span>
           )}
-          {status.data?.effort && EFFORT_LABEL[status.data.effort] && (
-            <span title="How hard it thinks — set under AI">{EFFORT_LABEL[status.data.effort]}</span>
+          {effortSupport !== 'none' && (
+            <EffortMenu
+              value={effort}
+              onPick={(e) => {
+                setEffortPick(e);
+                writeEffort(campaignId, e);
+              }}
+            />
           )}
           <ContextRing fill={usage.fill} last={usage.last} total={usage.total} subCalls={usage.subCalls} />
         </span>
