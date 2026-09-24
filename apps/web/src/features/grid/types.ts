@@ -483,7 +483,7 @@ export interface StageCallbacks {
    */
   onPaintedEdit?(delta: PaintDelta, anchorId: string, tilesetId: string): void;
   /** Build: a box was dragged on open floor, corners inclusive. */
-  onBoxSelect?(a: { col: number; row: number }, b: { col: number; row: number }): void;
+  onBoxSelect?(a: { col: number; row: number }, b: { col: number; row: number }, everything: boolean): void;
   /** Build: Shift+click on a painted object — in or out of the selection. */
   onPaintedToggle?(id: string): void;
   /** Build: the multi-selection was dragged by whole squares. */

@@ -224,7 +224,17 @@ function SelectionInspector({ scene }: { scene: Scene }) {
           onClick={() => {
             const bodies = eraseBodies(scene, sel);
             setCellSelection(null);
-            if (bodies.length > 0) batch.mutate({ sceneId: scene.id, bodies, label: 'delete the selection' });
+            if (bodies.length > 0) {
+              batch.mutate({
+                sceneId: scene.id,
+                bodies,
+                label: 'delete the selection',
+                restore: {
+                  undo: () => useGridStore.getState().setCellSelection(sel),
+                  redo: () => useGridStore.getState().setCellSelection(null),
+                },
+              });
+            }
           }}
         >
           delete

@@ -25,7 +25,7 @@
  * bodies, which `usePaintBatch` sends as one undo step.
  */
 import type { Scene } from '@safehouse/contracts';
-import { levelTiles } from '@safehouse/rules';
+import { levelTiles, tileById } from '@safehouse/rules';
 import type { PaintBody, TileLayerName } from './history.js';
 import { key, parseKey, type CellRef, type PaintedObject } from './paintedObjects.js';
 
@@ -89,7 +89,14 @@ export function describeSet(sel: CellSet): string {
  * the objects in it if there are any, the floor in it if not. Null when the
  * box is over nothing painted at all.
  */
-export function boxSelect(scene: Scene, level: number, a: CellRef, b: CellRef): CellSet | null {
+export function boxSelect(
+  scene: Scene,
+  level: number,
+  a: CellRef,
+  b: CellRef,
+  /** Ctrl+Shift: take the objects AND the floor under them — a whole room. */
+  everything = false,
+): CellSet | null {
   const layers = layerMap(scene, level);
   if (!layers) return null;
   const c0 = Math.min(a.col, b.col);
@@ -103,7 +110,7 @@ export function boxSelect(scene: Scene, level: number, a: CellRef, b: CellRef): 
   const cells = empty();
   cells.structure = Object.keys(layers.structure).filter(inBox);
   cells.object = Object.keys(layers.object).filter(inBox);
-  if (cells.structure.length + cells.object.length === 0) {
+  if (everything || cells.structure.length + cells.object.length === 0) {
     cells.ground = Object.keys(layers.ground).filter(inBox);
   }
   const sel = { level, cells };
@@ -235,4 +242,175 @@ export function pasteBodies(clip: Clipboard, at: CellRef, level: number, tileset
     if (Object.keys(paint).length > 0) bodies.push({ tilesetId, level, paint, erase: [] });
   }
   return bodies;
+}
+
+// ---------------------------------------------------------------------------
+// Moving a selection that holds walls
+// ---------------------------------------------------------------------------
+
+/**
+ * One direction of a wall move, on a scratch copy of the structure layer.
+ *
+ * `movers` are the selected squares that travel in this direction — the
+ * squares of walls whose normal it is. Everything else, selected or not, is
+ * a wall that may have to follow: grown after a mover that left it behind,
+ * cut back where a mover came in past it, left whole where a mover crossed
+ * it. A square grown out of a SELECTED wall joins the selection, so the next
+ * direction moves it too — which is how a corner between two selected walls
+ * stays a corner.
+ */
+function slideStep(
+  map: Record<string, string>,
+  sel: Set<string>,
+  movers: Set<string>,
+  mc: number,
+  mr: number,
+  isWall: (slot: string | undefined) => boolean,
+  wallFill: (slot: string) => string,
+): { map: Record<string, string>; sel: Set<string> } {
+  const dist = Math.abs(mc) + Math.abs(mr);
+  const sc = Math.sign(mc);
+  const sr = Math.sign(mr);
+  const at = (k: string, i: number) => {
+    const { col, row } = parseKey(k);
+    return key(col + sc * i, row + sr * i);
+  };
+  const next: Record<string, string> = { ...map };
+  const nextSel = new Set([...sel].filter((k) => !movers.has(k)));
+  for (const k of movers) delete next[k];
+
+  for (const k of movers) {
+    const ahead = at(k, 1);
+    const behind = at(k, -1);
+    const aheadWall = !movers.has(ahead) && isWall(map[ahead]);
+    const behindWall = !movers.has(behind) && isWall(map[behind]);
+    if (aheadWall && behindWall) {
+      // A wall it crosses stays whole where the mover left it.
+      next[k] = map[k]!;
+      continue;
+    }
+    if (behindWall) {
+      const slot = wallFill(map[behind]!);
+      for (let i = 0; i < dist; i += 1) {
+        const f = at(k, i);
+        next[f] = slot;
+        if (sel.has(behind)) nextSel.add(f);
+      }
+      continue;
+    }
+    if (aheadWall) {
+      for (let i = 1; i < dist; i += 1) {
+        const c = at(k, i);
+        if (!isWall(map[c])) break;
+        delete next[c];
+        nextSel.delete(c);
+      }
+    }
+  }
+  for (const k of movers) {
+    const { col, row } = parseKey(k);
+    const nk = key(col + mc, row + mr);
+    next[nk] = map[k]!;
+    nextSel.add(nk);
+  }
+  return { map: next, sel: nextSel };
+}
+
+/**
+ * Which selected wall squares travel with a move along x and which along y.
+ * A square runs the way its selected neighbours run; one with none runs the
+ * way the walls around it do. A selected corner runs both ways, and so moves
+ * with both of its walls.
+ */
+function moversFor(
+  map: Record<string, string>,
+  sel: Set<string>,
+  isWall: (slot: string | undefined) => boolean,
+): { x: Set<string>; y: Set<string> } {
+  const x = new Set<string>();
+  const y = new Set<string>();
+  for (const k of sel) {
+    const { col, row } = parseKey(k);
+    const selH = sel.has(key(col - 1, row)) || sel.has(key(col + 1, row));
+    const selV = sel.has(key(col, row - 1)) || sel.has(key(col, row + 1));
+    let h = selH;
+    let v = selV;
+    if (!h && !v) {
+      h = isWall(map[key(col - 1, row)]) || isWall(map[key(col + 1, row)]);
+      v = !h && (isWall(map[key(col, row - 1)]) || isWall(map[key(col, row + 1)]));
+      if (!h && !v) h = true;
+    }
+    // A horizontal wall's normal is y; a vertical wall's is x.
+    if (v) x.add(k);
+    if (h) y.add(k);
+  }
+  return { x, y };
+}
+
+export interface SelectionMove {
+  bodies: PaintBody[];
+  /** The selection afterwards — where the moved squares went, and what grew out of them. */
+  sel: CellSet;
+  /** Every square the move paints — the ghost drawn while dragging. */
+  ghost: string[];
+}
+
+/**
+ * Drag a selection by `dc, dr`.
+ *
+ * Its walls do what one wall does when it is dragged: each moves only along
+ * its own normal, and every wall it meets — selected or not — grows or
+ * shrinks so no corner comes apart. The move is done x first, then y, on a
+ * scratch copy, so each step has one direction to think about and a corner
+ * shared by two selected walls follows them both. Furniture and floor in
+ * the selection move rigidly by the whole drag.
+ *
+ * Structure is diffed against where it started into one body; the other
+ * layers are `moveBodies`' rigid move. One undo step either way.
+ */
+export function moveSelection(scene: Scene, sel: CellSet, dc: number, dr: number): SelectionMove {
+  const layers = layerMap(scene, sel.level);
+  const tilesetId = tilesetOf(scene, sel.level);
+  const none = { bodies: [], sel, ghost: [] };
+  if (!layers || !tilesetId || (dc === 0 && dr === 0)) return none;
+
+  const kind = (slot: string | undefined) => (slot === undefined ? null : (tileById(tilesetId, slot)?.kind ?? null));
+  const isWall = (slot: string | undefined) => {
+    const k = kind(slot);
+    return k === 'wall' || k === 'door';
+  };
+  const selectedWall = sel.cells.structure.find((k) => kind(layers.structure[k]) === 'wall');
+  // A wall grows in its own material — never the door beside the corner.
+  const wallFill = (slot: string) =>
+    kind(slot) === 'door' ? (selectedWall !== undefined ? layers.structure[selectedWall]! : slot) : slot;
+
+  // Structure: two steps on a scratch copy.
+  let map: Record<string, string> = { ...layers.structure };
+  let wallSel = new Set(sel.cells.structure);
+  const firstMovers = moversFor(map, wallSel, isWall);
+  if (dc !== 0 && firstMovers.x.size > 0) {
+    ({ map, sel: wallSel } = slideStep(map, wallSel, firstMovers.x, dc, 0, isWall, wallFill));
+  }
+  if (dr !== 0) {
+    const { y } = moversFor(map, wallSel, isWall);
+    if (y.size > 0) ({ map, sel: wallSel } = slideStep(map, wallSel, y, 0, dr, isWall, wallFill));
+  }
+
+  const bodies: PaintBody[] = [];
+  const paint: Record<string, string> = {};
+  for (const [k, v] of Object.entries(map)) if (layers.structure[k] !== v) paint[k] = v;
+  const erase = Object.keys(layers.structure).filter((k) => !(k in map));
+  if (Object.keys(paint).length + erase.length > 0) {
+    bodies.push({ tilesetId, level: sel.level, layer: 'structure', paint, erase });
+  }
+
+  // Everything that is not a wall moves rigidly by the whole drag.
+  const rest: CellSet = { level: sel.level, cells: { ...sel.cells, structure: [] } };
+  const restBodies = moveBodies(scene, rest, dc, dr);
+  bodies.push(...restBodies);
+
+  const moved = shiftSet(rest, dc, dr);
+  const nextSel: CellSet = { level: sel.level, cells: { ...moved.cells, structure: [...wallSel] } };
+  const ghost = [...new Set(bodies.flatMap((b) => Object.keys(b.paint)))];
+  return { bodies, sel: nextSel, ghost };
 }

@@ -5,7 +5,16 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Scene } from '@safehouse/contracts';
-import { boxSelect, copySet, eraseBodies, moveBodies, pasteBodies, toggleObject } from './cellSelection.js';
+import {
+  boxSelect,
+  copySet,
+  eraseBodies,
+  moveBodies,
+  moveSelection,
+  pasteBodies,
+  toggleObject,
+} from './cellSelection.js';
+import type { PaintBody } from './history.js';
 import { pickPainted } from './paintedObjects.js';
 
 function scene(
@@ -105,5 +114,70 @@ describe('acting on it', () => {
     const crateOnly = toggleObject(both, wall, 0)!;
     expect(crateOnly.cells.structure).toEqual([]);
     expect(toggleObject(crateOnly, crate, 0)).toBeNull();
+  });
+});
+
+describe('Ctrl+Shift', () => {
+  it('takes the floor as well as what stands on it', () => {
+    const s = scene(floor(0, 0, 3, 3), { '1,1': 'wall' });
+    const sel = boxSelect(s, 0, { col: 0, row: 0 }, { col: 3, row: 3 }, true)!;
+    expect(sel.cells.structure).toEqual(['1,1']);
+    expect(sel.cells.ground).toHaveLength(16);
+  });
+});
+
+describe('a selection of walls stretches, like one wall does', () => {
+  /** Apply a move's structure body to a copy of the layer, the way the server would. */
+  const apply = (structure: Record<string, string>, bodies: PaintBody[]) => {
+    const out = { ...structure };
+    for (const b of bodies.filter((x) => x.layer === 'structure')) {
+      Object.assign(out, b.paint);
+      for (const k of b.erase) delete out[k];
+    }
+    return Object.keys(out).sort();
+  };
+  /** A box of walls, cols c0..c1, rows r0..r1. */
+  const walls = (c0: number, r0: number, c1: number, r1: number) => {
+    const st: Record<string, string> = {};
+    for (let c = c0; c <= c1; c += 1) {
+      st[`${c},${r0}`] = 'wall';
+      st[`${c},${r1}`] = 'wall';
+    }
+    for (let r = r0; r <= r1; r += 1) {
+      st[`${c0},${r}`] = 'wall';
+      st[`${c1},${r}`] = 'wall';
+    }
+    return st;
+  };
+
+  it('grows the room in both directions when its north-east corner is dragged out', () => {
+    // A room at cols 2..6, rows 4..8; select its north and east walls.
+    const st = walls(2, 4, 6, 8);
+    const s = scene({}, st);
+    const north = pickPainted(s, 0, { col: 4, row: 4 })!;
+    const east = pickPainted(s, 0, { col: 6, row: 6 })!;
+    const sel = toggleObject(toggleObject(null, north, 0), east, 0)!;
+    // Up two, right two.
+    const move = moveSelection(s, sel, 2, -2);
+    // The same room, two squares wider and two taller: cols 2..8, rows 2..8.
+    expect(apply(st, move.bodies)).toEqual(Object.keys(walls(2, 2, 8, 8)).sort());
+  });
+
+  it('slides parallel walls on their normal only, however the pointer wanders', () => {
+    const st = walls(2, 4, 6, 8);
+    const s = scene({}, st);
+    const east = pickPainted(s, 0, { col: 6, row: 6 })!;
+    const sel = toggleObject(null, east, 0)!;
+    // Right two and down three: only the right counts for a vertical wall.
+    const move = moveSelection(s, sel, 2, 3);
+    expect(apply(st, move.bodies)).toEqual(Object.keys(walls(2, 4, 8, 8)).sort());
+  });
+
+  it('keeps hold of the moved walls, grown corners included', () => {
+    const st = walls(2, 4, 6, 8);
+    const s = scene({}, st);
+    const east = pickPainted(s, 0, { col: 6, row: 6 })!;
+    const move = moveSelection(s, toggleObject(null, east, 0)!, 2, 0);
+    expect(move.sel.cells.structure.sort()).toEqual(['8,4', '8,5', '8,6', '8,7', '8,8']);
   });
 });

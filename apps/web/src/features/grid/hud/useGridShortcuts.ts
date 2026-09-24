@@ -34,9 +34,21 @@ export function useGridShortcuts(
         const s = useGridStore.getState();
         // A multi-selection goes as one step: each square from its own layer.
         if (s.cellSelection) {
-          const bodies = eraseBodies(scene, s.cellSelection);
+          const gone = s.cellSelection;
+          const bodies = eraseBodies(scene, gone);
           s.setCellSelection(null);
-          if (bodies.length > 0) paintBatch({ sceneId: scene.id, bodies, label: 'delete the selection' });
+          if (bodies.length > 0) {
+            paintBatch({
+              sceneId: scene.id,
+              bodies,
+              label: 'delete the selection',
+              // Undo brings the squares back, and the selection with them.
+              restore: {
+                undo: () => useGridStore.getState().setCellSelection(gone),
+                redo: () => useGridStore.getState().setCellSelection(null),
+              },
+            });
+          }
           e.preventDefault();
           return;
         }

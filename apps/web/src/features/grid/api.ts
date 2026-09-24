@@ -617,6 +617,19 @@ export interface TilePaint {
   level?: number;
   /** Which layer `erase`/`clear` act on; absent means all three. */
   layer?: 'ground' | 'structure' | 'object';
+  /** What the selection should be after this edit is undone or redone. Never sent. */
+  restore?: SelectionRestore;
+}
+
+/**
+ * Put the selection back where the squares went. An undo that moves a wall
+ * back and leaves its selection ring where the wall used to be has undone
+ * half the edit: the next drag then picks up empty floor. Run after the
+ * undo or redo lands.
+ */
+export interface SelectionRestore {
+  undo?: () => void;
+  redo?: () => void;
 }
 
 /**
@@ -631,14 +644,14 @@ export interface TilePaint {
  */
 export function usePaintTiles() {
   return useMutation({
-    mutationFn: async ({ sceneId, ...body }: TilePaint) =>
+    mutationFn: async ({ sceneId, restore: _restore, ...body }: TilePaint) =>
       (await apiPost<{ scene: Scene; painted: number }>(`/api/scenes/${sceneId}/tiles`, body)).scene,
     // What the touched squares held a moment ago — the undo (`history.ts`).
     // Only a clear starts the floor over, so only a clear snapshots the whole
     // floor; a stroke under another set keeps every square (they hold slots —
     // rules/tilesets/slots.ts) and changes what the floor is drawn in, which
     // the restore puts back by sending the set the floor had.
-    onMutate: ({ sceneId, ...body }) => {
+    onMutate: ({ sceneId, restore: _restore, ...body }) => {
       const scene = queryClient.getQueryData<ComposedScene>(['scene', sceneId])?.scene;
       if (!scene) return { before: null, wipe: false, tilesetBefore: body.tilesetId };
       const had = levelTiles(scene, body.level ?? 0);
@@ -647,7 +660,7 @@ export function usePaintTiles() {
       return { before, wipe, tilesetBefore: had?.tilesetId ?? body.tilesetId };
     },
     onSuccess: (scene, vars, ctx) => {
-      const { sceneId, ...body } = vars;
+      const { sceneId, restore, ...body } = vars;
       if (ctx?.before) {
         const bodies = restoreBodies(ctx.before, ctx.tilesetBefore, body.level ?? 0, ctx.wipe);
         useHistory.getState().push({
@@ -655,8 +668,12 @@ export function usePaintTiles() {
           label: describePaint(body),
           undo: async () => {
             for (const b of bodies) await sendPaint(sceneId, b);
+            restore?.undo?.();
           },
-          redo: () => sendPaint(sceneId, body),
+          redo: async () => {
+            await sendPaint(sceneId, body);
+            restore?.redo?.();
+          },
         });
       }
       queryClient.setQueryData<ComposedScene>(['scene', sceneId], (old) =>
@@ -678,7 +695,15 @@ export function usePaintTiles() {
  */
 export function usePaintBatch() {
   return useMutation({
-    mutationFn: async ({ sceneId, bodies }: { sceneId: string; bodies: PaintBody[]; label: string }) => {
+    mutationFn: async ({
+      sceneId,
+      bodies,
+    }: {
+      sceneId: string;
+      bodies: PaintBody[];
+      label: string;
+      restore?: SelectionRestore;
+    }) => {
       const scene = queryClient.getQueryData<ComposedScene>(['scene', sceneId])?.scene;
       const level = bodies[0]?.level ?? 0;
       // Every square every body touches, as it was before ANY of them ran.
@@ -690,7 +715,7 @@ export function usePaintBatch() {
       }
       return { last, before, tilesetBefore, level };
     },
-    onSuccess: ({ last, before, tilesetBefore, level }, { sceneId, bodies, label }) => {
+    onSuccess: ({ last, before, tilesetBefore, level }, { sceneId, bodies, label, restore }) => {
       if (before) {
         const undoBodies = restoreBodies(before, tilesetBefore, level);
         useHistory.getState().push({
@@ -698,9 +723,11 @@ export function usePaintBatch() {
           label,
           undo: async () => {
             for (const b of undoBodies) await sendPaint(sceneId, b);
+            restore?.undo?.();
           },
           redo: async () => {
             for (const b of bodies) await sendPaint(sceneId, b);
+            restore?.redo?.();
           },
         });
       }

@@ -91,7 +91,7 @@ export function useStage(params: UseStageParams): UseStageResult {
       onContextMenu: (request) => cbRef.current.onContextMenu?.(request),
       onPaintedSelect: (id) => cbRef.current.onPaintedSelect?.(id),
       onPaintedEdit: (delta, anchorId, tilesetId) => cbRef.current.onPaintedEdit?.(delta, anchorId, tilesetId),
-      onBoxSelect: (a, b) => cbRef.current.onBoxSelect?.(a, b),
+      onBoxSelect: (a, b, everything) => cbRef.current.onBoxSelect?.(a, b, everything),
       onPaintedToggle: (id) => cbRef.current.onPaintedToggle?.(id),
       onCellSelectionMove: (dc, dr) => cbRef.current.onCellSelectionMove?.(dc, dr),
       onPaste: (at) => cbRef.current.onPaste?.(at),

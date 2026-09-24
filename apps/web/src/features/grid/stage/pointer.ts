@@ -42,7 +42,7 @@ import {
   type EditResult,
   type PaintedObject,
 } from '../paintedObjects.js';
-import { allCells, containsCell, pastedSet, shiftSet } from '../cellSelection.js';
+import { allCells, containsCell, moveSelection, pastedSet } from '../cellSelection.js';
 
 type Mode =
   | 'idle'
@@ -744,7 +744,10 @@ export class PointerController {
         const at = this.cellAt(this.toGrid(screen));
         this.groupDelta = { col: at.col - this.boxFrom.col, row: at.row - this.boxFrom.row };
         const { col, row } = this.groupDelta;
-        this.host.drawPaintedGhost?.(col === 0 && row === 0 ? null : allCells(shiftSet(sel, col, row)));
+        // The ghost is what the move will paint — the stretched walls
+        // included, not just the selection slid along.
+        const ghost = col === 0 && row === 0 ? null : moveSelection(this.host.state().scene, sel, col, row).ghost;
+        this.host.drawPaintedGhost?.(ghost);
         return;
       }
       case 'painted': {
@@ -840,7 +843,9 @@ export class PointerController {
     } else if (this.mode === 'marquee') {
       this.host.clearRect?.();
       if (this.moved) {
-        this.host.callbacks.onBoxSelect?.(this.boxFrom, this.boxTo);
+        // Ctrl+Shift as the box is let go: take the floor too. Read at the
+        // release, so the keys can go down mid-drag.
+        this.host.callbacks.onBoxSelect?.(this.boxFrom, this.boxTo, e.ctrlKey && e.shiftKey);
       } else {
         // A click on open floor, not a box: let go of everything, as before.
         this.host.callbacks.onSelectToken(null);

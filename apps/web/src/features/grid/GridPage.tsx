@@ -76,11 +76,10 @@ import { historyFor, useHistory } from './history.js';
 import { useGridStore } from './store.js';
 import {
   boxSelect,
-  moveBodies,
+  moveSelection,
   pasteBodies,
   pastedSet,
   setOfObject,
-  shiftSet,
   tilesetOf,
   toggleObject,
 } from './cellSelection.js';
@@ -588,11 +587,11 @@ export default function GridPage() {
       },
       onContextMenu: (request) => setMenu(request),
       // -- Multi-selection, copy and paste (Build) ----------------------------
-      onBoxSelect: (a, b) => {
+      onBoxSelect: (a, b, everything) => {
         if (!scene) return;
         const s = useGridStore.getState();
         // A box over nothing painted lets go, like a click on open floor.
-        const sel = boxSelect(scene, s.activeLevel, a, b);
+        const sel = boxSelect(scene, s.activeLevel, a, b, everything);
         s.setCellSelection(sel);
         if (!sel) s.select(null);
         else s.openGmPanel();
@@ -623,12 +622,23 @@ export default function GridPage() {
         const s = useGridStore.getState();
         const sel = s.cellSelection;
         if (!sel) return;
-        const bodies = moveBodies(scene, sel, dc, dr);
-        if (bodies.length === 0) return;
+        // Its walls stretch the walls they meet, as one wall does.
+        const move = moveSelection(scene, sel, dc, dr);
+        if (move.bodies.length === 0) return;
+        const store0 = useGridStore.getState;
         paintBatch(
-          { sceneId: scene.id, bodies, label: 'move the selection' },
-          // Keep hold of what moved, where it went.
-          { onSuccess: () => useGridStore.getState().setCellSelection(shiftSet(sel, dc, dr)) },
+          {
+            sceneId: scene.id,
+            bodies: move.bodies,
+            label: 'move the selection',
+            // Undo takes the selection back to where the squares went back to.
+            restore: {
+              undo: () => store0().setCellSelection(sel),
+              redo: () => store0().setCellSelection(move.sel),
+            },
+          },
+          // Keep hold of what moved, and what grew out of it.
+          { onSuccess: () => useGridStore.getState().setCellSelection(move.sel) },
         );
       },
       onPaste: (at) => {
@@ -642,7 +652,16 @@ export default function GridPage() {
         if (bodies.length === 0) return;
         const landed = pastedSet(clip, at, s.activeLevel);
         paintBatch(
-          { sceneId: scene.id, bodies, label: 'paste' },
+          {
+            sceneId: scene.id,
+            bodies,
+            label: 'paste',
+            // An undone paste has nothing left to hold on to.
+            restore: {
+              undo: () => useGridStore.getState().setCellSelection(null),
+              redo: () => useGridStore.getState().setCellSelection(landed),
+            },
+          },
           // What was just pasted is what is selected: a paste is usually
           // followed by a nudge into place.
           { onSuccess: () => useGridStore.getState().setCellSelection(landed) },
@@ -658,7 +677,9 @@ export default function GridPage() {
       // and paints where it went, in a single stroke the history can reverse.
       onPaintedEdit: (delta, anchorId, tilesetId) => {
         if (!scene || !isGm) return;
-        const level = useGridStore.getState().activeLevel;
+        const s0 = useGridStore.getState();
+        const level = s0.activeLevel;
+        const was = s0.selected;
         paintMutate(
           {
             sceneId: scene.id,
@@ -667,6 +688,11 @@ export default function GridPage() {
             paint: delta.paint,
             erase: delta.erase,
             layer: delta.layer,
+            // Undo takes the ring back to the wall it moved back to.
+            restore: {
+              undo: () => useGridStore.getState().select(was),
+              redo: () => useGridStore.getState().select({ kind: 'painted', id: anchorId }),
+            },
           },
           {
             // Keep hold of what was moved: the old anchor may now be empty
