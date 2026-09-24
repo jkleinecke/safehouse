@@ -1146,6 +1146,11 @@ export interface WallJoins {
   e: boolean;
   s: boolean;
   w: boolean;
+  /** The diagonal neighbours: where two runs side by side are one thick wall. */
+  ne?: boolean;
+  nw?: boolean;
+  se?: boolean;
+  sw?: boolean;
 }
 
 /**
@@ -1156,6 +1161,11 @@ export interface WallJoins {
  * two opposite stubs is a straight run, two adjacent is a corner, three is a
  * T, four is a crossing, none is a pillar — which is what a lone wall cell
  * honestly is.
+ *
+ * Walls side by side are ONE wall. Where a square of four cells is all wall,
+ * each cell fills the corner facing the other three, so the hole between the
+ * runs closes: two rows of wall read as one thick wall rather than a ladder
+ * of thin ones with rungs, and a solid block of wall cells is solid.
  */
 export function wallBoxes(joins: WallJoins): Array<[number, number, number, number]> {
   const lo = (1 - WALL_THICKNESS) / 2;
@@ -1165,6 +1175,10 @@ export function wallBoxes(joins: WallJoins): Array<[number, number, number, numb
   if (joins.s) out.push([lo, hi, hi, 1]);
   if (joins.w) out.push([0, lo, lo, hi]);
   if (joins.e) out.push([hi, lo, 1, hi]);
+  if (joins.n && joins.w && joins.nw) out.push([0, 0, lo, lo]);
+  if (joins.n && joins.e && joins.ne) out.push([hi, 0, 1, lo]);
+  if (joins.s && joins.w && joins.sw) out.push([0, hi, lo, 1]);
+  if (joins.s && joins.e && joins.se) out.push([hi, hi, 1, 1]);
   return out;
 }
 
@@ -1750,6 +1764,10 @@ function joinsOf(walls: ReadonlySet<string>, col: number, row: number): WallJoin
     s: walls.has(`${col},${row + 1}`),
     w: walls.has(`${col - 1},${row}`),
     e: walls.has(`${col + 1},${row}`),
+    nw: walls.has(`${col - 1},${row - 1}`),
+    ne: walls.has(`${col + 1},${row - 1}`),
+    sw: walls.has(`${col - 1},${row + 1}`),
+    se: walls.has(`${col + 1},${row + 1}`),
   };
 }
 
@@ -2005,9 +2023,10 @@ function waterOf(input: TileDrawInput): WaterMap {
 /**
  * Which chunks a set of changed cells dirties.
  *
- * A cell's rendering depends on its four orthogonal neighbours — wall runs
- * turn corners from them, and a shadow or an ambient ring reaches into them —
- * so a change on a chunk's edge dirties the chunk next door as well.
+ * A cell's rendering depends on its neighbours — wall runs turn corners from
+ * the four beside it and close up with the four diagonal to it, and a shadow
+ * or an ambient ring reaches into them — so a change on a chunk's edge or
+ * corner dirties the chunks next door as well.
  */
 export function dirtyChunks(changed: Iterable<string>): Set<string> {
   const out = new Set<string>();
@@ -2020,6 +2039,10 @@ export function dirtyChunks(changed: Iterable<string>): Set<string> {
       [-1, 0],
       [0, 1],
       [0, -1],
+      [1, 1],
+      [1, -1],
+      [-1, 1],
+      [-1, -1],
     ] as const) {
       out.add(chunkKey(at.col + dc, at.row + dr));
     }

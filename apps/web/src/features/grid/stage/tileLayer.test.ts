@@ -541,6 +541,11 @@ describe('thin walls orient themselves from their neighbours', () => {
   it('makes a T and a crossing from the same rule', () => {
     expect(wallBoxes({ n: true, e: true, s: true, w: false })).toHaveLength(4);
     expect(wallBoxes({ n: true, e: true, s: true, w: true })).toHaveLength(5);
+    // Walls side by side close up: the corner facing a square of wall fills,
+    // so two rows read as one thick wall, and a cell walled all round is solid.
+    expect(wallBoxes({ n: true, e: true, s: false, w: false, ne: true })).toContainEqual([expect.any(Number), 0, 1, expect.any(Number)]);
+    expect(wallBoxes({ n: true, e: true, s: false, w: false, ne: false })).toHaveLength(3);
+    expect(wallBoxes({ n: true, e: true, s: true, w: true, ne: true, nw: true, se: true, sw: true })).toHaveLength(9);
   });
 
   it('never leaves the cell it belongs to', () => {
