@@ -26,7 +26,7 @@ import { updateRun, type ActivityHub, type AiRun } from './activity.js';
 import { createDraft } from './drafts.js';
 import { proposeFloor } from './floor-plan.js';
 import { LlmClient, constrainedEffort, type ChatMessage, type LlmConfig, type LlmUsage, type ModelSlot } from './llm.js';
-import { coerceOutline, repairJson, schemaMissError } from './repair.js';
+import { coerceOutline, cutOffError, repairJson, schemaMissError } from './repair.js';
 import { usageMeter } from './usage.js';
 import { describeKeys, parseModelJson, unwrapEnvelope } from './vision.js';
 
@@ -148,18 +148,12 @@ export async function outlineArchitect(db: Db, config: LlmConfig | null, ask: Ou
       model,
       messages,
       temperature: 0.7,
-      max_tokens: 8000,
       effort,
     },
     { timeoutMs: ARCHITECT_TIMEOUT_MS, ...(ask.signal ? { signal: ask.signal } : {}) },
   );
   if (turn.finishReason === 'length' && !/\}\s*$/.test(turn.content.trim())) {
-    throw httpError(
-      502,
-      'ai_error',
-      'the model hit its token limit before it finished the outline — set Thinking to Off under AI, or ask for less',
-      { preview: turn.content.trim().slice(-240), finishReason: turn.finishReason },
-    );
+    throw cutOffError('the outline', turn, effort);
   }
   const parsed = unwrapEnvelope(parseModelJson(turn.content, 'the campaign outline'), 'premise');
   // Bend first (an "encounter" kind, a 3.0, a summary a line too long), and
@@ -171,7 +165,7 @@ export async function outlineArchitect(db: Db, config: LlmConfig | null, ask: Ou
   if (!checked.success) {
     const repaired = await repairJson(
       client,
-      { model, max_tokens: 8000, effort },
+      { model, effort },
       { timeoutMs: ARCHITECT_TIMEOUT_MS, ...(ask.signal ? { signal: ask.signal } : {}) },
       { messages, badContent: turn.content, issues: checked.error.issues, what: 'the campaign outline', mustHave: 'premise' },
     );
@@ -354,7 +348,6 @@ export async function buildArchitect(db: Db, config: LlmConfig | null, ask: Buil
               { role: 'user', content: pagePrompt(outline, item) },
             ],
             temperature: 0.8,
-            max_tokens: 4000,
           },
           chatOpts,
         );

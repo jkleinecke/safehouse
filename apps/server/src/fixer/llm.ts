@@ -15,7 +15,34 @@ import type { AiDialect, AiEffort, AiProvider } from '@safehouse/contracts';
 import { anthropicChat } from './anthropic.js';
 import { httpError, type HttpError } from '../services/auth.js';
 
+/**
+ * How long the model may go SILENT before the call is given up — not how long
+ * the whole answer may take. A local model on a GM's own box can take five
+ * minutes over a long reply and still be working the whole time; a wall-clock
+ * limit killed exactly those replies, mid-sentence, while tokens were still
+ * arriving. The clock restarts on every line the stream sends.
+ */
 const DEFAULT_TIMEOUT_MS = 120_000;
+
+/**
+ * An abort that fires only after `ms` with nothing heard. `touch()` on every
+ * sign of life; `stop()` once the call is over, so a finished call leaves no
+ * timer holding the process open.
+ */
+export function idleWatchdog(ms: number): { signal: AbortSignal; touch: () => void; stop: () => void } {
+  const ctrl = new AbortController();
+  const fire = () =>
+    ctrl.abort(new DOMException(`the model sent nothing for ${Math.round(ms / 1000)}s`, 'TimeoutError'));
+  let timer = setTimeout(fire, ms);
+  return {
+    signal: ctrl.signal,
+    touch: () => {
+      clearTimeout(timer);
+      timer = setTimeout(fire, ms);
+    },
+    stop: () => clearTimeout(timer),
+  };
+}
 
 /** Blank line between folded system parts, so they read as separate notes. */
 const SYSTEM_JOIN = '\n\n';
@@ -138,6 +165,28 @@ export function upstreamAiError(
   details?: unknown,
 ): HttpError {
   return markUpstreamAiError(httpError(statusCode, code, message, details)) as HttpError;
+}
+
+/** True when `err` is the watchdog giving up, not the GM pressing stop. */
+function isIdleTimeout(err: unknown, idle: AbortSignal): boolean {
+  if (!idle.aborted) return false;
+  return err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
+}
+
+/**
+ * The model went quiet. Said as silence, because that is what happened — "timed
+ * out" read as "too slow", and a GM with a slow box then shortened prompts
+ * that were never the problem.
+ */
+function idleTimeoutError(ms: number): HttpError {
+  const e = upstreamAiError(
+    504,
+    'ai_timeout',
+    `the model went quiet for ${Math.round(ms / 1000)}s mid-answer and was given up on`,
+  );
+  // Kept, so code that already tells a timeout by its name still can.
+  (e as { name: string }).name = 'TimeoutError';
+  return e;
 }
 
 /** Stamp an envelope somebody else built (a provider SDK's) as the box's. */
@@ -491,7 +540,11 @@ export class LlmClient {
   /** The Chat Completions path — OpenAI, xAI, and anything self-hosted. */
   private async chatOpenAi(req: ChatRequest, opts: ChatOptions = {}): Promise<ChatTurn> {
     const startedAt = Date.now();
-    const signals: AbortSignal[] = [AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS)];
+    // Silence, not duration: see DEFAULT_TIMEOUT_MS. The first stretch covers
+    // the box reading the prompt before its first token, which is the one
+    // wait with nothing to show for it.
+    const idle = idleWatchdog(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+    const signals: AbortSignal[] = [idle.signal];
     if (opts.signal) signals.push(opts.signal);
     // `effort` is ours, not the API's: it picks the reasoning fields below
     // and must not reach the wire as an unknown key.
@@ -520,6 +573,8 @@ export class LlmClient {
         signal: AbortSignal.any(signals),
       });
     } catch (err) {
+      idle.stop();
+      if (isIdleTimeout(err, idle.signal)) throw idleTimeoutError(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
       throw upstreamAiError(
         503,
         'ai_unreachable',
@@ -527,7 +582,9 @@ export class LlmClient {
         err instanceof Error ? err.message : String(err),
       );
     }
+    idle.touch();
     if (!res.ok) {
+      idle.stop();
       const text = await res.text().catch(() => '');
       // A wrong model name is the likeliest misconfiguration, and servers do
       // not agree on how to say so: llama.cpp's router answers 400 with
@@ -545,22 +602,35 @@ export class LlmClient {
       }
       throw upstreamAiError(502, 'ai_error', `LLM responded ${res.status}`, text.slice(0, 500));
     }
-    if (!res.body) throw upstreamAiError(502, 'ai_error', 'LLM response carried no body');
+    if (!res.body) {
+      idle.stop();
+      throw upstreamAiError(502, 'ai_error', 'LLM response carried no body');
+    }
 
     const acc = new ChatAccumulator();
-    for await (const line of sseLines(res.body)) {
-      if (!line.startsWith('data:')) continue;
-      const data = line.slice(5).trim();
-      if (data.length === 0) continue;
-      if (data === '[DONE]') break;
-      let chunk: unknown;
-      try {
-        chunk = JSON.parse(data);
-      } catch {
-        continue; // a partial/garbled frame is not worth killing the turn over
+    try {
+      for await (const line of sseLines(res.body)) {
+        // Any line is a sign of life — a content token, a reasoning token the
+        // GM never sees, a keep-alive comment. All of them restart the clock.
+        idle.touch();
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (data.length === 0) continue;
+        if (data === '[DONE]') break;
+        let chunk: unknown;
+        try {
+          chunk = JSON.parse(data);
+        } catch {
+          continue; // a partial/garbled frame is not worth killing the turn over
+        }
+        const delta = acc.push(chunk);
+        if (delta.length > 0 && opts.onDelta) opts.onDelta(delta);
       }
-      const delta = acc.push(chunk);
-      if (delta.length > 0 && opts.onDelta) opts.onDelta(delta);
+    } catch (err) {
+      if (isIdleTimeout(err, idle.signal)) throw idleTimeoutError(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+      throw err;
+    } finally {
+      idle.stop();
     }
 
     return {

@@ -1,50 +1,616 @@
 /**
- * The Fixer chat (FR12.1): GM-only, streaming. Deltas arrive as `fixer.*`
- * ephemerals on the campaign socket and fold into the transcript here;
- * tool calls render as activity chips (FR12.17), the live-session situation
- * snapshot as its own chip (FR12.18), and tokens/latency as a usage meter
- * (FR12.16). No LLM configured → the panel says so and stays quiet (NG7).
+ * The Fixer chat (FR12.1), on the AI SDK's `useChat`.
+ *
+ * The panel sends only the GM's new message — text, plus any files — and the
+ * server holds the transcript and decides what the model is handed each turn
+ * (server `fixer/chat/memory.ts`: a curated context, not the last N lines).
+ * The reply streams back as UI message parts, drawn here as they arrive:
+ * text, the model's thinking (folded away), a chip per tool call (FR12.17),
+ * and — when the Fixer drafts a floor — the plan itself, with the button that
+ * builds it. The "draft a floor" tab this replaced is gone: the chat is the
+ * one place the GM asks, and it carries what the floor is for.
+ *
+ * Files: the paperclip, a paste, or a drop onto the panel. Each is uploaded
+ * at once (GM-only, `POST /api/attachments`), so pressing send is quick, and
+ * travels with the message as a `/files/<id>` link. Text files stay with the
+ * chat for its whole life; images are shown to the model on the turn they
+ * arrive and the next.
+ *
+ * The thread survives a reload: its id is kept for the tab, and reopening the
+ * panel reloads it from the server exactly as it was drawn.
  */
+import { useChat } from '@ai-sdk/react';
+import { DefaultChatTransport, lastAssistantMessageIsCompleteWithToolCalls, type FileUIPart, type UIMessage } from 'ai';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useLiveStore } from '../../../live/store.js';
+import { apiGet } from '../../../api/client.js';
+import Icon from '../../../components/Icon.js';
+import { getToken } from '../../../api/session.js';
+import FloorPlanCard from '../../grid/gm/FloorPlanCard.js';
+import { fileUrl, type FloorPlanResult } from '../../grid/api.js';
 import { fmtLatency, fmtTokens } from '../common.js';
-import { ErrorNote, SectionTitle, Spinner } from '../ui.js';
-import { aiDisabledFrom, isAiCancelled, useCancelAi, useFixerSend, useFixerStatus } from './api.js';
+import { SectionTitle } from '../ui.js';
+import { aiDisabledFrom, useCancelAi, useFixerStatus } from './api.js';
 import type { AiContext } from './aiContext.js';
-import { reduceFixerStream, type FixerUsage, type ToolChip } from './stream.js';
 
-function ToolChipView({ chip }: { chip: ToolChip }) {
-  const tone =
-    chip.status === 'error'
-      ? 'border-danger/50 text-danger'
-      : chip.status === 'running'
-        ? 'border-cyan-dim text-cyan animate-pulse'
-        : 'border-edge text-dim';
+// ---------------------------------------------------------------------------
+// Message shape
+// ---------------------------------------------------------------------------
+
+export interface FixerUsage {
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  latencyMs?: number;
+}
+
+interface FixerMetadata {
+  conversationId?: string;
+  usage?: FixerUsage;
+  /** How full the model's window was for the turn — the input bar's ring and its panel. */
+  context?: ContextStats;
+}
+
+/** What the server sends about a turn's context (server `ContextStats`, chat/turn.ts). */
+interface ContextStats {
+  usedTokens: number;
+  windowTokens: number;
+  promptBudget?: number;
+  breakdown?: { system: number; brief: number; files: number; messages: number; tools: number; images: number };
+  steps?: Array<{ inputTokens: number; outputTokens: number; finishReason: string; tools: string[] }>;
+  folded: number;
+  windowMessages?: number;
+  dropped?: number;
+  totalMessages?: number;
+  charsPerToken?: number;
+  model?: string;
+}
+
+/** A tool that asked the model on its own — its tokens are not the chat's. */
+interface SubCall {
+  tool: string;
+  promptTokens: number;
+  completionTokens: number;
+  error?: string;
+  latencyMs?: number;
+}
+
+interface FixerData {
+  /** The live situation snapshot the model was handed (FR12.18). */
+  snapshot: { text: string };
+  /** A step the turn is taking that is not the answer — folding the brief. */
+  status: { text: string };
+  [key: string]: unknown;
+}
+
+export type FixerUIMessage = UIMessage<FixerMetadata, FixerData>;
+
+type Part = FixerUIMessage['parts'][number];
+
+interface FloorPlanOutput {
+  kind: 'floor-plan';
+  sceneId: string;
+  level: number;
+  plan: FloorPlanResult['plan'];
+}
+
+function isFloorPlan(v: unknown): v is FloorPlanOutput {
+  return typeof v === 'object' && v !== null && (v as { kind?: unknown }).kind === 'floor-plan';
+}
+
+/** The attachment id behind a `/files/<id>` link. */
+function attachmentIdOf(url: string): string | null {
+  const m = /\/files\/([0-9a-f-]{8,})/i.exec(url);
+  return m ? m[1]! : null;
+}
+
+/** What went wrong, in a sentence — the server's envelope when it sent one. */
+function errorSentence(err: Error | undefined): string | null {
+  if (!err) return null;
+  try {
+    const body = JSON.parse(err.message) as { error?: { message?: string; code?: string } };
+    if (body.error?.code === 'ai_cancelled') return 'Cancelled.';
+    if (body.error?.message) return body.error.message;
+  } catch {
+    // not JSON
+  }
+  return err.message || 'Something went wrong.';
+}
+
+const THREAD_KEY = (campaignId: string) => `safehouse:fixer-thread:${campaignId}`;
+
+function readThread(campaignId: string): string | undefined {
+  try {
+    return sessionStorage.getItem(THREAD_KEY(campaignId)) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeThread(campaignId: string, id: string | undefined): void {
+  try {
+    if (id) sessionStorage.setItem(THREAD_KEY(campaignId), id);
+    else sessionStorage.removeItem(THREAD_KEY(campaignId));
+  } catch {
+    // storage blocked: the thread simply does not survive a reload
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Parts
+// ---------------------------------------------------------------------------
+
+function ToolChip({ part }: { part: Part }) {
+  const p = part as { type: string; toolName?: string; state: string; output?: unknown; errorText?: string };
+  const name = p.type === 'dynamic-tool' ? (p.toolName ?? 'tool') : p.type.slice('tool-'.length);
+  const failed =
+    p.state === 'output-error' ||
+    (p.state === 'output-available' && typeof p.output === 'object' && p.output !== null && 'error' in p.output);
+  const running = p.state === 'input-streaming' || p.state === 'input-available';
+  const tone = failed ? 'border-danger/50 text-danger' : running ? 'border-cyan-dim text-cyan animate-pulse' : 'border-edge text-dim';
+  const detail = failed
+    ? (p.errorText ?? String((p.output as { error?: unknown }).error ?? 'failed'))
+    : undefined;
   return (
-    <span className={`chip ${tone}`} title={chip.detail ?? chip.name}>
-      {chip.status === 'running' ? '▮' : chip.status === 'error' ? '✕' : '✓'} {chip.name}
-      {chip.detail && <span className="normal-case text-faint">{chip.detail}</span>}
+    <span className={`chip ${tone}`} title={detail ?? name}>
+      {running ? '▮' : failed ? '✕' : '✓'} {name}
     </span>
   );
 }
 
-function UsageMeter({ last, total }: { last?: FixerUsage; total: FixerUsage }) {
+interface AskGmInput {
+  question: string;
+  options: Array<{ label: string; description?: string }>;
+}
+
+interface AskGmOutput {
+  answer: string;
+  chosen?: string;
+}
+
+/** The question the latest reply is waiting on, if any. */
+function waitingQuestion(messages: readonly FixerUIMessage[]): { toolCallId: string; input: AskGmInput } | null {
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== 'assistant') return null;
+  for (const part of last.parts) {
+    const p = part as { type: string; state?: string; toolCallId?: string; input?: unknown };
+    if (p.type === 'tool-ask_gm' && p.state === 'input-available' && p.toolCallId) {
+      return { toolCallId: p.toolCallId, input: p.input as AskGmInput };
+    }
+  }
+  return null;
+}
+
+/**
+ * A question from the Fixer (`ask_gm`): its suggested answers, the one it
+ * recommends first, and a box for anything else — the GM is never limited to
+ * what the model thought of. Answered, it folds down to the question and the
+ * answer given, so the thread reads as a conversation.
+ */
+function QuestionCard({
+  input,
+  output,
+  waiting,
+  onAnswer,
+}: {
+  input: AskGmInput;
+  output?: AskGmOutput;
+  waiting: boolean;
+  onAnswer: (out: AskGmOutput) => void;
+}) {
+  const [own, setOwn] = useState('');
+  if (!input?.question) return null;
+  if (output) {
+    return (
+      <div className="rounded-md border border-edge px-3 py-2" data-testid="fixer-question-answered">
+        <p className="text-sm text-dim">{input.question}</p>
+        <p className="mt-1 text-sm text-ink">
+          <Icon name="subdirectory_arrow_right" size={14} className="mr-1 text-faint" />
+          {output.answer}
+        </p>
+      </div>
+    );
+  }
+  const sendOwn = () => {
+    const text = own.trim();
+    if (!text) return;
+    onAnswer({ answer: text });
+  };
   return (
-    <div className="flex flex-wrap items-center gap-2 border-t border-edge pt-2">
-      <span className="mono-label text-faint">usage</span>
-      <span className="chip text-dim" title="Tokens in the most recent turn">
-        {fmtTokens(last?.totalTokens)} tok
-      </span>
-      <span className="chip text-dim" title="Latency of the most recent turn">
-        {fmtLatency(last?.latencyMs)}
-      </span>
-      <span className="mono-label ml-auto text-faint">
-        session total {fmtTokens(total.totalTokens)} tok
-      </span>
+    <div className="rounded-md border border-cyan-dim/60 bg-deck px-3 py-2" data-testid="fixer-question">
+      <p className="text-sm text-ink">{input.question}</p>
+      <div className="mt-2 flex flex-col gap-1.5">
+        {input.options.map((o, i) => (
+          <button
+            key={i}
+            type="button"
+            disabled={!waiting}
+            onClick={() => onAnswer({ answer: o.label, chosen: o.label })}
+            className={
+              'rounded-md border px-2.5 py-1.5 text-left text-sm disabled:opacity-50 ' +
+              (i === 0 ? 'border-cyan text-cyan hover:bg-raised' : 'border-edge text-ink hover:border-dim')
+            }
+            data-testid={`fixer-question-option-${i}`}
+          >
+            <span className="flex items-baseline gap-2">
+              <span>{o.label}</span>
+              {i === 0 && <span className="mono-label text-faint">recommended</span>}
+            </span>
+            {o.description && <span className="block text-xs text-dim">{o.description}</span>}
+          </button>
+        ))}
+        {/* Always a way to say something the model did not offer. */}
+        <div className="flex items-center gap-1.5 rounded-md border border-edge px-2.5 py-1 focus-within:border-cyan">
+          <input
+            className="w-full bg-transparent text-sm text-ink placeholder:text-faint focus:outline-none"
+            placeholder="or type your own answer…"
+            aria-label="Your own answer"
+            value={own}
+            disabled={!waiting}
+            onChange={(e) => setOwn(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                sendOwn();
+              }
+            }}
+          />
+          <button
+            type="button"
+            className="shrink-0 text-cyan hover:text-ink disabled:text-faint"
+            disabled={!waiting || !own.trim()}
+            onClick={sendOwn}
+            title="Answer"
+            aria-label="Answer"
+          >
+            <Icon name="arrow_circle_up" size={18} />
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
+
+function FileChip({ part }: { part: FileUIPart }) {
+  const id = attachmentIdOf(part.url);
+  if (part.mediaType.startsWith('image/') && id) {
+    return (
+      <img
+        src={fileUrl(id)}
+        alt={part.filename ?? 'attached image'}
+        className="max-h-40 max-w-full rounded border border-edge object-contain"
+      />
+    );
+  }
+  return <span className="chip text-dim">📄 {part.filename ?? part.mediaType}</span>;
+}
+
+function MessageView({
+  message,
+  streaming,
+  historic,
+  onAnswer,
+}: {
+  message: FixerUIMessage;
+  streaming: boolean;
+  /** Read back from the server — its plans are shown, never built again. */
+  historic: boolean;
+  /** Answer a question on this message (`ask_gm`); absent while nothing can be sent. */
+  onAnswer?: (toolCallId: string, out: AskGmOutput) => void;
+}) {
+  const mine = message.role === 'user';
+  const chips: Part[] = [];
+  const body: React.ReactNode[] = [];
+  message.parts.forEach((part, i) => {
+    if (part.type === 'text') {
+      if (part.text.trim()) {
+        body.push(
+          <p key={i} className="whitespace-pre-wrap text-sm text-ink">
+            {part.text}
+          </p>,
+        );
+      }
+    } else if (part.type === 'reasoning') {
+      if (part.text.trim()) {
+        body.push(
+          <details key={i} className="text-xs text-faint">
+            <summary className="mono-label cursor-pointer">thinking</summary>
+            <p className="mt-1 whitespace-pre-wrap">{part.text}</p>
+          </details>,
+        );
+      }
+    } else if (part.type === 'file') {
+      body.push(<FileChip key={i} part={part} />);
+    } else if (part.type.startsWith('tool-') || part.type === 'dynamic-tool') {
+      const p = part as { state: string; output?: unknown };
+      // A question is asked, not chipped.
+      if (part.type === 'tool-ask_gm') {
+        const q = part as { toolCallId: string; state: string; input?: unknown; output?: unknown };
+        if (q.state === 'input-available' || q.state === 'output-available') {
+          body.push(
+            <QuestionCard
+              key={i}
+              input={q.input as AskGmInput}
+              {...(q.state === 'output-available' ? { output: q.output as AskGmOutput } : {})}
+              waiting={q.state === 'input-available' && Boolean(onAnswer)}
+              onAnswer={(out) => onAnswer?.(q.toolCallId, out)}
+            />,
+          );
+        }
+        return;
+      }
+      // A drafted floor is shown, not chipped: it is the answer.
+      if (part.type === 'tool-draft_floor' && p.state === 'output-available' && isFloorPlan(p.output)) {
+        const callId = (part as { toolCallId: string }).toolCallId;
+        body.push(
+          <FloorPlanCard
+            key={i}
+            sceneId={p.output.sceneId}
+            level={p.output.level}
+            plan={p.output.plan}
+            {...(historic ? {} : { autoBuildKey: callId })}
+          />,
+        );
+      } else {
+        chips.push(part);
+      }
+    }
+  });
+
+  if (mine) {
+    return (
+      <div className="ml-auto max-w-[85%] space-y-1.5 rounded-md bg-raised px-3 py-2">
+        <div className="mono-label text-faint">gm</div>
+        {body}
+      </div>
+    );
+  }
+  return (
+    <div className="max-w-[95%]">
+      <div className="mono-label text-magenta">fixer</div>
+      {chips.length > 0 && (
+        <div className="mt-1 flex flex-wrap gap-1.5">
+          {chips.map((c, i) => (
+            <ToolChip key={i} part={c} />
+          ))}
+        </div>
+      )}
+      <div className="mt-1 space-y-1.5">
+        {body}
+        {streaming && <span className="animate-pulse text-cyan">▮</span>}
+      </div>
+    </div>
+  );
+}
+
+/** What the effort setting is called on the bar; `default` says nothing. */
+const EFFORT_LABEL: Record<string, string> = { off: 'Off', low: 'Low', medium: 'Medium', high: 'High' };
+
+const n = (v: number | undefined) => (v === undefined ? '—' : v.toLocaleString('en-US'));
+
+function Row({ label, value, note, tone }: { label: string; value: string; note?: string; tone?: string }) {
+  return (
+    <div className="flex items-baseline gap-2">
+      <span className="text-dim">{label}</span>
+      {note && <span className="text-faint">{note}</span>}
+      <span className={`ml-auto tabular-nums ${tone ?? 'text-ink'}`}>{value}</span>
+    </div>
+  );
+}
+
+/**
+ * How full the model's window was on the last turn, as a ring — and, on
+ * hover, everything behind that number.
+ *
+ * The ring is the estimate the server built the turn to; the panel breaks it
+ * down by layer, sets it against what the model itself counted on each step,
+ * and lists any tool that asked the model on its own (a drafted floor is a
+ * whole separate call, with its own prompt, which never shows in the chat's
+ * context at all — the one a "cut off" error is usually about).
+ */
+function ContextRing({
+  fill,
+  last,
+  total,
+  subCalls,
+}: {
+  fill?: ContextStats;
+  last?: FixerUsage;
+  total: FixerUsage;
+  subCalls: SubCall[];
+}) {
+  const [open, setOpen] = useState(false);
+  const share = fill && fill.windowTokens > 0 ? Math.min(1, fill.usedTokens / fill.windowTokens) : 0;
+  const r = 7;
+  const circumference = 2 * Math.PI * r;
+  const tone = share >= 0.7 ? 'text-warn' : 'text-cyan';
+  const b = fill?.breakdown;
+  const steps = fill?.steps ?? [];
+  const firstCounted = steps[0]?.inputTokens;
+
+  return (
+    <span
+      className="relative"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+    >
+      <button
+        type="button"
+        className={`block ${tone}`}
+        aria-label={fill ? `Context ${Math.round(share * 100)}% full — details` : 'Context details'}
+        aria-expanded={open}
+        data-testid="fixer-context-ring"
+      >
+        <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden className="-rotate-90">
+          <circle cx="9" cy="9" r={r} fill="none" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2.5" />
+          <circle
+            cx="9"
+            cy="9"
+            r={r}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeDasharray={`${share * circumference} ${circumference}`}
+          />
+        </svg>
+      </button>
+
+      {open && (
+        <div
+          role="dialog"
+          aria-label="Context details"
+          data-testid="fixer-context-panel"
+          className="absolute bottom-full right-0 z-30 mb-2 w-80 space-y-2 rounded-lg border border-edge bg-panel p-3 text-xs shadow-lg"
+        >
+          {!fill ? (
+            <p className="text-dim">No turn yet. Send a message and this shows how much of the model&apos;s window it used.</p>
+          ) : (
+            <>
+              <div className="flex items-baseline gap-2">
+                <span className="mono-label text-cyan">context</span>
+                <span className="truncate text-faint">{fill.model}</span>
+                <span className={`ml-auto tabular-nums ${tone}`}>{Math.round(share * 100)}%</span>
+              </div>
+
+              {/* The window, the budget line, and where this turn filled to. */}
+              <div className="relative h-2 overflow-hidden rounded bg-raised" aria-hidden>
+                <div className={`h-full ${share >= 0.7 ? 'bg-warn' : 'bg-cyan'}`} style={{ width: `${share * 100}%` }} />
+                {fill.promptBudget !== undefined && (
+                  <div
+                    className="absolute top-0 h-full w-px bg-ink"
+                    style={{ left: `${(fill.promptBudget / fill.windowTokens) * 100}%` }}
+                  />
+                )}
+              </div>
+              <div className="space-y-0.5">
+                <Row label="Window" value={n(fill.windowTokens)} />
+                {fill.promptBudget !== undefined && (
+                  <Row
+                    label="For the prompt"
+                    value={n(fill.promptBudget)}
+                    note={`${n(fill.windowTokens - fill.promptBudget)} kept for the answer`}
+                  />
+                )}
+              </div>
+
+              {b && (
+                <div className="space-y-0.5 border-t border-edge pt-2">
+                  <div className="mono-label text-faint">this turn, estimated</div>
+                  <Row label="System & situation" value={n(b.system)} />
+                  {b.brief > 0 && <Row label="Session brief" value={n(b.brief)} />}
+                  {b.files > 0 && <Row label="Attached files" value={n(b.files)} />}
+                  <Row
+                    label="Conversation"
+                    note={fill.windowMessages !== undefined ? `${fill.windowMessages} messages` : undefined}
+                    value={n(b.messages)}
+                  />
+                  <Row label="Tool definitions" value={n(b.tools)} />
+                  {b.images > 0 && <Row label="Images" value={n(b.images)} />}
+                  <Row label="Total" value={n(fill.usedTokens)} tone={tone} />
+                </div>
+              )}
+
+              {steps.length > 0 && (
+                <div className="space-y-0.5 border-t border-edge pt-2">
+                  <div className="mono-label text-faint">counted by the model</div>
+                  {steps.map((st, i) => (
+                    <Row
+                      key={i}
+                      label={`Step ${i + 1}`}
+                      note={st.tools.length > 0 ? st.tools.join(', ') : st.finishReason === 'length' ? 'cut off' : undefined}
+                      value={`${n(st.inputTokens)} in · ${n(st.outputTokens)} out`}
+                      tone={st.finishReason === 'length' ? 'text-danger' : undefined}
+                    />
+                  ))}
+                  {firstCounted !== undefined && firstCounted > 0 && (
+                    <p className="text-faint">
+                      estimate was {Math.round((fill.usedTokens / firstCounted) * 100)}% of the first step&apos;s count
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {subCalls.length > 0 && (
+                <div className="space-y-0.5 border-t border-edge pt-2">
+                  <div className="mono-label text-faint">tools that asked the model themselves</div>
+                  {subCalls.map((c, i) => (
+                    <div key={i}>
+                      <Row
+                        label={c.tool}
+                        value={`${n(c.promptTokens)} in · ${n(c.completionTokens)} out`}
+                        tone={c.error ? 'text-danger' : undefined}
+                      />
+                      {c.error && <p className="text-danger">{c.error}</p>}
+                    </div>
+                  ))}
+                  <p className="text-faint">A separate request, with its own prompt — not part of the chat&apos;s context.</p>
+                </div>
+              )}
+
+              <div className="space-y-0.5 border-t border-edge pt-2">
+                <Row
+                  label="Folded into the brief"
+                  value={`${n(fill.folded)} of ${n(fill.totalMessages)}`}
+                  note="messages"
+                />
+                {(fill.dropped ?? 0) > 0 && (
+                  <Row label="Left out this turn" value={n(fill.dropped)} note="didn't fit" tone="text-warn" />
+                )}
+                {fill.charsPerToken !== undefined && (
+                  <Row label="Characters per token" value={fill.charsPerToken.toFixed(2)} note="measured" />
+                )}
+                <Row label="Last turn" value={`${fmtTokens(last?.totalTokens)} tok · ${fmtLatency(last?.latencyMs)}`} />
+                <Row label="Thread" value={`${fmtTokens(total.totalTokens)} tok`} />
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Attachments
+// ---------------------------------------------------------------------------
+
+interface Pending {
+  key: string;
+  name: string;
+  mediaType: string;
+  part?: FileUIPart;
+  error?: string;
+}
+
+/** The GM's upload, as a handout the Fixer can read — never shown to players. */
+async function uploadForChat(campaignId: string, file: File): Promise<FileUIPart> {
+  const form = new FormData();
+  // Fields before the file: the server reads them as the file part arrives.
+  form.append('kind', 'handout');
+  form.append('visibility', 'gm');
+  form.append('file', file, file.name);
+  const token = getToken();
+  const res = await fetch(`/api/attachments?campaign=${encodeURIComponent(campaignId)}`, {
+    method: 'POST',
+    body: form,
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw new Error(`upload failed (${res.status})`);
+  const { attachment } = (await res.json()) as { attachment: { id: string; mime: string } };
+  return {
+    type: 'file',
+    url: `/files/${attachment.id}`,
+    mediaType: file.type || attachment.mime || 'application/octet-stream',
+    filename: file.name,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The panel
+// ---------------------------------------------------------------------------
 
 export interface FixerChatProps {
   campaignId: string;
@@ -65,40 +631,152 @@ export interface FixerChatProps {
 }
 
 export default function FixerChat({ campaignId, dense, fill, context, seed }: FixerChatProps) {
-  const chunks = useLiveStore((s) => s.fixerStream);
-  const clearStream = useLiveStore((s) => s.clearFixerStream);
-  const send = useFixerSend();
   const status = useFixerStatus();
   const cancel = useCancelAi(campaignId);
-
+  const [conversationId, setConversationId] = useState<string | undefined>(() => readThread(campaignId));
+  const [snapshot, setSnapshot] = useState<string | null>(null);
+  const [working, setWorking] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
-  const [sent, setSent] = useState<{ text: string; ts: number }[]>([]);
-  const [conversationId, setConversationId] = useState<string | undefined>(undefined);
+  const [pending, setPending] = useState<Pending[]>([]);
+  const [dragging, setDragging] = useState(false);
   const scroller = useRef<HTMLDivElement | null>(null);
+  const fileInput = useRef<HTMLInputElement | null>(null);
+  const box = useRef<HTMLTextAreaElement | null>(null);
 
-  const view = useMemo(() => reduceFixerStream(chunks), [chunks]);
-  const disabled = aiDisabledFrom(status.data, status.error, send.error);
+  // The box grows with what is typed, so the whole message is in view; past
+  // a dozen lines or so it scrolls instead of pushing the chat off screen.
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [draft]);
+
+  // The transport reads these at send time, so it never needs rebuilding.
+  const live = useRef({ campaignId, conversationId, context });
+  live.current = { campaignId, conversationId, context };
+
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport<FixerUIMessage>({
+        api: '/api/fixer/chat/stream',
+        headers: (): Record<string, string> => {
+          const token = getToken();
+          return token ? { Authorization: `Bearer ${token}` } : {};
+        },
+        // Only what is new goes: the server holds the transcript. That is the
+        // GM's message — or, when the reply stopped at a question, just the
+        // answer, which the server fills into the question it has stored.
+        prepareSendMessagesRequest: ({ messages }) => {
+          const last = messages[messages.length - 1];
+          const common = {
+            campaignId: live.current.campaignId,
+            ...(live.current.conversationId ? { conversationId: live.current.conversationId } : {}),
+            ...(live.current.context ? { context: live.current.context } : {}),
+          };
+          if (last?.role === 'assistant') {
+            const answered = [...last.parts].reverse().find(
+              (p) => p.type === 'tool-ask_gm' && (p as { state?: string }).state === 'output-available',
+            ) as { toolCallId: string; output: AskGmOutput } | undefined;
+            if (answered) {
+              return {
+                body: {
+                  ...common,
+                  answer: {
+                    toolCallId: answered.toolCallId,
+                    answer: answered.output.answer,
+                    ...(answered.output.chosen ? { chosen: answered.output.chosen } : {}),
+                  },
+                },
+              };
+            }
+          }
+          return { body: { ...common, message: last } };
+        },
+      }),
+    [],
+  );
+
+  const chat = useChat<FixerUIMessage>({
+    transport,
+    // An answered question carries the same reply on, without a send button.
+    sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
+    onData: (part) => {
+      if (part.type === 'data-snapshot') setSnapshot((part.data as { text: string }).text);
+      if (part.type === 'data-status') setWorking((part.data as { text: string }).text);
+    },
+    onFinish: ({ message }) => {
+      setWorking(null);
+      const id = message.metadata?.conversationId;
+      if (id) {
+        setConversationId(id);
+        writeThread(campaignId, id);
+      }
+    },
+    onError: () => setWorking(null),
+  });
+  const { messages, sendMessage, status: chatStatus, setMessages, stop, error, addToolOutput } = chat;
+  const busy = chatStatus === 'submitted' || chatStatus === 'streaming';
+  const question = busy ? null : waitingQuestion(messages);
+  const answer = (toolCallId: string, out: AskGmOutput) => {
+    void addToolOutput({ tool: 'ask_gm', toolCallId, output: out } as never);
+  };
+
+  // A thread kept for this tab comes back as it was drawn — and what came
+  // back is history: its floor plans were built (or not) the first time.
+  const reopened = useRef(false);
+  const historic = useRef(new Set<string>());
+  useEffect(() => {
+    if (reopened.current || !conversationId || messages.length > 0) return;
+    reopened.current = true;
+    apiGet<{ messages: FixerUIMessage[] }>(`/api/fixer/chat/${conversationId}`)
+      .then((thread) => {
+        for (const m of thread.messages) historic.current.add(m.id);
+        setMessages(thread.messages);
+      })
+      .catch(() => {
+        // Gone (another campaign, deleted): start fresh.
+        setConversationId(undefined);
+        writeThread(campaignId, undefined);
+      });
+  }, [conversationId, messages.length, setMessages, campaignId]);
 
   useEffect(() => {
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [chunks.length, sent.length]);
+  }, [messages]);
 
-  // `text` only when a chip calls it; the send button passes its click event.
+  const disabled = aiDisabledFrom(status.data, status.error);
+
+  const attach = (files: FileList | File[] | null) => {
+    if (!files) return;
+    for (const file of Array.from(files)) {
+      const key = `${file.name}-${file.size}-${Date.now()}-${Math.random()}`;
+      setPending((p) => [...p, { key, name: file.name, mediaType: file.type }]);
+      uploadForChat(campaignId, file)
+        .then((part) => setPending((p) => p.map((x) => (x.key === key ? { ...x, part } : x))))
+        .catch((err: unknown) =>
+          setPending((p) => p.map((x) => (x.key === key ? { ...x, error: err instanceof Error ? err.message : 'upload failed' } : x))),
+        );
+    }
+  };
+
+  const uploading = pending.some((p) => !p.part && !p.error);
+
   const submit = (text?: unknown) => {
     const message = (typeof text === 'string' ? text : draft).trim();
-    if (!message || disabled) return;
-    setSent((s) => [...s, { text: message, ts: Date.now() }]);
+    const files = pending.flatMap((p) => (p.part ? [p.part] : []));
+    if ((!message && files.length === 0) || disabled || busy || uploading) return;
+    // A question is waiting: what the GM typed is their answer to it.
+    if (question && message) {
+      setDraft('');
+      answer(question.toolCallId, { answer: message });
+      return;
+    }
     setDraft('');
-    send.mutate(
-      {
-        campaignId,
-        message,
-        ...(conversationId ? { conversationId } : {}),
-        ...(context ? { context } : {}),
-      },
-      { onSuccess: (ack) => ack.conversationId && setConversationId(ack.conversationId) },
-    );
+    setPending([]);
+    setWorking(null);
+    void sendMessage({ text: message || 'Here are some files.', ...(files.length > 0 ? { files } : {}) });
   };
 
   // A chip from the dock: into the box, or straight out the door.
@@ -109,6 +787,33 @@ export default function FixerChat({ campaignId, dense, fill, context, seed }: Fi
     else setDraft(seed.text);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seedNonce]);
+
+  const usage = useMemo(() => {
+    const turns = messages.flatMap((m) => (m.role === 'assistant' && m.metadata?.usage ? [m.metadata.usage] : []));
+    const total = turns.reduce<FixerUsage>((acc, u) => ({ totalTokens: (acc.totalTokens ?? 0) + (u.totalTokens ?? 0) }), {
+      totalTokens: 0,
+    });
+    const fills = messages.flatMap((m) => (m.role === 'assistant' && m.metadata?.context ? [m.metadata.context] : []));
+    // Tools on the latest answer that asked the model on their own.
+    const lastAnswer = [...messages].reverse().find((m) => m.role === 'assistant');
+    const subCalls: SubCall[] = (lastAnswer?.parts ?? []).flatMap((part) => {
+      if (!part.type.startsWith('tool-')) return [];
+      const out = (part as { output?: unknown }).output as
+        | { usage?: { promptTokens?: number; completionTokens?: number; latencyMs?: number }; error?: string }
+        | undefined;
+      if (!out?.usage) return [];
+      return [
+        {
+          tool: part.type.slice('tool-'.length),
+          promptTokens: out.usage.promptTokens ?? 0,
+          completionTokens: out.usage.completionTokens ?? 0,
+          ...(out.error ? { error: out.error } : {}),
+          ...(out.usage.latencyMs !== undefined ? { latencyMs: out.usage.latencyMs } : {}),
+        },
+      ];
+    });
+    return { last: turns[turns.length - 1], total, fill: fills[fills.length - 1], subCalls };
+  }, [messages]);
 
   if (disabled) {
     return (
@@ -124,47 +829,57 @@ export default function FixerChat({ campaignId, dense, fill, context, seed }: Fi
           <code className="text-cyan">.env</code> only sets the default until then.
         </p>
         {status.data?.models && (
-          <p className="mono-label mt-2 text-faint">
-            configured model: {status.data.models.primary}
-          </p>
+          <p className="mono-label mt-2 text-faint">configured model: {status.data.models.primary}</p>
         )}
       </div>
     );
   }
 
-  // Interleave the GM's own lines with the streamed assistant turns by time.
-  const timeline: Array<
-    | { kind: 'user'; text: string; ts: number }
-    | { kind: 'assistant'; index: number; ts: number }
-  > = [
-    ...sent.map((m) => ({ kind: 'user' as const, text: m.text, ts: m.ts })),
-    ...view.messages.map((m, index) => ({ kind: 'assistant' as const, index, ts: m.ts })),
-  ].sort((a, b) => a.ts - b.ts);
+  const lastId = messages[messages.length - 1]?.id;
+  const errorLine = errorSentence(error);
 
   return (
-    <div className="panel flex min-h-0 flex-1 flex-col p-4">
+    <div
+      className={`panel flex min-h-0 flex-1 flex-col p-4 ${dragging ? 'ring-2 ring-cyan' : ''}`}
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes('Files')) {
+          e.preventDefault();
+          setDragging(true);
+        }
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => {
+        if (e.dataTransfer.files.length === 0) return;
+        e.preventDefault();
+        setDragging(false);
+        attach(e.dataTransfer.files);
+      }}
+    >
       <div className="flex flex-wrap items-center gap-2">
         <SectionTitle>The Fixer</SectionTitle>
         <button
-          className="btn ml-auto px-2.5 py-1"
+          className="btn ml-auto px-2 py-1"
           onClick={() => {
-            clearStream();
-            setSent([]);
+            if (busy) return;
+            setMessages([]);
+            setSnapshot(null);
+            setPending([]);
             setConversationId(undefined);
+            writeThread(campaignId, undefined);
           }}
-          title="Clear the transcript buffer (history lives server-side)"
+          disabled={busy}
+          title="New thread — the Fixer forgets this one's brief and files"
+          aria-label="New thread"
+          data-testid="fixer-new-thread"
         >
-          new thread
+          <Icon name="add_comment" size={18} />
         </button>
       </div>
 
-      {view.snapshot && (
-        <div
-          className="mt-2 rounded-md border border-cyan-dim/50 bg-deck px-3 py-2"
-          title="Auto-prefixed while a session is live"
-        >
+      {snapshot && (
+        <div className="mt-2 rounded-md border border-cyan-dim/50 bg-deck px-3 py-2" title="Rebuilt every turn">
           <span className="mono-label text-cyan">situation</span>
-          <p className="mt-0.5 text-xs text-dim">{view.snapshot}</p>
+          <p className="mt-0.5 whitespace-pre-wrap text-xs text-dim">{snapshot}</p>
         </div>
       )}
 
@@ -172,78 +887,145 @@ export default function FixerChat({ campaignId, dense, fill, context, seed }: Fi
         ref={scroller}
         className={`mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 ${fill ? '' : dense ? 'max-h-80' : 'max-h-[60vh]'}`}
       >
-        {timeline.map((item, i) =>
-          item.kind === 'user' ? (
-            <div key={`u${i}`} className="ml-auto max-w-[85%] rounded-md bg-raised px-3 py-2">
-              <div className="mono-label text-faint">gm</div>
-              <p className="whitespace-pre-wrap text-sm text-ink">{item.text}</p>
-            </div>
-          ) : (
-            <div key={`a${i}`} className="max-w-[95%]">
-              <div className="mono-label text-magenta">fixer</div>
-              {view.messages[item.index]!.chips.length > 0 && (
-                <div className="mt-1 flex flex-wrap gap-1.5">
-                  {view.messages[item.index]!.chips.map((chip, j) => (
-                    <ToolChipView key={j} chip={chip} />
-                  ))}
-                </div>
-              )}
-              <p className="mt-1 whitespace-pre-wrap text-sm text-ink">
-                {view.messages[item.index]!.text}
-                {!view.messages[item.index]!.done && <span className="animate-pulse text-cyan">▮</span>}
-              </p>
-            </div>
-          ),
-        )}
-
-        {view.error && (
+        {messages.map((m) => (
+          <MessageView
+            key={m.id}
+            message={m}
+            streaming={busy && m.id === lastId && m.role === 'assistant'}
+            historic={historic.current.has(m.id)}
+            {...(question ? { onAnswer: answer } : {})}
+          />
+        ))}
+        {errorLine && (
           <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
-            {view.error}
+            {errorLine}
           </div>
         )}
       </div>
 
-      <div className="mt-3 flex items-end gap-2">
-        <textarea
-          className="min-h-[2.5rem] w-full resize-y rounded-md border border-edge bg-deck px-2.5 py-1.5 text-sm text-ink placeholder:text-faint focus:border-cyan focus:outline-none"
-          rows={dense ? 2 : 3}
-          value={draft}
-          placeholder="ask the Fixer…"
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-              e.preventDefault();
-              submit();
+      {/*
+        The input, the way a chat app draws one: a single box with the send —
+        or, while the Fixer works, the stop — inside it; files waiting above
+        it; and a slim bar beneath: attach on the left, and on the right which
+        model answers, how hard it thinks, and how full its window is.
+      */}
+      <div className="mt-3 rounded-xl border border-edge bg-deck focus-within:border-cyan">
+        {pending.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 px-2.5 pt-2" data-testid="fixer-attachments">
+            {pending.map((p) => (
+              <span
+                key={p.key}
+                className={`chip ${p.error ? 'border-danger/50 text-danger' : p.part ? 'text-dim' : 'animate-pulse text-cyan'}`}
+                title={p.error ?? p.mediaType}
+              >
+                <Icon name={p.mediaType.startsWith('image/') ? 'image' : 'description'} size={14} />
+                {p.name}
+                <button
+                  type="button"
+                  className="ml-1 text-faint hover:text-danger"
+                  aria-label={`Remove ${p.name}`}
+                  title={`Remove ${p.name}`}
+                  onClick={() => setPending((all) => all.filter((x) => x.key !== p.key))}
+                >
+                  <Icon name="close" size={14} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="flex items-end gap-2 px-3 py-2">
+          <textarea
+            ref={box}
+            className="max-h-72 min-h-[1.5rem] w-full resize-none overflow-y-auto bg-transparent text-sm text-ink placeholder:text-faint focus:outline-none"
+            rows={dense ? 1 : 2}
+            value={draft}
+            placeholder={
+              working ??
+              (busy
+                ? 'the Fixer is thinking…'
+                : question
+                  ? 'Answer the question above — or type your own answer here'
+                  : 'Ask the Fixer — or have it lay out this floor')
             }
+            aria-label="Message the Fixer"
+            onChange={(e) => setDraft(e.target.value)}
+            onPaste={(e) => {
+              if (e.clipboardData.files.length > 0) {
+                e.preventDefault();
+                attach(e.clipboardData.files);
+              }
+            }}
+            onKeyDown={(e) => {
+              // Enter sends; Shift+Enter is a new line — as every chat does.
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                submit();
+              }
+            }}
+          />
+          {busy ? (
+            <button
+              type="button"
+              className="shrink-0 text-ink hover:text-danger"
+              onClick={() => {
+                void stop();
+                cancel.mutate();
+              }}
+              disabled={cancel.isPending}
+              data-testid="fixer-cancel"
+              title="Stop the Fixer"
+              aria-label="Stop"
+            >
+              <Icon name="stop_circle" size={20} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="shrink-0 text-cyan hover:text-ink disabled:text-faint"
+              onClick={submit}
+              disabled={uploading || (!draft.trim() && pending.every((p) => !p.part))}
+              data-testid="fixer-send"
+              title={uploading ? 'Waiting for the upload' : 'Send (Enter)'}
+              aria-label="Send"
+            >
+              <Icon name={uploading ? 'hourglass_top' : 'arrow_circle_up'} size={20} />
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="mt-1.5 flex items-center gap-3 px-1 text-xs text-dim">
+        <input
+          ref={fileInput}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            attach(e.target.files);
+            e.target.value = '';
           }}
         />
-        <button className="btn btn-accent shrink-0 px-3 py-2" onClick={submit} disabled={send.isPending}>
-          {send.isPending ? 'sending…' : 'send'}
+        <button
+          type="button"
+          className="text-dim hover:text-ink"
+          title="Attach files — text or images; you can also paste or drop them"
+          aria-label="Attach files"
+          onClick={() => fileInput.current?.click()}
+          data-testid="fixer-attach"
+        >
+          <Icon name="add" size={18} />
         </button>
-      </div>
-      <p className="mono-label mt-1 text-faint">ctrl+enter sends</p>
-      {(view.streaming || send.isPending) && (
-        <div className="mt-1 flex flex-wrap items-center gap-2" data-testid="fixer-working">
-          <Spinner label="the Fixer is thinking" />
-          <button
-            type="button"
-            className="btn px-2.5 py-0.5 text-danger"
-            onClick={() => cancel.mutate()}
-            disabled={cancel.isPending}
-            data-testid="fixer-cancel"
-          >
-            cancel
-          </button>
-        </div>
-      )}
-      {isAiCancelled(send.error) ? (
-        <p className="mt-2 text-xs text-warn">Cancelled — nothing from that turn was kept.</p>
-      ) : (
-        <ErrorNote error={send.error} />
-      )}
-
-      <div className="mt-2">
-        <UsageMeter last={view.lastUsage} total={view.totalUsage} />
+        {working && busy && <span className="mono-label truncate text-faint">{working}</span>}
+        <span className="ml-auto flex items-center gap-3">
+          {status.data?.models?.primary && (
+            <span className="max-w-40 truncate text-ink" title="The model answering">
+              {status.data.models.primary}
+            </span>
+          )}
+          {status.data?.effort && EFFORT_LABEL[status.data.effort] && (
+            <span title="How hard it thinks — set under AI">{EFFORT_LABEL[status.data.effort]}</span>
+          )}
+          <ContextRing fill={usage.fill} last={usage.last} total={usage.total} subCalls={usage.subCalls} />
+        </span>
       </div>
     </div>
   );

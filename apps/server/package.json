@@ -14,6 +14,8 @@
     "playthrough": "tsx scripts/playthrough.ts"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.60",
+    "@ai-sdk/openai-compatible": "^3.0.53",
     "@anthropic-ai/sdk": "^0.124.0",
     "@fastify/compress": "^8.3.1",
     "@fastify/cookie": "^11.1.2",
@@ -23,6 +25,7 @@
     "@safehouse/contracts": "workspace:*",
     "@safehouse/db": "workspace:*",
     "@safehouse/rules": "workspace:*",
+    "ai": "^7.0.111",
     "drizzle-orm": "^0.45.2",
     "fastify": "^5.12.1",
     "pino": "^10.3.1",

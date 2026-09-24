@@ -989,17 +989,3 @@ export interface FloorPlanResult {
   latencyMs: number;
 }
 
-export interface BuildFloorBody {
-  sceneId: string;
-  level: number;
-  tilesetId: string;
-  prompt: string;
-  slot?: 'primary' | 'fast';
-}
-
-export function useBuildFloor() {
-  return useMutation({
-    mutationFn: (body: BuildFloorBody) => apiPost<FloorPlanResult>('/api/fixer/build-floor', body),
-    ...pendingFor('floor', 'drafting a floor from the description'),
-  });
-}

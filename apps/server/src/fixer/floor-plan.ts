@@ -13,6 +13,7 @@
  * cannot extend by hand is a plan they cannot fix.
  */
 import { z } from 'zod';
+import type { AiEffort } from '@safehouse/contracts';
 import type { Db } from '@safehouse/db';
 import {
   categoryOf,
@@ -27,8 +28,17 @@ import {
 import { httpError } from '../services/auth.js';
 import { ScenesService, serializeScene } from '../services/scenes.js';
 import { ROOM_KINDS } from './geometry.js';
-import { LlmClient, constrainedEffort, type ChatMessage, type LlmConfig, type LlmUsage, type ModelSlot } from './llm.js';
-import { coerceFloorPlan, repairJson, schemaMissError } from './repair.js';
+import {
+  LlmClient,
+  constrainedEffort,
+  type ChatMessage,
+  type ChatOptions,
+  type ChatTurn,
+  type LlmConfig,
+  type LlmUsage,
+  type ModelSlot,
+} from './llm.js';
+import { coerceFloorPlan, cutOffError, repairJson, schemaMissError } from './repair.js';
 import { usageMeter } from './usage.js';
 import { describeKeys, parseModelJson, unwrapEnvelope } from './vision.js';
 
@@ -137,6 +147,33 @@ export const FloorPlanSchema = z.object({
 });
 export type FloorPlan = z.infer<typeof FloorPlanSchema>;
 export type FloorPlanInput = z.input<typeof FloorPlanSchema>;
+
+/**
+ * The first pass: the building without its furniture. Everything the plan
+ * says except the props — which is most of what used to make a plan long
+ * enough to be cut off.
+ */
+export const FloorSkeletonSchema = FloorPlanSchema.extend({
+  rooms: z.array(FloorRoomSchema.omit({ props: true })).min(1).max(60),
+});
+
+/** The second pass, a few rooms at a time: just their furniture. */
+export const FloorFurnishSchema = z.object({
+  rooms: z
+    .array(
+      z.object({
+        name: z.string().min(1).max(60).describe('The room, by the name it was given'),
+        props: z.array(FloorPropSchema).max(80).default([]),
+      }),
+    )
+    .max(20),
+});
+
+function jsonSchemaOf(schema: z.ZodType): Record<string, unknown> {
+  const json = z.toJSONSchema(schema, { io: 'input' }) as Record<string, unknown>;
+  delete json['$schema'];
+  return json;
+}
 
 export function floorPlanJsonSchema(): Record<string, unknown> {
   const json = z.toJSONSchema(FloorPlanSchema, { io: 'input' }) as Record<string, unknown>;
@@ -573,6 +610,27 @@ const SYSTEM_PROMPT = [
   '9. Name rooms the way a GM says them out loud ("loading dock", "break room"); the GM reads those names back.',
 ].join('\n');
 
+/**
+ * The skeleton pass is told the same rules, less the one that made a plan
+ * long: the furniture comes afterwards, room by room, in calls of its own.
+ */
+const SKELETON_SYSTEM = SYSTEM_PROMPT.replace(
+  /\n8\. Dress every room:[^\n]*/,
+  '\n8. Do NOT place props: leave every room empty. Furniture is placed afterwards, a few rooms at a time.',
+);
+
+const FURNISH_SYSTEM = [
+  'You furnish rooms of a tabletop battle map floor for a Shadowrun 5th Edition game master. The rooms are already laid out; you only place props in them.',
+  'Answer with JSON only, matching the schema you are given. No prose, no markdown fence.',
+  '',
+  'Rules:',
+  '1. Coordinates are WHOLE GRID SQUARES from the top-left of the grid: x to the right, y downwards.',
+  "2. A prop stands on one of the room's FLOOR squares — the ranges you are given — never on its wall ring, one prop per square.",
+  '3. Prop tiles come ONLY from the interior and decoration palette — use the ids exactly as written. A tile marked "against a wall" goes on a floor square next to a wall.',
+  '4. Never in front of a door: leave the square just inside every door clear.',
+  '5. About one prop per ten floor squares, chosen for what the room is. Name every room you were given, by its name, even if you leave one bare.',
+].join('\n');
+
 /** The palette as the model reads it — exported so what it is told can be pinned. */
 export function floorPalette(set: Tileset): string {
   // Each tile with the one fact the model needs to place it: what it stands
@@ -653,7 +711,152 @@ export interface FloorResult {
   latencyMs: number;
 }
 
-/** One non-streaming ask; the payoff is a whole floor or none. */
+function addUsage(a: LlmUsage, b: LlmUsage): LlmUsage {
+  return {
+    promptTokens: a.promptTokens + b.promptTokens,
+    completionTokens: a.completionTokens + b.completionTokens,
+    totalTokens: a.totalTokens + b.totalTokens,
+  };
+}
+
+/** Floor squares a batch of rooms may add up to before it is split. */
+const FURNISH_BATCH_SQUARES = 100;
+const FURNISH_BATCH_ROOMS = 3;
+
+type SkeletonRoom = FloorPlan['rooms'][number];
+
+/** A room's floor squares: its rectangle less the wall ring. */
+function floorSquares(room: SkeletonRoom): number {
+  return Math.max(0, room.w - 2) * Math.max(0, room.h - 2);
+}
+
+/** Rooms in batches small enough that their furniture fits in one short answer. */
+export function furnishBatches(rooms: readonly SkeletonRoom[]): SkeletonRoom[][] {
+  const batches: SkeletonRoom[][] = [];
+  let batch: SkeletonRoom[] = [];
+  let squares = 0;
+  for (const room of rooms) {
+    const n = floorSquares(room);
+    if (n === 0) continue;
+    if (batch.length > 0 && (batch.length >= FURNISH_BATCH_ROOMS || squares + n > FURNISH_BATCH_SQUARES)) {
+      batches.push(batch);
+      batch = [];
+      squares = 0;
+    }
+    batch.push(room);
+    squares += n;
+  }
+  if (batch.length > 0) batches.push(batch);
+  return batches;
+}
+
+/** One room as the furnishing pass reads it: where its floor is, where its doors are. */
+function describeRoom(room: SkeletonRoom, openings: FloorPlan['openings']): string {
+  const doors = openings
+    .filter((o) => o.room === room.name)
+    .map((o) => `${o.kind} on the ${({ n: 'north', s: 'south', e: 'east', w: 'west' } as const)[o.wall]} wall at ${o.offset}${o.width > 1 ? `, ${o.width} wide` : ''}`);
+  return [
+    `- "${room.name}" (${room.kind}): walls x ${room.x}..${room.x + room.w - 1}, y ${room.y}..${room.y + room.h - 1};`,
+    `  floor squares x ${room.x + 1}..${room.x + room.w - 2}, y ${room.y + 1}..${room.y + room.h - 2}`,
+    doors.length > 0 ? `; ${doors.join('; ')}` : '',
+  ].join('');
+}
+
+interface FurnishResult {
+  plan: FloorPlan;
+  usage: LlmUsage;
+  latencyMs: number;
+  warnings: string[];
+}
+
+/**
+ * Furniture for every room, a batch at a time.
+ *
+ * Each call asks only for the props of a few rooms, so no single answer is
+ * long enough to run out of room. A batch that is cut off anyway is split in
+ * half and asked again; a single room that still will not fit is left to the
+ * compiler's own dressing (`compileFloorPlan` furnishes a bare room from the
+ * palette), with a warning — one room without chosen furniture is not worth
+ * failing a whole floor over.
+ */
+async function furnishRooms(
+  client: LlmClient,
+  req: { model: string; effort: AiEffort },
+  opts: ChatOptions,
+  skeleton: FloorPlan,
+  set: Tileset,
+  description: string,
+): Promise<FurnishResult> {
+  const palette = floorPalette(set);
+  const props = new Map<string, FloorPlan['rooms'][number]['props']>();
+  const warnings: string[] = [];
+  let usage: LlmUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  let latencyMs = 0;
+
+  const ask = async (rooms: SkeletonRoom[]): Promise<void> => {
+    const messages: ChatMessage[] = [
+      { role: 'system', content: FURNISH_SYSTEM },
+      {
+        role: 'user',
+        content: [
+          `The floor is: ${description.trim()}`,
+          '',
+          palette,
+          '',
+          'Furnish these rooms:',
+          ...rooms.map((r) => describeRoom(r, skeleton.openings)),
+          '',
+          `Schema:\n${JSON.stringify(jsonSchemaOf(FloorFurnishSchema))}`,
+        ].join('\n'),
+      },
+    ];
+    // Cancelled, or the box went quiet: that is the whole floor's problem, so it throws.
+    const turn: ChatTurn = await client.chat({ model: req.model, messages, temperature: 0.4, effort: req.effort }, opts);
+    usage = addUsage(usage, turn.usage);
+    latencyMs += turn.latencyMs;
+    const cutOff = turn.finishReason === 'length' && !/\}\s*$/.test(turn.content.trim());
+    if (cutOff) {
+      if (rooms.length > 1) {
+        const half = Math.ceil(rooms.length / 2);
+        await ask(rooms.slice(0, half));
+        await ask(rooms.slice(half));
+        return;
+      }
+      warnings.push(`"${rooms[0]!.name}": its furniture ran too long to place — the builder dressed it instead`);
+      return;
+    }
+    let parsed: unknown;
+    try {
+      parsed = unwrapEnvelope(parseModelJson(turn.content, 'the furniture'), 'rooms');
+    } catch {
+      warnings.push(`${rooms.map((r) => `"${r.name}"`).join(', ')}: the furniture came back unreadable — the builder dressed ${rooms.length === 1 ? 'it' : 'them'} instead`);
+      return;
+    }
+    const checked = FloorFurnishSchema.safeParse(parsed);
+    if (!checked.success) {
+      warnings.push(`${rooms.map((r) => `"${r.name}"`).join(', ')}: the furniture did not fit the schema — the builder dressed ${rooms.length === 1 ? 'it' : 'them'} instead`);
+      return;
+    }
+    const wanted = new Set(rooms.map((r) => r.name));
+    for (const r of checked.data.rooms) {
+      if (wanted.has(r.name)) props.set(r.name, r.props);
+    }
+  };
+
+  for (const batch of furnishBatches(skeleton.rooms)) await ask(batch);
+
+  return {
+    plan: { ...skeleton, rooms: skeleton.rooms.map((r) => ({ ...r, props: props.get(r.name) ?? r.props ?? [] })) },
+    usage,
+    latencyMs,
+    warnings,
+  };
+}
+
+/**
+ * A floor in two passes: the building, then its furniture a few rooms at a
+ * time — so no one answer is long enough to be cut off.
+ */
 export async function proposeFloor(db: Db, config: LlmConfig | null, ask: FloorAsk): Promise<FloorResult> {
   if (!config) {
     throw httpError(
@@ -681,23 +884,23 @@ export async function proposeFloor(db: Db, config: LlmConfig | null, ask: FloorA
 
   const client = new LlmClient(config);
   const model = ask.slot === 'fast' ? config.fast : config.primary;
-  const messages: ChatMessage[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
-    {
-      role: 'user',
-      content: `${userPrompt(scene, ask.level, set, painted, ask.prompt)}\n\nSchema:\n${JSON.stringify(floorPlanJsonSchema())}`,
-    },
-  ];
   const opts = { timeoutMs: FLOOR_TIMEOUT_MS, ...(ask.signal ? { signal: ask.signal } : {}) };
   const effort = constrainedEffort(config);
-  const turn = await client.chat({ model, messages, temperature: 0.2, max_tokens: 8000, effort }, opts);
+
+  // --- Pass 1: the building, without its furniture ---------------------------
+  // One answer for every room with its furniture was the plan that kept being
+  // cut off: most of its length was props. The skeleton is small and reliable.
+  const messages: ChatMessage[] = [
+    { role: 'system', content: SKELETON_SYSTEM },
+    {
+      role: 'user',
+      content: `${userPrompt(scene, ask.level, set, painted, ask.prompt)}\n\nSchema:\n${JSON.stringify(jsonSchemaOf(FloorSkeletonSchema))}`,
+    },
+  ];
+  // No output limit: a floor is as long as the model needs to write it.
+  const turn = await client.chat({ model, messages, temperature: 0.2, effort }, opts);
   if (turn.finishReason === 'length' && !/\}\s*$/.test(turn.content.trim())) {
-    throw httpError(
-      502,
-      'ai_error',
-      'the model hit its token limit before it finished the floor plan — set Thinking to Off under AI, or raise the model\'s output limit',
-      { preview: turn.content.trim().slice(-240), finishReason: turn.finishReason },
-    );
+    throw cutOffError('the floor plan', turn, effort);
   }
   const parsed = unwrapEnvelope(parseModelJson(turn.content, 'the floor plan'), 'rooms');
   // Bend the numbers and the names into bounds first; if the schema still
@@ -708,24 +911,27 @@ export async function proposeFloor(db: Db, config: LlmConfig | null, ask: FloorA
   if (!checked.success) {
     const repaired = await repairJson(
       client,
-      { model, max_tokens: 8000, effort },
+      { model, effort },
       opts,
       { messages, badContent: turn.content, issues: checked.error.issues, what: 'the floor plan', mustHave: 'rooms' },
     );
-    usage = {
-      promptTokens: usage.promptTokens + repaired.turn.usage.promptTokens,
-      completionTokens: usage.completionTokens + repaired.turn.usage.completionTokens,
-      totalTokens: usage.totalTokens + repaired.turn.usage.totalTokens,
-    };
+    usage = addUsage(usage, repaired.turn.usage);
     latencyMs += repaired.turn.latencyMs;
     checked = FloorPlanSchema.safeParse(coerceFloorPlan(repaired.parsed, ROOM_KINDS));
     if (!checked.success) throw schemaMissError(`floor plan (it sent ${describeKeys(parsed)})`, checked.error.issues);
   }
-  const plan = compileFloorPlan(checked.data, scene.grid, set);
+
+  // --- Pass 2: furniture, a few rooms at a time -----------------------------
+  const furnished = await furnishRooms(client, { model, effort }, opts, checked.data, set, ask.prompt);
+  usage = addUsage(usage, furnished.usage);
+  latencyMs += furnished.latencyMs;
+
+  const plan = compileFloorPlan(furnished.plan, scene.grid, set);
+  plan.warnings.push(...furnished.warnings);
   usageMeter.record(ask.campaignId, { model: turn.model, usage, latencyMs });
   return {
     plan,
-    raw: checked.data,
+    raw: furnished.plan,
     level: ask.level,
     model: turn.model,
     usage,

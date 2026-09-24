@@ -47,7 +47,7 @@ import type {
  * enough for the Fixer's longest job (a recap) without being the 128K ceiling
  * that would demand streaming-only handling for its own sake.
  */
-const DEFAULT_MAX_TOKENS = 8_192;
+const DEFAULT_MAX_TOKENS = 32_000;
 
 /**
  * Split our flat message list into Anthropic's shape.

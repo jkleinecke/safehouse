@@ -34,6 +34,9 @@ import { campaignUsage, persistTurnUsage, usageMeter } from '../fixer/usage.js';
 import { visionCapability } from '../fixer/vision.js';
 import { AiContextSchema } from '../fixer/context.js';
 import fixerToolRoutes from '../fixer/routes.js';
+import type { UIMessage } from 'ai';
+import { streamFixerTurn } from '../fixer/chat/turn.js';
+import { fromLegacy, readMemory } from '../fixer/chat/memory.js';
 
 const ChatBody = z.object({
   campaignId: z.string().optional(),
@@ -45,6 +48,53 @@ const ChatBody = z.object({
   /** What the GM is looking at (fixer/context.ts) — the dock stamps it on every turn. */
   context: AiContextSchema.optional(),
 });
+
+/**
+ * One GM message for the SDK chat (fixer/chat/turn.ts): the panel sends only
+ * its new message, and the transcript stays here. Files ride as `/files/<id>`
+ * URLs from the ordinary GM upload — never as inline data, which would put
+ * megabytes of base64 in every saved transcript.
+ */
+const ChatStreamMessage = z.object({
+  id: z.string().min(1).max(120),
+  role: z.literal('user'),
+  metadata: z.unknown().optional(),
+  parts: z
+    .array(
+      z.union([
+        z.object({ type: z.literal('text'), text: z.string().max(20_000) }),
+        z.object({
+          type: z.literal('file'),
+          mediaType: z.string().min(1).max(200),
+          url: z.string().regex(/^\/files\/[0-9a-f-]{8,}$/i),
+          filename: z.string().max(300).optional(),
+        }),
+      ]),
+    )
+    .min(1)
+    .max(24),
+});
+
+const ChatStreamBody = z
+  .object({
+    campaignId: z.string().optional(),
+    conversationId: z.string().optional(),
+    slot: z.enum(['primary', 'fast']).optional(),
+    context: AiContextSchema.optional(),
+    /** A new GM message… */
+    message: ChatStreamMessage.optional(),
+    /** …or the GM's answer to the question the last reply stopped at (`ask_gm`). */
+    answer: z
+      .object({
+        toolCallId: z.string().min(1).max(200),
+        answer: z.string().min(1).max(4_000),
+        chosen: z.string().max(200).optional(),
+      })
+      .optional(),
+  })
+  .refine((b) => Boolean(b.message) !== Boolean(b.answer), {
+    message: 'send a message or an answer, not both',
+  });
 
 const ConverseBody = z.object({
   campaignId: z.string().optional(),
@@ -273,6 +323,8 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
     return {
       enabled: config !== null,
       models: config ? { primary: config.primary, fast: config.fast } : null,
+      /** How hard the model is asked to think — the chat's input bar names it. */
+      effort: config?.effort ?? 'default',
       maxToolRounds: 8,
       /** What the AI is doing for this campaign right now, if anything. */
       activity: currentRun(campaignId),
@@ -348,6 +400,48 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
       usage: result.usage,
       model: result.model,
       snapshotApplied: result.snapshot !== null,
+    });
+  });
+
+  // --- The Fixer chat on the AI SDK: a UI message stream --------------------
+  app.post('/api/fixer/chat/stream', async (req, reply) => {
+    const body = parseBody(ChatStreamBody, req.body);
+    const campaignId = gmFor(req, body.campaignId);
+    const config = resolveLlmConfig(await settingsOf(app.db, campaignId));
+    if (!config) return disabled(reply);
+    try {
+      await streamFixerTurn({ db: app.db, hub: app.hub }, reply, {
+        campaignId,
+        config,
+        ...(body.message ? { message: body.message as UIMessage } : {}),
+        ...(body.answer ? { answer: body.answer } : {}),
+        conversationId: body.conversationId,
+        context: body.context,
+        slot: body.slot,
+      });
+    } catch (err) {
+      // Once the stream has begun, its failures went down it as error parts.
+      if (reply.sent || reply.raw.headersSent) return;
+      // Busy (409), an unknown thread (404), cancelled before a word (499):
+      // ordinary errors, answered the ordinary way.
+      const status = (err as { statusCode?: unknown }).statusCode;
+      if (typeof status === 'number' && status < 500) throw err;
+      return upstream(reply, err);
+    }
+  });
+
+  /** A thread as the chat panel draws it: UI messages, and what the Fixer is carrying. */
+  app.get('/api/fixer/chat/:id', async (req, reply) => {
+    const campaignId = gmFor(req, undefined);
+    const { id } = req.params as { id: string };
+    const conversation = await loadConversation(app.db, campaignId, { kind: 'fixer', conversationId: id });
+    const memory = readMemory(conversation.memory);
+    return reply.send({
+      id: conversation.id,
+      messages: fromLegacy(conversation.messages as unknown[]),
+      brief: memory.brief,
+      folded: memory.foldedCount,
+      files: Object.values(memory.files).map((f) => ({ id: f.id, name: f.name, mediaType: f.mediaType, kind: f.kind })),
     });
   });
 

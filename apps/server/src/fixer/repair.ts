@@ -21,7 +21,7 @@
  *     that error now lists the issues by path so the GM can read them.
  */
 import type { ZodIssue } from 'zod';
-import { httpError } from '../services/auth.js';
+import { httpError, type HttpError } from '../services/auth.js';
 import type { ChatMessage, ChatOptions, ChatRequest, ChatTurn } from './llm.js';
 import { parseModelJson, unwrapEnvelope } from './vision.js';
 
@@ -369,6 +369,45 @@ export interface RepairAsk {
 export interface RepairResult {
   parsed: unknown;
   turn: ChatTurn;
+}
+
+/**
+ * A structured answer that was cut off before it closed, as an error that
+ * says how many tokens were in play.
+ *
+ * None of these calls sets an output limit any more — a floor, an outline
+ * and a runner may be as long as the model will write — so "cut off" means
+ * the model ran out of room: its window filled, or the server's own ceiling.
+ * On a local reasoning model the usual cause is thinking, which spends the
+ * room deciding and leaves the JSON unfinished. The turn does not keep the
+ * reasoning text, but the arithmetic shows it: tokens written, less what the
+ * visible answer accounts for.
+ */
+export function cutOffError(what: string, turn: ChatTurn, effort: string | undefined): HttpError {
+  const fmt = (n: number) => n.toLocaleString('en-US');
+  const { promptTokens, completionTokens } = turn.usage;
+  const visible = Math.ceil(turn.content.length / 3.5);
+  const hidden = Math.max(0, completionTokens - visible);
+  const thinking = hidden > visible;
+  const spent = thinking
+    ? `it wrote ${fmt(completionTokens)}: about ${fmt(visible)} of ${what} and ~${fmt(hidden)} spent thinking`
+    : `it wrote ${fmt(completionTokens)}, nearly all of it ${what}`;
+  const fix =
+    thinking && effort !== 'off'
+      ? 'Set Thinking to Off under AI and ask again.'
+      : 'Ask for less, or load the model with a bigger context.';
+  return httpError(
+    502,
+    'ai_error',
+    `${what} was cut off before it finished — the model ran out of room (prompt ${fmt(promptTokens)} tokens; ${spent}). ${fix}`,
+    {
+      preview: turn.content.trim().slice(-240),
+      finishReason: turn.finishReason,
+      model: turn.model,
+      usage: turn.usage,
+      effort: effort ?? 'default',
+    },
+  );
 }
 
 /**

@@ -16,11 +16,7 @@
  */
 import { Suspense, lazy, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useLocation } from 'react-router-dom';
-import { levelTiles } from '@safehouse/rules';
 import { getSession } from '../../../api/session.js';
-import { useScene } from '../../grid/api.js';
-import BuildWithAi from '../../grid/gm/BuildWithAi.js';
-import { DEFAULT_TILESET_ID, useGridStore } from '../../grid/store.js';
 import { aiDisabledFrom, useFixerStatus } from './api.js';
 import { contextLine, useAiContext, useAiPage } from './aiContext.js';
 import { dockPlacement } from './dockPlacement.js';
@@ -42,7 +38,7 @@ function clampWidth(px: number): number {
   return Math.min(max, Math.max(MIN_WIDTH, Math.round(px)));
 }
 
-type DockTab = 'chat' | 'floor' | 'page' | 'voice';
+type DockTab = 'chat' | 'page' | 'voice';
 
 export interface FixerDockProps {
   campaignId: string;
@@ -64,8 +60,6 @@ export default function FixerDock({ campaignId, sessionLive }: FixerDockProps) {
   const dragging = useRef(false);
   const ctx = useAiContext(campaignId);
   const placement = dockPlacement(useLocation().pathname);
-  const scene = useScene(tab === 'floor' && ctx.sceneId ? ctx.sceneId : null);
-  const paletteTileset = useGridStore((s) => s.tilesetId);
   const page = useAiPage(tab === 'page' ? ctx.pageId : undefined);
 
   useEffect(() => {
@@ -135,24 +129,16 @@ export default function FixerDock({ campaignId, sessionLive }: FixerDockProps) {
   if (session?.role !== 'gm') return null;
   if (aiDisabledFrom(status.data, status.error)) return null;
 
-  const canFloor = ctx.screen === 'map' && Boolean(ctx.sceneId);
   const canPage = ctx.screen === 'codex' && Boolean(ctx.pageId);
   const canVoice = Boolean(ctx.npcId);
   const tabs: Array<{ id: DockTab; label: string; on: boolean }> = [
     { id: 'chat', label: 'chat', on: true },
-    { id: 'floor', label: 'draft a floor', on: canFloor },
     { id: 'page', label: 'this page', on: canPage },
     { id: 'voice', label: `speak as ${ctx.npcName ?? 'them'}`, on: canVoice },
   ];
   // A tab that no longer applies falls back to the chat.
   const shown: DockTab = tabs.find((t) => t.id === tab)?.on ? tab : 'chat';
   const where = contextLine(ctx);
-  const floorScene = scene.data ?? null;
-  const floorLevel = ctx.level ?? 0;
-  // The set the plan is drawn in: what the floor already carries, else the
-  // palette's current set (a scene switched to the lake before anything is
-  // painted has no tiles yet, and the Tiles tab keeps the store in step).
-  const floorTileset = (floorScene ? levelTiles(floorScene, floorLevel)?.tilesetId : undefined) ?? paletteTileset ?? DEFAULT_TILESET_ID;
 
   // The drawer stays mounted while closed — slid off the right edge and
   // invisible — so opening it animates and the conversation survives a close.
@@ -215,11 +201,6 @@ export default function FixerDock({ campaignId, sessionLive }: FixerDockProps) {
         )}
         {shown === 'chat' && (
           <FixerChat campaignId={campaignId} sessionLive={sessionLive} dense fill context={ctx} />
-        )}
-        {shown === 'floor' && floorScene && (
-          <div className="panel min-h-0 flex-1 overflow-y-auto p-3">
-            <BuildWithAi scene={floorScene} tilesetId={floorTileset} level={floorLevel} />
-          </div>
         )}
         {shown === 'page' && page.data && (
           <div className="min-h-0 flex-1 overflow-y-auto">

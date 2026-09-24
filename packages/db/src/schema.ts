@@ -495,6 +495,8 @@ export const aiConversations = pgTable('ai_conversations', {
   kind: text('kind').$type<'fixer' | 'npc'>().notNull(),
   npcRef: uuid('npc_ref'),
   messages: jsonb('messages').notNull().default([]),
+  /** The Fixer's curated memory of this chat — brief, fold point, attachments (fixer/chat/memory.ts). */
+  memory: jsonb('memory').notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

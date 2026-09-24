@@ -22,6 +22,8 @@ export function isAiDisabled(err: unknown): boolean {
 export interface FixerStatus {
   enabled: boolean;
   models: { primary: string; fast: string } | null;
+  /** How hard the model is asked to think: default, off, low, medium, high. */
+  effort?: string;
   /** Cap on tool rounds per turn (FR12.17). */
   maxToolRounds?: number;
   /** What the AI is doing right now, if anything (fixer/activity.ts). */
@@ -41,35 +43,6 @@ export function useFixerStatus() {
 export function aiDisabledFrom(status: FixerStatus | undefined, ...errors: unknown[]): boolean {
   if (status && status.enabled === false) return true;
   return errors.some(isAiDisabled);
-}
-
-export interface FixerChatBody {
-  campaignId: string;
-  message: string;
-  conversationId?: string;
-  /** Model slot hint (FR12.16): 'primary' | 'fast'. */
-  slot?: 'primary' | 'fast';
-  /** What the GM is looking at — the dock stamps it on every turn (aiContext.ts). */
-  context?: AiContext;
-}
-
-/** The turn also streams over WS as `fixer.*` ephemerals; this is the result. */
-export interface FixerChatAck {
-  conversationId?: string;
-  text?: string;
-  rounds?: number;
-  truncated?: boolean;
-  tools?: unknown[];
-  usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
-  model?: string;
-  snapshotApplied?: boolean;
-}
-
-export function useFixerSend() {
-  return useMutation({
-    mutationFn: (body: FixerChatBody) => apiPost<FixerChatAck>('/api/fixer/chat', body),
-    ...pendingFor('chat', 'answering the Fixer chat'),
-  });
 }
 
 /** An `ai_generations` row (§9.2) — Principle 8's paper trail. */

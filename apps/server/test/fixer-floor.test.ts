@@ -389,7 +389,19 @@ describe('POST /api/fixer/build-floor', () => {
   });
 
   it('turns the model’s plan into slots the paint route takes, and nothing is painted yet', async () => {
-    const mock = await MockLlmServer.start({ turns: [{ content: JSON.stringify(PLAN), usage: { promptTokens: 300, completionTokens: 120 } }] });
+    // Two passes: the building, then its furniture (both rooms fit one batch).
+    const furniture = {
+      rooms: [
+        { name: 'waiting room', props: [{ tile: 'crates', x: 2, y: 2 }] },
+        { name: 'exam room', props: [{ tile: 'barrel', x: 7, y: 2 }] },
+      ],
+    };
+    const mock = await MockLlmServer.start({
+      turns: [
+        { content: JSON.stringify(PLAN), usage: { promptTokens: 300, completionTokens: 120 } },
+        { content: JSON.stringify(furniture), usage: { promptTokens: 200, completionTokens: 40 } },
+      ],
+    });
     mocks.push(mock);
     enableAi(mock.baseUrl);
     const res = await ask({});
@@ -404,9 +416,16 @@ describe('POST /api/fixer/build-floor', () => {
     expect(out.plan.layers.structure['5,2']).toBe('building/door');
     expect(out.plan.counts.door).toBe(2);
     expect(out.level).toBe(0);
-    expect(out.usage.totalTokens).toBe(420);
+    // Both passes are counted.
+    expect(out.usage.totalTokens).toBe(660);
+    expect(mock.requests).toHaveLength(2);
     // The palette went to the model, in the set's own ids.
     const sent = mock.requests[0]!.messages.map((m) => String(m.content)).join('\n');
+    // The first pass lays the building out bare; the second furnishes it.
+    expect(sent).toContain('Do NOT place props');
+    const furnish = mock.requests[1]!.messages.map((m) => String(m.content)).join('\n');
+    expect(furnish).toContain('"waiting room" (lobby)');
+    expect(furnish).toContain('"exam room" (room)');
     expect(sent).toContain('crates —');
     expect(sent).toContain('"outside.areas" are rectangles of OTHER ground');
     expect(sent).toContain('a two-room clinic');

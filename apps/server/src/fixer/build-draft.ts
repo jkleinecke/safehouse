@@ -137,7 +137,7 @@ import {
   type LlmConfig,
   type LlmUsage,
 } from './llm.js';
-import { int, isRec, repairJson, schemaMissError, str, strList, type Rec } from './repair.js';
+import { type Rec, cutOffError, int, isRec, repairJson, schemaMissError, str, strList } from './repair.js';
 import { usageMeter, type UsageRecord } from './usage.js';
 import { describeKeys, parseModelJson, unwrapEnvelope } from './vision.js';
 
@@ -1748,22 +1748,18 @@ export async function proposeCharBuild(db: Db, config: LlmConfig | null, ask: Ch
     usageMeter.record(ask.campaignId, record);
     ask.onTurn?.(record);
   };
-  const turn = await client.chat({ model, messages, temperature: 0.3, max_tokens: 6000, effort }, opts);
+  // No output limit: a runner is as long as the model needs to write it.
+  const turn = await client.chat({ model, messages, temperature: 0.3, effort }, opts);
   meter(turn);
   if (turn.finishReason === 'length' && !/\}\s*$/.test(turn.content.trim())) {
-    throw httpError(
-      502,
-      'ai_error',
-      "the model hit its token limit before it finished the runner — ask the GM to set Thinking to Off under AI, or to raise the model's output limit",
-      { preview: turn.content.trim().slice(-240), finishReason: turn.finishReason },
-    );
+    throw cutOffError('the runner', turn, effort);
   }
   const parsed = unwrapEnvelope(parseModelJson(turn.content, 'the runner'), 'priorities');
   let checked = CharBuildDraftSchema.safeParse(coerceCharBuildDraft(parsed));
   let usage = turn.usage;
   let latencyMs = turn.latencyMs;
   if (!checked.success) {
-    const repaired = await repairJson(client, { model, max_tokens: 6000, effort }, opts, {
+    const repaired = await repairJson(client, { model, effort }, opts, {
       messages,
       badContent: turn.content,
       issues: checked.error.issues,

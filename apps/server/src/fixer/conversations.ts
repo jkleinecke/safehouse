@@ -21,6 +21,8 @@ export interface ConversationHandle {
   kind: 'fixer' | 'npc';
   npcRef: string | null;
   messages: ChatMessage[];
+  /** The Fixer chat's curated memory (fixer/chat/memory.ts); `{}` for anything else. */
+  memory: unknown;
 }
 
 function isChatMessage(value: unknown): value is ChatMessage {
@@ -58,7 +60,7 @@ export async function loadConversation(
     if (!row || row.campaignId !== campaignId) {
       throw httpError(404, 'not_found', 'unknown conversation');
     }
-    return { id: row.id, kind: row.kind, npcRef: row.npcRef, messages: readMessages(row.messages) };
+    return { id: row.id, kind: row.kind, npcRef: row.npcRef, messages: readMessages(row.messages), memory: row.memory };
   }
   const created = (
     await db
@@ -67,11 +69,50 @@ export async function loadConversation(
       .returning()
   )[0];
   if (!created) throw httpError(500, 'internal', 'conversation insert returned no row');
-  return { id: created.id, kind: created.kind, npcRef: created.npcRef, messages: [] };
+  return { id: created.id, kind: created.kind, npcRef: created.npcRef, messages: [], memory: {} };
 }
 
 export async function saveConversation(db: Db, id: string, messages: ChatMessage[]): Promise<void> {
   await db.update(aiConversations).set({ messages }).where(eq(aiConversations.id, id));
+}
+
+/**
+ * The Fixer chat's save: the whole transcript as UI messages (the SDK's own
+ * format, which the chat panel reloads as-is) and its curated memory.
+ * `messages` alone when the memory has not changed.
+ */
+export async function saveChat(db: Db, id: string, messages: unknown[], memory?: unknown): Promise<void> {
+  await db
+    .update(aiConversations)
+    .set(memory === undefined ? { messages } : { messages, memory })
+    .where(eq(aiConversations.id, id));
+}
+
+/** Just the memory — calibration after a turn, without re-writing the transcript. */
+export async function saveMemory(db: Db, id: string, memory: unknown): Promise<void> {
+  await db.update(aiConversations).set({ memory }).where(eq(aiConversations.id, id));
+}
+
+/**
+ * The first thing the GM said, for a conversation's title — from either
+ * shape: a Chat Completions message's `content`, or a UI message's text parts.
+ */
+function firstUserText(raw: unknown): string {
+  if (!Array.isArray(raw)) return '';
+  for (const m of raw) {
+    if (typeof m !== 'object' || m === null || (m as { role?: unknown }).role !== 'user') continue;
+    const content = (m as { content?: unknown }).content;
+    if (typeof content === 'string') return content;
+    const parts = (m as { parts?: unknown }).parts;
+    if (Array.isArray(parts)) {
+      const text = parts
+        .filter((p): p is { type: 'text'; text: string } => (p as { type?: unknown }).type === 'text')
+        .map((p) => p.text)
+        .join(' ');
+      if (text) return text;
+    }
+  }
+  return '';
 }
 
 export interface ConversationSummary {
@@ -96,13 +137,12 @@ export async function listConversations(
     .limit(Math.min(Math.max(limit, 1), 100));
   return rows.map((row) => {
     const messages = readMessages(row.messages);
-    const firstUser = messages.find((m) => m.role === 'user');
     return {
       id: row.id,
       kind: row.kind,
       npcRef: row.npcRef,
       messageCount: messages.length,
-      title: (firstUser?.content ?? '').slice(0, 120),
+      title: firstUserText(row.messages).slice(0, 120),
       createdAt: row.createdAt.toISOString(),
     };
   });
