@@ -19,6 +19,7 @@ import { useLocation } from 'react-router-dom';
 import { getSession } from '../../../api/session.js';
 import { aiDisabledFrom, useFixerStatus } from './api.js';
 import { contextLine, useAiContext, useAiPage } from './aiContext.js';
+import Icon from '../../../components/Icon.js';
 import { dockPlacement } from './dockPlacement.js';
 
 // The codex is a lazy chunk (§15): its page workshop is pulled in only when
@@ -136,6 +137,7 @@ export default function FixerDock({ campaignId, sessionLive }: FixerDockProps) {
     { id: 'page', label: 'this page', on: canPage },
     { id: 'voice', label: `speak as ${ctx.npcName ?? 'them'}`, on: canVoice },
   ];
+  const onTabs = tabs.filter((t) => t.on);
   // A tab that no longer applies falls back to the chat.
   const shown: DockTab = tabs.find((t) => t.id === tab)?.on ? tab : 'chat';
   const where = contextLine(ctx);
@@ -174,11 +176,12 @@ export default function FixerDock({ campaignId, sessionLive }: FixerDockProps) {
           onPointerCancel={onHandleUp}
           onDoubleClick={resetWidth}
         />
+        {/* One row: the tabs when there is somewhere else to be, else what the
+            GM is looking at — the chat alone needs no tab — and the close. */}
         <div className="flex items-center justify-between gap-2 pb-1">
-          <div className="flex min-w-0 items-center gap-1">
-            {tabs
-              .filter((t) => t.on)
-              .map((t) => (
+          {onTabs.length > 1 ? (
+            <div className="flex min-w-0 items-center gap-1">
+              {onTabs.map((t) => (
                 <button
                   key={t.id}
                   type="button"
@@ -189,12 +192,17 @@ export default function FixerDock({ campaignId, sessionLive }: FixerDockProps) {
                   {t.label}
                 </button>
               ))}
-          </div>
-          <button className="btn px-2.5 py-1" onClick={toggle} aria-label="Close the Fixer">
-            close ▸
+            </div>
+          ) : (
+            <div className="mono-label min-w-0 truncate px-1 text-faint" data-testid="fixer-context" title={where ?? undefined}>
+              {where ? `looking at · ${where}` : ''}
+            </div>
+          )}
+          <button className="btn px-1.5 py-1" onClick={toggle} aria-label="Close the Fixer" title="Close (`)">
+            <Icon name="close" size={18} />
           </button>
         </div>
-        {where && (
+        {where && onTabs.length > 1 && (
           <div className="mono-label mb-1 truncate px-1 text-faint" data-testid="fixer-context" title={where}>
             looking at · {where}
           </div>
