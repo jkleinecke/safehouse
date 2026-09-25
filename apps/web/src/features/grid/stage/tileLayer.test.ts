@@ -129,7 +129,7 @@ describe('the palette answers slots as well as ids', () => {
       }
     }
     // A number the set lacks wraps onto one it has, rather than onto nothing.
-    expect(defs[tileDefKey('corp', 'decoration/4')]).toBe(defs[tileDefKey('corp', 'decoration/1')]);
+    expect(defs[tileDefKey('corp', 'decoration/5')]).toBe(defs[tileDefKey('corp', 'decoration/1')]);
   });
 });
 

@@ -24,7 +24,7 @@
  * position. `delta()` below is the one place that rule lives.
  */
 import type { Scene } from '@safehouse/contracts';
-import { levelTiles, tileById } from '@safehouse/rules';
+import { levelTiles, objectCoverage, propCoverage, tileById } from '@safehouse/rules';
 
 export type PaintedRole = 'wall' | 'door' | 'prop';
 export type PaintedLayer = 'structure' | 'object';
@@ -43,6 +43,13 @@ export interface PaintedObject {
   cells: string[];
   /** What each of those cells holds — the stored slot, which paint accepts back. */
   slots: Record<string, string>;
+  /**
+   * The squares a piece of furniture takes up on the map, when that is more
+   * than the one it is stored in (rules: footprint.ts) — what the selection
+   * rings and a click anywhere on it finds. `cells` stays the stored square,
+   * so a move or a delete touches only what is really there.
+   */
+  covers?: string[];
   /** The line a wall or door runs along; props have none. */
   axis?: Axis;
   /** Bounding box, inclusive, in cells. */
@@ -190,11 +197,24 @@ export function pickPainted(
   if (!floor) return null;
   const k = key(cell.col, cell.row);
 
-  const objectSlot = floor.object[k];
-  if (objectSlot !== undefined && prefer !== 'structure') {
+  // Furniture covers as many squares as it is big, and a click on any of
+  // them is a click on it.
+  const unitM = scene.grid.unitM ?? 1;
+  const at = objectCoverage(floor.object, unitM, (v) => tileById(floor.tilesetId, v)?.prop).get(k);
+  const objectSlot = at === undefined ? undefined : floor.object[at];
+  if (at !== undefined && objectSlot !== undefined && prefer !== 'structure') {
+    const prop = tileById(floor.tilesetId, objectSlot)?.prop;
+    if (prop !== undefined) {
+      // A designed piece is ONE piece, however many like it stand beside it:
+      // two desks side by side are two desks.
+      const a = parseKey(at);
+      const covers = propCoverage(prop, a.col, a.row, unitM);
+      return { ...objectFrom(floor, 'prop', 'object', [at], undefined), covers, ...bounds(covers) };
+    }
     // Every cell of the same tile touching this one, 4-connected.
-    const seen = new Set<string>([k]);
-    const queue: CellRef[] = [cell];
+    const start = parseKey(at);
+    const seen = new Set<string>([at]);
+    const queue: CellRef[] = [start];
     while (queue.length > 0 && seen.size < 4096) {
       const c = queue.shift()!;
       for (const [dc, dr] of [
@@ -253,6 +273,8 @@ export interface Handle {
  */
 export function handlesOf(obj: PaintedObject): Handle[] {
   const { min, max } = obj;
+  // A piece of furniture is as big as it is: nothing to drag bigger.
+  if (obj.covers !== undefined) return [];
   if (obj.role === 'prop') return [{ id: 'corner', at: { x: max.col + 1, y: max.row + 1 } }];
   if (obj.axis === 'v') {
     return [
@@ -449,6 +471,14 @@ export function applyEdit(
       anchor: { col: anchor.col + mc, row: anchor.row + mr },
       noop: mc === 0 && mr === 0,
     };
+    // Furniture's ghost is every square it will take up, not only its anchor.
+    if (obj.covers !== undefined && op.kind === 'move') {
+      const ghost = obj.covers.map((k) => {
+        const { col, row } = parseKey(k);
+        return key(col + mc, row + mr);
+      });
+      return { ...result, cells: ghost, delta: delta(obj.layer, before, after) };
+    }
     if (op.kind === 'slide' && !result.noop) {
       const { paint, erase } = followConnected(scene, level, obj, mc, mr, after);
       return { ...result, cells: Object.keys(paint), delta: { paint, erase, layer: obj.layer } };

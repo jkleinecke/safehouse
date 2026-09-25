@@ -480,7 +480,7 @@ class Stage implements StageApi, PointerHost {
     const pselKey = multi
       ? `M|${level}|${multi.join(';')}|${metricsKey(m)}`
       : psel
-        ? `${level}|${psel.cells.join(';')}|${metricsKey(m)}`
+        ? `${level}|${(psel.covers ?? psel.cells).join(';')}|${metricsKey(m)}`
         : '';
     if (pselKey !== this.lastPaintedSelKey) {
       this.lastPaintedSelKey = pselKey;
@@ -489,7 +489,7 @@ class Stage implements StageApi, PointerHost {
       } else if (psel) {
         this.fx.setPaintedSelection(
           m,
-          psel.cells,
+          psel.covers ?? psel.cells,
           handlesOf(psel).map((h) => worldFromGrid(m, h.at)),
         );
       } else {

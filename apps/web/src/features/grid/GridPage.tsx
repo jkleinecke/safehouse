@@ -8,7 +8,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import type { Scene, Token } from '@safehouse/contracts';
-import { GROUND_LEVEL_NAME, VISION_MODE_LABELS, deriveCharacter, levelTiles } from '@safehouse/rules';
+import {
+  GROUND_LEVEL_NAME,
+  VISION_MODE_LABELS,
+  deriveCharacter,
+  levelTiles,
+  objectCoverage,
+  propCoverage,
+  tileById,
+} from '@safehouse/rules';
 import { useMyCharacterId } from '../../api/campaigns.js';
 import { ApiError } from '../../api/client.js';
 import { getSession } from '../../api/session.js';
@@ -208,6 +216,10 @@ export default function GridPage() {
   }
   // A stroke still buffered when the GM navigates away is work they did.
   useEffect(() => () => strokeRef.current?.dispose(), []);
+  // Squares the furniture laid in the stroke under way covers: the brush
+  // steps over them, so a dragged desk brush lays desks side by side rather
+  // than a desk on every square it crosses.
+  const strokeCovered = useRef(new Set<string>());
 
 
   // -- commands -------------------------------------------------------------
@@ -502,9 +514,27 @@ export default function GridPage() {
 
         setTileNotice(null);
         const key = `${col},${row}`;
+        // Furniture covers as many squares as it is big (rules: footprint.ts).
+        const floor = levelTiles(scene, st.activeLevel);
+        const unitM = scene.grid.unitM ?? 1;
+        const covering = floor
+          ? objectCoverage(floor.object, unitM, (v) => tileById(floor.tilesetId, v)?.prop).get(key)
+          : undefined;
+        const prop = placing === null ? undefined : tileById(st.tilesetId, placing)?.prop;
+        if (!erase && prop !== undefined) {
+          // Not inside a piece already standing here, nor one laid earlier in
+          // this stroke; a piece's own square it may replace.
+          if ((covering !== undefined && covering !== key) || strokeCovered.current.has(key)) return;
+          for (const k of propCoverage(prop, col, row, unitM)) strokeCovered.current.add(k);
+        }
+        // The eraser on any square a piece covers takes the piece.
+        if (erase && covering !== undefined && covering !== key) {
+          strokeRef.current?.add(scene.id, st.tilesetId, covering, null, st.activeLevel, 'object');
+          return;
+        }
         // The eraser takes the top thing out of the square — a prop first,
         // then the wall, then the floor — one pass per layer, never the lot.
-        const top = erase ? topLayerAt(levelTiles(scene, st.activeLevel), key) : undefined;
+        const top = erase ? topLayerAt(floor, key) : undefined;
         if (erase && top === null) return;
         strokeRef.current?.add(
           scene.id,
@@ -515,7 +545,10 @@ export default function GridPage() {
           top === undefined || top === null || top === 'all' ? undefined : top,
         );
       },
-      onTileStrokeEnd: () => strokeRef.current?.flush(),
+      onTileStrokeEnd: () => {
+        strokeCovered.current.clear();
+        strokeRef.current?.flush();
+      },
       // -- room / area rectangles (FR9.2) -----------------------------------
       // Two requests, floor then walls, because a cell holds one tile per
       // request and a room's edge cells need both: floor in the ground layer

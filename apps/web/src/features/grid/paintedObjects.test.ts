@@ -42,10 +42,20 @@ describe('picking up', () => {
   });
 
   it('prefers the furniture standing on a square over the wall behind it', () => {
-    const s = scene({ '3,5': 'wall' }, { '3,5': 'crates', '4,5': 'crates' });
+    const s = scene({ '3,5': 'wall' }, { '3,5': 'crates' });
     const obj = pickPainted(s, 0, { col: 3, row: 5 })!;
     expect(obj.role).toBe('prop');
-    expect(obj.cells.sort()).toEqual(['3,5', '4,5']);
+    // Stored in one square; a 2 m by 1.5 m crate stack on a 1 m grid covers a 2x2 block.
+    expect(obj.cells).toEqual(['3,5']);
+    expect(obj.covers).toEqual(['3,5', '4,5', '3,6', '4,6']);
+  });
+
+  it('picks a piece of furniture up from any square it covers, and two alike are two', () => {
+    const s = scene({}, { '3,3': 'crates', '3,4': 'crates' });
+    const first = pickPainted(s, 0, { col: 4, row: 3 })!;
+    expect(first.cells).toEqual(['3,3']);
+    const second = pickPainted(s, 0, { col: 3, row: 4 })!;
+    expect(second.cells).toEqual(['3,4']);
   });
 
   it('finds nothing on bare floor', () => {
@@ -64,13 +74,13 @@ describe('dragging', () => {
   });
 
   it('keeps the overlap out of erase when a prop moves one square', () => {
-    const s = scene({}, { '3,3': 'crates', '4,3': 'crates' });
+    const s = scene({}, { '3,3': 'crates' });
     const prop = pickPainted(s, 0, { col: 3, row: 3 })!;
     const r = applyEdit(s, 0, prop, { kind: 'move' }, { col: 3, row: 3 }, { col: 4, row: 3 });
-    expect(Object.keys(r.delta.paint).sort()).toEqual(['4,3', '5,3']);
-    // 4,3 is painted — the server paints first, so erasing it too would
-    // take the crate back out of the square it just moved into.
+    // Only the stored square moves; the ghost is every square it will cover.
+    expect(Object.keys(r.delta.paint)).toEqual(['4,3']);
     expect(r.delta.erase).toEqual(['3,3']);
+    expect(r.cells).toEqual(['4,3', '5,3', '4,4', '5,4']);
   });
 
   it('stretches a wall from its end with the wall, not the door in it', () => {
@@ -90,24 +100,23 @@ describe('dragging', () => {
     expect(r.delta.erase).toEqual([]);
   });
 
-  it('resizes a prop from its corner, and never below one square', () => {
+  it('sizes furniture by the grid, not by a handle', () => {
+    // The same crate stack covers a 2x2 block on a 1 m grid and one square on a 2 m grid.
     const s = scene({}, { '3,3': 'crates' });
-    const prop = pickPainted(s, 0, { col: 3, row: 3 })!;
-    const grow = applyEdit(s, 0, prop, { kind: 'resize' }, { col: 4, row: 4 }, { col: 5, row: 5 });
-    expect(Object.keys(grow.delta.paint).sort()).toEqual(['3,3', '3,4', '4,3', '4,4']);
-    const shrink = applyEdit(s, 0, prop, { kind: 'resize' }, { col: 4, row: 4 }, { col: 1, row: 1 });
-    expect(Object.keys(shrink.delta.paint)).toEqual(['3,3']);
-    expect(shrink.noop).toBe(true);
+    expect(pickPainted(s, 0, { col: 3, row: 3 })!.covers).toEqual(['3,3', '4,3', '3,4', '4,4']);
+    const big = { ...s, grid: { ...s.grid, unitM: 2 } } as Scene;
+    expect(pickPainted(big, 0, { col: 3, row: 3 })!.covers).toEqual(['3,3']);
   });
 
-  it('puts a run’s handles on its outer ends and a prop’s on its corner', () => {
+  it('puts a run’s handles on its outer ends, and none on furniture', () => {
     const wall = pickPainted(ROOM, 0, { col: 3, row: 5 })!;
     expect(handlesOf(wall).map((h) => h.at)).toEqual([
       { x: 2, y: 5.5 },
       { x: 7, y: 5.5 },
     ]);
+    // A piece of furniture is as big as it is: nothing to drag bigger.
     const s = scene({}, { '3,3': 'crates' });
-    expect(handlesOf(pickPainted(s, 0, { col: 3, row: 3 })!).map((h) => h.at)).toEqual([{ x: 4, y: 4 }]);
+    expect(handlesOf(pickPainted(s, 0, { col: 3, row: 3 })!)).toEqual([]);
   });
 
   describe('the walls it meets go with it', () => {

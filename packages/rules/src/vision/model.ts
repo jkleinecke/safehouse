@@ -10,6 +10,7 @@
 import type { Point } from '@safehouse/contracts';
 import { tilesetById } from '../tilesets/catalogue.js';
 import { resolveTile } from '../tilesets/slots.js';
+import { objectCoverage } from '../tilesets/footprint.js';
 import { levelTiles, migrateTileLayer, type LayeredTiles } from '../tilesets/layers.js';
 import { givesCover, parseCellKey, stopsMovement, stopsSight } from '../tilesets/types.js';
 import type { SightCell, SightModel, SightSegment } from './los.js';
@@ -19,6 +20,8 @@ export interface SightSceneInput {
   tiles?: LayeredTiles | undefined;
   /** Floors above the ground one. Sight is computed on ONE of them. */
   levels?: readonly { id: string; name: string; tiles?: LayeredTiles | undefined }[] | undefined;
+  /** Metres a square: furniture covers as many squares as it is big (footprint.ts). */
+  grid?: { unitM?: number | undefined } | undefined;
   geometry?: {
     walls?: readonly { id: string; a: Point; b: Point }[];
     doors?: readonly { id: string; a: Point; b: Point; open?: boolean }[];
@@ -50,7 +53,21 @@ export function sightModelFor(scene: SightSceneInput, level = 0): SightModel {
       // layer and a chair in the object layer occupy the same square, and the
       // square is as blocked as the most blocking thing standing in it —
       // otherwise a desk pushed against a wall would open a hole in it.
-      for (const map of [layers.ground, layers.structure, layers.object]) {
+      // Furniture stands on every square it covers, not just the one it is
+      // stored in: a 2 m sofa on a 1 m grid is two squares of cover. What
+      // hangs overhead — a tree's crown, a ceiling light — covers only its own.
+      const covered = objectCoverage(
+        layers.object,
+        scene.grid?.unitM ?? 1,
+        (v) => byId.get(v)?.prop,
+        true,
+      );
+      const objectCells: Record<string, string> = {};
+      for (const [key, anchor] of covered) {
+        const v = layers.object[anchor];
+        if (v !== undefined) objectCells[key] = v;
+      }
+      for (const map of [layers.ground, layers.structure, objectCells]) {
         for (const [key, tileId] of Object.entries(map)) {
           if (parseCellKey(key) === null) continue;
           const tile = byId.get(tileId);

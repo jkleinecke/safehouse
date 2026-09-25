@@ -106,10 +106,10 @@ describe('compileFloorPlan', () => {
     expect(Object.keys(out.layers.ground)).toHaveLength(GRID.cols * GRID.rows);
     // Outside the two rooms: the set's best guess at an exterior ground.
     const outside = outsideGroundFor(dock)!;
-    // Docklands has no road, yard or walk ("catwalk" is not a walk), so the
-    // outside is its first ground: poured concrete.
-    expect(outside.id).toBe('floor');
-    expect(out.layers.ground['15,12']).toBe('ground/1');
+    // Docklands has no road, yard or walk of its own ("catwalk" is not a
+    // walk), so the outside is the street every set carries: its access road.
+    expect(outside.id).toBe('street');
+    expect(out.layers.ground['15,12']).toBe('ground/6');
     // A set with a street knows it.
     expect(outsideGroundFor(tilesetById('sprawl')!)?.id).toBe('road');
     expect(outsideGroundFor(tilesetById('park')!)?.id).toBe('path');
@@ -336,7 +336,8 @@ describe('areas: the ground outside the rooms is not one ground', () => {
   // The rule 7 example is the HARBOUR plan above, id for id, so a renamed
   // marina tile fails the areas tests; this pins the heading the model reads.
   it('tells the model an area takes a ground tile from the palette', () => {
-    expect(floorPalette(marina)).toContain('Ground tiles (a room\'s "floor", "outside.ground", and an area\'s "ground"):');
+    expect(floorPalette(marina)).toContain('Floors for INSIDE a building (a room\'s "floor"):');
+    expect(floorPalette(marina)).toContain('Ground for OUTSIDE a building ("outside.ground", and an area\'s "ground")');
   });
 });
 

@@ -412,3 +412,29 @@ describe('water is a body, and the land knows how it meets it', () => {
     expect(tileById('marina', 'quay')?.shore).toBe('quay');
   });
 });
+
+describe('every set has floors for inside and ground for outside', () => {
+  it('says of every ground tile whether it is inside a building or outside one', () => {
+    for (const { setId, tile } of ALL_TILES) {
+      if (tile.category !== 'ground') continue;
+      expect(tile.setting, `${setId}/${tile.id}`).toMatch(/^(inside|outside)$/);
+    }
+  });
+
+  it('gives every set a room floor, and a street, a sidewalk and a kerb outside', () => {
+    for (const set of TILESETS) {
+      const grounds = set.tiles.filter((t) => t.category === 'ground');
+      expect(grounds.some((t) => t.setting === 'inside'), `${set.id} has a floor for inside`).toBe(true);
+      expect(grounds.some((t) => t.setting === 'outside'), `${set.id} has ground for outside`).toBe(true);
+      expect(grounds.some((t) => t.id === 'curb' && t.setting === 'outside'), `${set.id} has a kerb`).toBe(true);
+      expect(grounds.some((t) => t.id === 'street' || t.id === 'road'), `${set.id} has a street`).toBe(true);
+    }
+  });
+
+  it('lights every set from inside', () => {
+    for (const set of TILESETS) {
+      const lit = set.tiles.some((t) => t.emissive !== undefined && (t.prop === 'pendant' || t.prop === 'chandelier'));
+      expect(lit, `${set.id} has a ceiling light`).toBe(true);
+    }
+  });
+});

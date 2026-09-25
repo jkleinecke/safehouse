@@ -378,6 +378,13 @@ export const TILE_PROPS = [
   'menu',
   /** A hanging fixture: an arm of lamps that throws its pool below. */
   'chandelier',
+  /**
+   * A plain ceiling light — a shade on a cord, lit underneath. Every set has
+   * one, so a room is lit from inside rather than by a street lamp dragged
+   * indoors. Painted at floor height: it hangs overhead, so it neither gives
+   * cover nor blocks a sightline.
+   */
+  'pendant',
   // --- outside -------------------------------------------------------------
   /** A figure on a plinth. */
   'statue',
@@ -485,6 +492,9 @@ export const PARTIAL_FOOTPRINTS: readonly TileFootprint[] = [
  */
 export const WALL_THICKNESS = 1 / 3;
 
+/** Where a ground tile belongs: a room's floor, or the ground around the building. */
+export type TileSetting = 'inside' | 'outside';
+
 export interface Tile {
   id: string;
   name: string;
@@ -505,6 +515,13 @@ export interface Tile {
   footprint?: TileFootprint;
   /** Which tool offers it, and so which layer it lands on. */
   category?: TileCategory;
+  /**
+   * For ground: whether it is a floor INSIDE a building or ground OUTSIDE
+   * one. Every set has both — a room's floor and the street, sidewalk and
+   * kerb around the building — so a floor plan can tell rooms from the lot
+   * they stand on, and the palette can offer each where it belongs.
+   */
+  setting?: TileSetting;
   /** Where it belongs, for single-click placement. */
   placement?: TilePlacement;
   /**

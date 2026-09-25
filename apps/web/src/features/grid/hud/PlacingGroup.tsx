@@ -30,6 +30,21 @@ export function tilesFor(tileset: TilesetDef | undefined, subject: SubjectDef | 
   return tileset.tiles.filter((t) => tileIsSubject(subject, t, categoryOf));
 }
 
+/**
+ * The menu's sections: ground in two — floors for inside a building, then the
+ * street, sidewalk and kerb and whatever else lies outside — and everything
+ * else as one list. A set that predates the distinction is one list too.
+ */
+export function tileSections(tiles: readonly TileDef[]): Array<{ heading: string | null; tiles: TileDef[] }> {
+  if (!tiles.some((t) => t.setting !== undefined)) return [{ heading: null, tiles: [...tiles] }];
+  const inside = tiles.filter((t) => t.setting !== 'outside');
+  const outside = tiles.filter((t) => t.setting === 'outside');
+  return [
+    { heading: 'Inside', tiles: inside },
+    { heading: 'Outside', tiles: outside },
+  ].filter((s) => s.tiles.length > 0);
+}
+
 /** What is armed, for the button's tooltip: the tile's name, or Auto. */
 export function armedLabel(tileset: TilesetDef | undefined, tileId: string | null): string {
   if (!tileset || tileId === null) return 'Auto';
@@ -191,18 +206,23 @@ function SubjectControl({
               </span>
             }
           />
-          {tiles.map((t) => (
-            <Row
-              key={t.id}
-              selected={armed?.id === t.id}
-              name={t.name}
-              note={t.hint}
-              onClick={() => {
-                onTile(t);
-                setOpen(false);
-              }}
-              swatch={<Swatch set={tileset} tile={t} size="h-8 w-8" />}
-            />
+          {tileSections(tiles).map((section) => (
+            <div key={section.heading ?? 'all'} role="group" aria-label={section.heading ?? subject.label}>
+              {section.heading && <div className="mono-label px-1.5 pb-0.5 pt-1.5 text-faint">{section.heading}</div>}
+              {section.tiles.map((t) => (
+                <Row
+                  key={t.id}
+                  selected={armed?.id === t.id}
+                  name={t.name}
+                  note={t.hint}
+                  onClick={() => {
+                    onTile(t);
+                    setOpen(false);
+                  }}
+                  swatch={<Swatch set={tileset} tile={t} size="h-8 w-8" />}
+                />
+              ))}
+            </div>
           ))}
         </div>
       )}

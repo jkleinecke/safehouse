@@ -29,7 +29,7 @@
  */
 import type { Graphics } from 'pixi.js';
 import type { Point } from '@safehouse/contracts';
-import type { TileProp } from '@safehouse/rules';
+import { PROP_SIZE_M, propCells, type TileProp } from '@safehouse/rules';
 import { groundRadius, worldFromGrid, type SceneMetrics } from '../geometry.js';
 import { C, FACE_FOOT, FACE_SHADE, shade } from './colors.js';
 
@@ -73,6 +73,8 @@ interface CylOpts {
  */
 export class PropKit {
   readonly plan: boolean;
+  /** Where the design lands on this grid and how big (`propPlacement`). */
+  private readonly place: PropPlacement;
 
   constructor(
     readonly g: Graphics,
@@ -84,14 +86,24 @@ export class PropKit {
     private readonly seed: number,
     /** Cells below the floor the whole design stands: a boat floating in sunk water. */
     private readonly sink = 0,
+    place: PropPlacement = UNIT_PLACEMENT,
   ) {
     this.plan = unit <= 0;
+    this.place = place;
   }
 
-  /** Cell space to world pixels. */
+  /**
+   * Cell space to world pixels. Every point a design draws comes through
+   * here, so this is the one place its real size is applied: its footprint's
+   * centre lands on the centre of the squares it covers, and it is scaled
+   * across and down to its real size, and up from the floor.
+   */
   at(p: P3): Point {
-    const w = worldFromGrid(this.m, { x: this.col + p[0], y: this.row + p[1] });
-    return { x: w.x, y: w.y - (p[2] - this.sink) * this.unit };
+    const { anchor, centre, su, sv, up } = this.place;
+    const u = centre[0] + (p[0] - anchor[0]) * su;
+    const v = centre[1] + (p[1] - anchor[1]) * sv;
+    const w = worldFromGrid(this.m, { x: this.col + u, y: this.row + v });
+    return { x: w.x, y: w.y - (p[2] * up - this.sink) * this.unit };
   }
 
   /** Deterministic 0..1 per (cell, salt), so a prop never flickers between draws. */
@@ -130,7 +142,7 @@ export class PropKit {
 
   /** One vertical face between two ground points, shaded like every wall. */
   private face(a: readonly [number, number], b: readonly [number, number], z0: number, z1: number, color: number, lit: number, alpha: number): void {
-    const bands = (z1 - z0) * this.unit > 14 ? 3 : 1;
+    const bands = (z1 - z0) * this.place.up * this.unit > 14 ? 3 : 1;
     for (let i = 0; i < bands; i += 1) {
       const lo = z0 + ((z1 - z0) * i) / bands;
       const hi = z0 + ((z1 - z0) * (i + 1)) / bands;
@@ -212,7 +224,7 @@ export class PropKit {
   /** A flat disc at height `z`: a lid, a seat, a puddle of light. */
   disc(cu: number, cv: number, r: number, z: number, color: number, alpha = 1, ink = false): void {
     const c = this.at([cu, cv, z]);
-    const { rx, ry } = groundRadius(this.m, r);
+    const { rx, ry } = groundRadius(this.m, r * (this.place.su + this.place.sv) / 2);
     const e = this.g.ellipse(c.x, c.y, rx, ry).fill({ color, alpha });
     if (ink) e.stroke({ width: 1, color: this.t.ink, alpha: 0.45, pixelLine: true });
   }
@@ -339,6 +351,7 @@ const FOOTPRINTS: Readonly<Record<TileProp, readonly [number, number, number, nu
   bar: [0.05, 0.3, 0.95, 0.85],
   menu: [0.3, 0.4, 0.7, 0.7],
   chandelier: [0.2, 0.2, 0.8, 0.8],
+  pendant: [0.32, 0.32, 0.68, 0.68],
   statue: [0.25, 0.25, 0.75, 0.75],
   hedge: [0.05, 0.25, 0.95, 0.75],
   bench: [0.08, 0.35, 0.92, 0.7],
@@ -359,6 +372,57 @@ const FOOTPRINTS: Readonly<Record<TileProp, readonly [number, number, number, nu
   trough: [0.1, 0.3, 0.9, 0.7],
   logs: [0.1, 0.25, 0.9, 0.8],
 };
+
+/**
+ * Where a design lands on a grid and how big. Its real size is the rules'
+ * (`PROP_SIZE_M`, footprint.ts), and so are the squares it covers
+ * (`propCells`): the drawing is scaled across and down to that size and
+ * centred on those squares, so what the GM sees and what blocks a step are
+ * the same squares.
+ */
+export interface PropPlacement {
+  /** The design's footprint centre, in its own cell space. */
+  anchor: readonly [number, number];
+  /** Where that centre lands, in cells from the anchor square's corner. */
+  centre: readonly [number, number];
+  /** Scale across (u) and down (v). */
+  su: number;
+  sv: number;
+  /** Scale up from the floor. */
+  up: number;
+}
+
+const UNIT_PLACEMENT: PropPlacement = { anchor: [0.5, 0.5], centre: [0.5, 0.5], su: 1, sv: 1, up: 1 };
+
+/**
+ * A design's placement on a grid of `unitM` metres a square.
+ *
+ * Upward it never GROWS: a tile's height is measured against the walls
+ * (`TILE_HEIGHTS` — a full wall is one cell tall at any grid size), so a car
+ * drawn waist-high stays waist-high however long it gets, rather than
+ * towering over the room it is parked beside. It does shrink with the
+ * footprint, so a chair on a 3 m grid is a small chair and not a spike.
+ */
+export function propPlacement(prop: TileProp, unitM: number): PropPlacement {
+  const [u0, v0, u1, v1] = FOOTPRINTS[prop];
+  const [wm, dm] = PROP_SIZE_M[prop];
+  const [cw, ch] = propCells(prop, unitM);
+  const m = unitM > 0 ? unitM : 1;
+  const su = wm / m / Math.max(0.05, u1 - u0);
+  const sv = dm / m / Math.max(0.05, v1 - v0);
+  return {
+    anchor: [(u0 + u1) / 2, (v0 + v1) / 2],
+    centre: [cw / 2, ch / 2],
+    su,
+    sv,
+    up: Math.min(1, su, sv),
+  };
+}
+
+/** The footprint a design is drawn to, in cell space, before it is scaled. */
+export function designFootprint(prop: TileProp): readonly [number, number, number, number] {
+  return FOOTPRINTS[prop];
+}
 
 /** Four legs from the corners of a slab to the ground. */
 export function legs(k: PropKit, u0: number, v0: number, u1: number, v1: number, z: number, color: number): void {
@@ -6490,6 +6554,21 @@ export const DESIGNS: Readonly<Record<TileProp, Draw>> = {
     civicOutline(k, [F(u0, 0), F(u1, 0), F(u1, 1), F(u0, 1), B(u0, 0), B(u1, 0), B(u0, 1)], 0.5);
     return null;
   },
+  pendant: (k, _h, glow) => {
+    // Hung from the ceiling whatever the tile's height (it is painted at
+    // floor height so it gives no cover): the cord from wall-top height, the
+    // shade a little below it, lit on the underside.
+    const t = k.t;
+    const zc = 0.8;
+    const bulb = glow ?? shade(t.light, 1.1);
+    if (!k.plan) k.line([[0.5, 0.5, 1.02], [0.5, 0.5, zc + 0.09]], shade(t.ink, 0.9), 1, 0.85);
+    if (glow !== null) k.disc(0.5, 0.5, 0.26, zc - 0.02, glow, 0.12);
+    k.cyl(0.5, 0.5, 0.16, zc, zc + 0.08, shade(t.base, 1), { sides: 12 });
+    k.disc(0.5, 0.5, 0.08, zc + 0.08, shade(t.base, 1.2), 1, true);
+    // In plan the shade is all there is, so the bulb shows through it.
+    k.disc(0.5, 0.5, k.plan ? 0.09 : 0.1, k.plan ? zc + 0.08 : zc - 0.005, bulb, 0.95);
+    return glow ? k.pool(0.5, 0.5, 0.45) : null;
+  },
   chandelier: (k, h, glow) => {
     type P = readonly [number, number, number];
     const t = k.t;
@@ -8407,14 +8486,26 @@ export const DESIGNS: Readonly<Record<TileProp, Draw>> = {
   },
 };
 
-/** The rect a design's shadow falls from, in GRID units. */
-export function propFootprint(prop: TileProp, col: number, row: number): [number, number, number, number] {
+/** The rect a design's shadow falls from, in GRID units, at its real size on this grid. */
+export function propFootprint(
+  prop: TileProp,
+  col: number,
+  row: number,
+  unitM = 1,
+): [number, number, number, number] {
   const [u0, v0, u1, v1] = FOOTPRINTS[prop];
-  return [col + u0, row + v0, col + u1, row + v1];
+  const { anchor, centre, su, sv } = propPlacement(prop, unitM);
+  return [
+    col + centre[0] + (u0 - anchor[0]) * su,
+    row + centre[1] + (v0 - anchor[1]) * sv,
+    col + centre[0] + (u1 - anchor[0]) * su,
+    row + centre[1] + (v1 - anchor[1]) * sv,
+  ];
 }
 
 /**
- * Draw one prop in its cell.
+ * Draw one prop from its anchor cell — at its real size on this grid, over
+ * the squares it covers (`propPlacement`), which on a small grid is several.
  *
  * `unit` is the screen height of one cell of `z` (`heightRise(m, 1)`), zero in
  * plan view. `height` is the tile's own height in cells. Returns the face a
@@ -8435,7 +8526,7 @@ export function drawProp(
   /** Cells below the floor it stands at — `WATER_LEVEL` for a thing afloat. */
   sink = 0,
 ): Point[] | null {
-  const k = new PropKit(g, m, col, row, unit, tones, seed, sink);
+  const k = new PropKit(g, m, col, row, unit, tones, seed, sink, m.designSize ? UNIT_PLACEMENT : propPlacement(prop, m.unitM));
   // A flat prop still needs a little height to build with; a standing one
   // builds to its own.
   return DESIGNS[prop](k, height > 0 ? height : 0.5, glow);

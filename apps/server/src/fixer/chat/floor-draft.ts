@@ -21,7 +21,7 @@
  */
 import { tool, type ToolSet } from 'ai';
 import { z } from 'zod';
-import { levelTiles, tileBySlot, tilesetById, type Tileset } from '@safehouse/rules';
+import { levelTiles, objectCoverage, resolveTile, tileBySlot, tilesetById, type Tileset } from '@safehouse/rules';
 import { ScenesService, serializeScene } from '../../services/scenes.js';
 import {
   DraftPlanSchema,
@@ -140,7 +140,11 @@ const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
  * look at the map: is the door where the corridor meets the room, does the
  * lobby really touch the street.
  */
-export function floorPicture(floor: CompiledFloor, grid: { cols: number; rows: number }, set: Tileset): string {
+export function floorPicture(
+  floor: CompiledFloor,
+  grid: { cols: number; rows: number; unitM?: number | undefined },
+  set: Tileset,
+): string {
   const inside = new Map<string, string>();
   floor.rooms.forEach((room, i) => {
     const ch = LETTERS[i] ?? '?';
@@ -148,10 +152,12 @@ export function floorPicture(floor: CompiledFloor, grid: { cols: number; rows: n
     for (let c = x + 1; c < x + w - 1; c += 1) for (let r = y + 1; r < y + h - 1; r += 1) inside.set(`${c},${r}`, ch);
   });
   const { ground, structure, object } = floor.layers;
+  // Furniture covers as many squares as it is big: every one of them is a prop.
+  const covered = objectCoverage(object, grid.unitM ?? 1, (v) => resolveTile(set, v)?.prop);
   const cell = (c: number, r: number): string => {
     const k = `${c},${r}`;
     const s = structure[k];
-    const o = object[k];
+    const o = object[k] ?? (covered.has(k) ? object[covered.get(k)!] : undefined);
     const stairs = [s, o, ground[k]].find((v) => v?.startsWith('stairs/'));
     if (stairs) return stairs === 'stairs/up' ? '^' : 'v';
     if (s === 'building/door') return 'D';
@@ -293,7 +299,7 @@ export function floorTools(deps: FloorToolDeps, guarded: Guarded): ToolSet {
     guide?: string,
   ): Promise<FloorEditOutput> => {
     const scene = await sceneOf(ctx, draft.sceneId);
-    const grid = { cols: scene.grid.cols, rows: scene.grid.rows };
+    const grid = { cols: scene.grid.cols, rows: scene.grid.rows, unitM: scene.grid.unitM };
     const before = previous ? compileFloorPlan(previous.plan, previous.grid, setOf(previous.tilesetId), { draft: true }) : null;
     const after = compileFloorPlan(next, grid, setOf(draft.tilesetId), { draft: true });
     const diff = diffFloor(before?.layers ?? null, after.layers, levelTiles(scene, draft.level));
@@ -376,7 +382,7 @@ export function floorTools(deps: FloorToolDeps, guarded: Guarded): ToolSet {
               ? `This floor already had ${plural(painted, 'painted square')} (all layers). Your drawing paints over them where it reaches; walls and props outside it stay. If the GM wants a clean start, call clear_floor first.`
               : '',
             RULES,
-            floorPalette(set),
+            floorPalette(set, scene.grid.unitM),
           ]
             .filter(Boolean)
             .join('\n');
@@ -580,7 +586,7 @@ export function floorTools(deps: FloorToolDeps, guarded: Guarded): ToolSet {
           const { draft } = current();
           const set = setOf(draft.tilesetId);
           const scene = await sceneOf(ctx, draft.sceneId);
-          const grid = { cols: scene.grid.cols, rows: scene.grid.rows };
+          const grid = { cols: scene.grid.cols, rows: scene.grid.rows, unitM: scene.grid.unitM };
           return { summary: floorPicture(compileFloorPlan(draft.plan, grid, set, { draft: true }), grid, set) };
         }),
       ),

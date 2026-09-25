@@ -174,7 +174,9 @@ async function render(set: TileSetLike): Promise<Sheet | null> {
   } as Scene['grid'];
   const g = new s.pixi.Graphics();
   try {
-    layer.drawTiles(g, metricsFor(grid), { tilesetId: set.id, ...input, defs: tileDefsFromSets([set]) });
+    // Each piece at its one-square design size: the swatches share a sheet,
+    // and a car at its real size would park in its neighbour's.
+    layer.drawTiles(g, { ...metricsFor(grid), designSize: true }, { tilesetId: set.id, ...input, defs: tileDefsFromSets([set]) });
     const url = await s.renderer.extract.base64({
       target: g,
       frame: new s.pixi.Rectangle(0, 0, layout.cols * CELL, layout.rows * CELL),

@@ -51,7 +51,7 @@ export interface FloorDraft {
   level: number;
   tilesetId: string;
   /** The grid the plan was last compiled on — what its last edit painted. */
-  grid: { cols: number; rows: number };
+  grid: { cols: number; rows: number; unitM?: number };
   plan: FloorPlan;
 }
 

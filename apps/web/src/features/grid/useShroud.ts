@@ -135,6 +135,8 @@ export function useShroud(inputs: ShroudInputs): ShroudState | null {
     JSON.stringify(scene?.geometry.doors ?? []),
     scene?.grid.cols,
     scene?.grid.rows,
+    // Metres a square: furniture covers as many squares as it is big.
+    scene?.grid.unitM,
     vx,
     vy,
     viewer?.level ?? 0,

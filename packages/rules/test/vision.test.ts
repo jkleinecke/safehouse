@@ -234,8 +234,10 @@ describe('lineOfSight', () => {
 
 describe('sightModelFor', () => {
   it('reads painted walls and cover straight out of the tile layer', () => {
+    // On a 2 m grid a crate stack covers its one square (see below for 1 m).
     const m = sightModelFor({
       tiles: { tilesetId: 'docklands', cells: { '1,0': 'wall', '2,0': 'crates', '3,0': 'floor' } },
+      grid: { unitM: 2 },
     });
     // `height` rides along because everything that DRAWS this model needs it —
     // in isometric a square's content occupies its ground diamond plus a band
@@ -255,6 +257,18 @@ describe('sightModelFor', () => {
     });
     // A plain floor earns no entry; the map stays sparse.
     expect(m.cells.has('3,0')).toBe(false);
+  });
+
+  it('covers every square a piece of furniture takes up, on a grid that small', () => {
+    // A 2 m by 1.5 m crate stack on a 1 m grid takes a 2x2 block; all of it gives cover.
+    const tiles = { tilesetId: 'docklands', cells: {}, ground: {}, structure: {}, object: { '2,0': 'crates' } };
+    const small = sightModelFor({ tiles, grid: { unitM: 1 } });
+    expect(small.cells.get('2,0')?.givesCover).toBe(true);
+    expect(small.cells.get('3,0')?.givesCover).toBe(true);
+    expect(small.cells.get('3,1')?.givesCover).toBe(true);
+    expect(small.cells.has('4,0')).toBe(false);
+    // The same stack on a 2 m grid is one square.
+    expect(sightModelFor({ tiles, grid: { unitM: 2 } }).cells.has('3,0')).toBe(false);
   });
 
   it('takes the tallest thing in a square, so furniture cannot shorten a wall', () => {

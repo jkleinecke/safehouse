@@ -371,7 +371,9 @@ export const AFFLUENCE = {
  * emissive budget. Lamp pools and neon spills are the exception that proves
  * the rule, because a GM paints two cells of those rather than two hundred.
  */
-export const SET_EMISSIVE_MAX = 4;
+// Five, not four: every set carries a ceiling light (`pendant`) so a room is
+// lit from inside, on top of the handful of lights that give it character.
+export const SET_EMISSIVE_MAX = 5;
 
 /** At most this many distinct hue families in one set, so it reads as a place. */
 export const SET_HUE_FAMILY_MAX = 5;

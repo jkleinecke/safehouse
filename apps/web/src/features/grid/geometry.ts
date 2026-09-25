@@ -25,6 +25,11 @@ export interface SceneMetrics {
   opacity: number;
   /** Plan view, or 2:1 isometric. Presentation only — see `GridProjection`. */
   projection: GridProjection;
+  /**
+   * Draw furniture at its one-square design size rather than its real size
+   * on this grid — for a palette swatch, where a car must fit its square.
+   */
+  designSize?: boolean;
 }
 
 export function metricsFor(grid: Grid): SceneMetrics {

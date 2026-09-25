@@ -540,6 +540,8 @@ export interface TileDef {
    * the palette falls back to `kind`.
    */
   category?: 'ground' | 'building' | 'interior' | 'decoration' | 'stairs';
+  /** For ground: a room's floor, or the ground around the building (see `Tile.setting`). */
+  setting?: 'inside' | 'outside';
   /** Which floor a flight of stairs leads to (FR9.22). */
   connects?: 'up' | 'down';
   /** Where it belongs, for single-click placement (see `pickTile` in rules). */

@@ -25,7 +25,8 @@ import { tileDefKey, type TileDrawDef } from '../types.js';
 import type { TileCut, TilePattern } from '@safehouse/rules';
 import { C, FACE_FOOT, FACE_SHADE, parseColor, shade } from './colors.js';
 import { drawCut, type CutRun } from './cuts.js';
-import { drawProp, propFootprint } from './props.js';
+import { propCells } from '@safehouse/rules';
+import { designFootprint, drawProp, propFootprint, propPlacement } from './props.js';
 import {
   drawShoreTop,
   drawWaterCell,
@@ -516,6 +517,19 @@ function uvDot(
  * inside the study's tier-2 budget (the accent stays within twelve value
  * points of the base) and only hairlines allowed the ink. Per-cell seeds vary
  * the boards, chunks and cracks so forty cells of one tile do not tile.
+ *
+ * ## Why no pattern draws a grid of its own
+ *
+ * The map's grid lines are the one set of straight lines a GM counts squares
+ * by. A texture that ALSO draws straight, full-length, dark lines — grout on
+ * thirds, a board seam across the middle, bars along the cell's own edges, a
+ * bevel a hair inside them — reads as a second, finer grid, doubles the real
+ * one, and makes the squares hard to count. So: nothing is drawn on or hugging
+ * a cell edge, nothing splits the cell evenly in half, and the seams that do
+ * run across a cell (boards, grout, courses, joints) are drawn soft — the
+ * `dark` tone at low alpha, never the ink — and broken where the material
+ * would break them. Ink is for cracks and chips, which no one mistakes for a
+ * grid line.
  */
 function drawPattern(
   g: Graphics,
@@ -538,7 +552,7 @@ function drawPattern(
 
   switch (def.pattern) {
     case 'planks': {
-      const boards = 4;
+      const boards = 5;
       for (let i = 0; i < boards; i += 1) {
         const v0 = i / boards;
         const v1 = (i + 1) / boards;
@@ -556,14 +570,27 @@ function drawPattern(
           0.28,
         );
       }
+      // Seams between boards, soft; each board has a butt joint somewhere
+      // along it, staggered, so the seams read as boards and not ruled lines.
       for (let i = 1; i < boards; i += 1) {
         line(
           [
             [0, i / boards],
             [1, i / boards],
           ],
-          ink,
-          0.55,
+          dark,
+          0.3,
+        );
+      }
+      for (let i = 0; i < boards; i += 1) {
+        const u = 0.2 + rnd(seed, 50 + i) * 0.6;
+        line(
+          [
+            [u, (i + 0.15) / boards],
+            [u, (i + 0.85) / boards],
+          ],
+          dark,
+          0.35,
         );
       }
       break;
@@ -602,22 +629,23 @@ function drawPattern(
           uvRect(g, P, i / n, j / n, (i + 1) / n, (j + 1) / n, { color: tone, alpha: 0.6 });
         }
       }
+      // Grout, soft: the tiles are told apart by tone, the joints only hinted.
       for (let i = 1; i < n; i += 1) {
         line(
           [
             [i / n, 0],
             [i / n, 1],
           ],
-          ink,
-          0.6,
+          dark,
+          0.25,
         );
         line(
           [
             [0, i / n],
             [1, i / n],
           ],
-          ink,
-          0.6,
+          dark,
+          0.25,
         );
       }
       break;
@@ -654,16 +682,18 @@ function drawPattern(
       // Dark below, bars above: the whole reason a grate reads as a grate is
       // that something is visible through it.
       uvRect(g, P, 0, 0, 1, 1, { color: ink, alpha: 0.35 });
+      // Bars at the middle of each run, never on the cell's own edges, where
+      // they would sit on the grid line and thicken it.
       const n = 5;
-      for (let i = 0; i <= n; i += 1) {
-        const t = i / n;
+      for (let i = 0; i < n; i += 1) {
+        const t = (i + 0.5) / n;
         line(
           [
             [t, 0],
             [t, 1],
           ],
           accent,
-          0.9,
+          0.75,
           2,
         );
         line(
@@ -672,7 +702,7 @@ function drawPattern(
             [1, t],
           ],
           light,
-          0.6,
+          0.4,
           1,
         );
       }
@@ -743,8 +773,8 @@ function drawPattern(
               [0, v0],
               [1, v0],
             ],
-            ink,
-            0.55,
+            dark,
+            0.35,
           );
         }
       }
@@ -753,8 +783,10 @@ function drawPattern(
     case 'panel': {
       // A bevelled plate: lit on the two edges toward the key light, shadowed
       // on the other two, with a rivet in each corner.
-      const i0 = 0.09;
-      const i1 = 0.91;
+      // Inset well clear of the edge: a bevel a hair inside the cell is a
+      // second grid line drawn beside the first.
+      const i0 = 0.17;
+      const i1 = 0.83;
       line(
         [
           [i0, i1],
@@ -762,7 +794,7 @@ function drawPattern(
           [i1, i0],
         ],
         light,
-        0.55,
+        0.4,
       );
       line(
         [
@@ -770,14 +802,14 @@ function drawPattern(
           [i1, i1],
           [i0, i1],
         ],
-        ink,
-        0.55,
+        dark,
+        0.45,
       );
       for (const [u, v] of [
-        [0.14, 0.14],
-        [0.86, 0.14],
-        [0.14, 0.86],
-        [0.86, 0.86],
+        [0.22, 0.22],
+        [0.78, 0.22],
+        [0.22, 0.78],
+        [0.78, 0.78],
       ] as const) {
         uvDot(g, m, P, u, v, 0.028, { color: light, alpha: 0.85 });
       }
@@ -801,15 +833,15 @@ function drawPattern(
     }
     case 'hatch': {
       uvPoly(g, P, [
-        [0.06, 0.06],
-        [0.94, 0.06],
-        [0.94, 0.94],
-        [0.06, 0.94],
-      ]).stroke({ width: 1, color: light, alpha: 0.35, pixelLine: true });
+        [0.16, 0.16],
+        [0.84, 0.16],
+        [0.84, 0.84],
+        [0.16, 0.84],
+      ]).stroke({ width: 1, color: light, alpha: 0.25, pixelLine: true });
       line(
         [
-          [0.1, 0.1],
-          [0.9, 0.9],
+          [0.2, 0.2],
+          [0.8, 0.8],
         ],
         accent,
         0.75,
@@ -817,8 +849,8 @@ function drawPattern(
       );
       line(
         [
-          [0.9, 0.1],
-          [0.1, 0.9],
+          [0.8, 0.2],
+          [0.2, 0.8],
         ],
         accent,
         0.75,
@@ -894,8 +926,8 @@ function drawPattern(
           const v1 = (j + 1) / rows - 0.02;
           const tone = shade(tones.base, 0.94 + rnd(seed, i * 7 + j * 13 + 3) * 0.12);
           uvRect(g, P, u0, v0, u1, v1, { color: tone, alpha: 0.85 });
-          line([[u0, v0], [u1, v0]], light, 0.35);
-          line([[u0, v1], [u1, v1]], ink, 0.5);
+          line([[u0, v0], [u1, v0]], light, 0.25);
+          line([[u0, v1], [u1, v1]], dark, 0.4);
         }
       }
       break;
@@ -903,9 +935,10 @@ function drawPattern(
     case 'marble': {
       // Two big slabs, a soft vein across each, one hairline joint. Kept
       // quiet: polished stone is read by its sheen, not its pattern.
+      // The slabs are told apart by tone alone: a joint across the middle of
+      // every cell is a half-grid.
       uvRect(g, P, 0, 0, 1, 0.5, { color: shade(tones.base, 1.03), alpha: 0.5 });
       uvRect(g, P, 0, 0.5, 1, 1, { color: shade(tones.base, 0.98), alpha: 0.5 });
-      line([[0, 0.5], [1, 0.5]], ink, 0.35);
       for (let i = 0; i < 2; i += 1) {
         const v = 0.1 + i * 0.5 + rnd(seed, i) * 0.3;
         const u = rnd(seed, 10 + i) * 0.4;
@@ -955,7 +988,7 @@ function drawPattern(
         const cut = 0.3 + rnd(seed, 10 + i) * 0.4;
         uvRect(g, P, 0, v - 0.06, gap ? cut : 1, v + 0.06, { color: dark, alpha: 0.35 });
         if (gap) uvRect(g, P, cut + 0.1, v - 0.06, 1, v + 0.06, { color: dark, alpha: 0.35 });
-        line([[0, v - 0.06], [1, v - 0.06]], light, 0.4);
+        line([[0, v - 0.06], [1, v - 0.06]], light, 0.25);
       }
       for (let i = 0; i < 4; i += 1) {
         uvDot(g, m, P, rnd(seed, 20 + i), rnd(seed, 30 + i), 0.02, { color: accent, alpha: 0.7 });
@@ -1347,7 +1380,7 @@ function drawObjectTile(
     // radius is jittered per vertex so no two trees are the same shape, and
     // a lighter lump sits on its lit side.
     const lifted = drawPrism(g, m, centre, 0.42, rise, base, 8, 0.35, seed);
-    drawPattern(g, m, def, tones, objectRect(def, col, row), rise, seed);
+    drawPattern(g, m, def, tones, objectRect(def, col, row, m), rise, seed);
     drawPrism(g, m, { x: centre.x - 0.1, y: centre.y - 0.1 }, 0.2, rise * 1.08, shade(base, 1.14), 7, 0.3, seed + 1);
     drawGlow(g, m, def, accent, lifted);
     return;
@@ -1374,8 +1407,13 @@ function objectRect(
   def: TileDrawDef,
   col: number,
   row: number,
+  m: SceneMetrics,
 ): [number, number, number, number] {
-  if (def.prop !== undefined) return propFootprint(def.prop, col, row);
+  if (def.prop !== undefined) {
+    if (!m.designSize) return propFootprint(def.prop, col, row, m.unitM);
+    const [u0, v0, u1, v1] = designFootprint(def.prop);
+    return [col + u0, row + v0, col + u1, row + v1];
+  }
   const r = def.footprint === 'canopy' ? 0.42 : def.footprint === 'round' ? 0.34 : 0.15;
   return [col + 0.5 - r, row + 0.5 - r, col + 0.5 + r, row + 0.5 + r];
 }
@@ -1502,6 +1540,11 @@ export interface TileCell {
   def: TileDrawDef;
   /** 0 ground, 1 structure, 2 object — the draw order within a square. */
   layer: number;
+  /**
+   * Squares a piece of furniture covers, across and down from this one
+   * (rules: footprint.ts). Absent is one square.
+   */
+  span?: readonly [number, number];
 }
 
 /**
@@ -1550,7 +1593,9 @@ export function planTiles(m: SceneMetrics, input: TileDrawInput): TilePlan {
       if (at.col < 0 || at.row < 0 || at.col >= m.cols || at.row >= m.rows) continue;
       const def = input.defs[tileDefKey(input.tilesetId, tileId)];
       if (def === undefined) continue; // unknown id (tileset changed) — draw nothing, lose nothing
-      cells.push({ col: at.col, row: at.row, id: tileId, def, layer });
+      // Furniture covers as many squares as it is big on this grid.
+      const span = layer === 2 && def.prop !== undefined && !m.designSize ? propCells(def.prop, m.unitM) : undefined;
+      cells.push({ col: at.col, row: at.row, id: tileId, def, layer, ...(span && (span[0] > 1 || span[1] > 1) ? { span } : {}) });
       if (def.footprint === 'wall') walls.add(`${at.col},${at.row}`);
     }
   }
@@ -1560,9 +1605,12 @@ export function planTiles(m: SceneMetrics, input: TileDrawInput): TilePlan {
     if (c.def.footprint === 'wall') structure.set(`${c.col},${c.row}`, c.id);
   }
 
+  // A piece of furniture over several squares is as near as its nearest
+  // corner: drawn after whatever stands behind any part of it.
+  const depthOf = (c: TileCell) => cellDepth(c.col + (c.span?.[0] ?? 1) - 1, c.row + (c.span?.[1] ?? 1) - 1);
   cells.sort(
     (a, b) =>
-      cellDepth(a.col, a.row) - cellDepth(b.col, b.row) ||
+      depthOf(a) - depthOf(b) ||
       a.layer - b.layer ||
       a.col - b.col,
   );
@@ -1584,7 +1632,10 @@ export function planTiles(m: SceneMetrics, input: TileDrawInput): TilePlan {
   const occupied = new Set<string>();
   for (const c of cells) occupied.add(`${c.col},${c.row}`);
 
-  const standing = cells.filter((c) => isStanding(c.def) || c.def.footprint === 'wall');
+  // Flat furniture over several squares — a mattress, a pallet — joins the
+  // standing pass: drawn with the floor, the next square's floor would be
+  // painted over the part of it that reaches there.
+  const standing = cells.filter((c) => isStanding(c.def) || c.def.footprint === 'wall' || c.span !== undefined);
   const openDoors = new Set<string>();
   for (const [key, d] of Object.entries(input.doors ?? {})) if (d.open) openDoors.add(key);
   const water = waterOf(input);
@@ -1786,7 +1837,7 @@ export function drawFloorCell(
   plan: Pick<TilePlan, 'grounded' | 'occupied'> & Partial<Pick<TilePlan, 'water'>>,
 ): void {
   const key = `${cell.col},${cell.row}`;
-  if (isStanding(cell.def) || cell.def.footprint === 'wall') {
+  if (isStanding(cell.def) || cell.def.footprint === 'wall' || cell.span !== undefined) {
     if (!plan.grounded.has(key)) {
       drawUnderlay(g, cell.def, m, cell.col, cell.row);
       drawFloorEdge(g, m, cell, plan.occupied);
@@ -1833,7 +1884,7 @@ export function drawAmbientFor(
     // A designed thing takes light from the floor around its own footprint,
     // and only when it is solid enough to: a lamp post and a tree are full
     // height but a sightline passes them, and so does the light.
-    if (cell.def.blocksSight !== false) drawAmbientRing(g, m, objectRect(cell.def, cell.col, cell.row));
+    if (cell.def.blocksSight !== false) drawAmbientRing(g, m, objectRect(cell.def, cell.col, cell.row, m));
   } else if (shape === 'wall') {
     for (const r of wallRects(cell.col, cell.row, joinsOf(plan.walls, cell.col, cell.row))) {
       drawAmbientRing(g, m, r);
@@ -1857,14 +1908,15 @@ export function drawShadowFor(
     // one casts from the footprint its design declares — on the water, where
     // it floats, when it floats.
     const sink = plan.water?.water.has(`${cell.col},${cell.row}`) ? waterSink(m) : 0;
-    const [x0, y0, x1, y1] = objectRect(cell.def, cell.col, cell.row);
-    if (h > 0) drawGroundShadow(g, m, [x0 + sink, y0 + sink, x1 + sink, y1 + sink], h);
+    const [x0, y0, x1, y1] = objectRect(cell.def, cell.col, cell.row, m);
+    const up = propPlacement(cell.def.prop, m.unitM).up;
+    if (h > 0) drawGroundShadow(g, m, [x0 + sink, y0 + sink, x1 + sink, y1 + sink], h * up);
   } else if (shape === 'wall') {
     for (const r of wallRects(cell.col, cell.row, joinsOf(plan.walls, cell.col, cell.row))) {
       drawGroundShadow(g, m, r, h);
     }
   } else if (shape === 'post' || shape === 'canopy' || shape === 'round') {
-    drawGroundShadow(g, m, objectRect(cell.def, cell.col, cell.row), h);
+    drawGroundShadow(g, m, objectRect(cell.def, cell.col, cell.row, m), h);
   } else if (shape === 'stair') {
     drawGroundShadow(g, m, [cell.col + 0.12, cell.row, cell.col + 0.88, cell.row + 1], h);
   } else {

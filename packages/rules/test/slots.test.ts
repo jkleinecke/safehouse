@@ -50,6 +50,12 @@ describe('slotsOf', () => {
       puddle: 'decoration/2',
       worklight: 'decoration/3',
       pallet: 'decoration/4',
+      // Appended later — streets and a ceiling light — and numbered on, so
+      // nothing painted before them moved.
+      street: 'ground/6',
+      sidewalk: 'ground/7',
+      curb: 'ground/8',
+      ceilinglight: 'decoration/5',
     });
   });
 
@@ -83,10 +89,10 @@ describe('tileBySlot and resolveTile', () => {
   it('answers a slot with the set’s own tile, and a missing number with the nearest', () => {
     expect(tileBySlot(dock, 'ground/2')?.id).toBe('stain');
     expect(tileBySlot(corp, 'ground/2')?.id).toBe('lobby');
-    // Corp has three decorations; the docklands' fourth wraps onto its first.
-    expect(tileBySlot(corp, 'decoration/4')?.id).toBe('plant');
-    // Sprawl has seven grounds; a fifth ground on a three-ground set wraps.
-    expect(tileBySlot(tilesetById('club')!, 'ground/5')?.id).toBe('bar');
+    // Corp has four decorations; a fifth wraps onto its first.
+    expect(tileBySlot(corp, 'decoration/5')?.id).toBe('plant');
+    // Sprawl has more grounds than the club's six; an eighth wraps onto its second.
+    expect(tileBySlot(tilesetById('club')!, 'ground/8')?.id).toBe('bar');
     expect(tileBySlot(dock, 'stairs/down')?.id).toBe('stairdown');
     expect(tileBySlot(dock, 'nonsense')).toBeNull();
     expect(tileBySlot(dock, 'kitchen/1')).toBeNull();

@@ -13,7 +13,7 @@ import type { Graphics } from 'pixi.js';
 import { TILESETS, TILE_PROPS, type TileProp } from '@safehouse/rules';
 import { metricsFor } from '../geometry.js';
 import { tileDefKey, tileDefsFromSets } from '../types.js';
-import { drawProp, propFootprint } from './props.js';
+import { designFootprint, drawProp, propFootprint, propPlacement } from './props.js';
 import { drawTiles, tileDrawInput } from './tileLayer.js';
 
 const iso = metricsFor({ unitM: 1, cols: 12, rows: 12, offset: { x: 0, y: 0 }, projection: 'iso' as const });
@@ -61,24 +61,26 @@ describe('every prop design draws', () => {
       expect(b.calls.filter((c) => c.op === 'fill').length, `${prop} in plan`).toBeGreaterThan(0);
     });
 
-    it(`${prop} stays inside its own cell in plan`, () => {
+    it(`${prop} stays inside the squares it covers, in plan`, () => {
       // Plan has no height to lean into, so every point a design touches
-      // must fall within the cell's own diamond-free square, with a small
-      // allowance for stroke width. A design that leaks paints the neighbour.
+      // must fall within its own cell as placed on this grid — scaled to the
+      // thing's real size and centred on the squares it covers
+      // (`propPlacement`) — with a small allowance for stroke width.
       const c = counting();
       drawProp(c.g, plan, prop, 3, 4, 1, 0, TONES, 7, null);
-      const x0 = 3 * plan.cell;
-      const y0 = 4 * plan.cell;
+      const { anchor, centre, su, sv } = propPlacement(prop, plan.unitM);
+      const x0 = (3 + centre[0] - anchor[0] * su) * plan.cell;
+      const y0 = (4 + centre[1] - anchor[1] * sv) * plan.cell;
       for (const p of touched(c.calls)) {
         expect(p.x, `${prop} x`).toBeGreaterThanOrEqual(x0 - 2);
-        expect(p.x, `${prop} x`).toBeLessThanOrEqual(x0 + plan.cell + 2);
+        expect(p.x, `${prop} x`).toBeLessThanOrEqual(x0 + su * plan.cell + 2);
         expect(p.y, `${prop} y`).toBeGreaterThanOrEqual(y0 - 2);
-        expect(p.y, `${prop} y`).toBeLessThanOrEqual(y0 + plan.cell + 2);
+        expect(p.y, `${prop} y`).toBeLessThanOrEqual(y0 + sv * plan.cell + 2);
       }
     });
 
     it(`${prop} declares a footprint inside the cell`, () => {
-      const [u0, v0, u1, v1] = propFootprint(prop, 0, 0);
+      const [u0, v0, u1, v1] = designFootprint(prop);
       expect(u0).toBeGreaterThanOrEqual(0);
       expect(v0).toBeGreaterThanOrEqual(0);
       expect(u1).toBeLessThanOrEqual(1);

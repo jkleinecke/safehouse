@@ -18,6 +18,9 @@ import type { Db } from '@safehouse/db';
 import {
   categoryOf,
   layerOf,
+  propCells,
+  propCoverage,
+  propStandsOnFootprint,
   resolveTile,
   tileBySlot,
   tilesetById,
@@ -258,14 +261,24 @@ const OUTSIDE_WORDS = [
 /** The set's best guess at an outside ground when the plan names none. */
 export function outsideGroundFor(set: Tileset): Tile | null {
   const grounds = set.tiles.filter((t) => categoryOf(t) === 'ground' && t.emissive === undefined && t.connects === undefined);
+  // Only ground the set says lies OUTSIDE a building; a set that predates
+  // the distinction says nothing, and every ground is a candidate.
+  const outdoors = grounds.some((t) => t.setting !== undefined) ? grounds.filter((t) => t.setting === 'outside') : grounds;
   // Whole words only: "catwalk" is not a walk, and a "sludge channel" is not
-  // a road. The id and the name are searched together.
-  for (const word of OUTSIDE_WORDS) {
-    const re = new RegExp(`\\b${word}\\b`);
-    const hit = grounds.find((t) => re.test(`${t.id} ${t.name.toLowerCase()}`));
-    if (hit) return hit;
+  // a road. The id and the name are searched together — first among the
+  // set's own outside grounds, then its street and sidewalk (every set has
+  // those, so they would otherwise make every park and lakeshore a road), and
+  // never the kerb, which is a one-square edge and not somewhere to stand.
+  const street = new Set(['street', 'sidewalk']);
+  const own = outdoors.filter((t) => !street.has(t.id) && t.id !== 'curb');
+  for (const pool of [own, outdoors.filter((t) => street.has(t.id))]) {
+    for (const word of OUTSIDE_WORDS) {
+      const re = new RegExp(`\\b${word}\\b`);
+      const hit = pool.find((t) => re.test(`${t.id} ${t.name.toLowerCase()}`));
+      if (hit) return hit;
+    }
   }
-  return grounds[0] ?? null;
+  return own[0] ?? outdoors[0] ?? grounds[0] ?? null;
 }
 
 /** One prop per this many floor squares is "dressed"; below it a room is bare. */
@@ -281,7 +294,8 @@ const SCATTER_MAX = 80;
  */
 export function compileFloorPlan(
   raw: FloorPlanInput,
-  grid: { cols: number; rows: number },
+  /** The grid, and its metres a square: furniture covers as many squares as it is big. */
+  grid: { cols: number; rows: number; unitM?: number | undefined },
   set: Tileset,
   /**
    * `draft`: a plan the chat is drawing one edit at a time. It may have no
@@ -298,8 +312,36 @@ export function compileFloorPlan(
   const object: Record<string, string> = {};
   const counts = { floor: 0, wall: 0, door: 0, window: 0, prop: 0, stair: 0, outside: 0, areas: 0, scatter: 0, dressed: 0 };
 
+  // A piece of furniture covers as many squares as it is big on this grid
+  // (rules: footprint.ts), reaching right and down from the square it is
+  // put on. Every square it stands on must be free and allowed, or it is not
+  // put down at all — two tables do not share a square, and a sofa does not
+  // run through a wall.
+  const unitM = grid.unitM ?? 1;
+  const taken = new Set<string>();
+  const standsOn = (tile: Tile, k: string): string[] => {
+    if (tile.prop === undefined || !propStandsOnFootprint(tile.prop)) return [k];
+    const [c, r] = k.split(',').map(Number) as [number, number];
+    return propCoverage(tile.prop, c, r, unitM);
+  };
+  const put = (tile: Tile, k: string, allowed: (k: string) => boolean): boolean => {
+    const cells = standsOn(tile, k);
+    if (cells.some((c) => taken.has(c) || structure[c] !== undefined || !allowed(c))) return false;
+    object[k] = toSlot(set, tile.id) ?? tile.id;
+    for (const c of cells) taken.add(c);
+    return true;
+  };
+  const sizeOf = (tile: Tile): string => {
+    if (tile.prop === undefined) return '1 square';
+    const [w, d] = propCells(tile.prop, unitM);
+    return `${w}x${d} squares`;
+  };
+
   const grounds = set.tiles.filter((t) => categoryOf(t) === 'ground');
-  const defaultFloor = (grounds[0] && toSlot(set, grounds[0].id)) ?? 'ground/1';
+  // A room with no floor named gets the set's first floor for INSIDE — not
+  // its first ground, which on a street set is the road.
+  const firstFloor = grounds.find((t) => t.setting === 'inside') ?? grounds[0];
+  const defaultFloor = (firstFloor && toSlot(set, firstFloor.id)) ?? 'ground/1';
   const WALL = 'building/wall';
   const DOOR = 'building/door';
   const WINDOW = tileBySlot(set, 'building/window') ? 'building/window' : WALL;
@@ -410,11 +452,16 @@ export function compileFloorPlan(
         warnings.push(`${tile.name} at ${prop.x},${prop.y} is not on a floor square inside "${room.name}" — dropped`);
         continue;
       }
-      if (object[k] !== undefined) {
+      if (taken.has(k)) {
         warnings.push(`two props on square ${prop.x},${prop.y} — ${tile.name} dropped`);
         continue;
       }
-      object[k] = toSlot(set, tile.id) ?? tile.id;
+      if (!put(tile, k, (c) => interior.has(c))) {
+        warnings.push(
+          `${tile.name} at ${prop.x},${prop.y} covers ${sizeOf(tile)} (right and down) and does not fit there — it runs into a wall or another prop — dropped`,
+        );
+        continue;
+      }
       counts.prop += 1;
     }
   }
@@ -434,6 +481,7 @@ export function compileFloorPlan(
     const layer = layerOf(tile);
     const target = layer === 'ground' ? ground : layer === 'structure' ? structure : object;
     target[k] = slot;
+    taken.add(k);
     counts.stair += 1;
   }
 
@@ -541,11 +589,11 @@ export function compileFloorPlan(
     for (const k of order) {
       if (counts.scatter >= want) break;
       const [c, r] = k.split(',').map(Number) as [number, number];
-      if (object[k] !== undefined || structure[k] !== undefined || nearDoor(c, r)) continue;
+      if (taken.has(k) || structure[k] !== undefined || nearDoor(c, r)) continue;
       const g = outsideGround.get(k) ?? null;
       const fitting = scatterPool.filter((t) => fits(t, g));
       const tile = fitting[Math.floor(rand() * fitting.length)]!;
-      object[k] = toSlot(set, tile.id) ?? tile.id;
+      if (!put(tile, k, (q) => outsideGround.has(q) && fits(tile, outsideGround.get(q) ?? null))) continue;
       counts.scatter += 1;
     }
   }
@@ -562,34 +610,39 @@ export function compileFloorPlan(
       const { x, y, w, h } = room.rect;
       const cells: string[] = [];
       for (let c = x + 1; c < x + w - 1; c += 1) for (let r = y + 1; r < y + h - 1; r += 1) cells.push(key(c, r));
-      const have = cells.filter((k) => object[k] !== undefined || structure[k] !== undefined).length;
+      const have = cells.filter((k) => taken.has(k) || structure[k] !== undefined).length;
       let need = Math.floor(cells.length / DRESS_PER_SQUARES) - have;
       if (need <= 0) continue;
-      const free = cells.filter((k) => {
+      const inRoom = new Set(cells);
+      const clear = (k: string): boolean => {
         const [c, r] = k.split(',').map(Number) as [number, number];
-        return object[k] === undefined && structure[k] === undefined && !nearDoor(c, r);
-      });
+        return inRoom.has(k) && !nearDoor(c, r);
+      };
+      const free = cells.filter((k) => !taken.has(k) && structure[k] === undefined && clear(k));
       const byWall = free.filter((k) => {
         const [c, r] = k.split(',').map(Number) as [number, number];
         return nearWall(c, r);
       });
       const inOpen = free.filter((k) => !byWall.includes(k));
+      // Each try uses up a square, placed or not, so the loop always ends.
       const pick = (pool: string[], from: Tile[]): boolean => {
         if (pool.length === 0 || from.length === 0) return false;
         const k = pool.splice(Math.floor(rand() * pool.length), 1)[0]!;
         const tile = from[Math.floor(rand() * from.length)]!;
-        object[k] = toSlot(set, tile.id) ?? tile.id;
-        counts.dressed += 1;
-        need -= 1;
+        if (put(tile, k, clear)) {
+          counts.dressed += 1;
+          need -= 1;
+        }
         return true;
       };
+      const rest = [...free];
       while (need > 0) {
         // Alternate: something against the wall, then something in the room.
         const first = wallSide.length > 0 ? pick(byWall, wallSide) : false;
         const second = need > 0 ? pick(inOpen, open.length > 0 ? open : furniture) : false;
         if (!first && !second) {
           // Nothing left that fits the rule: use whatever square and piece remain.
-          if (!pick(free.filter((k) => object[k] === undefined), furniture)) break;
+          if (!pick(rest, furniture)) break;
         }
       }
     }
@@ -652,7 +705,7 @@ const FURNISH_SYSTEM = [
 ].join('\n');
 
 /** The palette as the model reads it — exported so what it is told can be pinned. */
-export function floorPalette(set: Tileset): string {
+export function floorPalette(set: Tileset, unitM?: number): string {
   // Each tile with the one fact the model needs to place it: what it stands
   // on, whether it wants a wall at its back.
   const where = (t: Tile): string => {
@@ -667,19 +720,26 @@ export function floorPalette(set: Tileset): string {
     if (t.shore === 'beach') bits.push('runs into water as a beach');
     if (t.shore === 'pier') bits.push('meets water as a pier wall');
     if (t.shore === 'quay') bits.push('meets water as a quay wall');
+    // How many squares it takes up on this grid, when that is more than one.
+    if (unitM !== undefined && t.prop !== undefined) {
+      const [w, d] = propCells(t.prop, unitM);
+      if (w > 1 || d > 1) bits.push(`covers ${w}x${d} squares, right and down from where it is put`);
+    }
     return bits.length > 0 ? ` (${bits.join(', ')})` : '';
   };
-  const list = (category: string) =>
+  const list = (category: string, setting?: 'inside' | 'outside') =>
     set.tiles
-      .filter((t) => categoryOf(t) === category)
+      .filter((t) => categoryOf(t) === category && (setting === undefined || (t.setting ?? 'inside') === setting))
       .map((t) => `  ${t.id} — ${t.name}${where(t)}`)
       .join('\n');
   const stairs = set.tiles.some((t) => categoryOf(t) === 'stairs');
   const outside = outsideGroundFor(set);
   return [
     `Tileset: ${set.name}.`,
-    'Ground tiles (a room\'s "floor", "outside.ground", and an area\'s "ground"):',
-    list('ground'),
+    'Floors for INSIDE a building (a room\'s "floor"):',
+    list('ground', 'inside'),
+    'Ground for OUTSIDE a building ("outside.ground", and an area\'s "ground") — the street, the sidewalk, and the one-square kerb between them:',
+    list('ground', 'outside'),
     'Interior tiles (furniture — a prop\'s "tile"):',
     list('interior'),
     'Decoration tiles (dressing — a prop\'s "tile", and "outside.scatter"):',
@@ -703,7 +763,7 @@ function userPrompt(
       ? `This floor already has ${painted} painted squares; your plan is laid on top of them, so leave room or say what you replace.`
       : 'This floor is empty.',
     '',
-    floorPalette(set),
+    floorPalette(set, scene.grid.unitM),
     '',
     `The GM describes the floor: ${description.trim()}`,
     '',
@@ -806,8 +866,9 @@ async function furnishRooms(
   skeleton: FloorPlan,
   set: Tileset,
   description: string,
+  unitM: number,
 ): Promise<FurnishResult> {
-  const palette = floorPalette(set);
+  const palette = floorPalette(set, unitM);
   const props = new Map<string, FloorPlan['rooms'][number]['props']>();
   const warnings: string[] = [];
   let usage: LlmUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
@@ -942,7 +1003,7 @@ export async function proposeFloor(db: Db, config: LlmConfig | null, ask: FloorA
   }
 
   // --- Pass 2: furniture, a few rooms at a time -----------------------------
-  const furnished = await furnishRooms(client, { model, effort }, opts, checked.data, set, ask.prompt);
+  const furnished = await furnishRooms(client, { model, effort }, opts, checked.data, set, ask.prompt, scene.grid.unitM);
   usage = addUsage(usage, furnished.usage);
   latencyMs += furnished.latencyMs;
 
