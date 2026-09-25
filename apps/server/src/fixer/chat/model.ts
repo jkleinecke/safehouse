@@ -17,7 +17,8 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
-import { openAiEffort, serverRootUrl, type LlmConfig, type ModelSlot } from '../llm.js';
+import { openAiEffort, type LlmConfig, type ModelSlot } from '../llm.js';
+import { isLocalServer, outputRoom } from '../model-info.js';
 
 /** The `/v1` root a Chat Completions client appends `/chat/completions` to. */
 export function v1Root(baseUrl: string): string {
@@ -29,8 +30,12 @@ export function modelIdFor(config: LlmConfig, slot: ModelSlot): string {
   return slot === 'fast' ? config.fast : config.primary;
 }
 
-/** The AI SDK model for one slot of this campaign's configuration. */
-export function languageModelFor(config: LlmConfig, slot: ModelSlot = 'primary'): LanguageModel {
+/**
+ * The AI SDK model for one slot of this campaign's configuration. `window` is
+ * the model's context length: a local server is told, on every request, how
+ * much of it is left for the reply (model-info.ts, `outputRoom`).
+ */
+export function languageModelFor(config: LlmConfig, slot: ModelSlot = 'primary', window?: number): LanguageModel {
   const id = modelIdFor(config, slot);
   if (config.dialect === 'anthropic') {
     return createAnthropic({
@@ -41,6 +46,7 @@ export function languageModelFor(config: LlmConfig, slot: ModelSlot = 'primary')
     })(id);
   }
   const effort = openAiEffort(config);
+  const room = window !== undefined && isLocalServer(config) ? window : undefined;
   return createOpenAICompatible({
     name: config.provider ?? 'local',
     baseURL: v1Root(config.baseUrl),
@@ -48,10 +54,18 @@ export function languageModelFor(config: LlmConfig, slot: ModelSlot = 'primary')
     // some servers reject the header rather than ignore it.
     ...(config.apiKey ? { apiKey: config.apiKey } : {}),
     includeUsage: true,
-    // The GM's thinking setting, in the fields a local template reads. Sent
-    // only when the GM chose something: `default` means "as it always was".
-    ...(Object.keys(effort).length > 0
-      ? { transformRequestBody: (body: Record<string, unknown>) => ({ ...body, ...effort }) }
+    // The GM's thinking setting, in the fields a local template reads — sent
+    // only when the GM chose something: `default` means "as it always was" —
+    // and the room left for the reply, so a server's own small default never
+    // cuts a model off mid-thought.
+    ...(Object.keys(effort).length > 0 || room !== undefined
+      ? {
+          transformRequestBody: (body: Record<string, unknown>) => {
+            const next = { ...body, ...effort };
+            if (room !== undefined && next['max_tokens'] === undefined) next['max_tokens'] = outputRoom(next, room);
+            return next;
+          },
+        }
       : {}),
   }).chatModel(id);
 }
@@ -65,74 +79,15 @@ export function providerOptionsFor(config: LlmConfig): Record<string, Record<str
   if (config.dialect !== 'anthropic') return undefined;
   const effort = config.effort ?? 'default';
   if (effort === 'default') return undefined;
-  return { anthropic: { thinking: { type: 'adaptive' }, effort: effort === 'off' ? 'low' : effort } };
+  return { anthropic: { thinking: { type: 'adaptive' }, effort: anthropicLevel(effort) } };
 }
 
-// ---------------------------------------------------------------------------
-// How much the model can read
-// ---------------------------------------------------------------------------
-
-/** What to assume when the box will not say: a common local default, and Claude's floor. */
-const LOCAL_FALLBACK_TOKENS = 32_768;
-const HOSTED_FALLBACK_TOKENS = 200_000;
-
-const windowCache = new Map<string, { tokens: number; at: number }>();
-const WINDOW_TTL_MS = 10 * 60_000;
-
-function envOverride(env: Record<string, string | undefined> = process.env): number | null {
-  const raw = Number((env['LLM_CONTEXT_TOKENS'] ?? '').trim());
-  return Number.isFinite(raw) && raw > 1024 ? Math.floor(raw) : null;
+/** A level Claude takes: off is low (see above), and a local server's extra levels clamp to the nearest. */
+export function anthropicLevel(effort: string): 'low' | 'medium' | 'high' {
+  if (effort === 'off' || effort === 'minimal' || effort === 'low') return 'low';
+  if (effort === 'medium') return 'medium';
+  return 'high';
 }
 
-async function getJson(url: string): Promise<unknown> {
-  const res = await fetch(url, { signal: AbortSignal.timeout(3_000) });
-  if (!res.ok) throw new Error(String(res.status));
-  return res.json();
-}
-
-function positive(v: unknown): number | null {
-  return typeof v === 'number' && Number.isFinite(v) && v > 1024 ? Math.floor(v) : null;
-}
-
-/**
- * The model's context length, in tokens — the whole budget the context
- * curation (memory.ts) plans against.
- *
- * Asked of the box, because a local model's window is whatever the GM loaded
- * it with and nothing in our settings knows it: TabbyAPI answers
- * `/v1/model` with `max_seq_len`; llama.cpp answers `/props` with `n_ctx`.
- * `LLM_CONTEXT_TOKENS` overrides both. A hosted provider is assumed large.
- * Cached for ten minutes — a GM reloading the model with a bigger window
- * should not wait for a restart to have it used.
- */
-export async function contextWindowFor(config: LlmConfig): Promise<number> {
-  const forced = envOverride();
-  if (forced) return forced;
-  if (config.dialect === 'anthropic' || config.provider === 'openai' || config.provider === 'xai') {
-    return HOSTED_FALLBACK_TOKENS;
-  }
-  const key = `${config.baseUrl}|${config.primary}`;
-  const hit = windowCache.get(key);
-  if (hit && Date.now() - hit.at < WINDOW_TTL_MS) return hit.tokens;
-
-  let tokens: number | null = null;
-  try {
-    const tabby = (await getJson(`${v1Root(config.baseUrl)}/model`)) as Record<string, unknown>;
-    const params = (tabby['parameters'] ?? {}) as Record<string, unknown>;
-    tokens = positive(params['max_seq_len']) ?? positive(tabby['max_seq_len']);
-  } catch {
-    // not TabbyAPI
-  }
-  if (tokens === null) {
-    try {
-      const props = (await getJson(`${serverRootUrl(config.baseUrl)}/props`)) as Record<string, unknown>;
-      const gen = (props['default_generation_settings'] ?? {}) as Record<string, unknown>;
-      tokens = positive(gen['n_ctx']) ?? positive(props['n_ctx']);
-    } catch {
-      // not llama.cpp either
-    }
-  }
-  const resolved = tokens ?? LOCAL_FALLBACK_TOKENS;
-  windowCache.set(key, { tokens: resolved, at: Date.now() });
-  return resolved;
-}
+// What the server says about its models — the window, the levels, the list.
+export { contextWindowFor, servedModelsFor } from '../model-info.js';

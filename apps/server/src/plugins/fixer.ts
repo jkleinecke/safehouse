@@ -36,6 +36,7 @@ import { AiContextSchema } from '../fixer/context.js';
 import fixerToolRoutes from '../fixer/routes.js';
 import type { UIMessage } from 'ai';
 import { streamFixerTurn } from '../fixer/chat/turn.js';
+import { servedModelsFor } from '../fixer/chat/model.js';
 import { fromLegacy, readMemory } from '../fixer/chat/memory.js';
 
 const ChatBody = z.object({
@@ -83,6 +84,8 @@ const ChatStreamBody = z
     context: AiContextSchema.optional(),
     /** The effort picked on the chat's input bar, for this turn; absent means the saved setting. */
     effort: AiEffortSchema.optional(),
+    /** The model picked on the chat's input bar, for this turn; absent means the saved one. */
+    model: z.string().min(1).max(200).optional(),
     /** A new GM message… */
     message: ChatStreamMessage.optional(),
     /** …or the GM's answer to the question the last reply stopped at (`ask_gm`). */
@@ -317,6 +320,17 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
     }
   });
 
+  /**
+   * The models the configured server serves, with each one's window and
+   * thinking levels when the server says — the chat bar's model and effort menus.
+   */
+  app.get('/api/fixer/models', async (req) => {
+    const campaignId = gmFor(req, (req.query as { campaignId?: string } | undefined)?.campaignId);
+    const config = resolveLlmConfig(await settingsOf(app.db, campaignId));
+    if (!config) return { models: [] };
+    return { models: await servedModelsFor(config) };
+  });
+
   app.get('/api/fixer/status', async (req) => {
     const campaignId = gmFor(req, (req.query as { campaignId?: string } | undefined)?.campaignId);
     const config = resolveLlmConfig(await settingsOf(app.db, campaignId));
@@ -413,7 +427,14 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
     const campaignId = gmFor(req, body.campaignId);
     const saved = resolveLlmConfig(await settingsOf(app.db, campaignId));
     if (!saved) return disabled(reply);
-    const config = body.effort ? { ...saved, effort: body.effort } : saved;
+    // The bar's picks, for this turn. One model does everything in a turn —
+    // the brief is folded by the model answering, so a local box never has to
+    // hold two at once.
+    const config = {
+      ...saved,
+      ...(body.effort ? { effort: body.effort } : {}),
+      ...(body.model ? { primary: body.model, fast: body.model } : {}),
+    };
     try {
       await streamFixerTurn({ db: app.db, hub: app.hub }, reply, {
         campaignId,

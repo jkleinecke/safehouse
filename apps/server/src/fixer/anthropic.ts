@@ -203,7 +203,7 @@ export function anthropicEffort(effort: string | undefined): Record<string, unkn
   }
   // `off` maps to the cheapest setting that still leaves the model able to
   // call a tool properly.
-  const level = effort === 'off' ? 'low' : effort;
+  const level = effort === 'off' || effort === 'minimal' ? 'low' : effort === 'xhigh' || effort === 'max' ? 'high' : effort;
   return {
     thinking: { type: 'adaptive' },
     output_config: { effort: level },

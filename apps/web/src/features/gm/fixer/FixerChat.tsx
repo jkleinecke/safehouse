@@ -29,7 +29,7 @@ import { getToken } from '../../../api/session.js';
 import { fileUrl } from '../../grid/api.js';
 import { fmtLatency, fmtTokens } from '../common.js';
 import { SectionTitle } from '../ui.js';
-import { aiDisabledFrom, useCancelAi, useFixerStatus } from './api.js';
+import { aiDisabledFrom, useCancelAi, useFixerModels, useFixerStatus } from './api.js';
 import type { AiContext } from './aiContext.js';
 import { useFloorEdits } from './floorEdits.js';
 
@@ -359,28 +359,56 @@ function MessageView({
 }
 
 /** What each effort is called on the bar. */
-const EFFORT_LABEL: Record<string, string> = { default: 'Default', off: 'Off', low: 'Low', medium: 'Medium', high: 'High' };
+const EFFORT_LABEL: Record<string, string> = {
+  default: 'Default',
+  off: 'Off',
+  minimal: 'Minimal',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra high',
+  max: 'Max',
+};
 
-const EFFORT_KEY = (campaignId: string) => `safehouse:fixer-effort:${campaignId}`;
+/** The bar's picks — effort, model — kept per browser and campaign. */
+const PICK_KEY = (kind: 'effort' | 'model', campaignId: string) => `safehouse:fixer-${kind}:${campaignId}`;
 
-function readEffort(campaignId: string): string | undefined {
+function readPick(kind: 'effort' | 'model', campaignId: string): string | undefined {
   try {
-    return localStorage.getItem(EFFORT_KEY(campaignId)) ?? undefined;
+    return localStorage.getItem(PICK_KEY(kind, campaignId)) ?? undefined;
   } catch {
     return undefined;
   }
 }
 
-function writeEffort(campaignId: string, effort: string): void {
+function writePick(kind: 'effort' | 'model', campaignId: string, value: string): void {
   try {
-    localStorage.setItem(EFFORT_KEY(campaignId), effort);
+    localStorage.setItem(PICK_KEY(kind, campaignId), value);
   } catch {
     // storage blocked: the pick lasts until the page reloads
   }
 }
 
-/** The effort on the input bar, and a menu to change it. */
-function EffortMenu({ value, onPick }: { value: string; onPick: (effort: string) => void }) {
+/** A setting on the input bar — its value, and a menu opening upward to change it. */
+function BarMenu({
+  label,
+  heading,
+  title,
+  options,
+  current,
+  onPick,
+  testId,
+  className,
+}: {
+  label: string;
+  heading: string;
+  title: string;
+  options: ReadonlyArray<{ value: string; label: string }>;
+  current: string;
+  onPick: (value: string) => void;
+  testId: string;
+  className?: string;
+}) {
   const [open, setOpen] = useState(false);
   const boxRef = useRef<HTMLDivElement | null>(null);
 
@@ -400,31 +428,27 @@ function EffortMenu({ value, onPick }: { value: string; onPick: (effort: string)
     };
   }, [open]);
 
-  const options = ['default', 'off', 'low', 'medium', 'high'].map((v) => ({ value: v, label: EFFORT_LABEL[v]! }));
-  const label = EFFORT_LABEL[value] ?? value;
-  const current = value;
-
   return (
-    <div ref={boxRef} className="relative">
+    <div ref={boxRef} className={`relative min-w-0 ${className ?? ''}`}>
       <button
         type="button"
-        className="flex items-center gap-0.5 hover:text-ink"
-        title="Thinking effort"
+        className="flex max-w-full items-center gap-0.5 hover:text-ink"
+        title={title}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        data-testid="fixer-effort"
+        data-testid={testId}
       >
-        {label}
-        <Icon name="keyboard_arrow_down" size={14} />
+        <span className="truncate">{label}</span>
+        <Icon name="keyboard_arrow_down" size={14} className="shrink-0" />
       </button>
       {open && (
         <div
           role="menu"
-          className="absolute bottom-full right-0 z-30 mb-1 min-w-32 rounded-lg border border-edge bg-panel py-1 shadow-lg"
-          data-testid="fixer-effort-menu"
+          className="absolute bottom-full right-0 z-30 mb-1 max-h-72 min-w-32 max-w-80 overflow-y-auto rounded-lg border border-edge bg-panel py-1 shadow-lg"
+          data-testid={`${testId}-menu`}
         >
-          <div className="mono-label px-3 py-1 text-faint">Thinking</div>
+          <div className="mono-label px-3 py-1 text-faint">{heading}</div>
           {options.map((o) => (
             <button
               key={o.value}
@@ -432,19 +456,32 @@ function EffortMenu({ value, onPick }: { value: string; onPick: (effort: string)
               role="menuitemradio"
               aria-checked={o.value === current}
               className="flex w-full items-center gap-2 px-3 py-1 text-left text-sm text-ink hover:bg-raised"
+              title={o.label}
               onClick={() => {
                 onPick(o.value);
                 setOpen(false);
               }}
             >
-              <span className="w-4 text-cyan">{o.value === current ? <Icon name="check" size={14} /> : null}</span>
-              {o.label}
+              <span className="w-4 shrink-0 text-cyan">{o.value === current ? <Icon name="check" size={14} /> : null}</span>
+              <span className="truncate">{o.label}</span>
             </button>
           ))}
         </div>
       )}
     </div>
   );
+}
+
+const effortOption = (v: string) => ({ value: v, label: EFFORT_LABEL[v] ?? v.charAt(0).toUpperCase() + v.slice(1) });
+
+/**
+ * What the effort menu offers: the levels the model's server says its
+ * template takes, when it says (an empty list is "none — only on or off"),
+ * else the API's own.
+ */
+function effortOptions(levels: readonly string[] | undefined) {
+  const shown = levels ?? ['low', 'medium', 'high'];
+  return ['default', 'off', ...shown.filter((l) => l !== 'off' && l !== 'default')].map(effortOption);
 }
 
 const n = (v: number | undefined) => (v === undefined ? '—' : v.toLocaleString('en-US'));
@@ -696,8 +733,15 @@ export default function FixerChat({ campaignId, dense, fill, context, seed }: Fi
   const cancel = useCancelAi(campaignId);
   const [conversationId, setConversationId] = useState<string | undefined>(() => readThread(campaignId));
   // The bar's effort pick, kept per browser; absent means the saved setting.
-  const [effortPick, setEffortPick] = useState<string | undefined>(() => readEffort(campaignId));
+  const [effortPick, setEffortPick] = useState<string | undefined>(() => readPick('effort', campaignId));
   const effort = effortPick ?? status.data?.effort ?? 'default';
+  // The model: the GM's pick, while the server still serves it; else the saved one.
+  const served = useFixerModels(campaignId, Boolean(status.data?.enabled));
+  const [modelPick, setModelPick] = useState<string | undefined>(() => readPick('model', campaignId));
+  const savedModel = status.data?.models?.primary;
+  const modelChoice =
+    modelPick && (served.data === undefined || served.data.models.some((m) => m.id === modelPick)) ? modelPick : undefined;
+  const model = modelChoice ?? savedModel;
   const effortSupport = status.data?.effortSupport ?? 'none';
   const [snapshot, setSnapshot] = useState<string | null>(null);
   const [working, setWorking] = useState<string | null>(null);
@@ -718,8 +762,8 @@ export default function FixerChat({ campaignId, dense, fill, context, seed }: Fi
   }, [draft]);
 
   // The transport reads these at send time, so it never needs rebuilding.
-  const live = useRef({ campaignId, conversationId, context, effortPick });
-  live.current = { campaignId, conversationId, context, effortPick };
+  const live = useRef({ campaignId, conversationId, context, effortPick, modelChoice });
+  live.current = { campaignId, conversationId, context, effortPick, modelChoice };
 
   const transport = useMemo(
     () =>
@@ -739,6 +783,7 @@ export default function FixerChat({ campaignId, dense, fill, context, seed }: Fi
             ...(live.current.conversationId ? { conversationId: live.current.conversationId } : {}),
             ...(live.current.context ? { context: live.current.context } : {}),
             ...(live.current.effortPick ? { effort: live.current.effortPick } : {}),
+            ...(live.current.modelChoice ? { model: live.current.modelChoice } : {}),
           };
           if (last?.role === 'assistant') {
             const answered = [...last.parts].reverse().find(
@@ -1084,18 +1129,38 @@ export default function FixerChat({ campaignId, dense, fill, context, seed }: Fi
         </button>
         {working && busy && <span className="mono-label truncate text-faint">{working}</span>}
         <span className="ml-auto flex items-center gap-3">
-          {status.data?.models?.primary && (
-            <span className="max-w-40 truncate text-ink" title="The model answering">
-              {status.data.models.primary}
-            </span>
-          )}
+          {model &&
+            ((served.data?.models.length ?? 0) > 1 ? (
+              <BarMenu
+                className="max-w-48 text-ink"
+                label={model}
+                heading="Model"
+                title="The model answering"
+                options={served.data!.models.map((m) => ({ value: m.id, label: m.id }))}
+                current={model}
+                onPick={(m) => {
+                  setModelPick(m);
+                  writePick('model', campaignId, m);
+                }}
+                testId="fixer-model"
+              />
+            ) : (
+              <span className="max-w-40 truncate text-ink" title="The model answering">
+                {model}
+              </span>
+            ))}
           {effortSupport !== 'none' && (
-            <EffortMenu
-              value={effort}
+            <BarMenu
+              label={EFFORT_LABEL[effort] ?? effort}
+              heading="Thinking"
+              title="Thinking effort"
+              options={effortOptions(served.data?.models.find((m) => m.id === model)?.efforts)}
+              current={effort}
               onPick={(e) => {
                 setEffortPick(e);
-                writeEffort(campaignId, e);
+                writePick('effort', campaignId, e);
               }}
+              testId="fixer-effort"
             />
           )}
           <ContextRing fill={usage.fill} last={usage.last} total={usage.total} subCalls={usage.subCalls} />

@@ -187,10 +187,11 @@ export async function streamFixerTurn(
       ? await registerAttachments(db, campaignId, input.message, readMemory(conversation.memory))
       : readMemory(conversation.memory);
 
-    const model = languageModelFor(config, slot);
-    const foldModel = languageModelFor(config, 'fast');
+    const window = await contextWindowFor(config);
+    const model = languageModelFor(config, slot, window);
+    const foldModel = languageModelFor(config, 'fast', window);
     const providerOptions = providerOptionsFor(config);
-    const budget = budgetFor(await contextWindowFor(config));
+    const budget = budgetFor(window);
     const vision = cachedVisionCapability(config, slot).supported;
     const ctx: ToolContext = {
       db,

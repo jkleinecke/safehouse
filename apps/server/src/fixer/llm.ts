@@ -13,6 +13,8 @@
  */
 import type { AiDialect, AiEffort, AiProvider } from '@safehouse/contracts';
 import { anthropicChat } from './anthropic.js';
+import { contextWindowFor, isLocalServer, outputRoom } from './model-info.js';
+import { chatCompletionsUrl, modelsUrl } from './urls.js';
 import { httpError, type HttpError } from '../services/auth.js';
 
 /**
@@ -97,31 +99,8 @@ export function isAiEnabled(env: Record<string, string | undefined> = process.en
   return llmConfigFromEnv(env) !== null;
 }
 
-/** `…/v1/chat/completions`, tolerating a base URL that already ends in `/v1`. */
-export function chatCompletionsUrl(baseUrl: string): string {
-  const trimmed = baseUrl.replace(/\/+$/, '');
-  return /\/v\d+$/.test(trimmed)
-    ? `${trimmed}/chat/completions`
-    : `${trimmed}/v1/chat/completions`;
-}
-
-/**
- * The server's root, with any `/v1` suffix removed.
- *
- * Not every endpoint lives under `/v1`: llama.cpp serves `/props` — the
- * capability report the vision probe reads — at the root, so a base URL
- * written the documented way (ending in `/v1`) turns that into `/v1/props`
- * and a 404. Both spellings have to land in the same place.
- */
-export function serverRootUrl(baseUrl: string): string {
-  return baseUrl.replace(/\/+$/, '').replace(/\/v\d+$/, '');
-}
-
-/** `…/v1/models`, tolerating a base URL that already ends in `/v1`. */
-export function modelsUrl(baseUrl: string): string {
-  const trimmed = baseUrl.replace(/\/+$/, '');
-  return /\/v\d+$/.test(trimmed) ? `${trimmed}/models` : `${trimmed}/v1/models`;
-}
+// Where things live on the server — urls.ts, shared with model-info.ts.
+export { chatCompletionsUrl, modelsUrl, serverRootUrl } from './urls.js';
 
 /** Model ids the box admits to serving. Empty when it will not say. */
 export async function listServedModels(baseUrl: string, timeoutMs = 5_000): Promise<string[]> {
@@ -548,13 +527,19 @@ export class LlmClient {
     // `effort` is ours, not the API's: it picks the reasoning fields below
     // and must not reach the wire as an unknown key.
     const { effort, ...wire } = req;
-    const body = JSON.stringify({
+    const payload: Record<string, unknown> = {
       ...wire,
       messages: foldSystemMessages(req.messages),
       ...openAiEffort({ ...this.config, effort: effort ?? this.config.effort }),
       stream: true,
       stream_options: { include_usage: true },
-    });
+    };
+    // A local server sent no `max_tokens` picks its own, and some pick 1,024:
+    // say how much room the window really has left (model-info.ts).
+    if (payload['max_tokens'] === undefined && isLocalServer(this.config)) {
+      payload['max_tokens'] = outputRoom(payload, await contextWindowFor(this.config));
+    }
+    const body = JSON.stringify(payload);
 
     let res: Response;
     try {

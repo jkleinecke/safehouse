@@ -230,6 +230,25 @@ export interface ModelProbe {
   hint: string | null;
 }
 
+/** A model the server serves, with what it says about itself (server: fixer/model-info.ts). */
+export interface ServedModel {
+  id: string;
+  /** Tokens it can hold, when the server says. */
+  contextWindow?: number;
+  /** The thinking levels its template takes, when the server says; empty means none. */
+  efforts?: string[];
+}
+
+/** The models the configured server serves — the chat bar's model and effort menus. The saved one comes first. */
+export function useFixerModels(campaignId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['fixer', 'models', campaignId],
+    queryFn: () => apiGet<{ models: ServedModel[] }>(`/api/fixer/models?campaignId=${encodeURIComponent(campaignId)}`),
+    enabled,
+    staleTime: 60_000,
+  });
+}
+
 export function useProbeModels(campaignId: string) {
   return useMutation({
     mutationFn: (baseUrl: string) =>

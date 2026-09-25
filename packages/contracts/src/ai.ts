@@ -156,7 +156,9 @@ export function aiProviderInfo(id: AiProvider): AiProviderInfo {
  * — the setting has to start somewhere, and changing how everybody's existing
  * Fixer behaves is not the way to introduce a knob.
  */
-export const AiEffortSchema = z.enum(['default', 'off', 'low', 'medium', 'high']);
+// `minimal`, `xhigh` and `max` are levels some local templates name (the chat
+// bar offers what the server lists — fixer/model-info.ts); Claude clamps them.
+export const AiEffortSchema = z.enum(['default', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 export type AiEffort = z.infer<typeof AiEffortSchema>;
 
 /** Whether a provider takes the effort setting at all, for the GM's screen to offer it. */
