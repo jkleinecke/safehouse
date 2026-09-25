@@ -195,6 +195,7 @@ const RULES = [
   '- Neighbouring rooms share a wall: overlap their rectangles by exactly one square. A corridor is a room too, a long thin one.',
   "- A door or window is in one of a room's walls (n, s, e, w), `offset` squares from that wall's top or left end — never 0, which is a corner. Every room the runners enter needs a door; two rooms that share a wall need a door in it.",
   '- Work in small steps: a few rooms per add_rooms, then the doors and windows, then furnish_room one room at a time, then set_outside. Call view_floor after the layout and fix what is wrong with change_room.',
+  '- EDIT, never rebuild. To change a floor that is already drawn — bigger, smaller, a room moved, split, renamed or gone — change what is there: change_room, add_rooms, remove_openings and add_openings, furnish_room, set_outside. Keep every room the GM did not ask to change. start_floor again or clear_floor only when the GM says to start over.',
   '- Furniture: about one prop per ten floor squares, chosen for the room; a tile marked "against a wall" goes on a floor square next to a wall; nothing in front of a door.',
   '- Tile ids come ONLY from the palette below, exactly as written. In set_outside, "ground" is the palette\'s "outside.ground", "areas" its "outside.areas", "scatter" its "outside.scatter".',
 ].join('\n');
@@ -327,15 +328,19 @@ export function floorTools(deps: FloorToolDeps, guarded: Guarded): ToolSet {
 
   tools['start_floor'] = tool({
     description:
-      "Begin drawing one floor of a scene on the map — or start that floor's drawing over. Use it when the GM asks for a floor, a building, a room layout or a map to be drawn. Leave sceneId and level out for the floor the GM is looking at. The floor is painted with the outside ground at once; then add_rooms, add_openings, furnish_room, set_outside and set_stairs build it up, each edit on the map as it lands (one Ctrl+Z takes the turn's work back). Returns the grid size, the rules and the tile palette.",
+      "Begin drawing one floor of a scene on the map. Use it when the GM asks for a floor, a building, a room layout or a map to be drawn and the floor has no drawing yet. A floor already drawn is EDITED, not started again: it refuses unless startOver is set, which is only for when the GM asks to start over. Leave sceneId and level out for the floor the GM is looking at. The floor is painted with the outside ground at once; then add_rooms, add_openings, furnish_room, set_outside and set_stairs build it up, each edit on the map as it lands (one Ctrl+Z takes the turn's work back). Returns the grid size, the rules and the tile palette.",
     inputSchema: z.object({
       title: z.string().min(1).max(120).describe('What the floor is, as the GM would name it: "Clinic, ground floor".'),
       outsideGround: z.string().max(60).optional().describe('A ground tile id for the land around the building; leave out until you have seen the palette, and set it with set_outside.'),
       notes: z.string().max(2000).optional().describe('Anything the GM should know about the floor.'),
       sceneId: z.string().optional().describe("Scene id; defaults to the scene on the GM's screen."),
       level: z.number().int().min(0).optional().describe('Floor index, 0 for the ground; defaults to the floor on screen.'),
+      startOver: z
+        .boolean()
+        .optional()
+        .describe("Throw this floor's drawing away and begin again. ONLY when the GM asked to start over — to change a drawing, edit it."),
     }),
-    execute: ({ title, outsideGround, notes, sceneId, level }) =>
+    execute: ({ title, outsideGround, notes, sceneId, level, startOver }) =>
       serial(() =>
         guarded('start_floor', async () => {
           const sid = sceneId ?? deps.where?.sceneId;
@@ -349,6 +354,15 @@ export function floorTools(deps: FloorToolDeps, guarded: Guarded): ToolSet {
           const set = setOf(tilesetId);
           const key = keyOf(sid, lvl);
           const previous = memory.floors[key] ?? null;
+          if (previous && !startOver) {
+            // The drawing stays, and the edits that follow land on it.
+            memory.activeFloor = key;
+            turn.key = key;
+            const rooms = previous.plan.rooms.map((r) => `"${r.name}" ${r.w}x${r.h} at ${r.x},${r.y}`).join('; ') || 'none yet';
+            throw new Error(
+              `Floor ${lvl} of scene [${sid}] is already drawn as "${previous.plan.title}" (rooms: ${rooms}). Edit it instead of starting over: change_room to move, resize, rename or remove a room; add_rooms; remove_openings and add_openings; furnish_room; set_outside; view_floor to see it. Set startOver only if the GM asked to start this floor over.`,
+            );
+          }
           const plan = DraftPlanSchema.parse({
             title,
             rooms: [],
@@ -400,7 +414,7 @@ export function floorTools(deps: FloorToolDeps, guarded: Guarded): ToolSet {
 
   tools['change_room'] = tool({
     description:
-      'Move, resize, rename or remove one room of the floor being drawn. Give only what changes. Its doors, windows, furniture and stairs move with it; removing it removes them too.',
+      'Move, resize, rename or remove one room of the floor being drawn — the way to change a room, rather than removing it and adding it again. Give only what changes. Its doors, windows, furniture and stairs move with it; removing it removes them too.',
     inputSchema: z.object({
       room: z.string().min(1).describe('The room, by name.'),
       x: z.number().int().min(0).optional(),
@@ -575,7 +589,7 @@ export function floorTools(deps: FloorToolDeps, guarded: Guarded): ToolSet {
 
   tools['clear_floor'] = tool({
     description:
-      "Erase every square of one floor — every layer, the GM's own painting included — and forget its drawing. Use it when the GM asks to start over or to wipe the floor; then start_floor draws it again. Leave sceneId and level out for the floor being drawn, or the one on screen.",
+      "Erase every square of one floor — every layer, the GM's own painting included — and forget its drawing. ONLY when the GM asks to wipe the floor or start over; never to fix or change a drawing, which is edited instead. Leave sceneId and level out for the floor being drawn, or the one on screen.",
     inputSchema: z.object({
       sceneId: z.string().optional(),
       level: z.number().int().min(0).optional(),
