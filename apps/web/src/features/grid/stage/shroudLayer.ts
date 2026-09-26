@@ -27,11 +27,14 @@ import type { Point } from '@safehouse/contracts';
 import { cellCorners, cellDepth, heightRise, type SceneMetrics } from '../geometry.js';
 import { C } from './colors.js';
 
-/** How dark the scrim is. Enough to read as "not yours", not enough to hide. */
-const SHROUD_ALPHA = 0.62;
+/**
+ * How dark the scrim is. Enough to read as "not yours", not enough to hide.
+ * The 3D map's shroud darkens by the same amounts (`stage3d/masks.ts`).
+ */
+export const SHROUD_ALPHA = 0.62;
 
 /** A softer wash for the GM, who is being shown a viewpoint, not limited to it. */
-const GM_SHROUD_ALPHA = 0.34;
+export const GM_SHROUD_ALPHA = 0.34;
 
 export interface ShroudInput {
   /** `"col,row"` of every cell the viewer CAN see. */

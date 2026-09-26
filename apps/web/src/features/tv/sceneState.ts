@@ -107,8 +107,35 @@ interface Draft {
   fogRegions: FogRegion[];
   revealed: string[];
   revealedShapes: Point[][];
+  /** Whether the scene is fogged at all (`FogState.active`): kept as the snapshot said it until an event says otherwise. */
+  fogActive: boolean | undefined;
   environment: Scene['environment'];
   changed: boolean;
+}
+
+/** An event's word on whether the scene is fogged at all, when it carries one. */
+function noteFogActive(draft: Draft, v: unknown): void {
+  if (typeof v !== 'boolean' || v === draft.fogActive) return;
+  draft.fogActive = v;
+  draft.changed = true;
+}
+
+/** A revealed region redrawn (a public `define`): its new shape, where the TV holds it. */
+function reshapeRegion(draft: Draft, region: FogRegion | null): void {
+  if (!region) return;
+  const i = draft.fogRegions.findIndex((r) => r.id === region.id);
+  if (i < 0) return;
+  draft.fogRegions[i] = region;
+  draft.changed = true;
+}
+
+/** The GM's reset: nothing is revealed any more, the scene still fogged (the server's `hide` with no region). */
+function hideAll(draft: Draft): void {
+  if (draft.revealed.length + draft.fogRegions.length + draft.revealedShapes.length === 0) return;
+  draft.revealed = [];
+  draft.fogRegions = [];
+  draft.revealedShapes = [];
+  draft.changed = true;
 }
 
 function upsertToken(draft: Draft, token: Token): void {
@@ -168,6 +195,7 @@ export function mergeSceneEvents(
     fogRegions: base.scene.fog.regions.slice(),
     revealed: base.scene.fog.revealed.slice(),
     revealedShapes: base.scene.fog.revealedShapes.slice(),
+    fogActive: base.scene.fog.active,
     environment: base.scene.environment,
     changed: false,
   };
@@ -216,12 +244,21 @@ export function mergeSceneEvents(
         if (op === 'reveal') {
           revealRegion(draft, asRegion(p['region']), str(p['regionId']));
           addShape(draft, asPolygon(p['shape']), seenShapes);
+        } else if (op === 'hide' && str(p['regionId']) === undefined) {
+          // The GM's reset: every reveal taken back, the fog left whole.
+          hideAll(draft);
         } else if (op === 'hide' || op === 'remove') {
           // A removed region is gone from the TV's picture the same way a
           // hidden one is; what it covered is the server's next answer.
           hideRegion(draft, str(p['regionId']));
+        } else if (op === 'define') {
+          // The GM's own define event never arrives here; its public word
+          // does when it fogs an open scene or redraws a revealed region.
+          reshapeRegion(draft, asRegion(p['region']));
         }
-        // 'define' is GM-visibility and never arrives here.
+        // Whether the scene is fogged at all: what keeps a scene with
+        // nothing revealed covered rather than open (`FogState.active`).
+        noteFogActive(draft, p['active']);
         break;
       }
       case 'scene.updated': {
@@ -248,6 +285,7 @@ export function mergeSceneEvents(
         regions: draft.fogRegions,
         revealed: draft.revealed,
         revealedShapes: draft.revealedShapes,
+        ...(draft.fogActive === undefined ? {} : { active: draft.fogActive }),
       },
     },
   };

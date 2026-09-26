@@ -3,14 +3,19 @@
  * read-only stage adapter — mount once, push state, tear down cleanly.
  *
  * Kiosk discipline (FR9.19): the host is `pointer-events: none`, so the
- * canvas's own pan/zoom/drag listeners can never fire. The map is never a
- * control surface; the one control on this screen is the plan/iso switch
- * `TvPage` lays over it.
+ * canvas's own pan/zoom/drag listeners can never fire (the 3D map does not
+ * even attach them for a display). The map is never a control surface; the
+ * one control on this screen is the plan/iso switch `TvPage` lays over it,
+ * which reaches the stage as the scene's projection. There is no renderer or
+ * quality switch here: the stage is the 3D map at Low, unless this device's
+ * own storage has set it to Classic (`stageLoader.ts`).
  *
- * Six-hour discipline: exactly one stage instance (the pixi ticker inside it is
- * the only ticker on the page), the handle is guarded against post-teardown
- * calls, and the props flowing in are memoised upstream so an idle minute
- * pushes zero updates.
+ * Six-hour discipline: exactly one stage instance, the handle is guarded
+ * against post-teardown calls, and the props flowing in are memoised
+ * upstream so an idle minute pushes zero updates. The 3D map draws on
+ * demand, so a still table costs no frames at all; the classic map, where
+ * the 3D one cannot run, keeps its pixi ticker as the only ticker on the
+ * page.
  */
 import { useEffect, useRef, useState } from 'react';
 import type { Scene, Token } from '@safehouse/contracts';
@@ -29,12 +34,13 @@ export interface TvStageViewProps {
 
 /**
  * Map images and token art come from the authenticated file store. An <img> —
- * and pixi's texture loader — cannot set an Authorization header, so the
- * device token rides as a query parameter, the same iframe-safe path the book
- * reader uses. A display token only ever unlocks player-visible files.
+ * and either renderer's texture loader — cannot set an Authorization header,
+ * so the device token rides as a query parameter, the same iframe-safe path
+ * the book reader uses. A display token only ever unlocks player-visible
+ * files.
  *
- * `createTvStage` wraps this so pixi is told which parser to use: the URL has
- * no file extension, and pixi picks its texture parser by extension.
+ * The classic stage wraps this so pixi is told which parser to use: the URL
+ * has no file extension, and pixi picks its texture parser by extension.
  */
 function fileUrlWithToken(attachmentId: string): string {
   const token = getToken();

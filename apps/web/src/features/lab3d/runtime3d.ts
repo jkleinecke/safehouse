@@ -78,6 +78,7 @@ import {
   type SightModel,
 } from '@safehouse/rules';
 import type { TileDrawDef } from '../grid/types.js';
+import { applyCover } from '../grid/stage3d/cover.js';
 import { STOREY_M, createLabMaterials, storeyUnits, type LabMaterials } from './geometry3d.js';
 import { buildFigure, disposeFigure, placeFigure, type FigureCtx } from './figure3d.js';
 import { createLighting, type LabLighting, type LabLightSource, type LabQuality, type ShadowScope } from './lighting3d.js';
@@ -463,6 +464,8 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
     depthWrite: false,
     side: FrontSide,
   });
+  // Over the floors below, under a viewer's fog and shroud like them.
+  applyCover(shadeMaterial, 'full');
 
   const camera = new OrthographicCamera(-1, 1, 1, -1, 0.1, 1000);
   /** Which way the camera looks: the ortho camera serves both iso and top. */
@@ -585,9 +588,10 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
     c.maxZoom = 24;
     c.minDistance = 2;
     c.maxDistance = sceneBox().radius * 8;
+    // Pan and zoom only, never tilt or turn: the GM wants a fixed view
+    // (2026-09-26). The benchmark's orbit moves the camera itself.
+    c.enableRotate = false;
     if (cameraKind === 'top') {
-      // A plan: pan and zoom, never tilt or turn — north stays up.
-      c.enableRotate = false;
       c.minPolarAngle = TOP_TILT;
       c.maxPolarAngle = TOP_TILT;
     }

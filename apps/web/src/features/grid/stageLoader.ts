@@ -10,10 +10,15 @@
  *
  * The choice, in order:
  *   1. Is there a 3D stage at all (`STAGE3D_BUILT`)? Yes, since P1.
- *   2. Does this role get 3D in this phase (`roleMay3d`)? The GM first;
- *      players and the TV stay classic until P2.
+ *   2. Does this role get 3D in this phase (`roleMay3d`)? Every role, since
+ *      P2: the GM, the players, the observers and the TV.
  *   3. Has this device been set to Classic (`getRendererPreference`)?
  *   4. Can this browser run it (`supportsWebGL2`)? three.js needs WebGL2.
+ *
+ * The 3D map's quality is this device's too (`getQualityPreference`): Low on
+ * the TV, always; for anyone else what the device was set to, else Low on a
+ * phone or a tablet and Medium elsewhere. The loader hands it to the 3D
+ * stage with the role it is for (`Stage3DHooks.quality`).
  *
  * And the fallback: a 3D stage that throws while starting, or that later
  * loses its GPU context or cannot build a change, is replaced by the classic
@@ -42,13 +47,22 @@ export interface StageLoadContext {
 }
 
 /**
- * What the loader hands the 3D stage besides its options: how to tell the
- * loader the 3D map cannot go on — its GPU context is gone for good, or its
- * world could not be built from a later change — so it can put the classic
- * stage in its place. The 3D stage's `createStage(opts, hooks)` takes this (P1).
+ * What the loader hands the 3D stage besides its options. The 3D stage's
+ * `createStage(opts, hooks)` takes this (P1).
  */
 export interface Stage3DHooks {
+  /**
+   * How to tell the loader the 3D map cannot go on — its GPU context is gone
+   * for good, or its world could not be built from a later change — so it
+   * can put the classic stage in its place.
+   */
   onLost(reason: string): void;
+  /**
+   * The quality the 3D map starts at: this device's for the role mounting it
+   * (`getQualityPreference`). Afterwards the page changes it on the live
+   * stage (`StageApi.setQuality`).
+   */
+  quality: StageQuality;
 }
 
 /**
@@ -60,12 +74,23 @@ export interface Stage3DHooks {
 const STAGE3D_BUILT: boolean = true;
 
 /**
- * The roles offered the 3D stage in this phase. The GM plays on it first
- * (P1); players' phones and the TV stay classic until P2 has proved the fog
- * cannot leak when a view turns, and that the TV and phones hold a frame rate.
- * P2 widens this set to every role.
+ * Which roles are offered the 3D stage, each one decided here — a role added
+ * to the contract does not compile until it is. The GM played on it first
+ * (P1); P2 made the fog and the sightline shroud cover the 3D scene at every
+ * height and from every angle, and moved the players' phones and laptops,
+ * the observers and the TV (`display`) onto it too.
  */
-export const ROLES_3D: ReadonlySet<Role> = new Set<Role>(['gm']);
+const OFFERED_3D: Readonly<Record<Role, boolean>> = {
+  gm: true,
+  player: true,
+  observer: true,
+  display: true,
+};
+
+/** The roles offered the 3D stage in this phase (`OFFERED_3D`): every role, since P2. */
+export const ROLES_3D: ReadonlySet<Role> = new Set<Role>(
+  (Object.keys(OFFERED_3D) as Role[]).filter((role) => OFFERED_3D[role]),
+);
 
 /** Whether `role` may be drawn with the 3D stage in this phase (see `ROLES_3D`). */
 export function roleMay3d(role: Role): boolean {
@@ -90,7 +115,7 @@ export function getRendererPreference(): StageRenderer | null {
 }
 
 /**
- * Set this device's renderer (the future "Classic" switch), or clear the
+ * Set this device's renderer (the 3D / Classic switch), or clear the
  * choice with null. It takes effect on the next mount. Storage that cannot be
  * written is ignored: the choice simply does not stick.
  */
@@ -107,12 +132,22 @@ export function setRendererPreference(renderer: StageRenderer | null): void {
 export const QUALITY_PREF_KEY = 'safehouse.renderer.quality';
 
 /**
- * The 3D quality this device was set to, or its default when it was never
- * set: Low on a touch-first device (a phone, a tablet: a coarse pointer),
- * where the GPU and the battery are the constraint, and Medium elsewhere.
- * Storage that cannot be read reads as never set.
+ * The 3D quality a mount for `role` starts at on this device.
+ *
+ * The TV (`display`) is always Low: a kiosk left drawing for hours, often on
+ * a stick or a smart TV's own browser, with no quality switch of its own.
+ * The stored choice is the Grid's switch, and it does not reach the TV — a
+ * TV page opened in the GM's own browser (a second screen off the laptop the
+ * session runs from) must not take the GM's High and double the laptop's GPU
+ * load.
+ *
+ * Anyone else gets what this device was set to, or when it was never set:
+ * Low on a touch-first device (a phone, a tablet: a coarse pointer), where
+ * the GPU and the battery are the constraint, and Medium elsewhere. Storage
+ * that cannot be read reads as never set.
  */
-export function getQualityPreference(): StageQuality {
+export function getQualityPreference(role?: Role): StageQuality {
+  if (role === 'display') return 'low';
   try {
     const v = window.localStorage.getItem(QUALITY_PREF_KEY);
     if (v === 'low' || v === 'medium' || v === 'high') return v;
@@ -196,7 +231,7 @@ export function chooseRenderer(role: Role): StageRenderer {
 export async function loadStage(opts: StageOptions, ctx: StageLoadContext): Promise<StageApi> {
   if (chooseRenderer(ctx.role) === '3d') {
     try {
-      return await load3d(opts);
+      return await load3d(opts, getQualityPreference(ctx.role));
     } catch (err) {
       failed3d = true;
       console.warn('[stage] the 3D map could not start; drawing the classic map instead', err);
@@ -226,8 +261,9 @@ async function create3d(opts: StageOptions, hooks: Stage3DHooks): Promise<StageA
  * context lost, destroys it and starts the classic stage in the same host
  * with all of that replayed. One-off effects (a ping, a trail sample, a
  * camera move) are not replayed: the classic stage frames the scene itself.
+ * `quality` is what the 3D stage starts at.
  */
-async function load3d(opts: StageOptions): Promise<StageApi> {
+async function load3d(opts: StageOptions, quality: StageQuality): Promise<StageApi> {
   let state = opts.state;
   let defs: Record<string, TileDrawDef> | null = null;
   let viewMode: VisionMode | null = null;
@@ -269,7 +305,7 @@ async function load3d(opts: StageOptions): Promise<StageApi> {
       });
   };
 
-  const inner = await create3d(opts, { onLost });
+  const inner = await create3d(opts, { onLost, quality });
   // A context lost while the stage was still starting has already sent the
   // classic stage in; the 3D one it would have been is not wanted.
   if (lost) inner.destroy();

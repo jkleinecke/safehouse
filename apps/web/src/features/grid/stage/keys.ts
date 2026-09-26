@@ -55,14 +55,51 @@ export function mapImagesKey(state: StageSceneState): string {
   return state.scene.mapAttachmentIds.join(',');
 }
 
-/** The fog: its regions, what is revealed, and whether it is drawn for the GM. */
+/** One fog's polygons, hashed (`polygonsHash`), by the fog object they were read from. */
+const fogShapeHashes = new WeakMap<object, string>();
+
+/**
+ * Every point of every polygon in `polygons`, in order, folded into one
+ * FNV-1a hash: a region redrawn with the same number of corners, or a
+ * revealed shape swapped for another once a list is at its cap, changes it.
+ */
+function polygonsHash(polygons: ReadonlyArray<ReadonlyArray<{ x: number; y: number }>>): string {
+  let h = 0x811c9dc5;
+  const fold = (n: number): void => {
+    h ^= n | 0;
+    h = Math.imul(h, 0x01000193);
+  };
+  for (const poly of polygons) {
+    fold(poly.length);
+    for (const p of poly) {
+      // Thousandths of a square: finer than any fog edge is drawn.
+      fold(Math.round(p.x * 1000));
+      fold(Math.round(p.y * 1000));
+    }
+  }
+  return (h >>> 0).toString(16);
+}
+
+/**
+ * The fog: its regions (where each lies, to the point), what is revealed,
+ * whether a player's copy says it is fogged at all (`FogState.active`), and
+ * whether it is drawn for the GM.
+ */
 export function fogKey(state: StageSceneState): string {
   const fog = state.scene.fog;
+  let shapes = fogShapeHashes.get(fog);
+  if (shapes === undefined) {
+    // Once per fog object: a token move hands the same fog over again.
+    shapes = `${polygonsHash(fog.regions.map((r) => r.polygon))}:${polygonsHash(fog.revealedShapes)}`;
+    fogShapeHashes.set(fog, shapes);
+  }
   return [
     state.role === 'gm' ? 'gm' : 'pc',
     fog.regions.map((r) => `${r.id}:${r.name}:${r.polygon.length}`).join(','),
     fog.revealed.join(','),
     fog.revealedShapes.length,
+    fog.active === true ? 'on' : '',
+    shapes,
   ].join('|');
 }
 

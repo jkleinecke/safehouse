@@ -28,6 +28,7 @@ import {
   type Material,
   type Object3D,
 } from 'three';
+import { applyCover, coverShadows, type CoverMode } from '../grid/stage3d/cover.js';
 
 export type V3 = readonly [number, number, number];
 
@@ -345,6 +346,9 @@ export class MeshBuilder {
     if (solid) {
       solid.castShadow = true;
       solid.receiveShadow = true;
+      // Its shadow passes wear the fog as its colour pass does: a wall the
+      // fog hides casts no shadow onto a revealed floor.
+      coverShadows(solid);
       all.push(solid);
     }
     const glass = this.glass.empty ? null : new Mesh(this.glass.geometry(), materials.glass);
@@ -367,7 +371,10 @@ export class MeshBuilder {
   }
 }
 
-/** The four shared materials every builder's output uses. One set per lab. */
+/**
+ * The four shared materials every builder's output uses. One set per lab —
+ * and one more per map stage, for its figures (`FigurePool`).
+ */
 export interface LabMaterials {
   solid: MeshStandardMaterial;
   glass: MeshStandardMaterial;
@@ -376,7 +383,14 @@ export interface LabMaterials {
   dispose(): void;
 }
 
-export function createLabMaterials(): LabMaterials {
+/**
+ * A set of the four materials. Every one wears the fog-and-shroud cover
+ * (`grid/stage3d/cover.ts`), which does nothing until a map stage shows a
+ * viewer's masks; `cover` says which masks hide what is drawn with the set:
+ * both for the world (the default), the fog alone for a stage's figures, as
+ * the 2D map draws its tokens over its shroud.
+ */
+export function createLabMaterials(cover: CoverMode = 'full'): LabMaterials {
   const solid = new MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0.05, side: DoubleSide });
   const glass = new MeshStandardMaterial({
     vertexColors: true,
@@ -397,6 +411,8 @@ export function createLabMaterials(): LabMaterials {
   };
   const lines = new LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.7 });
   const list: Material[] = [solid, glass, glow, lines];
+  // After the glow's own hook, which the cover's wraps.
+  for (const m of list) applyCover(m, cover);
   return {
     solid,
     glass,

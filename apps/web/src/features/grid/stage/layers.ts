@@ -118,7 +118,12 @@ export function drawFog(
   // every phone and the TV as a solid black screen, while the GM saw a 40%
   // tint they could easily read straight through. Fog is something a GM adds
   // to a map, not something a map starts under.
-  if (fog.regions.length === 0 && fog.revealedShapes.length === 0) {
+  //
+  // A player's copy carries only the REVEALED regions, so a scene the GM has
+  // fogged with nothing revealed yet (or has just reset) arrives with no
+  // regions at all; its `active` flag is what says it is fogged, and then the
+  // cover goes down whole.
+  if (fog.regions.length === 0 && fog.revealedShapes.length === 0 && fog.active !== true) {
     labels.sweep();
     return;
   }

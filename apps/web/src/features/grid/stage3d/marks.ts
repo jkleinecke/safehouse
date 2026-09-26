@@ -16,11 +16,13 @@
  *
  * World units are the lab's: x = grid x, z = grid y, y up in squares. Marks
  * are handed over in grid units and lie just over the floor in view, among
- * the flat overlays (`FloorInk`'s lift).
+ * the flat overlays (`FloorInk`'s lift). Like the 2D fx layer they lie over
+ * the players' fog and shroud (`cover.ts`), never under them.
  */
 import { CircleGeometry, Group, Mesh, MeshBasicMaterial, RingGeometry, type BufferGeometry } from 'three';
 import type { Point } from '@safehouse/contracts';
 import { C } from '../stage/colors.js';
+import { exemptFromCover } from './cover.js';
 
 /** A ping's and a trail dot's life, and how many of each can be on the floor at once (the 2D fx layer's). */
 const PING_LIFE_MS = 950;
@@ -174,6 +176,10 @@ export class FloorMarks {
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -4,
     });
+    // Over the cover, on purpose: the 2D map draws pings and the trail in its
+    // fx layer, above the fog, so a ping into an unrevealed room still shows
+    // everyone where it was.
+    exemptFromCover(material);
     const mesh = new Mesh(pool.geometry, material);
     mesh.renderOrder = pool.renderOrder;
     // Marks are never what a click lands on.

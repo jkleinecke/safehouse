@@ -208,14 +208,18 @@ export interface ViewControlsProps {
   onFit: () => void;
   /**
    * The renderer drawing this device's map, and the switch between the 3D
-   * map and the Classic one — a per-device choice, offered to the viewers
-   * who may have 3D in this phase (the GM). Absent hides the switch.
+   * map and the Classic one — a per-device choice, offered to every viewer
+   * of the Grid (the GM, players, observers) since P2; the TV has no
+   * controls and keeps its device's stored choice. Absent hides the switch.
    */
   renderer?: StageRenderer;
   onRenderer?: (renderer: StageRenderer) => void;
   /** Whether 3D can be picked here (WebGL2, and it has not failed this load). */
   can3d?: boolean;
-  /** The 3D map's quality on this device, shown while the 3D map is drawing. */
+  /**
+   * The 3D map's quality on this device, shown while the 3D map is drawing:
+   * Low by default on a phone or a tablet, Medium elsewhere, until picked.
+   */
   quality?: StageQuality;
   onQuality?: (quality: StageQuality) => void;
 }

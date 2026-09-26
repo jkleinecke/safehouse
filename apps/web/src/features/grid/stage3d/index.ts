@@ -1,15 +1,18 @@
 /**
- * The three.js map stage (P1 of the move to 3D): the `StageApi` the 2D Pixi
- * stage (`../stage/index.ts`) implements, drawn by the 3D runtime
- * (`lab3d/runtime3d.ts`) and behaving the same from the page's side. It is a
- * lazy chunk, reached only through `stageLoader.ts`'s dynamic import, so
- * three never enters the initial bundle and pixi never enters this one.
+ * The three.js map stage (the move to 3D: P1 for the GM, P2 for the table):
+ * the `StageApi` the 2D Pixi stage (`../stage/index.ts`) implements, drawn by
+ * the 3D runtime (`lab3d/runtime3d.ts`) and behaving the same from the page's
+ * side. It is a lazy chunk, reached only through `stageLoader.ts`'s dynamic
+ * import, so three never enters the initial bundle and pixi never enters
+ * this one.
  *
  * What stands where:
  *   - the runtime draws the world — painted floors, walls, doors, props and
  *     their lighting — for the floor in view, with the floors below it under
  *     a shade. It builds no figures of its own (`figures: false`); it is
- *     still handed the tokens, so the lights they carry light the rooms;
+ *     still handed the tokens, so the lights they carry light the rooms —
+ *     for anyone but the GM, only those the fog does not cover
+ *     (`lightTokens`);
  *   - `Camera3D` is the view, and the pointer's `ViewCamera`: isometric or
  *     top-down as the scene's projection says, orthographic both;
  *   - the same `PointerController` as the 2D map turns the DOM's pointer
@@ -18,7 +21,9 @@
  *     painted doors' leaves (`pickTileDoor`) ahead of its cell test;
  *   - `FigurePool` stands the tokens up as figures that glide to their
  *     squares, with their rings and blob shadows; `TokenBadges` hangs a DOM
- *     plate (portrait, name, bars) over each head;
+ *     plate (portrait, name, bars) over each head. The tokens seen down
+ *     through the open squares (`belowTokens`) stand on their own floors
+ *     under the shade, with no plate and no ring, never picked;
  *   - the flat overlays — the grid, the GM's walls, doors and zones, the
  *     GM's fog regions, the light-map wash, the AoE, the fog draft, the
  *     ruler and every Build draft — are the 2D map's own draw functions,
@@ -34,10 +39,29 @@
  * is moving draws nothing: the acting runner's plate breathes on the
  * compositor, and its ring holds still.
  *
- * Not drawn yet, and not hit either (they come in P2/P3): pins, GM notes,
- * security cameras and their cones, the GM's light markers, the sightline
- * shroud, the players' fog cover, tokens seen on the floors below, and the
- * vision modes. Each is a commented no-op below.
+ * Every viewer draws on it since P2 (`stageLoader.ts` `ROLES_3D`): the GM,
+ * the players' phones and laptops through the same Grid page, and the TV
+ * (`tvStage.ts`, role `display`), which gets no `PointerController` at all.
+ * What is the GM's alone is drawn for the GM alone, gated on the role as the
+ * 2D map gates it: the GM's walls, doors and zones (`drawGeometry`), the fog
+ * as a tint (`drawFog`), the light-map wash, and hidden tokens drawn
+ * see-through (`syncTokens`).
+ *
+ * What a viewer may not see is hidden by the cover (`cover.ts`, `masks.ts`):
+ * the players' fog and the sightline shroud (a runner's, or the GM's lens),
+ * as masks every material samples at the square it stands over — so walls,
+ * furniture, figures and overlays are hidden at every height and from every
+ * angle — and, for the plates and labels over the canvas, the same masks
+ * read on the CPU (`coveredAt`). The fog also reaches what no material
+ * draws: the shadow maps (redrawn when it changes), the lights of the tokens
+ * under it (not lit), and the storeys below the floor in view, which its lid
+ * shuts off where the fog's discard would open a hole. What the 2D map
+ * draws above its fog (the templates, the ruler, the drafts, pings and the
+ * trail) is drawn above it here too.
+ *
+ * Not drawn yet, and not hit either (they come in P3/P4): pins, GM notes,
+ * security cameras and their cones, the GM's light markers, and the vision
+ * modes. Each is a commented no-op below.
  */
 import { Raycaster, Vector2, Vector3 } from 'three';
 import type { Point, Scene, Token } from '@safehouse/contracts';
@@ -45,7 +69,7 @@ import { TILESETS, sceneLevels, type LightMap, type LightRow, type VisionMode } 
 import { allCells } from '../cellSelection.js';
 import { metricsFor, metricsKey, worldFromGrid, type SceneMetrics } from '../geometry.js';
 import { handlesOf, objectForSelection } from '../paintedObjects.js';
-import { getQualityPreference, type Stage3DHooks } from '../stageLoader.js';
+import type { Stage3DHooks } from '../stageLoader.js';
 import {
   tileDefsFromSets,
   type MovementThresholds,
@@ -74,11 +98,13 @@ import { createLabMaterials, type LabMaterials } from '../../lab3d/geometry3d.js
 import { createRuntime3D, type Runtime3D, type Runtime3DOptions } from '../../lab3d/runtime3d.js';
 import { Camera3D, type Camera3DKind } from './camera3d.js';
 import { TokenBadges } from './badges.js';
+import { coverScene } from './cover.js';
 import { FigurePool, type FigureState } from './figures.js';
-import { FloorInk } from './floorInk.js';
+import { FloorInk, type InkCover } from './floorInk.js';
 import { DomLabels } from './labels.js';
 import { MapPlane } from './mapPlane.js';
 import { FloorMarks } from './marks.js';
+import { CoverMasks, type FogDetail } from './masks.js';
 
 /** How long an un-terminated remote drag ghost keeps overriding a position (the 2D stage's rule). */
 const GHOST_TTL_MS = 4000;
@@ -120,6 +146,36 @@ const ORDER = {
   fx: 18,
 } as const;
 
+/**
+ * Which of a viewer's masks hide each flat overlay (`cover.ts`), after the 2D
+ * layer it sits in there: the light-map wash lies under the shroud and the
+ * fog; the grid and the doors over the shroud and under the fog; the GM's fog
+ * tint (which is the fog), the templates, the drafts and the ruler over both,
+ * as the 2D map's fx layer lies over its fog. Pings and the trail
+ * (`FloorMarks`) are over both as well.
+ */
+const COVER: Record<Exclude<keyof typeof ORDER, 'fx'>, InkCover> = {
+  lightMap: 'full',
+  grid: 'fog',
+  geometry: 'fog',
+  fog: 'none',
+  aoe: 'none',
+  fogDraft: 'none',
+  paintedSel: 'none',
+  segment: 'none',
+  rect: 'none',
+  ghost: 'none',
+  ruler: 'none',
+};
+
+/** A covered figure's plate or label hides from a player from this much cover up (`CoverMasks.coveredAt`). */
+const HIDDEN_AT = 0.5;
+
+/** How finely a stage at `quality` rasterises the players' fog (`masks.ts` `FOG_DETAIL`). */
+function fogDetailFor(quality: StageQuality): FogDetail {
+  return quality === 'low' ? 'low' : 'full';
+}
+
 /** The scene's metrics with the projection forced to plan: what every flat overlay draws in, whatever the camera. */
 function topDownMetrics(scene: Scene): SceneMetrics {
   return { ...metricsFor(scene.grid), projection: 'topdown' };
@@ -144,22 +200,48 @@ function clampLevel(scene: Scene, level: number): number {
 }
 
 /**
+ * Whether `token` is hidden from the table, by its own flag or by a hidden
+ * layer: the GM's alone (the server never sends one to anyone else).
+ */
+function isHidden(token: Token, state: StageSceneState): boolean {
+  return Boolean(token.hidden) || (state.hiddenLayerTokenIds?.has(token.id) ?? false);
+}
+
+/**
  * The tokens whose carried lights the runtime lights the scene with: the
  * ones on this floor and the ones seen below it (their lights shine up
  * through the open squares). Figures are the stage's own, so this list only
  * lights.
+ *
+ * Everyone but the GM gets only the lights of tokens they could see. A
+ * hidden token's light is the GM's alone, as the token is. And a token the
+ * players' fog covers carries its light nowhere for them — baked on Low, a
+ * real lamp on Medium and High, it would light the revealed rooms round it
+ * and say where the guard with the flashlight stands and which way he
+ * faces, which the 2D map (whose light-map wash is the GM's alone) never
+ * does — except the viewer's own runner, fog or not. `fogged` says whether
+ * the fog covers a token (`CoverMasks.coveredAt`).
  */
-function lightTokens(state: StageSceneState): readonly Token[] {
+function lightTokens(state: StageSceneState, fogged: (token: Token) => boolean): readonly Token[] {
   const below = state.belowTokens ?? [];
-  return below.length === 0 ? state.tokens : [...state.tokens, ...below.map((b) => b.token)];
+  const all = below.length === 0 ? state.tokens : [...state.tokens, ...below.map((b) => b.token)];
+  if (state.role === 'gm') return all;
+  const lit = (t: Token): boolean =>
+    !isHidden(t, state) && (state.draggableIds.has(t.id) || !(t.light && t.light.on !== false) || !fogged(t));
+  return all.every(lit) ? all : all.filter(lit);
 }
 
-/** The runtime's options for a first frame of `state`. */
-function runtimeOptions(state: StageSceneState, defs: Record<string, TileDrawDef>, quality: StageQuality): Runtime3DOptions {
+/** The runtime's options for a first frame of `state`, whose tokens the fog covers as `fogged` says. */
+function runtimeOptions(
+  state: StageSceneState,
+  defs: Record<string, TileDrawDef>,
+  quality: StageQuality,
+  fogged: (token: Token) => boolean,
+): Runtime3DOptions {
   const scene = state.scene;
   return {
     scene,
-    tokens: lightTokens(state),
+    tokens: lightTokens(state, fogged),
     figures: false,
     defs,
     quality,
@@ -192,11 +274,17 @@ class Stage3D implements StageApi, PointerHost {
   private readonly root: HTMLDivElement;
   /** The DOM over the canvas: token plates and labels. Never takes a click. */
   private readonly overlay: HTMLDivElement;
+  /** The figures' two sets (`FigurePool`): the floor in view's, and the ones seen below it. */
   private readonly materials: LabMaterials;
+  private readonly belowMaterials: LabMaterials;
   private readonly figures: FigurePool;
   private readonly badges: TokenBadges;
   private readonly mapPlane: MapPlane;
-  private readonly pointer: PointerController;
+  /**
+   * The DOM's pointer events turned into the page's callbacks; null on the
+   * TV (`display`), which has no controls, so nothing on it listens.
+   */
+  private readonly pointer: PointerController | null;
   private readonly resizeObserver: ResizeObserver | null;
   private readonly unhook: Array<() => void> = [];
 
@@ -262,11 +350,20 @@ class Stage3D implements StageApi, PointerHost {
   private readonly scratch = new Vector3();
   private destroyed = false;
 
+  /**
+   * `cover` is this stage's cover (`cover.ts`, `masks.ts`: what this viewer
+   * may not see), made and brought in line with `opts.state` before the
+   * runtime, so its first frame — and its first bake, which lights with the
+   * tokens the fog does not cover — is already covered. The stage owns it
+   * from here.
+   */
   constructor(
     private readonly opts: StageOptions,
     rt: Runtime3D,
     root: HTMLDivElement,
     private readonly hooks: Stage3DHooks,
+    /** What this viewer may not see: the fog and shroud masks every material samples, and the fog lid. */
+    private readonly cover: CoverMasks,
   ) {
     this.rt = rt;
     this.root = root;
@@ -277,6 +374,7 @@ class Stage3D implements StageApi, PointerHost {
     this.m = topDownMetrics(scene);
     this.level = rt.floor;
     this.sceneId = scene.id;
+    // What the runtime was made with (`runtimeOptions`).
     this.litTokens = opts.state.tokens;
     this.litBelow = opts.state.belowTokens;
     this.measure();
@@ -290,8 +388,15 @@ class Stage3D implements StageApi, PointerHost {
 
     this.camera = new Camera3D(rt, { sceneId: scene.id, host: root });
 
-    this.materials = createLabMaterials();
-    this.figures = new FigurePool(this.materials, { unitM: scene.grid.unitM, storey: rt.storey });
+    // Closes, under the floor in view, what the fog's discard opens.
+    rt.threeScene.add(this.cover.lid);
+    this.cover.setFloor(this.level, this.level * rt.storey);
+    // The figures' own sets: the floor in view's under the fog and over the
+    // shroud, as the 2D map draws its tokens; the ones seen below it under
+    // both, as the 2D map draws its floors below under its shroud.
+    this.materials = createLabMaterials('fog');
+    this.belowMaterials = createLabMaterials('full');
+    this.figures = new FigurePool(this.materials, { unitM: scene.grid.unitM, storey: rt.storey }, this.belowMaterials);
     this.figures.setLevel(this.level);
     rt.threeScene.add(this.figures.group);
     this.badges = new TokenBadges(overlay, (id) => this.opts.urlFor(id));
@@ -299,17 +404,17 @@ class Stage3D implements StageApi, PointerHost {
     this.mapPlane = new MapPlane({ onChange: () => this.rt.requestRender() });
     rt.threeScene.add(this.mapPlane.group);
 
-    this.lightMapInk = this.ink(ORDER.lightMap);
-    this.gridInk = this.ink(ORDER.grid);
-    this.geoInk = this.ink(ORDER.geometry);
-    this.fogInk = this.ink(ORDER.fog);
-    this.aoeInk = this.ink(ORDER.aoe);
-    this.fogDraftInk = this.ink(ORDER.fogDraft);
-    this.paintedSelInk = this.ink(ORDER.paintedSel);
-    this.segmentInk = this.ink(ORDER.segment);
-    this.rectInk = this.ink(ORDER.rect);
-    this.ghostInk = this.ink(ORDER.ghost);
-    this.rulerInk = this.ink(ORDER.ruler);
+    this.lightMapInk = this.ink('lightMap');
+    this.gridInk = this.ink('grid');
+    this.geoInk = this.ink('geometry');
+    this.fogInk = this.ink('fog');
+    this.aoeInk = this.ink('aoe');
+    this.fogDraftInk = this.ink('fogDraft');
+    this.paintedSelInk = this.ink('paintedSel');
+    this.segmentInk = this.ink('segment');
+    this.rectInk = this.ink('rect');
+    this.ghostInk = this.ink('ghost');
+    this.rulerInk = this.ink('ruler');
     this.marks = new FloorMarks({
       cell: () => this.m.cell,
       floorY: () => this.rt.floor * this.rt.storey,
@@ -329,8 +434,10 @@ class Stage3D implements StageApi, PointerHost {
     );
 
     // The pointer listens on the root, not the canvas: the canvas is
-    // replaced when the quality crosses the Low line.
-    this.pointer = new PointerController(root, this);
+    // replaced when the quality crosses the Low line. The TV is a kiosk
+    // (FR9.19): its callbacks are no-ops and its host takes no pointer, and
+    // on top of that it gets no listener at all.
+    this.pointer = opts.state.role === 'display' ? null : new PointerController(root, this);
 
     this.resizeObserver =
       typeof ResizeObserver === 'undefined'
@@ -340,7 +447,7 @@ class Stage3D implements StageApi, PointerHost {
             // The camera refits an untouched view itself (`Camera3D`); the
             // pointer only has to measure its element again.
             this.measure();
-            this.pointer.invalidateRect();
+            this.pointer?.invalidateRect();
             this.rt.requestRender();
           });
     this.resizeObserver?.observe(root);
@@ -348,12 +455,13 @@ class Stage3D implements StageApi, PointerHost {
     this.update(opts.state);
   }
 
-  /** A floor ink at draw order `order`, in the scene. */
-  private ink(order: number): FloorInk {
+  /** The floor ink for overlay `layer`, in the scene: at its draw order (`ORDER`), under its cover (`COVER`). */
+  private ink(layer: keyof typeof COVER): FloorInk {
     const ink = new FloorInk({
       metrics: () => this.m,
       floorY: () => this.rt.floor * this.rt.storey,
-      renderOrder: order,
+      renderOrder: ORDER[layer],
+      cover: COVER[layer],
     });
     this.rt.threeScene.add(ink.group);
     this.inks.push(ink);
@@ -398,27 +506,41 @@ class Stage3D implements StageApi, PointerHost {
    * on something the GM cannot see — an invisible pin next to a runner would
    * take the click meant for the runner. Placing them with their tools still
    * works; selecting them goes through the GM panel until they are drawn.
+   *
+   * For the same reason a player's pointer never lands on a token the fog
+   * covers (`CoverMasks.coveredAt`) — it is not drawn, and selecting it
+   * would say who stands there — unless it is one they may move: their own
+   * runner still comes when called, fog or not, as on the 2D map.
    */
   state(): StageSceneState {
     const s = this.sceneState;
     if (this.pointerStateOf !== s) {
       this.pointerStateOf = s;
       const geometry = { ...s.scene.geometry, pins: [], cameras: [], lights: [], gmNotes: [] };
-      this.pointerState = { ...s, scene: { ...s.scene, geometry } };
+      const tokens =
+        s.role === 'gm'
+          ? s.tokens
+          : s.tokens.filter((t) => s.draggableIds.has(t.id) || this.cover.coveredAt(t, 'fog') < HIDDEN_AT);
+      this.pointerState = { ...s, tokens, scene: { ...s.scene, geometry } };
     }
     return this.pointerState;
   }
 
   /**
    * The token under host point `screen`: its plate's portrait, which is
-   * drawn over everything, else a raycast of the figures on show.
+   * drawn over everything, else a raycast of the figures on show — of those
+   * the pointer may take (`state`), so a figure the fog covers from a player
+   * does not catch a press meant for one standing behind it.
    */
   pickToken(screen: Point): string | null {
     if (this.destroyed) return null;
     const plate = this.badges.pick(screen);
     if (plate !== null) return plate;
     this.aim(screen);
-    return this.figures.pick(this.raycaster);
+    const { tokens } = this.state();
+    if (tokens === this.sceneState.tokens) return this.figures.pick(this.raycaster);
+    const takeable = new Set(tokens.map((t) => t.id));
+    return this.figures.pick(this.raycaster, (id) => takeable.has(id));
   }
 
   /**
@@ -554,7 +676,9 @@ class Stage3D implements StageApi, PointerHost {
     if (this.destroyed || quality === this.rt.options.quality) return;
     // Crossing the Low line makes a new WebGL context, which a browser at its
     // context limit refuses.
-    this.attempt(() => this.rt.update({ quality }));
+    if (!this.attempt(() => this.rt.update({ quality }))) return;
+    // The fog is rasterised more coarsely at Low (`masks.ts`).
+    if (this.cover.setDetail(fogDetailFor(quality))) this.update(this.sceneState);
   }
 
   update(next: StageSceneState): void {
@@ -567,6 +691,12 @@ class Stage3D implements StageApi, PointerHost {
     this.m = m;
     const isGm = next.role === 'gm';
 
+    // -- the cover: the players' fog and the sightline shroud ----------------
+    // Rebuilt on the fog's and the shroud's keys, as the 2D map redraws them;
+    // first, because what follows reads it: the token lights a player is lit
+    // with, the shadow maps, the pointer's tokens, the plates and labels.
+    const covered = this.cover.update(next, m);
+
     // -- the world, its lights, and the view ---------------------------------
     const level = clampLevel(scene, next.level ?? 0);
     const kind = cameraKindOf(scene);
@@ -576,10 +706,13 @@ class Stage3D implements StageApi, PointerHost {
     if (level !== this.rt.options.floor) partial.floor = level;
     const ambient = ambientOf(scene);
     if (ambient !== this.rt.options.ambient) partial.ambient = ambient;
-    if (next.tokens !== this.litTokens || next.belowTokens !== this.litBelow) {
+    // A token that came out of the fog, or went into it, lights the scene or
+    // stops: the list is worked out again when the fog changes too. The
+    // runtime relights only if the lights it makes changed.
+    if (covered.fog || next.tokens !== this.litTokens || next.belowTokens !== this.litBelow) {
       this.litTokens = next.tokens;
       this.litBelow = next.belowTokens;
-      partial.tokens = lightTokens(next);
+      partial.tokens = lightTokens(next, this.fogged);
     }
     // A new scene is framed afresh by the runtime; its camera kind goes in
     // with it, so it is framed once, through the right camera.
@@ -599,6 +732,12 @@ class Stage3D implements StageApi, PointerHost {
       this.level = level;
       this.figures.setLevel(level);
     }
+    // The fog lid lies under the floor in view, at its height as now built.
+    this.cover.setFloor(level, level * this.rt.storey);
+    // The shadow maps are drawn once, not per frame: a caster the fog now
+    // hides, or no longer hides, casts again only when they are redrawn
+    // (`cover.ts` `coverShadows`). Low has none to redraw.
+    if (covered.fog && this.rt.options.quality !== 'low') this.rt.refreshShadows();
 
     // -- the flat overlays, each redrawn only when its key changes -----------
     const mk = metricsKey(m);
@@ -628,17 +767,35 @@ class Stage3D implements StageApi, PointerHost {
     }
 
     // The fog regions as the GM sees them: a tint with the revealed regions
-    // cut out, outlined and named. The players' opaque cover is P2 — this
-    // stage is the GM's only (`ROLES_3D`).
+    // cut out, outlined and named. Everyone else's fog is the opaque cover,
+    // and that is the cover's fog mask (below), which hides what stands under
+    // it at every height — not a sheet on the floor, which the walls would
+    // stand up through.
     const fk = fogKey(next);
     if (fk !== this.lastFogKey) {
       this.lastFogKey = fk;
-      drawFog(this.fogInk, this.fogLabels, scene, m, isGm);
+      if (isGm) drawFog(this.fogInk, this.fogLabels, scene, m, true);
+      else {
+        this.fogInk.clear();
+        this.fogLabels.sweep();
+      }
+    }
+
+    // -- what the cover hides over the canvas ---------------------------------
+    // A player's labels hide under the fog as the fog covers them in 2D; the
+    // GM's hide nowhere.
+    this.fogLabels.setCover(isGm ? null : this.labelCovered);
+    if (covered.fog || covered.shroud) {
+      // Lay the labels out again on the next frame, whether or not the view moves.
+      this.laidView.fill(Number.NaN);
+      this.pointerStateOf = null;
     }
 
     // The light-map wash: the hook hands over the same object until something
-    // that moves light moves, so identity is the key.
-    const lightMap = next.lightMap ?? null;
+    // that moves light moves, so identity is the key. The GM's alone: the
+    // page computes none for anyone else (as for the 2D map), and a player's
+    // phone or the TV would not draw one it was handed.
+    const lightMap = isGm ? (next.lightMap ?? null) : null;
     if (lightMap !== this.lastLightMap || mk !== this.lastLightMapMetrics) {
       this.lastLightMap = lightMap;
       this.lastLightMapMetrics = mk;
@@ -682,36 +839,71 @@ class Stage3D implements StageApi, PointerHost {
       else this.paintedSelInk.clear();
     }
 
-    // Not drawn in 3D yet — each a no-op until its phase:
-    //   - pins and zone names (`drawPins`), GM notes (`drawNotes`), security
-    //     cameras and their cones (`drawCameras`), the GM's light markers
-    //     (`drawLights`): P3, as DOM markers and floor inks;
-    //   - the sightline shroud (`next.shroud`): P2, as a mask on every material;
-    //   - tokens seen on the floors below (`next.belowTokens`): P2. Their
-    //     carried lights are already lit (`lightTokens`).
+    // Not drawn in 3D yet — each a no-op until its phase: pins and zone names
+    // (`drawPins`), GM notes (`drawNotes`), security cameras and their cones
+    // (`drawCameras`), the GM's light markers (`drawLights`): P3, as DOM
+    // markers and floor inks.
 
     // A new floor in view: every overlay that did not redraw above is laid on
     // the new floor's height.
     if (floorChanged) for (const ink of this.inks) ink.flush();
 
     this.syncTokens(next);
+    // Everything the scene now holds wears the cover before it is drawn: a
+    // material made without it is covered here (and named, in a dev build).
+    coverScene(this.rt.threeScene);
     this.rt.requestRender();
   }
 
+  /**
+   * The tokens as figures and plates: the floor in view's own, and the ones
+   * seen down through its open squares (`belowTokens`), each on its own floor
+   * inside the shade the runtime lays over the floors below — drawn only, as
+   * the 2D map draws them: no plate, no ring, no drag, never picked.
+   *
+   * Hidden tokens (by their flag or their layer) are the GM's alone, and the
+   * GM sees them see-through. No other viewer is ever sent one — that is the
+   * server's line (Principle 4), and the 2D map relies on it; this stage
+   * also does not draw one for them should it arrive anyway.
+   */
   private syncTokens(next: StageSceneState): void {
-    const hiddenLayer = next.hiddenLayerTokenIds;
-    // The page hands over this floor's tokens only, so every one stands on
-    // the floor in view.
-    const states: FigureState[] = next.tokens.map((token) => ({
-      token,
-      bars: next.bars.get(token.id) ?? null,
-      selected: next.selectedTokenId === token.id,
-      acting: next.actingTokenId === token.id,
-      // Hidden by its flag or by its layer: the GM sees it see-through.
-      ghosted: Boolean(token.hidden) || (hiddenLayer?.has(token.id) ?? false),
-      level: this.level,
-    }));
-    this.figures.sync(states);
+    const scene = next.scene;
+    const isGm = next.role === 'gm';
+    const states: FigureState[] = [];
+    for (const token of next.tokens) {
+      const ghosted = isHidden(token, next);
+      if (ghosted && !isGm) continue;
+      states.push({
+        token,
+        bars: next.bars.get(token.id) ?? null,
+        selected: next.selectedTokenId === token.id,
+        acting: next.actingTokenId === token.id,
+        ghosted,
+        // Each on the floor it stands on. The Grid and the TV hand over the
+        // floor in view's tokens only (and the ones below it apart), so that
+        // is this floor; one on another floor all the same stays off screen
+        // rather than standing on this one.
+        level: clampLevel(scene, token.level ?? 0),
+      });
+    }
+    const below: FigureState[] = [];
+    for (const { token, depth } of next.belowTokens ?? []) {
+      const ghosted = isHidden(token, next);
+      if (ghosted && !isGm) continue;
+      below.push({
+        token,
+        // The page projects the bars of the tokens seen below too
+        // (`composeStageState`), where the viewer may see them: a full
+        // monitor lays one down there as on its own floor.
+        bars: next.bars.get(token.id) ?? null,
+        selected: false,
+        acting: false,
+        ghosted,
+        level: Math.max(0, this.level - Math.max(1, Math.floor(depth))),
+      });
+    }
+    this.figures.sync(states, below);
+    // Plates for the floor in view's own; a figure seen below carries none.
     this.badges.sync(states);
     if (this.localDragId !== null && !next.tokens.some((t) => t.id === this.localDragId)) {
       this.localDragId = null;
@@ -817,12 +1009,30 @@ class Stage3D implements StageApi, PointerHost {
    * looked at after every frame (each is moved only if it moved); the labels
    * lie on the floor and move only with the view, so they are laid out again
    * only when it moved (a label drawn meanwhile is placed as it arrives).
+   *
+   * A player sees no plate over a figure the fog covers (`plateAt`), as the
+   * 2D fog covers its badges: the figure is not drawn, and its plate would
+   * say who stands there.
    */
   private layoutOverlay(): void {
     if (this.destroyed) return;
-    this.badges.layout(this.projectWorld, (id) => this.figures.positionOf(id));
+    const at = this.sceneState.role === 'gm' ? (id: string) => this.figures.positionOf(id) : this.plateAt;
+    this.badges.layout(this.projectWorld, at);
     if (this.viewMoved()) this.fogLabels.layout((grid) => this.camera.project(grid), true);
   }
+
+  /** Where a player's plate for a token hangs, or null — no plate — while the fog covers its figure's square. */
+  private readonly plateAt = (tokenId: string): Vector3 | null => {
+    const head = this.figures.positionOf(tokenId);
+    if (head === null) return null;
+    return this.cover.coveredAt({ x: head.x, y: head.z }, 'fog') >= HIDDEN_AT ? null : head;
+  };
+
+  /** Whether a player's label anchored at grid point `at` is under the fog (`DomLabels.setCover`). */
+  private readonly labelCovered = (at: Point): boolean => this.cover.coveredAt(at, 'fog') >= HIDDEN_AT;
+
+  /** Whether the fog covers where `token` stands, for a player: its light then lights nothing (`lightTokens`). */
+  private readonly fogged = (token: Token): boolean => this.cover.coveredAt(token, 'fog') >= HIDDEN_AT;
 
   /**
    * Whether the view differs from the one the floor labels were last laid
@@ -855,7 +1065,7 @@ class Stage3D implements StageApi, PointerHost {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
-    this.pointer.destroy();
+    this.pointer?.destroy();
     this.resizeObserver?.disconnect();
     if (this.holdTimer !== null) clearTimeout(this.holdTimer);
     this.holdTimer = null;
@@ -869,6 +1079,10 @@ class Stage3D implements StageApi, PointerHost {
     for (const ink of this.inks) ink.dispose();
     this.mapPlane.dispose();
     this.materials.dispose();
+    this.belowMaterials.dispose();
+    // Nothing covered any more, unless a newer stage has taken the cover over;
+    // the fog lid goes with it.
+    this.cover.dispose();
     try {
       this.rt.dispose();
     } catch {
@@ -891,18 +1105,26 @@ export async function createStage(opts: StageOptions, hooks: Stage3DHooks): Prom
   root.style.cssText = 'position:relative;width:100%;height:100%;overflow:hidden;touch-action:none;';
   opts.host.appendChild(root);
   let rt: Runtime3D | null = null;
+  // The cover first: the runtime's first frame and first bake are drawn
+  // under it, and lit only by the tokens the fog does not cover.
+  const cover = new CoverMasks(fogDetailFor(hooks.quality));
   try {
-    rt = createRuntime3D(root, runtimeOptions(opts.state, CATALOGUE_DEFS, getQualityPreference()), {
+    cover.update(opts.state, topDownMetrics(opts.state.scene));
+    const fogged = (token: Token): boolean => cover.coveredAt(token, 'fog') >= HIDDEN_AT;
+    // The quality this device starts at for this role (the TV's is Low),
+    // resolved by the loader.
+    rt = createRuntime3D(root, runtimeOptions(opts.state, CATALOGUE_DEFS, hooks.quality, fogged), {
       orbit: false,
       onContextLost: () => hooks.onLost('context lost'),
     });
-    return new Stage3D(opts, rt, root, hooks);
+    return new Stage3D(opts, rt, root, hooks, cover);
   } catch (err) {
     try {
       rt?.dispose();
     } catch {
       // Already failing; the error below is the one worth reporting.
     }
+    cover.dispose();
     root.remove();
     throw err;
   }

@@ -12,7 +12,9 @@
  * kept as the grid point that is (g = px / cell − offset, as `FloorInk` does).
  * `layout` places every label through the camera — the stage calls it after
  * any frame in which the view moved — and a label put between layouts is
- * placed at once with the last camera it was given.
+ * placed at once with the last camera it was given. A label whose anchor the
+ * viewer may not see (`setCover`: a player's fog) is hidden, as the fog
+ * covers the 2D map's labels under it.
  *
  * The two looks match the 2D map's (`stage/textLabels.ts`):
  *   - a `tag` (a zone's or fog region's name) is 12px Inter outlined in the
@@ -94,6 +96,8 @@ export class DomLabels extends LabelPool<HTMLElement> {
   private project: FloorProjector | null = null;
   private frame: Frame | null = null;
   private visible = true;
+  /** Whether the viewer may not see a label's anchor (`setCover`); null hides none. */
+  private covered: ((at: Point) => boolean) | null = null;
 
   /**
    * `container` is the stage's overlay element over the canvas (positioned,
@@ -125,6 +129,16 @@ export class DomLabels extends LabelPool<HTMLElement> {
     if (!visible) return;
     this.frame = this.frameFor(project);
     for (const [el, at] of this.placed) this.place(el, at);
+  }
+
+  /**
+   * Hide every label whose anchor (a grid point) `covered` says the viewer may
+   * not see — under a player's fog, as the 2D map's labels under its fog are
+   * — or none, with null. Takes effect at the next `layout`, which the caller
+   * asks for when the answer may have changed.
+   */
+  setCover(covered: ((at: Point) => boolean) | null): void {
+    this.covered = covered;
   }
 
   /** Remove every label and the layer. The sink puts nothing after this. */
@@ -214,7 +228,7 @@ export class DomLabels extends LabelPool<HTMLElement> {
     const f = this.frame;
     if (project === null || f === null) return;
     const s = project(p.at);
-    if (!Number.isFinite(s.x) || !Number.isFinite(s.y)) {
+    if (!Number.isFinite(s.x) || !Number.isFinite(s.y) || this.covered?.(p.at) === true) {
       if (this.written.get(el) !== '') el.style.visibility = 'hidden';
       this.written.set(el, '');
       return;

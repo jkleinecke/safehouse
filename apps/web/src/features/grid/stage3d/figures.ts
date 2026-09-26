@@ -23,7 +23,8 @@
  *   - its aura, when it has one: `aura.radiusM` across the floor in its
  *     colour, a faint fill and a firmer edge, as the 2D map draws it.
  * A ghosted figure (the GM's view of a hidden token) is drawn see-through, in
- * one pair of materials the whole pool shares: ghosting costs nothing a frame.
+ * one pair of materials shared by every figure of its kind (below): ghosting
+ * costs nothing a frame.
  *
  * Motion is the 2D figure's (`tokenView.ts` `tick`): a figure glides to where
  * it should be — its token's square, or a drag ghost the stage points it at
@@ -34,6 +35,24 @@
  *
  * World units are the lab's: x = grid x, z = grid y, y up in squares, floor
  * `L` at y = L × storey.
+ *
+ * Two kinds of figure share the pool, kept apart by `sync`'s two lists:
+ *   - the floor in view's own, which everything above is about;
+ *   - the ones seen down through its open squares (the stage's
+ *     `belowTokens`), stood on their own floors below, inside the shade the
+ *     runtime lays over those floors, as the 2D map's `BelowFloors` draws
+ *     them. They are looked at, never worked: no rings, no plate
+ *     (`positionOf` gives none), no drag or drag ghost, and the pointer never
+ *     takes them (`pick`) — the GM works on them from their own floor. A
+ *     token that crosses between the two (the view goes up a floor, a runner
+ *     drops through a hatch) keeps its figure: only its part changes.
+ *
+ * The two kinds wear different covers (`cover.ts`), after the 2D map's layers:
+ * the floor in view's figures lie over its sightline shroud and under its
+ * fog, as its tokens do; the 2D map draws the floors below under its shroud,
+ * so a figure seen below is darkened outside the viewer's sightline too.
+ * Each kind has its own set of materials (the pool's `inView` and `seenBelow`
+ * looks), and a figure crossing between the two is built again in the other.
  *
  * Nothing here asks for frames. The stage adds `group` to the runtime's scene
  * and wires `tick` as a runtime before-frame hook, which keeps frames coming
@@ -64,6 +83,7 @@ import type { FigurePose } from '../stage/figure.js';
 import { downedBy, tokenPose, WALK_SQUARES_PER_S } from '../stage/tokenState.js';
 import { buildFigure, disposeFigure, type FigureCtx } from '../../lab3d/figure3d.js';
 import type { LabMaterials } from '../../lab3d/geometry3d.js';
+import { applyCover, coverModeOf, type CoverMode } from './cover.js';
 
 /**
  * One token as the pool (and the plates, `badges.ts`) draws it: the stage's
@@ -136,10 +156,12 @@ function flatDisc(r: number, segments = 64): BufferGeometry {
 /**
  * The material for a flat mark: unlit and untouched by tone mapping, so the
  * cyan is the app's cyan; see-through, writing no depth, pulled toward the
- * camera so the floor under it never wins.
+ * camera so the floor under it never wins. Under the cover the figure it
+ * belongs to wears (`cover.ts`): by default the fog alone, over the shroud,
+ * like the token it rings.
  */
-function flatMaterial(color: number, opacity: number): MeshBasicMaterial {
-  return new MeshBasicMaterial({
+function flatMaterial(color: number, opacity: number, cover: CoverMode = 'fog'): MeshBasicMaterial {
+  const m = new MeshBasicMaterial({
     color,
     transparent: true,
     opacity,
@@ -149,6 +171,22 @@ function flatMaterial(color: number, opacity: number): MeshBasicMaterial {
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -2,
   });
+  applyCover(m, cover);
+  return m;
+}
+
+/**
+ * What one kind of figure is drawn with (see the module note): the lab's
+ * materials for the body, their see-through twins for a ghost, and the blob
+ * shadow's — all under one cover.
+ */
+interface FigureLook {
+  readonly lab: LabMaterials;
+  readonly ghostSolid: MeshStandardMaterial;
+  readonly ghostGlow: MeshStandardMaterial;
+  readonly blob: MeshBasicMaterial;
+  /** The cover they wear, which the aura's materials take too. */
+  readonly cover: CoverMode;
 }
 
 /** A soft round shadow: black, its alpha falling off from the middle to nothing at the rim. */
@@ -201,6 +239,12 @@ interface Figure {
   readonly select: Mesh;
   readonly act: Mesh;
   aura: { fill: Mesh; edge: Mesh } | null;
+  /**
+   * Seen from the floor in view down through its open squares rather than
+   * standing on it: shown on its own floor below, never ringed, plated,
+   * pointed elsewhere or picked.
+   */
+  below: boolean;
   /** The state it was last synced with. */
   state: FigureState;
   /** The look signature it was built for. */
@@ -245,21 +289,32 @@ export class FigurePool {
   private readonly pickMaterial = new MeshBasicMaterial({ visible: false });
   private readonly blobPlane: BufferGeometry = new PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
   private readonly blobMap = blobTexture();
-  private readonly blobMaterial: MeshBasicMaterial;
   private readonly selectMaterial = flatMaterial(C.cyan, RING_ALPHA);
   /** Shared by every acting ring. Steady: the plate over the head carries the breath. */
   private readonly actMaterial = flatMaterial(C.warn, RING_ALPHA);
-  private readonly auraMaterials = new Map<number, { fill: MeshBasicMaterial; edge: MeshBasicMaterial }>();
-  private readonly ghostSolid: MeshStandardMaterial;
-  private readonly ghostGlow: MeshStandardMaterial;
+  /** Keyed by cover and colour: an aura seen below wears the figure's cover below. */
+  private readonly auraMaterials = new Map<string, { fill: MeshBasicMaterial; edge: MeshBasicMaterial }>();
+  /** What the floor in view's figures are drawn with. */
+  private readonly inView: FigureLook;
+  /** What the figures seen below are drawn with: `inView` itself when the stage gave one set. */
+  private readonly seenBelow: FigureLook;
 
-  constructor(
-    private readonly materials: LabMaterials,
-    ctx: FigureCtx,
-  ) {
+  /**
+   * `materials` draw the floor in view's figures; `belowMaterials` the ones
+   * seen below it, under the cover those wear (see the module note) — the
+   * same set when not given. The stage owns both sets and frees them.
+   */
+  constructor(materials: LabMaterials, ctx: FigureCtx, belowMaterials: LabMaterials = materials) {
     this.ctx = { unitM: ctx.unitM > 0 ? ctx.unitM : 1, storey: ctx.storey };
     this.group.name = 'stage-figures';
-    this.blobMaterial = new MeshBasicMaterial({
+    this.inView = this.lookOf(materials);
+    this.seenBelow = belowMaterials === materials ? this.inView : this.lookOf(belowMaterials);
+  }
+
+  /** The ghost and blob materials that go with a set of the lab's, under the cover that set wears. */
+  private lookOf(lab: LabMaterials): FigureLook {
+    const cover = coverModeOf(lab.solid) ?? 'fog';
+    const blob = new MeshBasicMaterial({
       color: 0x000000,
       map: this.blobMap,
       transparent: true,
@@ -270,17 +325,30 @@ export class FigurePool {
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -1,
     });
-    // The lab's own materials, see-through. The glow keeps its shader patch
-    // (its vertex colour is its emissive colour), which a clone does not copy.
-    this.ghostSolid = materials.solid.clone();
-    this.ghostSolid.transparent = true;
-    this.ghostSolid.opacity = GHOST_ALPHA;
-    this.ghostSolid.depthWrite = false;
-    this.ghostGlow = materials.glow.clone();
-    this.ghostGlow.onBeforeCompile = materials.glow.onBeforeCompile;
-    this.ghostGlow.transparent = true;
-    this.ghostGlow.opacity = GHOST_ALPHA;
-    this.ghostGlow.depthWrite = false;
+    applyCover(blob, cover);
+    // The lab's own materials, see-through, under the same cover as they are
+    // (`cover.ts`), which a clone does not copy. The glow keeps its shader
+    // patch (its vertex colour is its emissive colour, and the cover is
+    // wrapped round it) with the program key that says so; handed to
+    // `applyCover` only to be counted among the cover's wearers.
+    const ghostSolid = lab.solid.clone();
+    applyCover(ghostSolid, cover);
+    ghostSolid.transparent = true;
+    ghostSolid.opacity = GHOST_ALPHA;
+    ghostSolid.depthWrite = false;
+    const ghostGlow = lab.glow.clone();
+    ghostGlow.onBeforeCompile = lab.glow.onBeforeCompile;
+    ghostGlow.customProgramCacheKey = lab.glow.customProgramCacheKey;
+    ghostGlow.transparent = true;
+    ghostGlow.opacity = GHOST_ALPHA;
+    ghostGlow.depthWrite = false;
+    applyCover(ghostGlow, cover);
+    return { lab, ghostSolid, ghostGlow, blob, cover };
+  }
+
+  /** The look a figure is drawn in, by which kind it is. */
+  private lookFor(f: Figure): FigureLook {
+    return f.below ? this.seenBelow : this.inView;
   }
 
   /**
@@ -288,20 +356,17 @@ export class FigurePool {
    * gone ones, rebuild one only when its look signature changed, and update
    * everything else (rings, aura, floor, where it is headed) in place. A new
    * figure starts on its token's square.
+   *
+   * `states` are the tokens on the floor in view; `below` the ones seen down
+   * through its open squares, each at the floor it stands on. Both lists are
+   * taken at once so a token that moved from one to the other in this update
+   * keeps its figure. Should a token be in both, the floor in view wins.
    */
-  sync(states: ReadonlyArray<FigureState>): void {
+  sync(states: ReadonlyArray<FigureState>, below: ReadonlyArray<FigureState> = []): void {
     if (this.disposed) return;
     const seen = new Set<string>();
-    for (const s of states) {
-      const id = s.token.id;
-      seen.add(id);
-      let f = this.figures.get(id);
-      if (!f) {
-        f = this.create(s);
-        this.figures.set(id, f);
-      }
-      this.apply(f, s);
-    }
+    for (const s of below) this.take(s, true, seen);
+    for (const s of states) this.take(s, false, seen);
     for (const [id, f] of this.figures) {
       if (seen.has(id)) continue;
       this.drop(f);
@@ -376,11 +441,15 @@ export class FigurePool {
     return busy;
   }
 
-  /** Show only the figures on floor `level`; the rest hide (tokens seen on other floors come in P2). */
+  /**
+   * Floor `level` is in view: its own figures show, and the ones seen below
+   * it on their floors beneath; anything else (a figure left on another
+   * floor until the next `sync` moves it) hides.
+   */
   setLevel(level: number): void {
     if (this.disposed) return;
     this.level = level;
-    for (const f of this.figures.values()) f.root.visible = f.level === level;
+    for (const f of this.figures.values()) f.root.visible = this.shows(f.level, f.below);
   }
 
   /**
@@ -403,12 +472,18 @@ export class FigurePool {
    * The token whose figure the ray meets first, of those on show; null for
    * none. Each figure is hit by a box round its body a little larger than it
    * (`PICK_PAD`), so a thin arm or a figure seen from straight above is
-   * still easy to take hold of.
+   * still easy to take hold of. `may`, when given, says which tokens the
+   * pointer may take at all: the others are passed through, so one it may
+   * not take (a player's view of one under the fog, which is not drawn) never
+   * stands in front of one it may.
    */
-  pick(raycaster: Raycaster): string | null {
+  pick(raycaster: Raycaster, may?: (tokenId: string) => boolean): string | null {
     if (this.disposed) return null;
     const targets: Object3D[] = [];
-    for (const f of this.figures.values()) if (f.root.visible) targets.push(f.proxy);
+    // A figure seen below is never taken from here: the 2D map's rule.
+    for (const f of this.figures.values()) {
+      if (f.root.visible && !f.below && (may === undefined || may(f.id))) targets.push(f.proxy);
+    }
     if (targets.length === 0) return null;
     // Moved since the last frame drew them: bring the matrices up to date first.
     this.group.updateMatrixWorld(true);
@@ -418,13 +493,14 @@ export class FigurePool {
 
   /**
    * Just over the head of a token's figure where it stands now, in world
-   * units — where its plate hangs. Null when it has no figure or its figure
-   * is not on show. The vector is the pool's own, updated as the figure
-   * moves: read it, do not keep or change it.
+   * units — where its plate hangs. Null when it has no figure, its figure
+   * is not on show, or it is seen below (those carry no plate). The vector
+   * is the pool's own, updated as the figure moves: read it, do not keep or
+   * change it.
    */
   positionOf(tokenId: string): Vector3 | null {
     const f = this.figures.get(tokenId);
-    return f && f.root.visible && !this.disposed ? f.head : null;
+    return f && f.root.visible && !f.below && !this.disposed ? f.head : null;
   }
 
   /** Free every figure and everything the pool made, and take the group out of the scene. */
@@ -438,7 +514,6 @@ export class FigurePool {
     this.pickMaterial.dispose();
     this.blobPlane.dispose();
     this.blobMap.dispose();
-    this.blobMaterial.dispose();
     this.selectMaterial.dispose();
     this.actMaterial.dispose();
     for (const m of this.auraMaterials.values()) {
@@ -446,20 +521,48 @@ export class FigurePool {
       m.edge.dispose();
     }
     this.auraMaterials.clear();
-    this.ghostSolid.dispose();
-    this.ghostGlow.dispose();
+    // The lab's sets are the stage's; the ghosts and blobs made for them are the pool's.
+    for (const look of new Set([this.inView, this.seenBelow])) {
+      look.blob.dispose();
+      look.ghostSolid.dispose();
+      look.ghostGlow.dispose();
+    }
     this.group.removeFromParent();
   }
 
   // --- one figure ----------------------------------------------------------
 
-  private create(s: FigureState): Figure {
+  /**
+   * Whether a figure on floor `level` is on show with this floor in view:
+   * one of the floor's own stands on it; one seen below stands under it.
+   */
+  private shows(level: number, below: boolean): boolean {
+    return below ? level < this.level : level === this.level;
+  }
+
+  /** Make or update the figure for `s`, as one of the floor in view's own or as one seen below it (`below`). */
+  private take(s: FigureState, below: boolean, seen: Set<string>): void {
+    const id = s.token.id;
+    seen.add(id);
+    let f = this.figures.get(id);
+    if (!f) {
+      f = this.create(s, below);
+      this.figures.set(id, f);
+    }
+    // Nothing points a figure seen below anywhere but its token's square; a
+    // drag ghost it carried off the floor in view goes with it.
+    if (below) this.overrides.delete(id);
+    f.below = below;
+    this.apply(f, s);
+  }
+
+  private create(s: FigureState, below: boolean): Figure {
     const id = s.token.id;
     const root = new Group();
     root.name = `token:${id}`;
     root.userData.tokenId = id;
     root.userData.level = s.level;
-    root.visible = s.level === this.level;
+    root.visible = this.shows(s.level, below);
     const turn = new Group();
     root.add(turn);
 
@@ -468,7 +571,7 @@ export class FigurePool {
     proxy.userData.tokenId = id;
     turn.add(proxy);
 
-    const blob = new Mesh(this.blobPlane, this.blobMaterial);
+    const blob = new Mesh(this.blobPlane, (below ? this.seenBelow : this.inView).blob);
     blob.position.y = BLOB_LIFT;
     blob.renderOrder = 1;
     turn.add(blob);
@@ -497,6 +600,7 @@ export class FigurePool {
       select,
       act,
       aura: null,
+      below,
       state: s,
       sig: '',
       pose: 'stand',
@@ -518,7 +622,9 @@ export class FigurePool {
     const token = s.token;
     const pose = tokenPose(token, downedBy(s.bars));
     const size = token.size > 0 ? token.size : 1;
-    const sig = `${lookKey(token)}|${size}|${pose}|${s.ghosted ? 1 : 0}`;
+    // Which kind it is only matters to its body where the two kinds wear different covers.
+    const part = this.seenBelow !== this.inView && f.below ? 'below' : '';
+    const sig = `${lookKey(token)}|${size}|${pose}|${s.ghosted ? 1 : 0}|${part}`;
     f.state = s;
     if (sig !== f.sig) {
       f.sig = sig;
@@ -527,8 +633,9 @@ export class FigurePool {
     }
     if (size !== f.ringSize) this.fitRings(f, size);
     this.fitAura(f, token.aura ?? null);
-    f.select.visible = s.selected;
-    f.act.visible = s.acting;
+    // Seen below, a figure is never selected or acting from here (2D's rule).
+    f.select.visible = s.selected && !f.below;
+    f.act.visible = s.acting && !f.below;
 
     // A token turned by hand (or by a move landing) faces its new way — once
     // it has stopped; while it glides, the way it goes wins.
@@ -542,8 +649,9 @@ export class FigurePool {
     if (s.level !== f.level) {
       f.level = s.level;
       f.root.userData.level = s.level;
-      f.root.visible = s.level === this.level;
     }
+    // Its floor, or which part it plays (`take`), may have changed.
+    f.root.visible = this.shows(f.level, f.below);
     this.place(f);
   }
 
@@ -555,21 +663,23 @@ export class FigurePool {
     }
     const s = f.state;
     const size = s.token.size > 0 ? s.token.size : 1;
+    const look = this.lookFor(f);
     let body: Group | null = null;
     try {
-      body = buildFigure(s.token, this.materials, { unitM: this.ctx.unitM, storey: this.ctx.storey, pose: f.pose });
+      body = buildFigure(s.token, look.lab, { unitM: this.ctx.unitM, storey: this.ctx.storey, pose: f.pose });
     } catch (err) {
       // One token the builder cannot make sense of costs that figure, not the map.
       console.warn(`[stage3d] token ${s.token.id} could not be built as a figure`, err);
     }
+    f.blob.material = look.blob;
     const box = new Box3();
     if (body) {
       body.traverse((o) => {
         if (!(o instanceof Mesh)) return;
         o.castShadow = false;
         if (s.ghosted) {
-          if (o.material === this.materials.solid) o.material = this.ghostSolid;
-          else if (o.material === this.materials.glow) o.material = this.ghostGlow;
+          if (o.material === look.lab.solid) o.material = look.ghostSolid;
+          else if (o.material === look.lab.glow) o.material = look.ghostGlow;
         }
         const g = o.geometry;
         if (!g.boundingBox) g.computeBoundingBox();
@@ -612,9 +722,10 @@ export class FigurePool {
     f.act.geometry = flatRing(r + ACT_GAP - ACT_HALF_W, r + ACT_GAP + ACT_HALF_W);
   }
 
-  /** The aura, redrawn only when its radius, colour or the scale changed. */
+  /** The aura, redrawn only when its radius, colour or the scale changed, or the figure's cover (its kind). */
   private fitAura(f: Figure, aura: TokenAura | null): void {
-    const key = aura ? `${aura.radiusM}|${aura.color ?? ''}|${this.ctx.unitM}` : '';
+    const cover = this.lookFor(f).cover;
+    const key = aura ? `${aura.radiusM}|${aura.color ?? ''}|${this.ctx.unitM}|${cover}` : '';
     if (key === f.auraKey) return;
     f.auraKey = key;
     if (f.aura) {
@@ -626,7 +737,7 @@ export class FigurePool {
     }
     if (!aura) return;
     const r = aura.radiusM / this.ctx.unitM;
-    const mats = this.auraMaterialsFor(parseColor(aura.color, C.magenta));
+    const mats = this.auraMaterialsFor(parseColor(aura.color, C.magenta), cover);
     const segments = Math.min(128, Math.max(48, Math.round(r * 12)));
     const fill = new Mesh(flatDisc(r, segments), mats.fill);
     const edge = new Mesh(flatRing(r - AURA_EDGE_HALF_W, r + AURA_EDGE_HALF_W, segments), mats.edge);
@@ -638,18 +749,19 @@ export class FigurePool {
     f.aura = { fill, edge };
   }
 
-  private auraMaterialsFor(color: number): { fill: MeshBasicMaterial; edge: MeshBasicMaterial } {
-    let m = this.auraMaterials.get(color);
+  private auraMaterialsFor(color: number, cover: CoverMode): { fill: MeshBasicMaterial; edge: MeshBasicMaterial } {
+    const key = `${cover}|${color}`;
+    let m = this.auraMaterials.get(key);
     if (!m) {
-      m = { fill: flatMaterial(color, AURA_FILL_ALPHA), edge: flatMaterial(color, AURA_EDGE_ALPHA) };
-      this.auraMaterials.set(color, m);
+      m = { fill: flatMaterial(color, AURA_FILL_ALPHA, cover), edge: flatMaterial(color, AURA_EDGE_ALPHA, cover) };
+      this.auraMaterials.set(key, m);
     }
     return m;
   }
 
-  /** Where a figure is headed: the stage's point for it, else its token's square. */
+  /** Where a figure is headed: the stage's point for it, else its token's square (always, for one seen below). */
   private targetOf(f: Figure): Point {
-    return this.overrides.get(f.id) ?? f.state.token;
+    return (f.below ? undefined : this.overrides.get(f.id)) ?? f.state.token;
   }
 
   /** Stand the figure where it now is, turned as it now faces, and move its plate point with it. */

@@ -135,7 +135,11 @@ export function normalizeGeometry(raw: unknown): SceneGeometry {
 
 export function normalizeFog(raw: unknown): FogState {
   const parsed = FogStateSchema.safeParse(isRecord(raw) ? raw : {});
-  return parsed.success ? parsed.data : FogStateSchema.parse({});
+  const fog = parsed.success ? parsed.data : FogStateSchema.parse({});
+  // `active` is said on a player's copy (`sceneForViewer`), from the regions;
+  // it is never stored, so a stale one can never outlive them.
+  delete fog.active;
+  return fog;
 }
 
 /**
@@ -290,6 +294,12 @@ export function sceneForViewer(scene: Scene, gm: boolean): Scene {
       regions: scene.fog.regions.filter((r) => revealed.has(r.id)),
       revealed: scene.fog.revealed,
       revealedShapes: scene.fog.revealedShapes,
+      // Whether the scene is fogged at all. The regions above are only the
+      // revealed ones, so a scene fogged with nothing revealed yet — or just
+      // reset — would otherwise read as one with no fog, and every player
+      // device and the TV would draw the whole map open (FR9.13). A count of
+      // one bit: nothing of an unrevealed region's shape, name or number.
+      active: scene.fog.regions.length > 0,
     },
   };
   delete (filtered as { notes?: string }).notes;

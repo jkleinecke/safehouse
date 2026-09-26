@@ -72,6 +72,7 @@ import {
 } from 'three';
 import type { Point } from '@safehouse/contracts';
 import type { LightRow, LightSource } from '@safehouse/rules';
+import { applyCover, coverModeOf } from '../grid/stage3d/cover.js';
 import type { BuiltWorld } from './world3d.js';
 
 // ---------------------------------------------------------------------------
@@ -868,7 +869,9 @@ function replaceOnce(src: string, target: string, code: string): string {
  * Low's material for a world material: unlit, its colour the vertex paint
  * times (hemisphere + key + baked) / π — what the lit material's diffuse term
  * would make of the same light, without its specular, shadows or per-pixel
- * anything.
+ * anything. It wears the world material's fog-and-shroud cover
+ * (`grid/stage3d/cover.ts`) as its own, wrapped round the hook below: a new
+ * material, it inherits nothing from the one it stands in for.
  */
 function lowVariant(orig: MeshStandardMaterial, u: LowUniforms): MeshBasicMaterial {
   const m = new MeshBasicMaterial({
@@ -899,10 +902,19 @@ function lowVariant(orig: MeshStandardMaterial, u: LowUniforms): MeshBasicMateri
       );
   };
   m.customProgramCacheKey = () => 'lab3d-baked-unlit';
+  const cover = coverModeOf(orig);
+  if (cover !== null) applyCover(m, cover);
   return m;
 }
 
-/** Medium and High's material for a world material: the same lit material, plus the baked lamps in its diffuse. */
+/**
+ * Medium and High's material for a world material: the same lit material, plus
+ * the baked lamps in its diffuse. It runs the world material's own compile
+ * hook first — the cover (`grid/stage3d/cover.ts`) with it, whose tag its key
+ * carries through the world material's — so it needs no cover of its own;
+ * it is handed to `applyCover` only to be counted among the materials the
+ * cover recompiles when its discard comes or goes.
+ */
 function litVariant(orig: MeshStandardMaterial): MeshStandardMaterial {
   const m = orig.clone();
   m.name = `${orig.name || 'lab'}:baked-lit`;
@@ -912,6 +924,8 @@ function litVariant(orig: MeshStandardMaterial): MeshStandardMaterial {
     shader.fragmentShader = LIT_FRAGMENT_PARS + insertAfter(shader.fragmentShader, '#include <lights_fragment_end>', LIT_FRAGMENT_MAIN);
   };
   m.customProgramCacheKey = () => `lab3d-baked-lit|${orig.customProgramCacheKey()}`;
+  const cover = coverModeOf(m);
+  if (cover !== null) applyCover(m, cover);
   return m;
 }
 
@@ -1090,6 +1104,8 @@ export function createLighting(ctx: {
       let mat = haloMaterials[i];
       if (!sprite || !mat) {
         mat = new SpriteMaterial({ map: haloTexture, blending: AdditiveBlending, transparent: true, depthWrite: false });
+        // A lamp in a room the viewer may not see must not glow through the cover.
+        applyCover(mat, 'full');
         mat.opacity = haloOpacity;
         sprite = new Sprite(mat);
         haloMaterials.push(mat);

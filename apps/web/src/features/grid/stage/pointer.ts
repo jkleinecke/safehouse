@@ -1,6 +1,5 @@
 /**
  * Pointer/wheel state machine for the scene canvas: pan, wheel + pinch zoom,
- * turning the view (middle-drag, two-finger twist) where the camera can turn,
  * token drag with grid snap, ruler drag, ping double-tap, pointer trail, and
  * the single-click tools (AoE, fog vertex, focus, door toggle).
  *
@@ -54,8 +53,6 @@ import { allCells, containsCell, moveSelection, pastedSet } from '../cellSelecti
 type Mode =
   | 'idle'
   | 'pan'
-  // A middle-drag turning a view that can turn (`ViewCamera.rotateBy`).
-  | 'rotate'
   | 'token'
   | 'ruler'
   | 'trail'
@@ -73,14 +70,6 @@ type Mode =
 /** React-facing ruler updates are rate-limited; the pixi line is not. */
 const RULER_REPORT_MS = 50;
 
-/** How far a middle-drag turns the view: radians per screen px across (a half turn over 400 px). */
-const ROTATE_PER_PX = Math.PI / 400;
-/**
- * How far two fingers must twist, in radians (about 9°), before the view
- * starts turning with them. Fingers pinching to zoom never hold their angle
- * exactly, and a zoom should not wobble the map round.
- */
-const TWIST_START = 0.15;
 
 export interface PointerHost {
   /** The view the pointer is resolved through: screen ↔ grid, and pan/zoom. */
@@ -244,12 +233,6 @@ export class PointerController {
 
   // pinch
   private pinchDist = 0;
-  /** The line between the two fingers' angle on screen at the last move, radians. */
-  private pinchAngle = 0;
-  /** How far the fingers have twisted this pinch before the view began to turn with them. */
-  private twistHeld = 0;
-  /** The twist passed `TWIST_START`: the view now turns with the fingers. */
-  private twisting = false;
 
   private readonly onDown = (e: PointerEvent) => this.handleDown(e);
   private readonly onMove = (e: PointerEvent) => this.handleMove(e);
@@ -398,12 +381,6 @@ export class PointerController {
     return hitTileDoor(scene, grid, level);
   }
 
-  /** Whether the view turns now: it has `rotateBy` and is not locked (`ViewCamera.canRotate`). */
-  private turnable(): boolean {
-    const camera = this.host.camera;
-    return camera.rotateBy !== undefined && camera.canRotate !== false;
-  }
-
   private snapped(p: Point, size: number, raw: boolean): Point {
     if (raw || !this.host.state().snapEnabled) return p;
     return snapCenter(p, size);
@@ -477,13 +454,9 @@ export class PointerController {
       return;
     }
 
-    // The middle button turns a view that can turn (the 3D map, while it is
-    // not looking straight down), whatever tool is selected.
-    if (e.button === 1 && this.turnable()) {
-      this.mode = 'rotate';
-      return;
-    }
-    // Otherwise middle/right button always pans, whatever tool is selected.
+    // Middle/right button always pans, whatever tool is selected. The view
+    // never turns: the GM wants a fixed angle that pans and zooms
+    // (2026-09-26), on the 3D map as on the 2D one.
     if (e.button === 1 || e.button === 2) {
       this.mode = 'pan';
       return;
@@ -889,13 +862,6 @@ export class PointerController {
       return;
     }
 
-    // Across the screen turns the view: a drag to the right carries the
-    // near side of the map to the right, as the lab's orbit did.
-    if (this.mode === 'rotate') {
-      this.host.camera.rotateBy?.(dx * ROTATE_PER_PX);
-      return;
-    }
-
     // Every other gesture follows the floor point under the pointer. Where
     // the view shows no floor (a 3D camera's sky) it holds where it last was.
     const grid = this.toGrid(screen);
@@ -1157,9 +1123,6 @@ export class PointerController {
     const [a, b] = [...this.pointers.values()];
     if (!a || !b) return;
     this.pinchDist = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-    this.pinchAngle = Math.atan2(b.y - a.y, b.x - a.x);
-    this.twistHeld = 0;
-    this.twisting = false;
     this.abandonGesture();
     this.mode = 'pinch';
   }
@@ -1199,33 +1162,6 @@ export class PointerController {
     const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
     this.host.camera.zoomAt(mid.x, mid.y, dist / this.pinchDist);
     this.pinchDist = dist;
-    this.twist(a, b);
-  }
-
-  /**
-   * Two fingers twisting turn a view that can turn, about its target, and
-   * the map turns with the fingers. Nothing turns until the twist since the
-   * pinch began passes `TWIST_START`, and that first stretch is not made up
-   * afterwards, so the map never jumps.
-   */
-  private twist(a: ActivePointer, b: ActivePointer): void {
-    const camera = this.host.camera;
-    if (!camera.rotateBy || camera.canRotate === false) return;
-    const angle = Math.atan2(b.y - a.y, b.x - a.x);
-    // The turn since the last move, the short way round. Screen y runs
-    // down, so a positive turn is the fingers going clockwise.
-    let d = angle - this.pinchAngle;
-    if (d > Math.PI) d -= 2 * Math.PI;
-    else if (d < -Math.PI) d += 2 * Math.PI;
-    this.pinchAngle = angle;
-    if (!this.twisting) {
-      this.twistHeld += d;
-      this.twisting = Math.abs(this.twistHeld) >= TWIST_START;
-      return;
-    }
-    // `rotateBy` turns the camera clockwise seen from above, which turns
-    // the map the other way on screen; the map follows the fingers.
-    camera.rotateBy(-d);
   }
 
   private handleWheel(e: WheelEvent): void {

@@ -10,9 +10,11 @@
  * glide, and no second opinion on the zoom.
  *
  * Two camera kinds, both orthographic, following the map's projection:
- *   - iso: the 2D map's angle as a true isometric camera, and the only kind
- *     that turns (`rotateBy`, about the target);
- *   - top: straight down, north up, locked — a plan never turns.
+ *   - iso: the 2D map's angle as a true isometric camera;
+ *   - top: straight down, north up.
+ * Neither turns: the GM wants a fixed view that pans and zooms (2026-09-26),
+ * so there is no rotate gesture and a saved view keeps only where it looks
+ * and how close.
  *
  * Spaces: host px (relative to the host element's rect, what
  * `PointerController` hands over), grid units on the floor, and three.js
@@ -210,15 +212,6 @@ export class Camera3D implements ViewCamera {
     return this.rt.options.camera;
   }
 
-  /**
-   * Only the iso view turns. Looking straight down the view is locked, and
-   * the pointer treats it as a view that cannot turn: a middle-drag pans, as
-   * on the 2D map, and a two-finger twist only zooms.
-   */
-  get canRotate(): boolean {
-    return this.kind === 'iso';
-  }
-
   // -- ViewCamera --------------------------------------------------------------
 
   /**
@@ -298,18 +291,6 @@ export class Camera3D implements ViewCamera {
     cam.updateProjectionMatrix();
     const now = this.floorAt(sx, sy, this.hitB);
     if (was && now) this.shift(was.x - now.x, was.z - now.z);
-    this.changed();
-  }
-
-  /**
-   * Turn the view about its target by `radians`: the camera goes round
-   * clockwise seen from above (grid x to the right, grid y down, as the plan
-   * is drawn), so the map on screen turns the other way. Only the iso camera
-   * turns; in top-down this does nothing — a plan keeps north up.
-   */
-  rotateBy(radians: number): void {
-    if (this.disposed || this.kind !== 'iso' || radians === 0 || !Number.isFinite(radians)) return;
-    this.setAzimuth(this.azimuth() - radians);
     this.changed();
   }
 
@@ -498,7 +479,6 @@ export class Camera3D implements ViewCamera {
     const cam = this.rt.camera;
     const target = this.rt.controls.target;
     this.shift(saved.target.x - target.x, saved.target.y - target.z);
-    if (this.kind === 'iso') this.setAzimuth(saved.azimuth);
     cam.zoom = clamp(saved.zoom, ZOOM_MIN, ZOOM_MAX);
     cam.updateProjectionMatrix();
     this.moved = true;

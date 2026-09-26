@@ -76,16 +76,6 @@ export interface ViewCamera {
   panBy(dx: number, dy: number): void;
   /** Zoom by `factor`, keeping the floor point under screen `(sx, sy)` where it is. */
   zoomAt(sx: number, sy: number, factor: number): void;
-  /** Turn the view about its focus, radians clockwise seen from above. Absent where the view cannot turn (2D). */
-  rotateBy?(radians: number): void;
-  /**
-   * Whether `rotateBy` turns the view as it now stands. False for a view
-   * that can turn but is locked for now — the 3D map looking straight down,
-   * where a plan keeps north up — so the gestures that would turn it do what
-   * they do on a view that cannot (a middle-drag pans). Absent: the view
-   * turns whenever it has `rotateBy`.
-   */
-  readonly canRotate?: boolean;
   /**
    * True once the viewer has panned, zoomed or turned the view since it was
    * last fitted. The stage re-fits on a resize only while this is false.

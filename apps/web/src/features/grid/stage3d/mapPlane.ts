@@ -18,6 +18,8 @@
  * draws over the map and the map shows wherever the GM has not painted, as in
  * 2D. They are unlit and not tone-mapped — the map is the map, as it was
  * drawn — do not write depth, and are hidden until their image has loaded.
+ * A viewer's fog and shroud hide them square by square (`cover.ts`), as the
+ * 2D map's cover lies over its image.
  */
 import {
   BufferGeometry,
@@ -35,6 +37,7 @@ import {
 import type { Scene } from '@safehouse/contracts';
 import { metricsFor } from '../geometry.js';
 import { cropPixels, localSizeFor, parseMapImageRef, radians, type MapImageRef } from '../mapImage.js';
+import { applyCover } from './cover.js';
 
 /** Options for a `MapPlane`. */
 export interface MapPlaneOptions {
@@ -178,6 +181,9 @@ export class MapPlane {
         shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>\n${TONE_GLSL}`);
     };
     material.customProgramCacheKey = () => PROGRAM_KEY;
+    // Under the shroud and the fog, as the 2D map's image lies under both:
+    // the image is the whole map, unrevealed rooms included.
+    applyCover(material, 'full');
 
     const mesh = new Mesh(geometry, material);
     mesh.name = `map:${ref.id}`;

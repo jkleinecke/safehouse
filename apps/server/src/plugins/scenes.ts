@@ -65,6 +65,7 @@ import {
   computeScatter,
   normalizeGrid,
   hiddenByLayer,
+  normalizeFog,
   sceneForViewer,
   serializeScene,
   serializeToken,
@@ -914,7 +915,10 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
   /**
    * Fog events keep the payload player-safe: a *reveal* may carry the region
    * polygon (players now see it), `define`/unrevealed geometry stays GM-only,
-   * and `hide` carries an id with no geometry at all.
+   * and `hide` carries an id with no geometry at all. Every public one says
+   * whether the scene is fogged at all (`active`, as `sceneForViewer` does);
+   * a `define` that fogs an open scene or redraws a revealed region also
+   * tells the table, with nothing of an unrevealed region in it.
    *
    * The `scenes.fog` write and its event commit together (`Hub.atomic`). Fog
    * is the sharpest case of the half-commit in the whole app: a reveal that
@@ -928,6 +932,7 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     body: z.output<typeof FogOpBody>,
   ): Promise<{ fog: unknown }> {
     return app.hub.atomic(scene.campaignId, async (tx) => {
+      const wasFogged = normalizeFog(scene.fog).regions.length > 0;
       const { fog, region } = await svc.withDb(tx.db).applyFogOp(scene, {
         op: body.op,
         ...(body.regionId ? { regionId: body.regionId } : {}),
@@ -935,6 +940,10 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         ...(body.shape ? { shape: body.shape } : {}),
       });
       const isDefine = body.op === 'define';
+      // Whether the scene is fogged at all, as a player's copy says it
+      // (`sceneForViewer`): a device folding the events (the TV) keeps it
+      // true through a reset or the last reveal taken back.
+      const active = fog.regions.length > 0;
       await tx.emit({
         type: 'fog.updated',
         payload: {
@@ -943,9 +952,29 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
           ...(body.regionId ? { regionId: body.regionId } : {}),
           ...(!isDefine && region ? { region } : {}),
           ...(!isDefine && body.shape ? { shape: body.shape } : {}),
+          ...(isDefine ? {} : { active }),
         },
         visibility: isDefine ? 'gm' : 'public',
       });
+      // A `define` is the GM's, but two of them change what the table sees:
+      // the first region fogs a scene that was open, and a revealed region
+      // redrawn moves ground the players see. The table hears that much, and
+      // no more — the region itself only when it is a revealed one, whose
+      // shape is already theirs — so the players' Grids fetch the scene again
+      // and the TV folds it in.
+      const revealedRegion = isDefine && region && fog.revealed.includes(region.id) ? region : undefined;
+      if (isDefine && (!wasFogged || revealedRegion)) {
+        await tx.emit({
+          type: 'fog.updated',
+          payload: {
+            sceneId: scene.id,
+            op: 'define',
+            active,
+            ...(revealedRegion ? { regionId: revealedRegion.id, region: revealedRegion } : {}),
+          },
+          visibility: 'public',
+        });
+      }
       if (body.announce && body.op === 'reveal' && region) {
         await tx.emit({
           type: 'log.posted',

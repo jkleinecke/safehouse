@@ -16,7 +16,8 @@
  *    reconnection and slowly on a timer, in case the gap outran the buffer.
  * 3. **It does not leak.** One stage (one ticker), capped event and moment
  *    buffers, every timer single and cleared, and nothing allocated per frame —
- *    the per-frame work all lives inside the pixi stage.
+ *    the per-frame work all lives inside the map stage, which on the 3D map
+ *    draws only while something on it changes or moves.
  */
 import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';

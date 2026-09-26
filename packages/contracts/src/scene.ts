@@ -365,6 +365,16 @@ export const FogStateSchema = z.object({
   revealed: z.array(z.string()).default([]),
   /** Freeform revealed polygons from brush/polygon painting. */
   revealedShapes: z.array(z.array(PointSchema)).default([]),
+  /**
+   * Whether the scene is fogged at all: true when the GM has defined any
+   * region, revealed or not. Set on a non-GM viewer's copy only
+   * (`sceneForViewer`), which carries only the REVEALED regions — so a scene
+   * fogged with nothing revealed yet, or reset, would otherwise arrive as
+   * `regions: []` and read as a scene with no fog, the whole map open. Never
+   * stored: the GM's copy says it with `regions` itself. Absent reads as
+   * "not said", and the regions decide as before.
+   */
+  active: z.boolean().optional(),
 });
 export type FogState = z.infer<typeof FogStateSchema>;
 

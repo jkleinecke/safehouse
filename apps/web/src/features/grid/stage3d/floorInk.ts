@@ -54,6 +54,20 @@
  * shared unlit, depth-tested, non-depth-writing material serves every
  * FloorInk: walls and figures standing in front of an overlay hide it, and
  * overlays never hide each other or anything else.
+ *
+ * ## Under the cover, or over it
+ *
+ * Each ink says which of the players' masks hide it (`cover`, `cover.ts`),
+ * after the 2D layer its drawing sits in: the light-map wash lies under the
+ * shroud and the fog, the grid and the doors over the shroud and under the
+ * fog, and the templates, the ruler and the drafts over both. There is one
+ * shared pair of materials per answer.
+ *
+ * ## The recorder
+ *
+ * Recording the calls under pixi's rules is `RecordingInk`, which knows
+ * nothing about three: this class turns its list into meshes, and the fog
+ * mask's `CanvasInk` (`masks.ts`) paints the same list on a canvas.
  */
 import {
   BufferGeometry,
@@ -71,9 +85,10 @@ import {
 } from 'three';
 import type { SceneMetrics } from '../geometry.js';
 import type { Ink, InkFill, InkStroke } from '../stage/ink.js';
+import { applyCover, exemptFromCover, type CoverMode } from './cover.js';
 
 /** One shape as it was drawn: flat `[x0, y0, x1, y1, …]` in world px. */
-interface Shape {
+export interface InkShape {
   pts: number[];
   closed: boolean;
 }
@@ -83,14 +98,25 @@ interface Shape {
  * from its last shape since. A fill and a stroke chained on the same shapes
  * share one, so a cut reaches both.
  */
-interface Path {
-  shapes: Shape[];
-  holes: Shape[];
+export interface InkPath {
+  shapes: InkShape[];
+  holes: InkShape[];
 }
 
-type Op =
-  | { kind: 'fill'; path: Path; color: number; alpha: number }
-  | { kind: 'stroke'; path: Path; color: number; alpha: number; width: number; hair: boolean };
+/**
+ * One paint, as recorded: a fill, or a stroke — `hair` when it is one screen
+ * pixel wide (`pixelLine`, or no more than 1 px).
+ */
+export type InkOp =
+  | { kind: 'fill'; path: InkPath; color: number; alpha: number }
+  | { kind: 'stroke'; path: InkPath; color: number; alpha: number; width: number; hair: boolean };
+
+/**
+ * Which of the viewer's masks hide an ink (`cover.ts`): `full` the shroud and
+ * the fog, `fog` the fog alone, `none` neither (drawn over the cover, as the
+ * 2D map's fx layer is drawn over its fog).
+ */
+export type InkCover = CoverMode | 'none';
 
 /** A linear-space colour and its opacity, as the vertex colours carry it. */
 interface Rgba {
@@ -120,6 +146,12 @@ export interface FloorInkOptions {
    * hairlines draw at `renderOrder + 0.5`. Default 0.
    */
   renderOrder?: number;
+  /**
+   * Which masks hide what this ink draws (`InkCover`), as the 2D map layers
+   * the same drawing under or over its shroud and fog. Default `full`: hidden
+   * by both, the safe answer for anything that is part of the map.
+   */
+  cover?: InkCover;
 }
 
 /** Default lift above the floor, in squares. */
@@ -138,11 +170,12 @@ function sidesFor(r: number): number {
   return Math.min(96, Math.max(12, Math.ceil(Math.sqrt(Math.abs(r)) * 3)));
 }
 
-/** The materials every FloorInk shares, made on first use and kept. */
-let shared: { tris: MeshBasicMaterial; lines: LineBasicMaterial } | null = null;
+/** The materials every FloorInk under the same cover shares, made on first use and kept. */
+const shared = new Map<InkCover, { tris: MeshBasicMaterial; lines: LineBasicMaterial }>();
 
-function materials(): { tris: MeshBasicMaterial; lines: LineBasicMaterial } {
-  if (shared !== null) return shared;
+function materials(cover: InkCover): { tris: MeshBasicMaterial; lines: LineBasicMaterial } {
+  const known = shared.get(cover);
+  if (known !== undefined) return known;
   // Unlit and untone-mapped, so the palette comes out as the 2D map's hex
   // does; depth-tested so what stands in front hides it; not depth-writing,
   // so overlays never hide each other or what is drawn after them; and
@@ -161,7 +194,7 @@ function materials(): { tris: MeshBasicMaterial; lines: LineBasicMaterial } {
   });
   // A flat sheet has no back to draw first.
   tris.forceSinglePass = true;
-  tris.name = 'floor-ink';
+  tris.name = `floor-ink:${cover}`;
   const lines = new LineBasicMaterial({
     vertexColors: true,
     transparent: true,
@@ -170,9 +203,14 @@ function materials(): { tris: MeshBasicMaterial; lines: LineBasicMaterial } {
     toneMapped: false,
     fog: false,
   });
-  lines.name = 'floor-ink:hairline';
-  shared = { tris, lines };
-  return shared;
+  lines.name = `floor-ink:${cover}:hairline`;
+  for (const m of [tris, lines]) {
+    if (cover === 'none') exemptFromCover(m);
+    else applyCover(m, cover);
+  }
+  const made = { tris, lines };
+  shared.set(cover, made);
+  return made;
 }
 
 /** Overlays are never what a click lands on: the stage picks the floor itself. */
@@ -219,7 +257,7 @@ class Buf {
  * A shape's points as grid (x, z), flat, with repeated points dropped — and,
  * when `closing`, a last point that only repeats the first.
  */
-function toGrid(s: Shape, k: number, ox: number, oz: number, closing: boolean): number[] {
+function toGrid(s: InkShape, k: number, ox: number, oz: number, closing: boolean): number[] {
   const out: number[] = [];
   const p = s.pts;
   for (let i = 0; i + 1 < p.length; i += 2) {
@@ -387,53 +425,43 @@ function hairline(buf: Buf, p: number[], closed: boolean, c: Rgba): void {
 }
 
 /**
- * An `Ink` that draws on the 3D floor. One per overlay layer, like the 2D
- * stage's one Graphics per layer: add `group` to the three.js scene, hand the
- * FloorInk to the layer's draw function whenever its key changes, and it
- * shows what was drawn from the next frame on.
+ * The recording half of an `Ink`: every call an overlay makes, kept as the
+ * list of paints (`ops`) since the last `clear`, with pixi's rules applied
+ * (see "What a paint does" above). Knows nothing of what the list becomes: a
+ * subclass hears of every change through `changed`, and of a `clear` through
+ * `cleared` just before.
  */
-export class FloorInk implements Ink {
-  /** Holds this ink's meshes; sits at the floor's height. Add it to the scene. */
-  readonly group = new Group();
-
-  private readonly metrics: () => SceneMetrics;
-  private readonly floorY: () => number;
-  private readonly lift: number;
-  private readonly renderOrder: number;
-
+export abstract class RecordingInk implements Ink {
   /** The paints since the last `clear`, in order. */
-  private ops: Op[] = [];
+  protected ops: InkOp[] = [];
   /** Shapes built since the last paint. */
-  private shapes: Shape[] = [];
+  private shapes: InkShape[] = [];
   /** The polyline `moveTo`/`lineTo` are extending, not yet in `shapes`. */
-  private current: Shape | null = null;
+  private current: InkShape | null = null;
   /** Anything built since the last paint — pixi's "tick", which decides whether a paint reuses the last one's shapes. */
   private fresh = false;
   /** Where the pen is: a `lineTo` with no `moveTo` before it starts here, as on a Graphics. */
   private penX = 0;
   private penY = 0;
 
-  private dirty = false;
-  private scheduled = false;
-  private disposed = false;
-  private tris: Mesh<BufferGeometry, MeshBasicMaterial> | null = null;
-  private lines: LineSegments<BufferGeometry, LineBasicMaterial> | null = null;
+  /** The recording changed: a paint, a cut or a clear. */
+  protected abstract changed(): void;
 
-  constructor(options: FloorInkOptions) {
-    this.metrics = options.metrics;
-    this.floorY = options.floorY;
-    this.lift = options.lift ?? DEFAULT_LIFT;
-    this.renderOrder = options.renderOrder ?? 0;
-    this.group.name = 'floor-ink';
-  }
+  /** The recording is about to be told it changed because it was cleared. */
+  protected cleared(): void {}
 
-  clear(): this {
+  /** Drop everything recorded, telling nobody. */
+  protected forget(): void {
     this.ops = [];
     this.shapes = [];
     this.current = null;
     this.fresh = false;
-    this.dropMeshes();
-    this.markDirty();
+  }
+
+  clear(): this {
+    this.forget();
+    this.cleared();
+    this.changed();
     return this;
   }
 
@@ -481,7 +509,7 @@ export class FloorInk implements Ink {
   fill(style: InkFill): this {
     const path = this.pathFor('stroke');
     this.ops.push({ kind: 'fill', path, color: style.color, alpha: style.alpha });
-    this.markDirty();
+    this.changed();
     return this;
   }
 
@@ -489,7 +517,7 @@ export class FloorInk implements Ink {
     const path = this.pathFor('fill');
     const hair = style.pixelLine === true || style.width <= 1;
     this.ops.push({ kind: 'stroke', path, color: style.color, alpha: style.alpha, width: style.width, hair });
-    this.markDirty();
+    this.changed();
     return this;
   }
 
@@ -498,8 +526,81 @@ export class FloorInk implements Ink {
     const last = this.ops[this.ops.length - 1];
     if (holes.length === 0 || last === undefined) return this;
     last.path.holes.push(...holes);
-    this.markDirty();
+    this.changed();
     return this;
+  }
+
+  private pen(x: number, y: number): void {
+    this.penX = x;
+    this.penY = y;
+    this.fresh = true;
+  }
+
+  private endCurrent(): void {
+    if (this.current !== null && this.current.pts.length >= 4) this.shapes.push(this.current);
+    this.current = null;
+  }
+
+  private addShape(pts: number[], closed: boolean): void {
+    this.endCurrent();
+    if (pts.length >= 4) this.shapes.push({ pts, closed });
+    const n = pts.length;
+    if (n >= 2) this.pen(pts[n - 2]!, pts[n - 1]!);
+    else this.fresh = true;
+  }
+
+  /** The shapes built since the last paint, taken: the next ones start afresh. */
+  private takeShapes(): InkShape[] {
+    this.endCurrent();
+    const taken = this.shapes;
+    this.shapes = [];
+    return taken;
+  }
+
+  /**
+   * What a paint paints: the last paint's shapes again when it was of the
+   * `other` kind and nothing has been built since (fill, then stroke the same
+   * shape), else the shapes built since.
+   */
+  private pathFor(other: InkOp['kind']): InkPath {
+    const last = this.ops[this.ops.length - 1];
+    const reuse = !this.fresh && last !== undefined && last.kind === other;
+    this.fresh = false;
+    if (reuse) return last.path;
+    return { shapes: this.takeShapes(), holes: [] };
+  }
+}
+
+/**
+ * An `Ink` that draws on the 3D floor. One per overlay layer, like the 2D
+ * stage's one Graphics per layer: add `group` to the three.js scene, hand the
+ * FloorInk to the layer's draw function whenever its key changes, and it
+ * shows what was drawn from the next frame on.
+ */
+export class FloorInk extends RecordingInk {
+  /** Holds this ink's meshes; sits at the floor's height. Add it to the scene. */
+  readonly group = new Group();
+
+  private readonly metrics: () => SceneMetrics;
+  private readonly floorY: () => number;
+  private readonly lift: number;
+  private readonly renderOrder: number;
+  private readonly cover: InkCover;
+
+  private dirty = false;
+  private scheduled = false;
+  private disposed = false;
+  private tris: Mesh<BufferGeometry, MeshBasicMaterial> | null = null;
+  private lines: LineSegments<BufferGeometry, LineBasicMaterial> | null = null;
+
+  constructor(options: FloorInkOptions) {
+    super();
+    this.metrics = options.metrics;
+    this.floorY = options.floorY;
+    this.lift = options.lift ?? DEFAULT_LIFT;
+    this.renderOrder = options.renderOrder ?? 0;
+    this.cover = options.cover ?? 'full';
+    this.group.name = 'floor-ink';
   }
 
   /**
@@ -543,7 +644,7 @@ export class FloorInk implements Ink {
       }
     }
 
-    const mats = materials();
+    const mats = materials(this.cover);
     if (!tri.empty) {
       const mesh = new Mesh(tri.geometry(), mats.tris);
       mesh.renderOrder = this.renderOrder;
@@ -563,51 +664,17 @@ export class FloorInk implements Ink {
   /** Free the meshes and take the group out of the scene. The ink draws nothing after this. */
   dispose(): void {
     this.disposed = true;
-    this.ops = [];
-    this.shapes = [];
-    this.current = null;
+    this.forget();
     this.dropMeshes();
     this.group.removeFromParent();
   }
 
-  private pen(x: number, y: number): void {
-    this.penX = x;
-    this.penY = y;
-    this.fresh = true;
+  protected override cleared(): void {
+    this.dropMeshes();
   }
 
-  private endCurrent(): void {
-    if (this.current !== null && this.current.pts.length >= 4) this.shapes.push(this.current);
-    this.current = null;
-  }
-
-  private addShape(pts: number[], closed: boolean): void {
-    this.endCurrent();
-    if (pts.length >= 4) this.shapes.push({ pts, closed });
-    const n = pts.length;
-    if (n >= 2) this.pen(pts[n - 2]!, pts[n - 1]!);
-    else this.fresh = true;
-  }
-
-  /** The shapes built since the last paint, taken: the next ones start afresh. */
-  private takeShapes(): Shape[] {
-    this.endCurrent();
-    const taken = this.shapes;
-    this.shapes = [];
-    return taken;
-  }
-
-  /**
-   * What a paint paints: the last paint's shapes again when it was of the
-   * `other` kind and nothing has been built since (fill, then stroke the same
-   * shape), else the shapes built since.
-   */
-  private pathFor(other: Op['kind']): Path {
-    const last = this.ops[this.ops.length - 1];
-    const reuse = !this.fresh && last !== undefined && last.kind === other;
-    this.fresh = false;
-    if (reuse) return last.path;
-    return { shapes: this.takeShapes(), holes: [] };
+  protected changed(): void {
+    this.markDirty();
   }
 
   private markDirty(): void {
