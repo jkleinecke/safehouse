@@ -24,6 +24,8 @@
 import { Container, Graphics } from 'pixi.js';
 import { metricsKey, type SceneMetrics } from '../geometry.js';
 import {
+  AMBIENT_ALPHA,
+  SHADOW_ALPHA,
   cellSignatures,
   changedCells,
   chunkDepth,
@@ -47,6 +49,14 @@ import {
 export class ChunkedTileLayer {
   readonly root = new Container();
   private readonly floors = new Container();
+  /**
+   * The floor's shade, in two graphics each drawn SOLID and faded as a whole
+   * (`alpha` on the graphics, not on each fill). Every wall piece, arc
+   * segment and prop casts its own shape, and those shapes overlap; faded one
+   * by one, each overlap was darker than the rest and a run of wall read as a
+   * row of separate blotches. Drawn solid, the union is one shadow.
+   */
+  private readonly ambient = new Graphics();
   private readonly shadows = new Graphics();
   private readonly standing = new Container();
   private readonly lights = new Graphics();
@@ -63,7 +73,9 @@ export class ChunkedTileLayer {
   constructor() {
     this.root.eventMode = 'none';
     this.standing.sortableChildren = true;
-    this.root.addChild(this.floors, this.shadows, this.standing, this.lights);
+    this.ambient.alpha = AMBIENT_ALPHA;
+    this.shadows.alpha = SHADOW_ALPHA;
+    this.root.addChild(this.floors, this.ambient, this.shadows, this.standing, this.lights);
   }
 
   /** Throw everything away; the next update draws from scratch. */
@@ -77,6 +89,7 @@ export class ChunkedTileLayer {
     this.floorChunks.clear();
     this.standingChunks.clear();
     this.chunkLights.clear();
+    this.ambient.clear();
     this.shadows.clear();
     this.lights.clear();
     this.last = null;
@@ -125,9 +138,10 @@ export class ChunkedTileLayer {
       const t1 = performance.now();
 
       // Shadows and lights: whole passes, both cheap, both border-crossing.
+      this.ambient.clear();
       this.shadows.clear();
-      for (const cell of plan.standing) drawAmbientFor(this.shadows, m, cell, plan);
-      for (const cell of plan.standing) drawShadowFor(this.shadows, m, cell, plan);
+      for (const cell of plan.standing) drawAmbientFor(this.ambient, m, cell, plan, 1);
+      for (const cell of plan.standing) drawShadowFor(this.shadows, m, cell, plan, 1);
       const t2 = performance.now();
       this.lights.clear();
       for (const lights of this.chunkLights.values()) drawLights(this.lights, m, lights);

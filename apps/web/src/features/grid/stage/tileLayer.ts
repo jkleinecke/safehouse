@@ -141,7 +141,7 @@ export function isStanding(def: TileDrawDef): boolean {
  * darker face, which is what makes a box sit down instead of hover.
  */
 const SHADOW_REACH = 0.14;
-const SHADOW_ALPHA = 0.34;
+export const SHADOW_ALPHA = 0.34;
 
 /**
  * The contact shadow under a standing tile, on the floor.
@@ -162,13 +162,53 @@ function drawGroundShadow(
   m: SceneMetrics,
   rect: readonly [number, number, number, number],
   height: number,
+  alpha = SHADOW_ALPHA,
 ): void {
   const d = SHADOW_REACH * Math.max(0.5, height);
   const [x0, y0, x1, y1] = rect;
   poly(g, rectCorners(m, x0 + d, y0 + d, x1 + d, y1 + d)).fill({
     color: C.ground,
-    alpha: SHADOW_ALPHA,
+    alpha,
   });
+}
+
+/** The convex hull of some grid points (monotone chain). */
+function hull(pts: ReadonlyArray<{ x: number; y: number }>): Array<{ x: number; y: number }> {
+  const p = [...pts].sort((a, b) => a.x - b.x || a.y - b.y);
+  if (p.length < 3) return p;
+  const cross = (o: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) =>
+    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower: Array<{ x: number; y: number }> = [];
+  for (const q of p) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2]!, lower[lower.length - 1]!, q) <= 0) lower.pop();
+    lower.push(q);
+  }
+  const upper: Array<{ x: number; y: number }> = [];
+  for (let i = p.length - 1; i >= 0; i -= 1) {
+    const q = p[i]!;
+    while (upper.length >= 2 && cross(upper[upper.length - 2]!, upper[upper.length - 1]!, q) <= 0) upper.pop();
+    upper.push(q);
+  }
+  return [...lower.slice(0, -1), ...upper.slice(0, -1)];
+}
+
+/**
+ * The contact shadow of a footprint at any angle — a piece of a curved or
+ * angled wall: the footprint swept along the light's lean, as its hull with
+ * a copy pushed away from the light. The axis-aligned box that stood in for
+ * it was a square round every half-square of a curve, and a curve drawn as
+ * overlapping squares came out as a staircase of blotches.
+ */
+function drawGroundShadowPoly(
+  g: Graphics,
+  m: SceneMetrics,
+  footprint: ReadonlyArray<{ x: number; y: number }>,
+  height: number,
+  alpha = SHADOW_ALPHA,
+): void {
+  const d = SHADOW_REACH * Math.max(0.5, height);
+  const swept = hull([...footprint, ...footprint.map((q) => ({ x: q.x + d, y: q.y + d }))]);
+  poly(g, swept.map((q) => worldFromGrid(m, q))).fill({ color: C.ground, alpha });
 }
 
 /**
@@ -181,18 +221,19 @@ function drawGroundShadow(
  * fence on it. Faint and wide; it must never read as a shadow of its own.
  */
 const AMBIENT_REACH = 0.22;
-const AMBIENT_ALPHA = 0.16;
+export const AMBIENT_ALPHA = 0.16;
 
 function drawAmbientRing(
   g: Graphics,
   m: SceneMetrics,
   rect: readonly [number, number, number, number],
+  alpha = AMBIENT_ALPHA,
 ): void {
   const [x0, y0, x1, y1] = rect;
   const d = AMBIENT_REACH;
   poly(g, rectCorners(m, x0 - d, y0 - d, x1 + d, y1 + d)).fill({
     color: C.ground,
-    alpha: AMBIENT_ALPHA,
+    alpha,
   });
 }
 
@@ -409,17 +450,6 @@ function band(a: { x: number; y: number }, b: { x: number; y: number }, over = 0
     { x: b2.x - uy * h, y: b2.y + ux * h },
     { x: b2.x + uy * h, y: b2.y - ux * h },
     { x: a2.x + uy * h, y: a2.y - ux * h },
-  ];
-}
-
-/** The rect around a piece of an arc, for its shadow. */
-function segRect(seg: { a: { x: number; y: number }; b: { x: number; y: number } }): FaceRect {
-  const h = WALL_THICKNESS / 2;
-  return [
-    Math.min(seg.a.x, seg.b.x) - h,
-    Math.min(seg.a.y, seg.b.y) - h,
-    Math.max(seg.a.x, seg.b.x) + h,
-    Math.max(seg.a.y, seg.b.y) + h,
   ];
 }
 
@@ -2301,20 +2331,37 @@ export function drawAmbientFor(
   m: SceneMetrics,
   cell: TileCell,
   plan: Pick<TilePlan, 'walls'>,
+  alpha = AMBIENT_ALPHA,
 ): void {
-  if ((cell.def.height ?? 0) < 1 || cell.seg !== undefined) return;
+  if ((cell.def.height ?? 0) < 1) return;
+  if (cell.seg !== undefined) {
+    // A curved or angled wall darkens the floor along both its sides, as a
+    // straight one does: its band, widened by the reach, ends rounded.
+    if (cell.def.blocksSight === false) return;
+    const { a, b } = cell.seg;
+    const r = WALL_THICKNESS / 2 + AMBIENT_REACH;
+    const pts: Array<{ x: number; y: number }> = [];
+    for (let i = 0; i < 16; i += 1) {
+      const t = (i / 16) * Math.PI * 2;
+      const ox = Math.cos(t) * r;
+      const oy = Math.sin(t) * r;
+      pts.push({ x: a.x + ox, y: a.y + oy }, { x: b.x + ox, y: b.y + oy });
+    }
+    poly(g, hull(pts).map((q) => worldFromGrid(m, q))).fill({ color: C.ground, alpha });
+    return;
+  }
   const shape = cell.def.footprint;
   if (cell.def.prop !== undefined) {
     // A designed thing takes light from the floor around its own footprint,
     // and only when it is solid enough to: a lamp post and a tree are full
     // height but a sightline passes them, and so does the light.
-    if (cell.def.blocksSight !== false) drawAmbientRing(g, m, objectRect(cell.def, cell.col, cell.row, m));
+    if (cell.def.blocksSight !== false) drawAmbientRing(g, m, objectRect(cell.def, cell.col, cell.row, m), alpha);
   } else if (shape === 'wall') {
     for (const r of wallRects(cell.col, cell.row, joinsOf(plan.walls, cell.col, cell.row))) {
-      drawAmbientRing(g, m, r);
+      drawAmbientRing(g, m, r, alpha);
     }
   } else if (shape === undefined || shape === 'fill') {
-    drawAmbientRing(g, m, [cell.col, cell.row, cell.col + 1, cell.row + 1]);
+    drawAmbientRing(g, m, [cell.col, cell.row, cell.col + 1, cell.row + 1], alpha);
   }
 }
 
@@ -2324,12 +2371,14 @@ export function drawShadowFor(
   m: SceneMetrics,
   cell: TileCell,
   plan: Pick<TilePlan, 'walls'> & Partial<Pick<TilePlan, 'water'>>,
+  alpha = SHADOW_ALPHA,
 ): void {
   const h = cell.def.height ?? (cell.def.footprint === 'stair' ? 0.5 : 0);
   const shape = cell.def.footprint;
   if (cell.seg !== undefined) {
-    // A piece of an arc casts from its own slab.
-    if (h > 0) drawGroundShadow(g, m, segRect(cell.seg), h);
+    // A piece of an arc casts from its own slab, at its own angle; the
+    // overlap into the next piece keeps a curve's shadow unbroken.
+    if (h > 0) drawGroundShadowPoly(g, m, band(cell.seg.a, cell.seg.b, 0.02), h, alpha);
     return;
   }
   if (cell.def.prop !== undefined) {
@@ -2339,17 +2388,17 @@ export function drawShadowFor(
     const sink = plan.water?.water.has(`${cell.col},${cell.row}`) ? waterSink(m) : 0;
     const [x0, y0, x1, y1] = objectRect(cell.def, cell.col, cell.row, m);
     const up = propPlacement(cell.def.prop, m.unitM).up;
-    if (h > 0) drawGroundShadow(g, m, [x0 + sink, y0 + sink, x1 + sink, y1 + sink], h * up);
+    if (h > 0) drawGroundShadow(g, m, [x0 + sink, y0 + sink, x1 + sink, y1 + sink], h * up, alpha);
   } else if (shape === 'wall') {
     for (const r of wallRects(cell.col, cell.row, joinsOf(plan.walls, cell.col, cell.row))) {
-      drawGroundShadow(g, m, r, h);
+      drawGroundShadow(g, m, r, h, alpha);
     }
   } else if (shape === 'post' || shape === 'canopy' || shape === 'round') {
-    drawGroundShadow(g, m, objectRect(cell.def, cell.col, cell.row, m), h);
+    drawGroundShadow(g, m, objectRect(cell.def, cell.col, cell.row, m), h, alpha);
   } else if (shape === 'stair') {
-    drawGroundShadow(g, m, [cell.col + 0.12, cell.row, cell.col + 0.88, cell.row + 1], h);
+    drawGroundShadow(g, m, [cell.col + 0.12, cell.row, cell.col + 0.88, cell.row + 1], h, alpha);
   } else {
-    drawGroundShadow(g, m, [cell.col, cell.row, cell.col + 1, cell.row + 1], h);
+    drawGroundShadow(g, m, [cell.col, cell.row, cell.col + 1, cell.row + 1], h, alpha);
   }
 }
 
