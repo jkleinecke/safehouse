@@ -107,6 +107,20 @@ export interface BuiltMeshes {
   all: Object3D[];
 }
 
+/** A run of vertices in one of a builder's meshes: the first, and how many. */
+export interface VertexSpan {
+  start: number;
+  count: number;
+}
+
+/** Where one builder's geometry landed in another's (`MeshBuilder.absorb`), per output mesh. */
+export interface BuilderSpans {
+  solid: VertexSpan;
+  glass: VertexSpan;
+  glow: VertexSpan;
+  lines: VertexSpan;
+}
+
 /**
  * Collects triangles by material. Build once per chunk of the world, then
  * `finish()` hands back at most four objects.
@@ -293,6 +307,35 @@ export class MeshBuilder {
 
   get empty(): boolean {
     return this.solid.empty && this.glass.empty && this.glowTris.empty && this.lineBuf.length === 0;
+  }
+
+  /**
+   * Take everything `other` has collected onto the end of this builder's
+   * own, and say where it landed: per output mesh, the first vertex and how
+   * many. So several things built apart can be finished as one mesh per
+   * material and still be told apart in it (the world's door leaves,
+   * `world3d.ts`). `other` is left as it was.
+   */
+  absorb(other: MeshBuilder): BuilderSpans {
+    const take = (to: number[], from: readonly number[]) => {
+      for (let i = 0; i < from.length; i += 1) to.push(from[i]!);
+    };
+    const tris = (to: TriBuffer, from: TriBuffer): VertexSpan => {
+      const span: VertexSpan = { start: to.pos.length / 3, count: from.pos.length / 3 };
+      take(to.pos, from.pos);
+      take(to.nor, from.nor);
+      take(to.col, from.col);
+      return span;
+    };
+    const lines: VertexSpan = { start: this.lineBuf.length / 3, count: other.lineBuf.length / 3 };
+    take(this.lineBuf, other.lineBuf);
+    take(this.lineCol, other.lineCol);
+    return {
+      solid: tris(this.solid, other.solid),
+      glass: tris(this.glass, other.glass),
+      glow: tris(this.glowTris, other.glowTris),
+      lines,
+    };
   }
 
   /** Hand the collected geometry over as meshes. The builder should not be used after. */

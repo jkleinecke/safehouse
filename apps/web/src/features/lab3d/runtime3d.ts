@@ -29,6 +29,24 @@
  *   - the camera, the world meshes, the figures and the light list belong to
  *     the scene and survive a renderer swap untouched.
  *
+ * What an `update` costs depends on what changed, and a scene arriving as a
+ * new object is compared by content, not by identity (`sceneChange`):
+ *   - the world is rebuilt (and its lighting made afresh) only when what it
+ *     is built from changed: the grid's size or scale, a floor added or
+ *     removed, any painted tile or arc on any floor, the palette's content,
+ *     or the walls option;
+ *   - a painted door opening or shutting, with nothing else of the world
+ *     changed, flips that door's leaf in place (`BuiltWorld.setDoorOpen`),
+ *     works the lights out again on that door's floor only (the sight of no
+ *     other floor changed), and draws again only the shadow maps its leaf
+ *     can fall in;
+ *   - the lamps alone are refreshed on the same lighting (`setSources`: only
+ *     lamps whose area changed are baked again) when the traced walls or
+ *     doors or the GM's lights changed, or a token's carried light moved,
+ *     turned or changed — and then only the token lights are recomputed;
+ *   - anything else in a scene (fog, pins, notes, zones, names) costs
+ *     nothing here.
+ *
  * Nothing here is shared with the 2D map, and nothing in the 2D map changes
  * because this exists.
  */
@@ -47,14 +65,22 @@ import {
   SRGBColorSpace,
   Vector3,
   WebGLRenderer,
+  type Raycaster,
 } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { Scene, Token } from '@safehouse/contracts';
-import { lightPolygonsFor, sceneLevels, type LightRow } from '@safehouse/rules';
+import {
+  lightPolygonsFor,
+  lightSourcesFor,
+  sceneLevels,
+  sightModelFor,
+  type LightRow,
+  type SightModel,
+} from '@safehouse/rules';
 import type { TileDrawDef } from '../grid/types.js';
 import { STOREY_M, createLabMaterials, storeyUnits, type LabMaterials } from './geometry3d.js';
 import { buildFigure, disposeFigure, placeFigure, type FigureCtx } from './figure3d.js';
-import { createLighting, type LabLighting, type LabLightSource, type LabQuality } from './lighting3d.js';
+import { createLighting, type LabLighting, type LabLightSource, type LabQuality, type ShadowScope } from './lighting3d.js';
 import { UPPER_SLAB, buildWorld, type BuiltWorld } from './world3d.js';
 
 export type { LabQuality } from './lighting3d.js';
@@ -73,7 +99,20 @@ export type LabWalls = 'full' | 'cut';
 /** Everything the runtime draws and how. `update` takes any subset of these. */
 export interface Runtime3DOptions {
   scene: Scene;
+  /**
+   * The tokens on the map. Their carried lights light the scene whatever
+   * `figures` says; with `figures` on they are also stood up as figures.
+   */
   tokens: readonly Token[];
+  /**
+   * Whether the runtime builds a figure for each token itself (default
+   * true, as the lab wants: every change to the tokens builds them all
+   * again). A stage that runs its own figure pool passes false and still
+   * passes the tokens: then a change to them costs nothing here unless a
+   * token carrying a light moved, turned or changed that light, and even
+   * then only the token lights are recomputed (`setSources`).
+   */
+  figures?: boolean;
   defs: Readonly<Record<string, TileDrawDef>>;
   quality: LabQuality;
   /**
@@ -168,8 +207,21 @@ export interface Runtime3D {
   update(partial: Partial<Runtime3DOptions>): void;
   /** Ask for a frame: call after moving the camera or anything in the scene from outside. Cheap to call often. */
   requestRender(): void;
+  /**
+   * Draw every shadow map again, and a frame to show it. Shadows are drawn
+   * once where their lamp lands, not per frame: call this after moving,
+   * adding or removing from outside anything that casts one.
+   */
+  refreshShadows(): void;
   /** Put the camera back on the whole floor in view, at the current camera's framing. */
   reframe(): void;
+  /**
+   * The painted door whose shut leaf `raycaster` meets first on the floor in
+   * view, as the cell of it the ray meets (`"col,row"`); null for none. Only
+   * the leaves are tested (`BuiltWorld.pickDoor`), so a pointer can take a
+   * door by the leaf it sees rather than by the floor square under it.
+   */
+  pickDoor(raycaster: Raycaster): string | null;
   /**
    * Let the orbit controls drive the camera, or stop them (a benchmark flying
    * the camera itself). Holds across renderer swaps.
@@ -253,6 +305,134 @@ function floorIndices(scene: Scene): number[] {
   return sceneLevels(scene).map((_, i) => i);
 }
 
+// --- what changed in a scene ---------------------------------------------------
+
+/** Two pieces of plain (JSON-shaped) data with the same content, however they were made. */
+function sameData(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) if (!sameData(a[i], b[i])) return false;
+    return true;
+  }
+  const ra = a as Record<string, unknown>;
+  const rb = b as Record<string, unknown>;
+  const ka = Object.keys(ra);
+  if (ka.length !== Object.keys(rb).length) return false;
+  for (const k of ka) {
+    if (!Object.prototype.hasOwnProperty.call(rb, k) || !sameData(ra[k], rb[k])) return false;
+  }
+  return true;
+}
+
+/** One floor's painted tiles as the world reads them: everything but the doors' open and locked state. */
+function sameTilesButDoors(a: object | undefined, b: object | undefined): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined) return false;
+  const ra = a as Record<string, unknown>;
+  const rb = b as Record<string, unknown>;
+  for (const k of new Set([...Object.keys(ra), ...Object.keys(rb)])) {
+    if (k !== 'doors' && !sameData(ra[k], rb[k])) return false;
+  }
+  return true;
+}
+
+/** The cells of one floor whose painted door stands open. */
+function openDoorCells(tiles: object | undefined): Set<string> {
+  const doors = (tiles as { doors?: Record<string, { open?: boolean } | undefined> } | undefined)?.doors;
+  const out = new Set<string>();
+  for (const [cell, d] of Object.entries(doors ?? {})) if (d?.open === true) out.add(cell);
+  return out;
+}
+
+/** A painted door that opened or shut. */
+interface DoorFlip {
+  level: number;
+  cell: string;
+  open: boolean;
+}
+
+/** How a new version of a scene differs from the last, by what the runtime has to do about it. */
+interface SceneChange {
+  /**
+   * What the world is built from changed: the grid's size or scale (not its
+   * offset, opacity or projection, which the world never reads), the number
+   * of floors, or any floor's painted tiles or arcs. The world is rebuilt.
+   */
+  world: boolean;
+  /** Painted doors that opened or shut; filled only when `world` is false. */
+  doors: readonly DoorFlip[];
+  /** What the lamps read besides the tiles changed: traced walls, traced doors (where and whether open), the GM's lights. */
+  lights: boolean;
+}
+
+const SAME_SCENE: SceneChange = { world: false, doors: [], lights: false };
+
+/** Traced doors as light reads them: where each is, and whether it is open (not its lock or note). */
+function sameTracedDoors(a: Scene['geometry']['doors'] | undefined, b: Scene['geometry']['doors'] | undefined): boolean {
+  if (a === b) return true;
+  const la = a ?? [];
+  const lb = b ?? [];
+  if (la.length !== lb.length) return false;
+  for (let i = 0; i < la.length; i += 1) {
+    const d = la[i]!;
+    const e = lb[i]!;
+    if (d.id !== e.id || (d.open === true) !== (e.open === true) || !sameData(d.a, e.a) || !sameData(d.b, e.b)) return false;
+  }
+  return true;
+}
+
+/** Compare two versions of a scene (`SceneChange`). */
+function sceneChange(a: Scene, b: Scene): SceneChange {
+  const ga = a.geometry;
+  const gb = b.geometry;
+  const lights =
+    ga !== gb &&
+    !(sameData(ga?.walls, gb?.walls) && sameTracedDoors(ga?.doors, gb?.doors) && sameData(ga?.lights, gb?.lights));
+
+  const la = sceneLevels(a);
+  const lb = sceneLevels(b);
+  const world =
+    a.grid.cols !== b.grid.cols ||
+    a.grid.rows !== b.grid.rows ||
+    a.grid.unitM !== b.grid.unitM ||
+    la.length !== lb.length ||
+    la.some((l, i) => !sameTilesButDoors(l.tiles, lb[i]?.tiles));
+  if (world) return { world, doors: [], lights };
+
+  const doors: DoorFlip[] = [];
+  lb.forEach((l, level) => {
+    const before = la[level]?.tiles as { doors?: unknown } | undefined;
+    const after = l.tiles as { doors?: unknown } | undefined;
+    if (before?.doors === after?.doors) return;
+    const was = openDoorCells(before);
+    const now = openDoorCells(after);
+    for (const cell of now) if (!was.has(cell)) doors.push({ level, cell, open: true });
+    for (const cell of was) if (!now.has(cell)) doors.push({ level, cell, open: false });
+  });
+  return { world, doors, lights };
+}
+
+/**
+ * Everything the token-carried lights depend on, as one string: each token
+ * whose light is on, the floor it is on, where it stands (and faces, for a
+ * beam), and the light itself. Token lists with the same key light the
+ * scene the same; a token without a light never changes it.
+ */
+function tokenLightKey(list: readonly Token[]): string {
+  const parts: string[] = [];
+  for (const t of list) {
+    const l = t.light;
+    if (!l || l.on === false) continue;
+    const beam = l.fov !== undefined;
+    parts.push(
+      [t.id, t.level ?? 0, t.x, t.y, l.radiusM, l.rows ?? '', l.color ?? '', beam ? l.fov : '', beam ? (t.rotation ?? 0) : ''].join('|'),
+    );
+  }
+  return parts.sort().join('\n');
+}
+
 /**
  * Mount the runtime into `host` (which should be positioned and sized; the
  * canvas fills it) and draw the first frame. Throws if WebGL or a builder
@@ -297,7 +477,15 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
   let storey = storeyUnits(opts.scene.grid.unitM);
   /** The tokens as the runtime stands them (`standTokens`): every one on a floor the scene has. */
   let tokens: Token[] = [];
+  /** `tokenLightKey` of `tokens`: what the token lights were last computed from. */
+  let tokenLights = '';
+  /** Per floor, the scene's own lights (tiles and the GM's) and the tokens' (`collectFixedOn`, `collectTokenLightsOn`). */
+  const fixedByLevel = new Map<number, LabLightSource[]>();
+  const tokenByLevel = new Map<number, LabLightSource[]>();
+  /** Every light on every floor: every floor's fixed lights, then every floor's token lights. */
   let sources: LabLightSource[] = [];
+  /** Each floor's sight model, which is what cuts a light's area; kept until the scene's walls or doors change. */
+  const sightModels = new Map<number, SightModel>();
   let lighting: LabLighting | null = null;
 
   // The frame loop's state. `raf` is the pending frame, 0 when none is.
@@ -374,6 +562,18 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
     r.domElement.remove();
   }
 
+  /**
+   * Let a set of controls go. Controls made without an element (`orbit:
+   * false`) are left undisposed: three's `dispose` is `disconnect`, which
+   * reads the element unguarded and throws on null, and there is nothing
+   * connected to undo. That throw used to escape from a camera switch, a
+   * renderer swap and the teardown, leaving the renderer's context alive.
+   */
+  function dropControls(c: OrbitControls): void {
+    c.removeEventListener('change', requestRender);
+    if (c.domElement !== null) c.dispose();
+  }
+
   function makeControls(target: Vector3): OrbitControls {
     const c = new OrbitControls(camera, orbit ? renderer.domElement : null);
     c.enableDamping = true;
@@ -432,8 +632,10 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
     });
   }
 
+  /** Every token as a figure, or none when the owner runs its own (`figures: false`). */
   function rebuildFigures(): void {
     for (const child of [...figures.children]) disposeFigure(child as Group);
+    if (opts.figures === false) return;
     const ctx: FigureCtx = { unitM: opts.scene.grid.unitM > 0 ? opts.scene.grid.unitM : 1, storey };
     for (const token of tokens) {
       // One token the figure builder cannot make sense of costs that figure, not the view.
@@ -448,21 +650,108 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
     }
   }
 
-  /** Every light on every floor, with the area each reaches, lifted to its lamp's height. */
-  function collectSources(): LabLightSource[] {
-    const out: LabLightSource[] = [];
-    for (const level of floorIndices(opts.scene)) {
-      for (const { source, points } of lightPolygonsFor(opts.scene, level, { tokens })) {
-        out.push({ level, y: (level + source.height) * storey, source, polygon: points });
-      }
+  /** Floor `level`'s sight model, made once per version of the scene's walls and doors (`sightModels`). */
+  function sightModelOf(level: number): SightModel {
+    let model = sightModels.get(level);
+    if (model === undefined) {
+      model = sightModelFor(opts.scene, level);
+      sightModels.set(level, model);
     }
+    return model;
+  }
+
+  /** Lights as the lighting takes them: the area each reaches, and lifted to its lamp's height. */
+  function lift(level: number, lit: ReturnType<typeof lightPolygonsFor>, out: LabLightSource[]): void {
+    for (const { source, points } of lit) out.push({ level, y: (level + source.height) * storey, source, polygon: points });
+  }
+
+  /** The scene's own lights on floor `level` — its glowing tiles and the GM's lamps — without the tokens'. */
+  function collectFixedOn(level: number): LabLightSource[] {
+    const out: LabLightSource[] = [];
+    const own = lightSourcesFor(opts.scene, level);
+    if (own.length > 0) lift(level, lightPolygonsFor(opts.scene, level, { sources: own, model: sightModelOf(level) }), out);
     return out;
   }
 
   /**
-   * The lighting for what is on show. Lights on hidden floors are left out
-   * rather than left on: a hidden slab casts no shadow, so a lamp upstairs
-   * would otherwise pour straight down into the room below.
+   * The lights the tokens carry on floor `level`. Their sources are read
+   * from the tokens alone (a scene with nothing but its grid, for the
+   * metres), so the scene's own lights are not recomputed with them.
+   */
+  function collectTokenLightsOn(level: number): LabLightSource[] {
+    const out: LabLightSource[] = [];
+    if (tokenLights === '') return out;
+    const carried = lightSourcesFor({ grid: opts.scene.grid }, level, tokens);
+    if (carried.length > 0) lift(level, lightPolygonsFor(opts.scene, level, { sources: carried, model: sightModelOf(level) }), out);
+    return out;
+  }
+
+  /**
+   * Work the lights out again, and say whether anything was. `fixed` is
+   * where the scene's own lights changed: on every floor (true — a new
+   * world, or the traced walls, traced doors or the GM's lamps, which stand
+   * on every floor), on these floors only (a painted door opened or shut
+   * there, and the sight of no other floor changed), or nowhere (false).
+   * `carried` is whether the tokens' lights changed: they are then worked
+   * out on every floor, and otherwise only on the floors whose sight did.
+   * Every other floor keeps its lights as they were — the same objects, so
+   * the lighting keeps their lamps too.
+   */
+  function collectSources(fixed: boolean | ReadonlySet<number>, carried: boolean): boolean {
+    const all = floorIndices(opts.scene);
+    let redo: number[];
+    if (fixed === true) {
+      sightModels.clear();
+      fixedByLevel.clear();
+      tokenByLevel.clear();
+      redo = all;
+    } else if (fixed === false) {
+      redo = [];
+    } else {
+      redo = all.filter((level) => fixed.has(level));
+      for (const level of redo) sightModels.delete(level);
+    }
+    for (const level of redo) fixedByLevel.set(level, collectFixedOn(level));
+    const relight = carried ? all : redo;
+    for (const level of relight) tokenByLevel.set(level, collectTokenLightsOn(level));
+    if (redo.length === 0 && relight.length === 0) return false;
+    sources = [...all.flatMap((level) => fixedByLevel.get(level) ?? []), ...all.flatMap((level) => tokenByLevel.get(level) ?? [])];
+    return true;
+  }
+
+  /**
+   * Where the painted doors that just flipped stand, for the shadow
+   * refresh: the middle of every square of each leaf a flipped cell belongs
+   * to, half a storey up, and how far a leaf reaches from there.
+   */
+  function doorScope(flips: readonly DoorFlip[]): ShadowScope {
+    const points: Array<{ x: number; y: number; z: number }> = [];
+    for (const flip of flips) {
+      const lv = world?.levels.find((l) => l.level === flip.level);
+      const cells = new Set<string>([flip.cell]);
+      for (const d of lv?.doors ?? []) if (d.cells.includes(flip.cell)) for (const c of d.cells) cells.add(c);
+      for (const cell of cells) {
+        const [col, row] = cell.split(',').map(Number);
+        if (col === undefined || row === undefined || !Number.isFinite(col) || !Number.isFinite(row)) continue;
+        points.push({ x: col + 0.5, y: (lv?.y ?? flip.level * storey) + storey / 2, z: row + 0.5 });
+      }
+    }
+    // A leaf stands inside its square, from the floor up to under a storey.
+    return { points, radius: Math.hypot(Math.SQRT1_2, storey / 2) + 0.05 };
+  }
+
+  /**
+   * The lights on show. Lights on hidden floors are left out rather than
+   * left on: a hidden slab casts no shadow, so a lamp upstairs would
+   * otherwise pour straight down into the room below.
+   */
+  function shownSources(): LabLightSource[] {
+    return sources.filter((s) => floorShown(s.level));
+  }
+
+  /**
+   * The lighting for what is on show, made afresh at the quality and around
+   * the point in view, so it is built once (`createLighting`).
    *
    * Call it after `applyFloorVisibility`: the lighting picks its real-time
    * lamps from the highest floor it finds visible, as soon as it is made.
@@ -475,12 +764,12 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
       scene: scene3,
       renderer,
       world,
-      sources: sources.filter((s) => s.level <= opts.floor && (opts.below !== 'hide' || s.level === opts.floor)),
+      sources: shownSources(),
       ambientRow: opts.ambient,
       storey,
+      quality: opts.quality,
+      focus: controls.target,
     });
-    lighting.setQuality(opts.quality);
-    lighting.update(controls.target);
     pickedAt.copy(controls.target);
     lastLightPick = performance.now();
   }
@@ -548,8 +837,7 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
 
   /** New orbit controls for the camera, turning about `target`; the old ones go. */
   function replaceControls(target: Vector3): void {
-    controls.removeEventListener('change', requestRender);
-    controls.dispose();
+    dropControls(controls);
     controls = makeControls(target);
   }
 
@@ -560,8 +848,7 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
    */
   function swapRenderer(q: LabQuality): void {
     const target = controls.target.clone();
-    controls.removeEventListener('change', requestRender);
-    controls.dispose();
+    dropControls(controls);
     lighting?.dispose();
     lighting = null;
     dropRenderer(renderer);
@@ -577,21 +864,6 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
     applySize();
     // The first frame on a new renderer compiles its shaders: not a frame time.
     lastFrame = 0;
-  }
-
-  /**
-   * Bring the renderer and lighting in line with `opts.quality`.
-   * True when that meant a new renderer, which rebuilt the lighting too.
-   */
-  function applyQuality(): boolean {
-    const q = opts.quality;
-    if ((q === 'low') !== rendererLow) {
-      swapRenderer(q);
-      return true;
-    }
-    lighting?.setQuality(q);
-    applySize();
-    return false;
   }
 
   // --- camera --------------------------------------------------------------
@@ -732,8 +1004,9 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
   try {
     rebuildWorld();
     tokens = standTokens();
+    tokenLights = tokenLightKey(tokens);
     rebuildFigures();
-    sources = collectSources();
+    collectSources(true, true);
     applyFloorVisibility();
     rebuildLighting();
     applySize();
@@ -758,8 +1031,7 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
     pickTimer = null;
     beforeHooks.clear();
     afterHooks.clear();
-    controls.removeEventListener('change', requestRender);
-    controls.dispose();
+    dropControls(controls);
     lighting?.dispose();
     lighting = null;
     for (const child of [...figures.children]) disposeFigure(child as Group);
@@ -783,46 +1055,118 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
       const next: Runtime3DOptions = { ...opts, ...partial };
       opts = next;
 
-      const sceneChanged = next.scene !== prev.scene || next.defs !== prev.defs;
-      const tokensChanged = next.tokens !== prev.tokens;
+      // What changed, by what it costs (the header lists it).
+      const change = next.scene === prev.scene ? SAME_SCENE : sceneChange(prev.scene, next.scene);
+      const defsChanged = next.defs !== prev.defs && !sameData(next.defs, prev.defs);
       const wallsChanged = next.walls !== prev.walls;
+      const tokensChanged = next.tokens !== prev.tokens;
       const floorsChanged = next.floor !== prev.floor || next.below !== prev.below;
-      const anyShape = sceneChanged || tokensChanged || wallsChanged || floorsChanged;
-      let lit = false;
+      const figuresOn = next.figures !== false;
+      const figuresToggled = figuresOn !== (prev.figures !== false);
+      const qualityChanged = next.quality !== prev.quality;
+      const ambientChanged = next.ambient !== prev.ambient;
+      const cameraChanged = next.camera !== prev.camera;
+      const sceneSwapped = next.scene.id !== prev.scene.id;
 
       // The world first (it sets the storey height), then what stands in it
-      // and the lights, which are measured in storeys. A new world drops the
-      // lighting (its bake lives on the old world's meshes), and what is
-      // shown is settled before the lighting is made again, since the
-      // lighting picks its real-time lamps from the top floor on show.
-      if (sceneChanged || wallsChanged) rebuildWorld();
-      if (sceneChanged || tokensChanged) {
+      // and the lights, which are measured in storeys. A door that only
+      // opened or shut is flipped where it stands; anything else the world
+      // is built from builds it again, which drops the lighting (its bake
+      // lives on the old world's meshes).
+      let rebuilt = false;
+      let doorsFlipped = false;
+      if (change.world || defsChanged || wallsChanged) {
+        rebuildWorld();
+        rebuilt = true;
+      } else if (change.doors.length > 0) {
+        const w = world;
+        if (w !== null && change.doors.every((d) => w.setDoorOpen(d.level, d.cell, d.open))) {
+          doorsFlipped = true;
+        } else {
+          rebuildWorld();
+          rebuilt = true;
+        }
+      }
+
+      let tokenLightsChanged = false;
+      if (rebuilt || tokensChanged) {
         tokens = standTokens();
-        rebuildFigures();
-        sources = collectSources();
+        const key = tokenLightKey(tokens);
+        tokenLightsChanged = key !== tokenLights;
+        tokenLights = key;
       }
-      if (anyShape) applyFloorVisibility();
-      if (next.quality !== prev.quality) lit = applyQuality();
-      if (!lit && anyShape) {
+      const figuresRebuilt = figuresToggled || (figuresOn && (rebuilt || tokensChanged));
+      if (figuresRebuilt) rebuildFigures();
+      // A painted door changes the sight of its own floor only; everything
+      // else the scene's lights read stands on every floor.
+      const fixedChanged: boolean | ReadonlySet<number> =
+        rebuilt || change.lights ? true : doorsFlipped ? new Set(change.doors.map((d) => d.level)) : false;
+      const lightsChanged = collectSources(fixedChanged, tokenLightsChanged);
+
+      // What is shown is settled before the lighting hears of any of it:
+      // the lighting picks its real-time lamps from the top floor on show.
+      if (rebuilt || figuresRebuilt || floorsChanged) applyFloorVisibility();
+
+      // The lighting: made afresh with a new world or a new renderer (the
+      // quality crossing the Low line), and otherwise changed in place.
+      let relit = false;
+      if (qualityChanged && (next.quality === 'low') !== rendererLow) {
+        swapRenderer(next.quality);
+        relit = true;
+      } else if (rebuilt) {
         rebuildLighting();
-        lit = true;
+        if (qualityChanged) applySize();
+        relit = true;
+      } else if (lighting !== null) {
+        if (qualityChanged) {
+          lighting.setQuality(next.quality);
+          applySize();
+        }
+        if (lightsChanged || floorsChanged) lighting.setSources(shownSources());
+        // Shadows are drawn once, so anything that casts one and moved,
+        // came or went (a figure, a floor, a door leaf) asks for them again —
+        // a door leaf only for the lamps whose light reaches it.
+        if (figuresRebuilt || floorsChanged) lighting.refreshShadows();
+        else if (doorsFlipped) lighting.refreshShadows(doorScope(change.doors));
       }
-      if (!lit && next.ambient !== prev.ambient) lighting?.setAmbient(next.ambient);
-      if (next.camera !== prev.camera) switchCamera(next.camera);
-      else if (sceneChanged && next.scene.id !== prev.scene.id) frameCamera();
+      if (!relit && ambientChanged) lighting?.setAmbient(next.ambient);
+
+      if (cameraChanged) switchCamera(next.camera);
+      else if (sceneSwapped) frameCamera();
       else if (next.floor !== prev.floor) followFloor(prev.floor, next.floor);
 
-      if (anyShape || next.quality !== prev.quality || next.ambient !== prev.ambient || next.camera !== prev.camera) {
+      if (
+        rebuilt ||
+        doorsFlipped ||
+        lightsChanged ||
+        figuresRebuilt ||
+        floorsChanged ||
+        qualityChanged ||
+        ambientChanged ||
+        cameraChanged ||
+        sceneSwapped
+      ) {
         requestRender();
       }
     },
 
     requestRender,
 
+    refreshShadows() {
+      if (disposed) return;
+      lighting?.refreshShadows();
+      requestRender();
+    },
+
     reframe() {
       if (disposed) return;
       frameCamera();
       requestRender();
+    },
+
+    pickDoor(raycaster) {
+      if (disposed || world === null) return null;
+      return world.pickDoor(opts.floor, raycaster);
     },
 
     setOrbitEnabled(on) {

@@ -2,22 +2,22 @@
  * The one place that decides which renderer draws the map.
  *
  * Two renderers can stand behind `StageApi`: the classic PixiJS stage
- * (`stage/index.ts`) and, once it exists, the three.js stage
- * (`stage3d/index.ts`, P1 of the move to 3D). The Grid (`useStage.ts`) and the
+ * (`stage/index.ts`) and the three.js stage (`stage3d/index.ts`, P1 of the
+ * move to 3D). The Grid (`useStage.ts`) and the
  * TV (`tvStage.ts`) both mount through `loadStage` and never import either
  * renderer themselves, so the choice, the capability check and the fallback
  * live here and nowhere else.
  *
  * The choice, in order:
- *   1. Is there a 3D stage at all? Not yet (`STAGE3D_BUILT`), so today every
- *      mount is classic and nothing below it runs.
+ *   1. Is there a 3D stage at all (`STAGE3D_BUILT`)? Yes, since P1.
  *   2. Does this role get 3D in this phase (`roleMay3d`)? The GM first;
  *      players and the TV stay classic until P2.
  *   3. Has this device been set to Classic (`getRendererPreference`)?
  *   4. Can this browser run it (`supportsWebGL2`)? three.js needs WebGL2.
  *
  * And the fallback: a 3D stage that throws while starting, or that later
- * loses its GPU context, is replaced by the classic stage in the same host.
+ * loses its GPU context or cannot build a change, is replaced by the classic
+ * stage in the same host.
  * The page never learns it happened; it keeps the handle it was given.
  *
  * Both renderers are reached only through dynamic `import()`, so pixi and
@@ -25,10 +25,16 @@
  */
 import type { Role } from '@safehouse/contracts';
 import type { VisionMode } from '@safehouse/rules';
-import type { MovementThresholds, StageApi, StageOptions, TileDrawDef } from './types.js';
+import type {
+  MovementThresholds,
+  StageApi,
+  StageOptions,
+  StageQuality,
+  StageRenderer,
+  TileDrawDef,
+} from './types.js';
 
-/** The two renderers the map can be drawn with. */
-export type StageRenderer = '3d' | 'classic';
+export type { StageQuality, StageRenderer } from './types.js';
 
 /** Who is mounting the map; the role gate reads it. */
 export interface StageLoadContext {
@@ -37,20 +43,21 @@ export interface StageLoadContext {
 
 /**
  * What the loader hands the 3D stage besides its options: how to tell the
- * loader the GPU context is gone for good, so it can put the classic stage in
- * its place. The 3D stage's `createStage(opts, hooks)` takes this (P1).
+ * loader the 3D map cannot go on — its GPU context is gone for good, or its
+ * world could not be built from a later change — so it can put the classic
+ * stage in its place. The 3D stage's `createStage(opts, hooks)` takes this (P1).
  */
 export interface Stage3DHooks {
   onLost(reason: string): void;
 }
 
 /**
- * Whether `./stage3d/index.ts` exists yet. P0 lays the seams before the 3D
- * stage is written, so this is false and every mount resolves to classic
- * without touching WebGL. P1 sets it true when it lands the 3D stage, and
- * fills in `create3d` below.
+ * Whether `./stage3d/index.ts` exists. P0 laid the seams with this false, so
+ * every mount resolved to classic without touching WebGL; P1 landed the 3D
+ * stage and set it true. Flip it back to take the 3D map out of every mount
+ * at once without touching anything else.
  */
-const STAGE3D_BUILT: boolean = false;
+const STAGE3D_BUILT: boolean = true;
 
 /**
  * The roles offered the 3D stage in this phase. The GM plays on it first
@@ -96,6 +103,42 @@ export function setRendererPreference(renderer: StageRenderer | null): void {
   }
 }
 
+/** The per-device 3D quality, in localStorage. Absent means the device's default (`getQualityPreference`). */
+export const QUALITY_PREF_KEY = 'safehouse.renderer.quality';
+
+/**
+ * The 3D quality this device was set to, or its default when it was never
+ * set: Low on a touch-first device (a phone, a tablet: a coarse pointer),
+ * where the GPU and the battery are the constraint, and Medium elsewhere.
+ * Storage that cannot be read reads as never set.
+ */
+export function getQualityPreference(): StageQuality {
+  try {
+    const v = window.localStorage.getItem(QUALITY_PREF_KEY);
+    if (v === 'low' || v === 'medium' || v === 'high') return v;
+  } catch {
+    // Unreadable: the default stands.
+  }
+  try {
+    return window.matchMedia('(pointer: coarse)').matches ? 'low' : 'medium';
+  } catch {
+    return 'medium';
+  }
+}
+
+/**
+ * Set this device's 3D quality. The page also hands it to the live stage
+ * (`StageApi.setQuality`); this is what the next mount starts with. Storage
+ * that cannot be written is ignored.
+ */
+export function setQualityPreference(quality: StageQuality): void {
+  try {
+    window.localStorage.setItem(QUALITY_PREF_KEY, quality);
+  } catch {
+    // Not stored; the default stands next time.
+  }
+}
+
 let webgl2: boolean | null = null;
 
 /**
@@ -125,6 +168,16 @@ export function supportsWebGL2(): boolean {
  * every scene switch. A reload tries 3D again.
  */
 let failed3d = false;
+
+/**
+ * Whether the 3D map can be offered to `role` on this device in this page
+ * load, whatever the device is set to: it exists, the role gets it in this
+ * phase, the browser has WebGL2, and it has not already failed here. The
+ * renderer switch offers 3D only when this is true.
+ */
+export function offers3d(role: Role): boolean {
+  return STAGE3D_BUILT && !failed3d && roleMay3d(role) && supportsWebGL2();
+}
 
 /** Which renderer a mount for `role` gets, by the rules in this module's header. */
 export function chooseRenderer(role: Role): StageRenderer {
@@ -158,14 +211,10 @@ async function createClassic(opts: StageOptions): Promise<StageApi> {
   return createStage(opts);
 }
 
-/**
- * The 3D stage's factory. P1 replaces the body with
- * `(await import('./stage3d/index.js')).createStage(opts, hooks)`. Until the
- * 3D stage exists it refuses, which `loadStage` answers with classic — but
- * `STAGE3D_BUILT` keeps it from being asked at all.
- */
+/** The 3D stage: the only reference to `stage3d/` outside it, so three stays in its own lazy chunk. */
 async function create3d(opts: StageOptions, hooks: Stage3DHooks): Promise<StageApi> {
-  throw new Error('there is no 3D stage yet');
+  const { createStage } = await import('./stage3d/index.js');
+  return createStage(opts, hooks);
 }
 
 /**
@@ -192,7 +241,7 @@ async function load3d(opts: StageOptions): Promise<StageApi> {
     if (destroyed || lost) return;
     lost = true;
     failed3d = true;
-    console.warn(`[stage] the 3D map lost its GPU context (${reason}); switching to the classic map`);
+    console.warn(`[stage] the 3D map stopped (${reason}); switching to the classic map`);
     const dead = current;
     current = null;
     try {
@@ -206,6 +255,9 @@ async function load3d(opts: StageOptions): Promise<StageApi> {
           classic.destroy();
           return;
         }
+        // The page kept updating while the classic chunk loaded: the stage
+        // was made with the state as it stood then, so it gets the latest.
+        classic.update(state);
         if (defs) classic.setTileDefs(defs);
         if (viewMode) classic.setViewMode(viewMode);
         if (drags) classic.setDrags(drags);
@@ -224,6 +276,12 @@ async function load3d(opts: StageOptions): Promise<StageApi> {
   else current = inner;
 
   return {
+    get renderer(): StageRenderer {
+      return current !== null && current === inner ? '3d' : 'classic';
+    },
+    setQuality(q) {
+      current?.setQuality?.(q);
+    },
     update(s) {
       state = s;
       current?.update(s);

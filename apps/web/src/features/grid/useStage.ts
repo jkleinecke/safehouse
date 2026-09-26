@@ -24,6 +24,12 @@ export interface UseStageParams {
   thresholds: MovementThresholds | null;
   /** Remote interim drag ghosts (tokenId → grid position). */
   drags: Record<string, { x: number; y: number }>;
+  /**
+   * Change it to tear the stage down and mount a fresh one in the same host —
+   * how the renderer switch (3D / Classic) takes effect without a reload:
+   * `loadStage` chooses again on every mount.
+   */
+  remountKey?: number;
 }
 
 export function useStage(params: UseStageParams): UseStageResult {
@@ -48,6 +54,7 @@ export function useStage(params: UseStageParams): UseStageResult {
   }, []);
 
   const hasState = params.state !== null;
+  const remountKey = params.remountKey ?? 0;
 
   useEffect(() => {
     const host = hostEl.current;
@@ -132,8 +139,9 @@ export function useStage(params: UseStageParams): UseStageResult {
       created?.destroy();
       setApi(null);
     };
-    // Mount once the host node and the first scene state both exist.
-  }, [hostReady, hasState]);
+    // Mount once the host node and the first scene state both exist, and
+    // again whenever the page asks for a fresh stage (`remountKey`).
+  }, [hostReady, hasState, remountKey]);
 
   // Push state / ghosts / thresholds every render — all cheap, diffed inside.
   useEffect(() => {

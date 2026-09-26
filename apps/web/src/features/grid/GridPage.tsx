@@ -105,8 +105,16 @@ import {
   type RulerState,
   type StageApi,
   type StageCallbacks,
+  type StageQuality,
   type StageSceneState,
 } from './types.js';
+import {
+  getQualityPreference,
+  offers3d,
+  roleMay3d,
+  setQualityPreference,
+  setRendererPreference,
+} from './stageLoader.js';
 import {
   useActiveSceneId,
   useFocusStream,
@@ -918,12 +926,17 @@ export default function GridPage() {
   );
 
   const urlFor = useCallback((id: string) => fileUrl(id), []);
+  // The renderer switch (3D / Classic) stores the device's choice and mounts
+  // a fresh stage, which `loadStage` draws with whatever it now picks.
+  const [stageEpoch, setStageEpoch] = useState(0);
+  const [quality, setQuality] = useState<StageQuality>(getQualityPreference);
   const { hostRef, api, loading, error } = useStage({
     state: stageState,
     callbacks,
     urlFor,
     thresholds,
     drags,
+    remountKey: stageEpoch,
   });
   apiRef.current = api;
 
@@ -1219,6 +1232,24 @@ export default function GridPage() {
                 onToggleGmPanel={store.toggleGmPanel}
                 onZoom={(f) => api?.zoomBy(f)}
                 onFit={() => api?.fitScene()}
+                // What is actually drawing: a 3D map that could not start,
+                // or lost its GPU, reads as Classic.
+                renderer={api ? (api.renderer ?? 'classic') : undefined}
+                can3d={offers3d(viewer.role)}
+                onRenderer={
+                  api && roleMay3d(viewer.role)
+                    ? (renderer) => {
+                        setRendererPreference(renderer);
+                        setStageEpoch((n) => n + 1);
+                      }
+                    : undefined
+                }
+                quality={quality}
+                onQuality={(q) => {
+                  setQualityPreference(q);
+                  setQuality(q);
+                  api?.setQuality?.(q);
+                }}
               />
             </div>
             {/*

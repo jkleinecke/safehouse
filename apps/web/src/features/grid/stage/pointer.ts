@@ -1,5 +1,6 @@
 /**
  * Pointer/wheel state machine for the scene canvas: pan, wheel + pinch zoom,
+ * turning the view (middle-drag, two-finger twist) where the camera can turn,
  * token drag with grid snap, ruler drag, ping double-tap, pointer trail, and
  * the single-click tools (AoE, fog vertex, focus, door toggle).
  *
@@ -11,7 +12,7 @@
  * back to the host is in grid units, so the same controller drives the 2D
  * and the 3D map.
  */
-import type { Point } from '@safehouse/contracts';
+import type { Point, Token } from '@safehouse/contracts';
 import { bulgeThrough } from '@safehouse/rules';
 import {
   isDegenerateSegment,
@@ -53,6 +54,8 @@ import { allCells, containsCell, moveSelection, pastedSet } from '../cellSelecti
 type Mode =
   | 'idle'
   | 'pan'
+  // A middle-drag turning a view that can turn (`ViewCamera.rotateBy`).
+  | 'rotate'
   | 'token'
   | 'ruler'
   | 'trail'
@@ -69,6 +72,15 @@ type Mode =
 
 /** React-facing ruler updates are rate-limited; the pixi line is not. */
 const RULER_REPORT_MS = 50;
+
+/** How far a middle-drag turns the view: radians per screen px across (a half turn over 400 px). */
+const ROTATE_PER_PX = Math.PI / 400;
+/**
+ * How far two fingers must twist, in radians (about 9°), before the view
+ * starts turning with them. Fingers pinching to zoom never hold their angle
+ * exactly, and a zoom should not wobble the map round.
+ */
+const TWIST_START = 0.15;
 
 export interface PointerHost {
   /** The view the pointer is resolved through: screen ↔ grid, and pan/zoom. */
@@ -94,6 +106,24 @@ export interface PointerHost {
   clearRect?(): void;
   /** Where a painted object will land while it is being dragged (Build). */
   drawPaintedGhost?(cells: readonly string[] | null): void;
+  /**
+   * The token whose drawn body is under host point `screen`, when the
+   * renderer can tell from what it drew — the 3D map raycasts its figures, so
+   * a press on a runner's head takes the runner however tall it stands and
+   * from whatever angle. Asked before the disc test (`hitToken`), which stays
+   * the fallback. Absent on the 2D map, where the disc IS what is drawn.
+   */
+  pickToken?(screen: Point): string | null;
+  /**
+   * The painted door (its `"col,row"` cell) whose drawn, shut leaf is under
+   * host point `screen` on the floor in view, when the renderer can tell
+   * from what it drew. The 3D map raycasts its leaves: a leaf stands a
+   * storey tall, so in its iso view most of it covers the squares behind its
+   * own, and the floor point under a press on it is rarely its cell. Asked
+   * before the cell test (`hitTileDoor`), which stays the fallback (an open
+   * door has no leaf; its doorway is its cell). Absent on the 2D map.
+   */
+  pickTileDoor?(screen: Point): string | null;
 }
 
 interface ActivePointer {
@@ -214,6 +244,12 @@ export class PointerController {
 
   // pinch
   private pinchDist = 0;
+  /** The line between the two fingers' angle on screen at the last move, radians. */
+  private pinchAngle = 0;
+  /** How far the fingers have twisted this pinch before the view began to turn with them. */
+  private twistHeld = 0;
+  /** The twist passed `TWIST_START`: the view now turns with the fingers. */
+  private twisting = false;
 
   private readonly onDown = (e: PointerEvent) => this.handleDown(e);
   private readonly onMove = (e: PointerEvent) => this.handleMove(e);
@@ -322,6 +358,52 @@ export class PointerController {
     return screenHitSlop(this.host.camera, this.host.metrics(), pointerType, at);
   }
 
+  /**
+   * The token under the pointer: the one the renderer says its drawn body is
+   * under `screen` (`PointerHost.pickToken`), else the topmost disc around
+   * `grid` (`hitToken`, with `minHitPx` of slop when given).
+   */
+  private tokenAt(screen: Point, grid: Point, minHitPx?: number): Token | null {
+    const state = this.host.state();
+    const picked = this.host.pickToken?.(screen) ?? null;
+    if (picked !== null) {
+      const token = state.tokens.find((t) => t.id === picked);
+      if (token) return token;
+    }
+    return hitToken(
+      this.host.camera,
+      this.host.metrics(),
+      state.tokens,
+      grid,
+      minHitPx === undefined ? {} : { minHitPx },
+    );
+  }
+
+  /**
+   * The painted door under the pointer on floor `level`: the one whose leaf
+   * the renderer says is under `screen` (`PointerHost.pickTileDoor`), as
+   * long as the scene still has a door painted there, else the door painted
+   * in the cell under `grid` (`hitTileDoor`).
+   */
+  private tileDoorAt(screen: Point, grid: Point, level: number): string | null {
+    const scene = this.host.state().scene;
+    const leaf = this.host.pickTileDoor?.(screen) ?? null;
+    if (leaf !== null) {
+      const [col, row] = leaf.split(',').map(Number);
+      if (col !== undefined && row !== undefined && Number.isFinite(col) && Number.isFinite(row)) {
+        const cell = hitTileDoor(scene, { x: col + 0.5, y: row + 0.5 }, level);
+        if (cell !== null) return cell;
+      }
+    }
+    return hitTileDoor(scene, grid, level);
+  }
+
+  /** Whether the view turns now: it has `rotateBy` and is not locked (`ViewCamera.canRotate`). */
+  private turnable(): boolean {
+    const camera = this.host.camera;
+    return camera.rotateBy !== undefined && camera.canRotate !== false;
+  }
+
   private snapped(p: Point, size: number, raw: boolean): Point {
     if (raw || !this.host.state().snapEnabled) return p;
     return snapCenter(p, size);
@@ -359,6 +441,10 @@ export class PointerController {
       this.longPress = setTimeout(() => {
         this.longPress = null;
         if (this.moved || this.pointers.size !== 1) return;
+        // The press became a menu: whatever it started is let go, as a
+        // second finger lets it go — above all a token drag, whose renderer
+        // would otherwise go on holding that token where the press found it.
+        this.abandonGesture();
         this.mode = 'idle';
         this.host.clearRuler?.();
         const under = this.toGrid(screen);
@@ -370,11 +456,7 @@ export class PointerController {
     // token it is two taps at a token — the second one selects like the first,
     // because on a phone the second tap is usually the player trying again.
     const tap: TapRecord = { x: screen.x, y: screen.y, t: e.timeStamp || Date.now() };
-    const onToken =
-      grid !== null &&
-      hitToken(this.host.camera, m, state.tokens, grid, {
-        minHitPx: this.hitSlop(e.pointerType, grid),
-      }) !== null;
+    const onToken = grid !== null && this.tokenAt(screen, grid, this.hitSlop(e.pointerType, grid)) !== null;
     if (grid && isDoubleTap(this.lastTap, tap) && !onToken && !this.lastTapOnToken) {
       this.lastTap = null;
       this.lastTapOnToken = false;
@@ -395,7 +477,13 @@ export class PointerController {
       return;
     }
 
-    // Middle/right button always pans, whatever tool is selected.
+    // The middle button turns a view that can turn (the 3D map, while it is
+    // not looking straight down), whatever tool is selected.
+    if (e.button === 1 && this.turnable()) {
+      this.mode = 'rotate';
+      return;
+    }
+    // Otherwise middle/right button always pans, whatever tool is selected.
     if (e.button === 1 || e.button === 2) {
       this.mode = 'pan';
       return;
@@ -419,7 +507,7 @@ export class PointerController {
 
     switch (state.tool) {
       case 'ruler':
-        this.beginRuler(grid, state, m);
+        this.beginRuler(grid, screen);
         return;
       case 'aoe':
         this.mode = 'idle';
@@ -499,7 +587,7 @@ export class PointerController {
         this.paintCell(grid);
         return;
       default:
-        this.beginSelect(grid, state, m);
+        this.beginSelect(grid, screen, state, m);
     }
   }
 
@@ -534,8 +622,8 @@ export class PointerController {
     this.host.drawSegment?.(kind, this.segmentFrom, this.segmentTo);
   }
 
-  private beginRuler(grid: Point, state: StageSceneState, m: SceneMetrics): void {
-    const token = hitToken(this.host.camera, m, state.tokens, grid);
+  private beginRuler(grid: Point, screen: Point): void {
+    const token = this.tokenAt(screen, grid);
     this.rulerTokenId = token?.id ?? null;
     this.rulerFrom = token ? { x: token.x, y: token.y } : grid;
     this.mode = 'ruler';
@@ -543,7 +631,7 @@ export class PointerController {
     this.updateRuler(grid, true);
   }
 
-  private beginSelect(grid: Point, state: StageSceneState, m: SceneMetrics): void {
+  private beginSelect(grid: Point, screen: Point, state: StageSceneState, m: SceneMetrics): void {
     // A selected painted object's handles, before anything else: they are
     // small, deliberate targets on its outer edge, and a GM reaching for one
     // meant it rather than the token standing next to the wall.
@@ -596,9 +684,7 @@ export class PointerController {
 
     // A finger gets a bigger target than a mouse, and both grow as the map
     // zooms out (B6: a phone's default fit left tokens four pixels wide).
-    const token = hitToken(this.host.camera, m, state.tokens, grid, {
-      minHitPx: this.hitSlop(this.pointerType, grid),
-    });
+    const token = this.tokenAt(screen, grid, this.hitSlop(this.pointerType, grid));
     if (token) {
       this.host.callbacks.onSelectToken(token.id);
       if (state.draggableIds.has(token.id)) {
@@ -653,7 +739,7 @@ export class PointerController {
       // While building, a painted door is a thing to pick up and stretch,
       // not a door to walk through — so it is left to the painted-object
       // check below rather than opened.
-      const cell = state.paintEdit ? null : hitTileDoor(state.scene, grid, level);
+      const cell = state.paintEdit ? null : this.tileDoorAt(screen, grid, level);
       if (cell && this.host.callbacks.onTileDoorToggle) {
         this.mode = 'idle';
         this.host.callbacks.onTileDoorToggle(cell, level);
@@ -800,6 +886,13 @@ export class PointerController {
 
     if (this.mode === 'pan') {
       this.host.camera.panBy(dx, dy);
+      return;
+    }
+
+    // Across the screen turns the view: a drag to the right carries the
+    // near side of the map to the right, as the lab's orbit did.
+    if (this.mode === 'rotate') {
+      this.host.camera.rotateBy?.(dx * ROTATE_PER_PX);
       return;
     }
 
@@ -1021,18 +1114,16 @@ export class PointerController {
    * its target: token first (with the pointer's own slop), then a door's
    * knob, a painted door, a wall for the GM, and otherwise the floor.
    */
-  private contextTarget(grid: Point): ContextTarget {
+  private contextTarget(screen: Point, grid: Point): ContextTarget {
     const state = this.host.state();
     const m = this.host.metrics();
-    const token = hitToken(this.host.camera, m, state.tokens, grid, {
-      minHitPx: this.hitSlop(this.pointerType, grid),
-    });
+    const token = this.tokenAt(screen, grid, this.hitSlop(this.pointerType, grid));
     if (token) return { kind: 'token', id: token.id };
     const tol = this.tolerance(12, grid);
     const doorId = hitDoor(this.host.camera, m, state.scene, grid, tol);
     if (doorId) return { kind: 'door', id: doorId };
     const level = state.level ?? 0;
-    const cell = hitTileDoor(state.scene, grid, level);
+    const cell = this.tileDoorAt(screen, grid, level);
     if (cell) return { kind: 'tileDoor', cell, level };
     if (state.role === 'gm') {
       const wallId = hitWall(this.host.camera, m, state.scene, grid, tol);
@@ -1053,7 +1144,7 @@ export class PointerController {
   private openContextMenu(screen: Point, grid: Point): void {
     const open = this.host.callbacks.onContextMenu;
     if (!open) return;
-    const target = this.contextTarget(grid);
+    const target = this.contextTarget(screen, grid);
     // The menu is about a token: select it too, so "range from the selected
     // runner" on the next menu and the inspector both point at the same thing.
     if (target.kind === 'token') this.host.callbacks.onSelectToken(target.id);
@@ -1066,7 +1157,20 @@ export class PointerController {
     const [a, b] = [...this.pointers.values()];
     if (!a || !b) return;
     this.pinchDist = Math.hypot(b.x - a.x, b.y - a.y) || 1;
-    // Abandon any single-pointer gesture cleanly.
+    this.pinchAngle = Math.atan2(b.y - a.y, b.x - a.x);
+    this.twistHeld = 0;
+    this.twisting = false;
+    this.abandonGesture();
+    this.mode = 'pinch';
+  }
+
+  /**
+   * Let go of the single-pointer gesture under way, cleanly: a second finger
+   * arrived, or a held finger became the context menu. A dragged token is
+   * released where it stands (no move is sent), drafts are taken away, and
+   * a paint stroke is ended rather than abandoned. The caller sets the mode.
+   */
+  private abandonGesture(): void {
     if (this.mode === 'token' && this.dragTokenId) {
       this.host.localDrag(null, null);
       this.dragTokenId = null;
@@ -1075,7 +1179,7 @@ export class PointerController {
     if (this.mode === 'segment') this.host.clearSegment?.();
     if (this.mode === 'arc' || this.mode === 'bend') this.host.clearArc?.();
     // A rectangle is abandoned, not filled: unlike a stroke it has laid
-    // nothing down yet, so a pinch simply takes it away.
+    // nothing down yet, so letting go of it simply takes it away.
     if (this.mode === 'rect') this.host.clearRect?.();
     if (this.mode === 'painted' || this.mode === 'group') {
       this.host.drawPaintedGhost?.(null);
@@ -1086,7 +1190,6 @@ export class PointerController {
     // A second finger ends the stroke rather than abandoning its cells: the
     // GM painted them, and pinching to zoom mid-floor is a normal thing to do.
     if (this.mode === 'painting') this.endStroke();
-    this.mode = 'pinch';
   }
 
   private updatePinch(): void {
@@ -1096,6 +1199,33 @@ export class PointerController {
     const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
     this.host.camera.zoomAt(mid.x, mid.y, dist / this.pinchDist);
     this.pinchDist = dist;
+    this.twist(a, b);
+  }
+
+  /**
+   * Two fingers twisting turn a view that can turn, about its target, and
+   * the map turns with the fingers. Nothing turns until the twist since the
+   * pinch began passes `TWIST_START`, and that first stretch is not made up
+   * afterwards, so the map never jumps.
+   */
+  private twist(a: ActivePointer, b: ActivePointer): void {
+    const camera = this.host.camera;
+    if (!camera.rotateBy || camera.canRotate === false) return;
+    const angle = Math.atan2(b.y - a.y, b.x - a.x);
+    // The turn since the last move, the short way round. Screen y runs
+    // down, so a positive turn is the fingers going clockwise.
+    let d = angle - this.pinchAngle;
+    if (d > Math.PI) d -= 2 * Math.PI;
+    else if (d < -Math.PI) d += 2 * Math.PI;
+    this.pinchAngle = angle;
+    if (!this.twisting) {
+      this.twistHeld += d;
+      this.twisting = Math.abs(this.twistHeld) >= TWIST_START;
+      return;
+    }
+    // `rotateBy` turns the camera clockwise seen from above, which turns
+    // the map the other way on screen; the map follows the fingers.
+    camera.rotateBy(-d);
   }
 
   private handleWheel(e: WheelEvent): void {

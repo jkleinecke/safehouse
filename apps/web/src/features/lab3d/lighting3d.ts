@@ -9,11 +9,12 @@
  *   - LOW (a phone, a TV): no real-time lamps at all. Each lamp's light is
  *     baked into the world's vertices once, and the world is drawn with an
  *     unlit material whose colour is its paint times (ambient + baked).
- *   - MEDIUM (a laptop): the 8 lamps nearest the focus are real three.js
- *     lights, the 3 nearest of those casting shadows; every other lamp stays
- *     baked, added to the lit material's diffuse, so a lamp across the map
- *     still pools on its floor.
- *   - HIGH (a gaming PC): 24 real-time lamps, 8 with shadows, the rest baked.
+ *   - MEDIUM (a laptop): the 8 lamps and 2 beams nearest the focus are real
+ *     three.js lights, the 3 nearest lamps casting shadows (and the beams);
+ *     every other lamp stays baked, added to the lit material's diffuse, so
+ *     a lamp across the map still pools on its floor.
+ *   - HIGH (a gaming PC): 24 real-time lamps and 4 beams, 8 lamps with
+ *     shadows, the rest baked.
  *     No bloom: tried, and it smeared the glow over the room and hid the
  *     scene rather than lighting it (2026-09-26).
  *
@@ -29,9 +30,18 @@
  * and shadows from things the rules do not count as walls (furniture,
  * figures).
  *
- * The bake is cached on the world (`bakes`), per lamp: the page rebuilds the
- * lighting whenever a token moves or a floor is hidden, and only the lamps
- * that actually changed are baked again.
+ * The bake is cached on the world (`bakes`), per lamp, keyed by where the lamp
+ * is and the area it reaches: when the lamps change on a running lighting
+ * (`setSources`: a door opened, a runner's flashlight moved, a floor was
+ * hidden) or a new lighting is made on the same world, only the lamps that
+ * actually changed are baked again.
+ *
+ * Nothing that comes and goes with the scene changes the number of three.js
+ * lights, or the materials the world is drawn with: the real-time pool is the
+ * tier's full size whatever the scene holds (parked slots for lamps it does
+ * not have), and each world material's baked stand-ins are made once and
+ * shared by every lighting after (`variantsOf`). Either change would make
+ * three compile every lit shader again, a stall of a good part of a second.
  *
  * Lab code: honest, not finished. Each approximation is named where it is made.
  */
@@ -83,6 +93,12 @@ export interface LabLightSource {
   polygon: Point[];
 }
 
+/** Where something that casts a shadow changed (`LabLighting.refreshShadows`): around these points, within `radius`. */
+export interface ShadowScope {
+  points: ReadonlyArray<{ x: number; y: number; z: number }>;
+  radius: number;
+}
+
 /** A running lighting setup for one world. */
 export interface LabLighting {
   /** Switch tiers. The bake is shared by all three, so this is cheap after the first. */
@@ -95,6 +111,30 @@ export interface LabLighting {
    * drifts. Meant to be called a few times a second, not every frame.
    */
   update(focus: Vector3): void;
+  /**
+   * Light with these lamps instead, on the same world: a door opened and a
+   * lamp's area grew, a token's light moved or was switched on, a floor was
+   * hidden. Only lamps whose place or area changed are baked again (the bake
+   * cache), only the meshes their light falls on are re-lit, and the
+   * real-time pool keeps every lamp it still has (moving it if it moved)
+   * before re-picking — so nothing is rebuilt and no shader is recompiled.
+   * Call it after the world's floors are shown or hidden as they will be
+   * drawn: the real-time lamps are picked from the highest floor on show.
+   */
+  setSources(sources: readonly LabLightSource[]): void;
+  /**
+   * Draw every shadow map again on the next frame. Shadows are drawn once
+   * where their lamp lands, not every frame, so call this when something
+   * that casts one has moved, appeared or gone: a door opened or shut, a
+   * figure moved, a floor was hidden or shown.
+   *
+   * With `near`, only the maps that can have changed are drawn again: the
+   * key light's (it covers the whole map) and those of the lamps whose light
+   * reaches within `near.radius` of one of `near.points` (world units, the
+   * world group's frame). A door that opened changes no shadow its leaf is
+   * out of every reach of.
+   */
+  refreshShadows(near?: ShadowScope): void;
   /** Lamps lit per pixel now, how many of those cast shadows, and how many are baked. */
   stats(): { realtime: number; shadowed: number; baked: number };
   /** Take every light out of the scene and give the world its own materials back. */
@@ -105,12 +145,19 @@ export interface LabLighting {
 // Tuning
 // ---------------------------------------------------------------------------
 
+/**
+ * A tier's real-time pool is always allocated whole — `pool - spots` point
+ * lights and `spots` spot lights, whether the scene has that many lamps or
+ * none — and a slot with no lamp to show is parked (off and far away). So
+ * the number of three.js lights, which three compiles into every lit shader,
+ * is fixed per tier: a lamp appearing or going never recompiles anything.
+ */
 interface Tier {
   /** Real-time lamps, spots included. */
   pool: number;
   /** How many real-time point lamps cast shadows. */
   shadows: number;
-  /** How many of the pool may be spot lights (beams). */
+  /** How many of the pool are spot lights (beams); the rest are point lights. */
   spots: number;
   /** Shadow map size for a lamp (a point lamp's is six faces of it). */
   mapSize: number;
@@ -118,10 +165,16 @@ interface Tier {
   keyMapSize: number;
 }
 
+/**
+ * The spots sit on top of the point lamps (8 + 2, 24 + 4) rather than
+ * inside them: when the pool was sized to the lamps, a scene with no beams
+ * gave all of it to point lamps, and a fixed split inside 8 and 24 would have
+ * cost such a scene two and four of its real-time lamps.
+ */
 const TIERS: Readonly<Record<LabQuality, Tier>> = {
   low: { pool: 0, shadows: 0, spots: 0, mapSize: 0, keyMapSize: 0 },
-  medium: { pool: 8, shadows: 3, spots: 2, mapSize: 512, keyMapSize: 1024 },
-  high: { pool: 24, shadows: 8, spots: 4, mapSize: 1024, keyMapSize: 2048 },
+  medium: { pool: 10, shadows: 3, spots: 2, mapSize: 512, keyMapSize: 1024 },
+  high: { pool: 28, shadows: 8, spots: 4, mapSize: 1024, keyMapSize: 2048 },
 };
 
 /**
@@ -427,7 +480,9 @@ function makeRec(mesh: Mesh, level: number, toGroup: Matrix4): MeshRec | null {
     count,
     pos,
     nor,
-    soup: geo.index === null && count % 3 === 0,
+    // A soup drawn through an index that only leaves whole triangles out (a
+    // floor's door leaves, `world3d.ts`) says so on its geometry.
+    soup: (geo.index === null || geo.userData.soup === true) && count % 3 === 0,
     minX,
     maxX,
     minY,
@@ -622,6 +677,10 @@ function bakeLamp(lamp: Lamp, poly: Poly, recs: readonly MeshRec[]): LampBake {
 /** A source made ready to light: where its light comes from, how strong, and what shape. */
 interface Lamp {
   src: LabLightSource;
+  /** Which lamp this is from one set of sources to the next: its floor and its rules id. */
+  id: string;
+  /** Everything a real-time light showing it is set from; a slot keeping this lamp is set again when it changes. */
+  pose: string;
   level: number;
   /** The lamp in the world group's frame (x = grid x, z = grid y). */
   x: number;
@@ -696,8 +755,14 @@ function makeLamp(s: LabLightSource, floorY: number, storey: number): Lamp | nul
   const y = floorY + h;
   const z = src.at.y;
   const poly = s.polygon.map((p) => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).join(' ');
+  const angle = Math.min(SPOT_MAX_ANGLE, (((src.fov ?? 90) / 2) * Math.PI) / 180);
+  const aimX = x + Math.cos(facing) * aim;
+  const aimZ = z + Math.sin(facing) * aim;
+  const near = Math.max(NEAR_MIN, Math.min(fixtureReach(src) + FIXTURE_CLEAR, src.radius * 0.4));
   return {
     src: s,
+    id: `${s.level}|${src.id}`,
+    pose: `${x}|${y}|${z}|${intensity}|${cutoff}|${color.getHexString()}|${spot ? `${angle}|${aimX}|${aimZ}` : ''}|${near}`,
     level: s.level,
     x,
     y,
@@ -709,10 +774,10 @@ function makeLamp(s: LabLightSource, floorY: number, storey: number): Lamp | nul
     color,
     rgb: [color.r * intensity, color.g * intensity, color.b * intensity],
     spot,
-    angle: Math.min(SPOT_MAX_ANGLE, (((src.fov ?? 90) / 2) * Math.PI) / 180),
-    aimX: x + Math.cos(facing) * aim,
-    aimZ: z + Math.sin(facing) * aim,
-    near: Math.max(NEAR_MIN, Math.min(fixtureReach(src) + FIXTURE_CLEAR, src.radius * 0.4)),
+    angle,
+    aimX,
+    aimZ,
+    near,
     key: `${s.level}|${x}|${y.toFixed(4)}|${z}|${src.radius}|${cutoff.toFixed(4)}|${poly}`,
     bake: null,
   };
@@ -850,6 +915,47 @@ function litVariant(orig: MeshStandardMaterial): MeshStandardMaterial {
   return m;
 }
 
+/** A world material's two stand-ins, and the uniforms Low's reads the ambient from. */
+interface Variants {
+  low: MeshBasicMaterial;
+  lit: MeshStandardMaterial;
+  lowU: LowUniforms;
+}
+
+/** Each world material's stand-ins (`variantsOf`), for as long as that material lives. */
+const variantCache = new WeakMap<MeshStandardMaterial, Variants>();
+
+/**
+ * A world material's stand-ins, made the first time a lighting needs them
+ * and shared by every lighting after, on this world or the next one built
+ * with the same materials; they are disposed when the material itself is.
+ *
+ * Shared because three frees a shader program as soon as the last material
+ * using it is disposed: a lighting that made its own stand-ins and disposed
+ * them with itself made every rebuild — a repainted floor, a renderer swap —
+ * compile the world's shaders again.
+ */
+function variantsOf(orig: MeshStandardMaterial): Variants {
+  const known = variantCache.get(orig);
+  if (known) return known;
+  const lowU: LowUniforms = {
+    sky: { value: new Color() },
+    ground: { value: new Color() },
+    keyColor: { value: new Color() },
+    keyDir: { value: new Vector3(0, 1, 0) },
+  };
+  const made: Variants = { low: lowVariant(orig, lowU), lit: litVariant(orig), lowU };
+  variantCache.set(orig, made);
+  const release = () => {
+    orig.removeEventListener('dispose', release);
+    variantCache.delete(orig);
+    made.low.dispose();
+    made.lit.dispose();
+  };
+  orig.addEventListener('dispose', release);
+  return made;
+}
+
 // ---------------------------------------------------------------------------
 // The lighting
 // ---------------------------------------------------------------------------
@@ -863,9 +969,12 @@ interface Slot {
 }
 
 /**
- * Light a built world with the rules' lamps. Starts at Medium when the
- * renderer has a shadow map and at Low when it does not; the page sets the
- * tier it wants straight after.
+ * Light a built world with the rules' lamps, at `quality` (by default Medium
+ * when the renderer has a shadow map and Low when it does not), picking the
+ * first real-time lamps around `focus` (world units; by default the world's
+ * middle). Pass the tier and the focus the owner means to use: the pool is
+ * built and the world lit once, for them, rather than once for the defaults
+ * and again when the owner corrects them.
  */
 export function createLighting(ctx: {
   scene: ThreeScene;
@@ -874,6 +983,8 @@ export function createLighting(ctx: {
   sources: readonly LabLightSource[];
   ambientRow: LightRow;
   storey: number;
+  quality?: LabQuality;
+  focus?: Vector3;
 }): LabLighting {
   const { world, renderer } = ctx;
   const storey = ctx.storey > 0 ? ctx.storey : world.storey;
@@ -898,52 +1009,34 @@ export function createLighting(ctx: {
 
   const cache = worldBakeFor(world);
   const recs = cache.recs;
-  cache.gen += 1;
   const floorYs = new Map<number, number>(world.levels.map((l) => [l.level, l.y]));
-  const lamps: Lamp[] = [];
-  for (const s of ctx.sources) {
-    const lamp = makeLamp(s, floorYs.get(s.level) ?? s.level * storey, storey);
-    if (lamp) lamps.push(lamp);
-  }
   /**
-   * The multiplier on every lamp: the tier's (`HIGH_BOOST`) times the
-   * ambient row's (`LAMP_GAIN`). Set by `applyQuality` and `applyAmbient`
-   * through `setBoost`.
+   * The lamp made for each source object, kept for as long as the owner
+   * keeps handing the same source back: an owner that recomputes only the
+   * floors that changed hands the rest over as they were, and their lamps
+   * (and the bake key each spells out of its polygon) are not made again.
    */
-  let boost = 1;
-  let tierBoost = 1;
-  let ambientGain = 1;
+  const lampOf = new WeakMap<LabLightSource, Lamp | null>();
 
-  // High's glow at each lamp: one soft sprite per lamp, where the lamp
-  // actually hangs (not where a low lamp is lifted to for its pool).
-  const haloTexture = makeHaloTexture();
-  const halos = new Group();
-  halos.name = 'lab-lamp-halos';
-  halos.visible = false;
-  const haloMaterials: SpriteMaterial[] = [];
-  for (const lamp of lamps) {
-    const mat = new SpriteMaterial({
-      map: haloTexture,
-      color: lamp.color,
-      blending: AdditiveBlending,
-      transparent: true,
-      depthWrite: false,
-    });
-    haloMaterials.push(mat);
-    const sprite = new Sprite(mat);
-    const rows = Math.min(3, Math.max(1, lamp.src.source.rows));
-    const size = HALO_SQUARES * (1 + rows);
-    sprite.scale.set(size, size, 1);
-    sprite.position.set(lamp.x, lamp.src.y, lamp.z);
-    halos.add(sprite);
-  }
-  root.add(halos);
-
-  {
+  /**
+   * Lamps for these sources, each with its bake: from the world's cache when
+   * a lamp with the same place and area was baked before, baked now when not.
+   */
+  function loadLamps(sources: readonly LabLightSource[]): Lamp[] {
+    const out: Lamp[] = [];
+    for (const s of sources) {
+      let lamp = lampOf.get(s);
+      if (lamp === undefined) {
+        lamp = makeLamp(s, floorYs.get(s.level) ?? s.level * storey, storey);
+        lampOf.set(s, lamp);
+      }
+      if (lamp) out.push(lamp);
+    }
+    cache.gen += 1;
     const t0 = performance.now();
     let fresh = 0;
     let scanned = 0;
-    for (const lamp of lamps) {
+    for (const lamp of out) {
       let b = cache.lamps.get(lamp.key);
       if (!b) {
         const poly = preparePolygon(lamp.src.polygon);
@@ -960,17 +1053,69 @@ export function createLighting(ctx: {
       let verts = 0;
       for (const rec of recs) verts += rec.count;
       console.info(
-        `[lab3d] light bake: ${fresh} of ${lamps.length} lamps baked (${lamps.length - fresh} cached), ` +
+        `[lab3d] light bake: ${fresh} of ${out.length} lamps baked (${out.length - fresh} cached), ` +
           `${scanned} lit vertices of ${verts}, ${(performance.now() - t0).toFixed(1)} ms`,
       );
     }
+    return out;
   }
 
+  let lamps: Lamp[] = loadLamps(ctx.sources);
+  /**
+   * The multiplier on every lamp: the tier's (`HIGH_BOOST`) times the
+   * ambient row's (`LAMP_GAIN`). Set by `applyQuality` and `applyAmbient`
+   * through `setBoost`.
+   */
+  let boost = 1;
+  let tierBoost = 1;
+  let ambientGain = 1;
+
+  // High's glow at each lamp: one soft sprite per lamp, where the lamp
+  // actually hangs (not where a low lamp is lifted to for its pool). The
+  // sprites are kept as the lamps change, and only ever added to.
+  const haloTexture = makeHaloTexture();
+  const halos = new Group();
+  halos.name = 'lab-lamp-halos';
+  halos.visible = false;
+  const haloSprites: Sprite[] = [];
+  const haloMaterials: SpriteMaterial[] = [];
+  let haloOpacity = HALO_OPACITY[0];
+  root.add(halos);
+
+  /** One halo per lamp, where it hangs and in its colour; spare sprites hidden. */
+  function layoutHalos(): void {
+    for (let i = 0; i < lamps.length; i += 1) {
+      const lamp = lamps[i]!;
+      let sprite = haloSprites[i];
+      let mat = haloMaterials[i];
+      if (!sprite || !mat) {
+        mat = new SpriteMaterial({ map: haloTexture, blending: AdditiveBlending, transparent: true, depthWrite: false });
+        mat.opacity = haloOpacity;
+        sprite = new Sprite(mat);
+        haloMaterials.push(mat);
+        haloSprites.push(sprite);
+        halos.add(sprite);
+      }
+      mat.color.copy(lamp.color);
+      const rows = Math.min(3, Math.max(1, lamp.src.source.rows));
+      const size = HALO_SQUARES * (1 + rows);
+      sprite.scale.set(size, size, 1);
+      sprite.position.set(lamp.x, lamp.src.y, lamp.z);
+      sprite.visible = true;
+    }
+    for (let i = lamps.length; i < haloSprites.length; i += 1) haloSprites[i]!.visible = false;
+  }
+  layoutHalos();
+
   /** Per mesh, the lamps whose light falls on it. */
-  const recLamps: Array<Array<{ lamp: number; part: BakePart }>> = recs.map(() => []);
-  lamps.forEach((lamp, i) => {
-    for (const part of lamp.bake?.parts ?? []) recLamps[part.rec]!.push({ lamp: i, part });
-  });
+  let recLamps: Array<Array<{ lamp: number; part: BakePart }>> = [];
+  function indexLamps(): void {
+    recLamps = recs.map(() => []);
+    lamps.forEach((lamp, i) => {
+      for (const part of lamp.bake?.parts ?? []) recLamps[part.rec]!.push({ lamp: i, part });
+    });
+  }
+  indexLamps();
 
   /** 1 where a lamp is real-time now (and so left out of the bake). */
   let realtime = new Uint8Array(lamps.length);
@@ -1010,21 +1155,15 @@ export function createLighting(ctx: {
 
   // --- materials -----------------------------------------------------------
 
-  const lowU: LowUniforms = {
-    sky: { value: new Color() },
-    ground: { value: new Color() },
-    keyColor: { value: new Color() },
-    keyDir: { value: new Vector3(0, 1, 0) },
-  };
   const originals = new Map<Mesh, Material | Material[]>();
-  const variants = new Map<Material, { low: MeshBasicMaterial; lit: MeshStandardMaterial }>();
+  const variants = new Map<Material, Variants>();
   for (const rec of recs) {
     const orig = rec.mesh.material;
     originals.set(rec.mesh, orig);
-    if (orig instanceof MeshStandardMaterial && !variants.has(orig)) {
-      variants.set(orig, { low: lowVariant(orig, lowU), lit: litVariant(orig) });
-    }
+    if (orig instanceof MeshStandardMaterial && !variants.has(orig)) variants.set(orig, variantsOf(orig));
   }
+  /** The ambient uniforms of every stand-in this world wears, written together (`applyAmbient`). */
+  const lowUs: LowUniforms[] = [...variants.values()].map((v) => v.lowU);
   function dressWorld(low: boolean): void {
     for (const rec of recs) {
       const orig = originals.get(rec.mesh);
@@ -1088,11 +1227,14 @@ export function createLighting(ctx: {
     hemi.intensity = Math.PI * HEMI_SHARE * a.level;
     key.color.setHex(a.key);
     key.intensity = Math.PI * KEY_SHARE * a.level;
-    lowU.sky.value.copy(hemi.color).multiplyScalar(hemi.intensity);
-    lowU.ground.value.copy(hemi.groundColor).multiplyScalar(hemi.intensity);
-    lowU.keyColor.value.copy(key.color).multiplyScalar(key.intensity);
-    lowU.keyDir.value.copy(KEY_DIR).transformDirection(root.matrix);
-    for (const m of haloMaterials) m.opacity = HALO_OPACITY[row];
+    for (const u of lowUs) {
+      u.sky.value.copy(hemi.color).multiplyScalar(hemi.intensity);
+      u.ground.value.copy(hemi.groundColor).multiplyScalar(hemi.intensity);
+      u.keyColor.value.copy(key.color).multiplyScalar(key.intensity);
+      u.keyDir.value.copy(KEY_DIR).transformDirection(root.matrix);
+    }
+    haloOpacity = HALO_OPACITY[row];
+    for (const m of haloMaterials) m.opacity = haloOpacity;
   }
   applyAmbient();
 
@@ -1100,7 +1242,7 @@ export function createLighting(ctx: {
 
   let quality: LabQuality | null = null;
   let slots: Slot[] = [];
-  const focus = new Vector3().copy(center);
+  const focus = new Vector3().copy(ctx.focus ?? center);
   const tmp = new Vector3();
   let disposed = false;
 
@@ -1268,11 +1410,11 @@ export function createLighting(ctx: {
     const tier = TIERS[q];
     const shadowsOn = tier.pool > 0 && renderer.shadowMap.enabled;
 
-    // The pool, sized once per tier so the light count never changes.
+    // The pool, the tier's full size whatever the lamps (`Tier`), so the
+    // light count never changes while this tier stands.
     dropSlots();
-    const beams = lamps.filter((l) => l.spot).length;
-    const spotCount = Math.min(tier.spots, beams);
-    const pointCount = Math.min(tier.pool - spotCount, lamps.length - beams);
+    const spotCount = Math.max(0, Math.min(tier.spots, tier.pool));
+    const pointCount = tier.pool - spotCount;
     const caps = renderer.capabilities;
     const keyShadows = shadowsOn ? 1 : 0;
     const spotShadows = shadowsOn ? spotCount : 0;
@@ -1298,12 +1440,100 @@ export function createLighting(ctx: {
     for (let r = 0; r < recs.length; r += 1) accumulate(r);
   }
 
-  applyQuality(renderer.shadowMap.enabled ? 'medium' : 'low');
+  /**
+   * Swap the lamps for `next`'s (`LabLighting.setSources`). The pool keeps
+   * each lamp it was showing that is still there — matched by `Lamp.id`, and
+   * set again only if it moved or changed (`Lamp.pose`) — and parks the
+   * rest; then the usual sticky re-pick runs. A mesh's baked light is
+   * rewritten only if a lamp that falls on it (before or after) changed what
+   * it adds: appeared, went, was baked again, changed colour or strength, or
+   * moved between real-time and baked.
+   */
+  function replaceSources(next: readonly LabLightSource[]): void {
+    const oldLamps = lamps;
+    const oldRealtime = realtime;
+    lamps = loadLamps(next);
+    indexLamps();
+    layoutHalos();
+
+    const byId = new Map<string, number>();
+    lamps.forEach((L, i) => byId.set(L.id, i));
+    const oldById = new Map<string, number>();
+    oldLamps.forEach((L, i) => oldById.set(L.id, i));
+    // Ids repeat only if the rules ever hand two lights one id; the lamps
+    // cannot then be matched one to one, so every mesh is re-lit.
+    const matched = byId.size === lamps.length && oldById.size === oldLamps.length;
+
+    const carried = new Uint8Array(lamps.length);
+    for (const slot of slots) {
+      if (slot.lamp < 0) continue;
+      const i = byId.get(oldLamps[slot.lamp]?.id ?? '');
+      const L = i === undefined ? undefined : lamps[i];
+      if (i === undefined || L === undefined || L.spot !== slot.spot || carried[i] === 1) {
+        park(slot);
+        continue;
+      }
+      if (L.pose !== oldLamps[slot.lamp]!.pose) place(slot, i);
+      else slot.lamp = i;
+      carried[i] = 1;
+    }
+    realtime = carried;
+    const dirty = pick();
+
+    if (!matched) {
+      for (let r = 0; r < recs.length; r += 1) accumulate(r);
+      return;
+    }
+    const ids = new Set<string>([...oldById.keys(), ...byId.keys()]);
+    for (const id of ids) {
+      const o = oldById.get(id);
+      const n = byId.get(id);
+      const before = o !== undefined && oldRealtime[o] !== 1 ? oldLamps[o]! : null;
+      const after = n !== undefined && realtime[n] !== 1 ? lamps[n]! : null;
+      if (before === null && after === null) continue;
+      if (
+        before !== null &&
+        after !== null &&
+        before.bake === after.bake &&
+        before.rgb[0] === after.rgb[0] &&
+        before.rgb[1] === after.rgb[1] &&
+        before.rgb[2] === after.rgb[2]
+      ) {
+        continue;
+      }
+      for (const part of before?.bake?.parts ?? []) dirty.add(part.rec);
+      for (const part of after?.bake?.parts ?? []) dirty.add(part.rec);
+    }
+    for (const r of dirty) accumulate(r);
+  }
+
+  applyQuality(ctx.quality ?? (renderer.shadowMap.enabled ? 'medium' : 'low'));
 
   return {
     setQuality(q) {
       if (disposed || q === quality) return;
       applyQuality(q);
+    },
+
+    setSources(next) {
+      if (disposed) return;
+      replaceSources(next);
+    },
+
+    refreshShadows(near) {
+      if (disposed) return;
+      if (key.castShadow) key.shadow.needsUpdate = true;
+      for (const slot of slots) {
+        if (!slot.shadow || slot.lamp < 0) continue;
+        const L = lamps[slot.lamp];
+        if (near && L) {
+          // A shadow map reaches as far as its lamp's light (three's `distance`).
+          const r = L.cutoff + near.radius;
+          const hit = near.points.some((p) => (p.x - L.x) ** 2 + (p.y - L.y) ** 2 + (p.z - L.z) ** 2 <= r * r);
+          if (!hit) continue;
+        }
+        slot.light.shadow.needsUpdate = true;
+      }
     },
 
     setAmbient(row) {
@@ -1324,7 +1554,7 @@ export function createLighting(ctx: {
       if (disposed) return;
       focus.copy(f);
       syncFrame();
-      lowU.keyDir.value.copy(KEY_DIR).transformDirection(root.matrix);
+      for (const u of lowUs) u.keyDir.value.copy(KEY_DIR).transformDirection(root.matrix);
       if (slots.length === 0) return;
       for (const r of pick()) accumulate(r);
     },
@@ -1344,11 +1574,8 @@ export function createLighting(ctx: {
       if (disposed) return;
       disposed = true;
       dropSlots();
+      // The stand-ins are shared (`variantsOf`) and outlive this lighting.
       for (const [mesh, mat] of originals) mesh.material = mat;
-      for (const v of variants.values()) {
-        v.low.dispose();
-        v.lit.dispose();
-      }
       variants.clear();
       originals.clear();
       hemi.dispose();

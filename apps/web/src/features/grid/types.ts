@@ -527,8 +527,26 @@ export interface CameraCone {
   key: string;
 }
 
-/** Imperative API of the lazily-loaded pixi stage. */
+/** The two renderers the map can be drawn with: the three.js map, or the classic PixiJS one. */
+export type StageRenderer = '3d' | 'classic';
+
+/**
+ * How hard the 3D map works this device's GPU: Low draws unlit with baked
+ * light and no shadow maps (phones, the TV); Medium and High add real-time
+ * lamps and shadows. A per-device choice (`stageLoader.ts`).
+ */
+export type StageQuality = 'low' | 'medium' | 'high';
+
+/** Imperative API of the lazily-loaded map stage (either renderer). */
 export interface StageApi {
+  /**
+   * Which renderer is drawing the map at the moment; absent means classic.
+   * The page reads it for the renderer switch, so it shows what is actually
+   * drawing — a 3D map that could not start or lost its GPU is classic.
+   */
+  readonly renderer?: StageRenderer;
+  /** The 3D map's quality (`StageQuality`); the classic map has none and leaves this out. */
+  setQuality?(quality: StageQuality): void;
   update(state: StageSceneState): void;
   /**
    * Tile definitions for the painted floor (FR9.2), keyed by `tileDefKey` —

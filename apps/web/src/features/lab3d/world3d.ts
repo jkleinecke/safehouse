@@ -15,12 +15,17 @@
  *
  * Each floor is cut into chunks of `CHUNK` squares a side, one `MeshBuilder`
  * each, so a floor is a few dozen meshes the renderer can cull, not one
- * mesh per sofa and not one mesh per floor.
+ * mesh per sofa and not one mesh per floor. A painted door's leaf is the
+ * exception (`BuiltDoor`): each is built apart, then every leaf of a floor
+ * goes into one mesh per material whose index draws only the shut ones, so a
+ * door opens and shuts by being left out of the draw (`setDoorOpen`) rather
+ * than by building its floor again — and a floor's doors cost a draw call
+ * or two, not one per leaf, in every frame and every shadow pass.
  *
  * This is lab code: honest, not finished. What it approximates is said where
  * it does it.
  */
-import { Group } from 'three';
+import { BufferAttribute, DynamicDrawUsage, Group, type Mesh, type Raycaster } from 'three';
 import type { Scene, TileLayer } from '@safehouse/contracts';
 import { levelTiles, sceneLevels, WALL_THICKNESS, type TileCut } from '@safehouse/rules';
 import { metricsFor } from '../grid/geometry.js';
@@ -31,7 +36,6 @@ import {
   cutRunFor,
   isStanding,
   planTiles,
-  runOpen,
   tileDrawInput,
   wallBoxes,
   wallDiagonals,
@@ -45,6 +49,7 @@ import {
   disposeBuilt,
   MeshBuilder,
   storeyUnits,
+  type BuilderSpans,
   type BuiltMeshes,
   type LabMaterials,
   type V3,
@@ -65,13 +70,52 @@ export interface WorldOptions {
   levels: readonly number[];
 }
 
-/** One built floor: where it stands and the chunk meshes it is made of. */
+/**
+ * The part of a painted door that is there only while the door is shut: its
+ * leaf. Every leaf of a floor is drawn by the floor's leaf meshes
+ * (`BuiltLevel.doorMeshes`), which draw the shut ones only, so opening or
+ * shutting a door is leaving its leaf out of that draw or putting it back,
+ * not building the floor again.
+ *
+ * Which parts those are, by where the door stands:
+ *   - in a straight run, the leaf panel. A plain door has one leaf per cell
+ *     (two cells are a double door, each leaf opening on its own); every other
+ *     door design (a roller, a hatch, a glass door) has one leaf across its
+ *     whole run, which stands open while any cell of the run does — as the
+ *     2D map draws them. The jambs and lintel are wall, and stay;
+ *   - across a 45° run, the whole cell: an open diagonal door is a gap;
+ *   - where an arc runs through a painted door or window, the whole opening
+ *     in that square: open, it is the way through.
+ */
+export interface BuiltDoor {
+  level: number;
+  /** The `"col,row"` cells whose door state this leaf follows. */
+  cells: readonly string[];
+  /** The cells of `cells` standing open now. The leaf is drawn while this is empty. */
+  readonly open: ReadonlySet<string>;
+}
+
+/** One built floor: where it stands and the meshes it is made of. */
 export interface BuiltLevel {
   level: number;
   /** World y of the floor's top surface. */
   y: number;
-  /** One entry per non-empty chunk. */
+  /**
+   * One entry per non-empty chunk, then the door leaves' (`doorMeshes`) when
+   * the floor has any. Every mesh the floor has is in here, which is what
+   * the lighting bakes and what hiding a floor hides.
+   */
   built: BuiltMeshes[];
+  /** The floor's door leaves (`BuiltDoor`). */
+  doors: BuiltDoor[];
+  /**
+   * Every door leaf of the floor, one mesh per material. Their vertices are
+   * every leaf's, open or shut (so the lighting's bake of them holds); their
+   * index draws the shut leaves only, and is rewritten as doors open and
+   * shut (`BuiltWorld.setDoorOpen`) — which the shadows and the raycaster
+   * honour too. Also in `built`. Null for a floor without a door.
+   */
+  doorMeshes: BuiltMeshes | null;
 }
 
 /** The whole built world, ready to add to a three.js scene. */
@@ -82,6 +126,29 @@ export interface BuiltWorld {
   storey: number;
   levels: BuiltLevel[];
   stats: { triangles: number; buildMs: number };
+  /**
+   * Open or shut the painted door in cell `cell` (`"col,row"`) on floor
+   * `level`, as `tiles.doors[cell].open` now says, by leaving its leaves
+   * (`BuiltDoor`) out of the floor's leaf meshes or putting them back.
+   * Nothing is built. True when the world now matches:
+   * also when nothing it built depends on that cell's door (a window, a
+   * gap, a cell with no door), since there is then nothing to change. False
+   * only for a floor this world was not built with, which only a rebuild can
+   * answer.
+   *
+   * The world's shape changes but its lighting does not know: the owner
+   * refreshes the light sources (an open door lets light through) and the
+   * shadow maps (the leaf cast one) after flipping doors.
+   */
+  setDoorOpen(level: number, cell: string, open: boolean): boolean;
+  /**
+   * The painted door whose shut leaf `raycaster` meets first on floor
+   * `level`, as the cell of it the ray meets (`"col,row"`): the pointer's
+   * way to a door drawn standing over the squares behind its own. Only the
+   * leaves are tested, not what may stand in front of them. Null for none,
+   * or when that floor's leaves are not on show.
+   */
+  pickDoor(level: number, raycaster: Raycaster): string | null;
   /** Free every geometry and detach the groups. Materials are the lab's and stay. */
   dispose(): void;
 }
@@ -370,8 +437,14 @@ interface OpeningCtx {
   glow: number;
   /** Cells along the run (1 for an arc piece). */
   n: number;
-  /** Per cell of the run, first to last, whether its door stands open. */
-  open: readonly boolean[];
+  /** The run's cells as `"col,row"`, first to last (the one square, for an arc piece). */
+  cells: readonly string[];
+  /**
+   * The builder for a door leaf that follows these cells' door state
+   * (`LevelCtx.doorLeaf`). Every leaf is built, open or shut; whether it
+   * shows is the world's to say, per door, after the build.
+   */
+  leaf(cells: readonly string[]): MeshBuilder;
   /** A straight run has jambs at its ends and mullions between cells; an arc piece has neither. */
   ends: boolean;
   /** Which side of the frame (+t or -t) faces south or east — the face a sign hangs on. */
@@ -404,13 +477,13 @@ function buildOpening(b: MeshBuilder, f: Frame, cut: TileCut, c: OpeningCtx): vo
       if (cut === 'door') {
         // One leaf per cell: two cells are a double door, and each leaf opens on its own.
         for (let i = 0; i < c.n; i += 1) {
-          if (c.open[i] === true) continue;
           const s0 = i === 0 ? pad : i * cl + 0.01;
           const s1 = i === c.n - 1 ? len - pad : (i + 1) * cl - 0.01;
-          block(b, f, s0, s1, -thin, thin, c.y, y(d.top), color, { kind });
+          block(c.leaf(c.cells.slice(i, i + 1)), f, s0, s1, -thin, thin, c.y, y(d.top), color, { kind });
         }
-      } else if (!c.open.some(Boolean)) {
-        block(b, f, pad, len - pad, -thin, thin, c.y, y(d.top), color, { kind });
+      } else {
+        // One leaf across the run, open while any cell of it is.
+        block(c.leaf(c.cells), f, pad, len - pad, -thin, thin, c.y, y(d.top), color, { kind });
       }
       return;
     }
@@ -489,6 +562,12 @@ interface LevelCtx {
   opts: WorldOptions;
   plan: TilePlan;
   chunk(col: number, row: number): MeshBuilder;
+  /**
+   * The builder for one door leaf (`BuiltDoor`), keyed by the cells it
+   * follows: asked twice for the same cells (the two half-square pieces of
+   * an arc in one square), it is the same leaf.
+   */
+  doorLeaf(cells: readonly string[]): MeshBuilder;
   /**
    * The chunk for things that are themselves lights — a ceiling light, a
    * lamppost, a terminal. Built apart because they cast no shadow: a live
@@ -628,13 +707,14 @@ function buildWallCell(ctx: LevelCtx, cell: TileCell): void {
   if (diagonalOnly(joins)) {
     // A diagonal door or window: its design runs along the grid, so across a
     // 45° run it is the wall in the opening's colours (glass if glazed), and
-    // an open door is a gap — as the 2D map draws it.
-    if (cut !== null && DOOR_CUTS.has(cut) && ctx.plan.openDoors.has(`${col},${row}`)) return;
+    // an open door is a gap — as the 2D map draws it. So a door's whole cell
+    // is its leaf.
+    const into = cut !== null && DOOR_CUTS.has(cut) ? ctx.doorLeaf([`${col},${row}`]) : b;
     const glassy = cut !== null && GLASSY.has(cut);
     const k: Kind = glassy ? 'glass' : kind;
     const color = glassy ? GLASS : tones.base;
-    b.extrude(lift(diagonalPost()), y0, y1, color, { top, kind: k });
-    for (const d of wallDiagonals(joins)) b.extrude(lift(d), y0, y1, color, { top, kind: k });
+    into.extrude(lift(diagonalPost()), y0, y1, color, { top, kind: k });
+    for (const d of wallDiagonals(joins)) into.extrude(lift(d), y0, y1, color, { top, kind: k });
     return;
   }
 
@@ -650,13 +730,17 @@ function buildWallCell(ctx: LevelCtx, cell: TileCell): void {
   if (cut !== null) {
     const run = cutRunFor(ctx.plan, cell);
     if (run === null) return;
+    // The run's cells, first to last: this cell is its last.
+    const [dc, dr] = run.axis === 'x' ? [1, 0] : [0, 1];
+    const cells = Array.from({ length: run.n }, (_, k) => `${col - dc * (run.n - 1 - k)},${row - dr * (run.n - 1 - k)}`);
     buildOpening(b, runFrame(run), cut, {
       y: ctx.y,
       heights,
       tones,
       glow: glowOf(def, tones) ?? tones.light,
       n: run.n,
-      open: runOpen(run, cell, ctx.plan.openDoors),
+      cells,
+      leaf: ctx.doorLeaf,
       ends: true,
       side: run.axis === 'x' ? 1 : -1,
       top,
@@ -683,17 +767,20 @@ function buildArcPiece(ctx: LevelCtx, cell: TileCell, seg: NonNullable<TileCell[
   const h = f.half;
 
   if (cell.opening !== undefined) {
-    // A door or window the arc runs through: open, it is the way through.
-    if (cell.opening.open) return;
+    // A door or window the arc runs through: open, it is the way through. So
+    // the whole opening in this square is the leaf of the door painted here.
     const cut = cutOf(def);
     if (cut !== null) {
-      buildOpening(b, f, cut, {
+      const cells = [`${cell.col},${cell.row}`];
+      const leaf = ctx.doorLeaf(cells);
+      buildOpening(leaf, f, cut, {
         y: ctx.y,
         heights,
         tones,
         glow: glowOf(def, tones) ?? tones.light,
         n: 1,
-        open: [],
+        cells,
+        leaf: () => leaf,
         ends: false,
         side: 1,
         top,
@@ -802,13 +889,14 @@ function buildLevel(
   materials: LabMaterials,
   opts: WorldOptions,
   storey: number,
-): { built: BuiltMeshes[]; chunkKeys: string[]; propFailures: number } {
+): { built: BuiltMeshes[]; leaves: LeafLayer | null; chunkKeys: string[]; propFailures: number } {
   const tiles = levelTiles(scene, level) as TileLayer | undefined;
-  if (tiles === undefined) return { built: [], chunkKeys: [], propFailures: 0 };
+  if (tiles === undefined) return { built: [], leaves: null, chunkKeys: [], propFailures: 0 };
   const m = metricsFor(scene.grid);
   const plan = planTiles(m, tileDrawInput(tiles, defs as Record<string, TileDrawDef>));
   const builders = new Map<string, MeshBuilder>();
   const emitters = new Map<string, MeshBuilder>();
+  const leaves = new Map<string, { cells: string[]; b: MeshBuilder }>();
   const ctx: LevelCtx = {
     level,
     y: level * storey,
@@ -833,6 +921,15 @@ function buildLevel(
         emitters.set(key, b);
       }
       return b;
+    },
+    doorLeaf(cells) {
+      const key = cells.join('+');
+      let leaf = leaves.get(key);
+      if (leaf === undefined) {
+        leaf = { cells: [...cells], b: new MeshBuilder() };
+        leaves.set(key, leaf);
+      }
+      return leaf.b;
     },
     propFailures: 0,
   };
@@ -960,7 +1057,72 @@ function buildLevel(
     built.push(meshes);
     chunkKeys.push(`lights:${key}`);
   }
-  return { built, chunkKeys, propFailures: ctx.propFailures };
+  // Every door leaf in one mesh per material, each leaf's span of it kept,
+  // drawing the shut ones as the painted doors say.
+  const merged = new MeshBuilder();
+  const doors: DoorRec[] = [];
+  for (const leaf of leaves.values()) {
+    if (leaf.b.empty) continue;
+    const spans = merged.absorb(leaf.b);
+    const open = new Set(leaf.cells.filter((c) => plan.openDoors.has(c)));
+    doors.push({ level, cells: leaf.cells, open, spans });
+  }
+  let layer: LeafLayer | null = null;
+  if (!merged.empty) {
+    const meshes = merged.finish(materials);
+    for (const o of meshes.all) o.name = `level-${level}:doors`;
+    for (const part of LEAF_PARTS) {
+      const geometry = meshes[part]?.geometry;
+      if (!geometry) continue;
+      const count = geometry.getAttribute('position').count;
+      geometry.setIndex(new BufferAttribute(new Uint32Array(count), 1).setUsage(DynamicDrawUsage));
+      // Still a triangle soup — vertex i belongs to triangle ⌊i/3⌋ alone —
+      // whose index only leaves whole leaves out; the lighting's bake reads
+      // this to treat it as the soup it is (`lighting3d.ts`).
+      geometry.userData.soup = true;
+    }
+    layer = { meshes, doors };
+    drawShutLeaves(layer);
+  }
+  return { built, leaves: layer, chunkKeys, propFailures: ctx.propFailures };
+}
+
+/** A door leaf as the world keeps it: `BuiltDoor`, with its open cells writable and its spans in the floor's leaf meshes. */
+interface DoorRec extends BuiltDoor {
+  readonly open: Set<string>;
+  readonly spans: BuilderSpans;
+}
+
+/** A floor's door leaves as drawn: its leaf meshes, and every leaf in them. */
+interface LeafLayer {
+  meshes: BuiltMeshes;
+  doors: DoorRec[];
+}
+
+/** The leaf meshes' parts, each with a span per leaf. */
+const LEAF_PARTS = ['solid', 'glass', 'glow', 'lines'] as const;
+/** The parts a ray can hit: hairlines are not what anyone clicks. */
+const LEAF_SURFACES = ['solid', 'glass', 'glow'] as const;
+
+/**
+ * Write each leaf mesh's index to draw the shut leaves only, whole and in
+ * order, and draw no further than them. The vertices stay put.
+ */
+function drawShutLeaves(layer: LeafLayer): void {
+  for (const part of LEAF_PARTS) {
+    const geometry = layer.meshes[part]?.geometry;
+    const index = geometry?.getIndex();
+    if (!geometry || !index || !(index.array instanceof Uint32Array)) continue;
+    const out = index.array;
+    let n = 0;
+    for (const d of layer.doors) {
+      if (d.open.size > 0) continue;
+      const span = d.spans[part];
+      for (let k = 0; k < span.count; k += 1) out[n++] = span.start + k;
+    }
+    geometry.setDrawRange(0, n);
+    index.needsUpdate = true;
+  }
 }
 
 function trianglesOf(built: BuiltMeshes): number {
@@ -994,6 +1156,10 @@ export function buildWorld(
   const wanted = [...new Set(opts.levels)].filter((l) => Number.isInteger(l) && l >= 0 && l < floorCount).sort((a, b) => a - b);
 
   const levels: BuiltLevel[] = [];
+  /** Per floor built, each door cell's leaves (a cell of a wide door and a leaf of its own share one). */
+  const doorIndex = new Map<number, Map<string, DoorRec[]>>();
+  /** Per floor built, its leaf meshes; null for a floor without a door. */
+  const leafLayers = new Map<number, LeafLayer | null>();
   let triangles = 0;
   let propFailures = 0;
   for (const level of wanted) {
@@ -1001,13 +1167,25 @@ export function buildWorld(
     levelGroup.name = `level-${level}`;
     levelGroup.userData = { level };
     const out = buildLevel(scene, level, defs, materials, opts, storey);
-    for (const b of out.built) {
+    // Counted open or shut: every leaf is on the GPU either way.
+    const built = out.leaves ? [...out.built, out.leaves.meshes] : out.built;
+    for (const b of built) {
       for (const o of b.all) levelGroup.add(o);
       triangles += trianglesOf(b);
     }
+    const index = new Map<string, DoorRec[]>();
+    for (const d of out.leaves?.doors ?? []) {
+      for (const cell of d.cells) {
+        const list = index.get(cell);
+        if (list) list.push(d);
+        else index.set(cell, [d]);
+      }
+    }
+    doorIndex.set(level, index);
+    leafLayers.set(level, out.leaves);
     propFailures += out.propFailures;
     group.add(levelGroup);
-    levels.push({ level, y: level * storey, built: out.built });
+    levels.push({ level, y: level * storey, built, doors: out.leaves?.doors ?? [], doorMeshes: out.leaves?.meshes ?? null });
   }
   if (propFailures > 0) console.warn(`[lab3d] ${propFailures} prop(s) failed to build and were left out`);
 
@@ -1016,6 +1194,42 @@ export function buildWorld(
     storey,
     levels,
     stats: { triangles: Math.round(triangles), buildMs: performance.now() - started },
+    setDoorOpen(level, cell, open) {
+      const index = doorIndex.get(level);
+      if (index === undefined) return false;
+      let changed = false;
+      for (const d of index.get(cell) ?? []) {
+        if (d.open.has(cell) === open) continue;
+        if (open) d.open.add(cell);
+        else d.open.delete(cell);
+        changed = true;
+      }
+      const layer = leafLayers.get(level);
+      if (changed && layer) drawShutLeaves(layer);
+      return true;
+    },
+    pickDoor(level, raycaster) {
+      const layer = leafLayers.get(level);
+      if (!layer) return null;
+      const targets: Mesh[] = [];
+      for (const part of LEAF_SURFACES) {
+        const mesh = layer.meshes[part];
+        if (mesh?.visible) targets.push(mesh);
+      }
+      if (targets.length === 0) return null;
+      const hit = raycaster.intersectObjects(targets, false)[0];
+      const part = LEAF_SURFACES.find((p) => layer.meshes[p] === hit?.object);
+      const vertex = hit?.face?.a;
+      if (hit === undefined || part === undefined || vertex === undefined) return null;
+      for (const d of layer.doors) {
+        const span = d.spans[part];
+        if (d.open.size > 0 || vertex < span.start || vertex >= span.start + span.count) continue;
+        // The square of the leaf the ray met: one leaf can span a run of them.
+        const cell = `${Math.floor(hit.point.x)},${Math.floor(hit.point.z)}`;
+        return d.cells.includes(cell) ? cell : (d.cells[0] ?? null);
+      }
+      return null;
+    },
     dispose() {
       for (const l of levels) for (const b of l.built) disposeBuilt(b);
       for (const child of [...group.children]) child.removeFromParent();
