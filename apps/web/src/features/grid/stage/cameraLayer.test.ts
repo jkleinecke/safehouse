@@ -7,10 +7,11 @@
  * the eye and the label, and drops the cone the moment the camera is off.
  */
 import { describe, expect, it } from 'vitest';
-import type { Container, Graphics, Text } from 'pixi.js';
+import type { Graphics } from 'pixi.js';
 import type { Scene } from '@safehouse/contracts';
 import { metricsFor } from '../geometry.js';
 import type { CameraCone } from '../types.js';
+import type { InkLabel, LabelSink } from './ink.js';
 import { drawCameras } from './layers.js';
 
 const flat = metricsFor({ unitM: 1, cols: 12, rows: 8, offset: { x: 0, y: 0 }, projection: 'topdown' as const });
@@ -35,24 +36,26 @@ function counting(): { g: Graphics; ops: string[]; polys: number } {
 }
 
 /**
- * `ensureLabel` constructs a real pixi Text on a pool miss; this pool never
- * misses, handing back a stand-in and recording which keys were asked for.
+ * The 2D sink constructs a real pixi Text for a new label; this one never
+ * does, recording which keys were asked for instead.
  */
-class StubPool extends Map<string, Text> {
+class StubPool extends Map<string, InkLabel> implements LabelSink {
   readonly made: string[] = [];
-  override get(key: string): Text {
-    if (!this.has(key)) {
-      this.made.push(key);
-      this.set(key, { text: '', style: {}, x: 0, y: 0, destroy: () => undefined } as unknown as Text);
-    }
-    return super.get(key)!;
+  private readonly seen = new Set<string>();
+  put(key: string, label: InkLabel): void {
+    if (!this.has(key)) this.made.push(key);
+    this.set(key, label);
+    this.seen.add(key);
+  }
+  sweep(): void {
+    for (const key of [...this.keys()]) if (!this.seen.has(key)) this.delete(key);
+    this.seen.clear();
   }
 }
 
-function labels(): { layer: Container; pool: StubPool; made: string[] } {
-  const layer = { addChild: () => undefined } as unknown as Container;
+function labels(): { pool: StubPool; made: string[] } {
   const pool = new StubPool();
-  return { layer, pool, made: pool.made };
+  return { pool, made: pool.made };
 }
 
 function scene(cameras: Scene['geometry']['cameras']): Scene {
@@ -77,7 +80,7 @@ describe('drawCameras', () => {
   it('draws nothing at all for a player', () => {
     const c = counting();
     const l = labels();
-    drawCameras(c.g, l.layer, l.pool, scene([CAM]), flat, [cone], null, false, 0);
+    drawCameras(c.g, l.pool,scene([CAM]), flat, [cone], null, false, 0);
     expect(c.ops).toEqual(['clear']);
     expect(l.made).toEqual([]);
   });
@@ -86,7 +89,7 @@ describe('drawCameras', () => {
     for (const m of [flat, iso]) {
       const c = counting();
       const l = labels();
-      drawCameras(c.g, l.layer, l.pool, scene([CAM]), m, [cone], null, true, 0);
+      drawCameras(c.g, l.pool,scene([CAM]), m, [cone], null, true, 0);
       // Four cone cells, one wedge, and the two field-of-view edges.
       expect(c.polys).toBe(cone.cells.size + 1);
       expect(c.ops.filter((o) => o === 'lineTo').length).toBe(2);
@@ -97,7 +100,7 @@ describe('drawCameras', () => {
   it('drops the cone and its edges when the camera is switched off', () => {
     const c = counting();
     const l = labels();
-    drawCameras(c.g, l.layer, l.pool, scene([{ ...CAM, active: false }]), flat, [cone], null, true, 0);
+    drawCameras(c.g, l.pool,scene([{ ...CAM, active: false }]), flat, [cone], null, true, 0);
     expect(c.polys).toBe(1); // the wedge only
     expect(c.ops.filter((o) => o === 'lineTo').length).toBe(1); // the strike-through
   });
@@ -105,14 +108,14 @@ describe('drawCameras', () => {
   it('draws only the cameras on the floor being shown', () => {
     const c = counting();
     const l = labels();
-    drawCameras(c.g, l.layer, l.pool, scene([{ ...CAM, level: 1 }]), flat, [cone], null, true, 0);
+    drawCameras(c.g, l.pool,scene([{ ...CAM, level: 1 }]), flat, [cone], null, true, 0);
     expect(c.ops).toEqual(['clear']);
   });
 
   it('draws a dome with no edges', () => {
     const c = counting();
     const l = labels();
-    drawCameras(c.g, l.layer, l.pool, scene([{ ...CAM, fov: 360 }]), flat, [cone], null, true, 0);
+    drawCameras(c.g, l.pool,scene([{ ...CAM, fov: 360 }]), flat, [cone], null, true, 0);
     expect(c.ops.filter((o) => o === 'lineTo').length).toBe(0);
   });
 });

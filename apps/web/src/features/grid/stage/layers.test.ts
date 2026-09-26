@@ -12,10 +12,11 @@
  * other layer draws through.
  */
 import { describe, expect, it } from 'vitest';
-import type { Container, Graphics, Text } from 'pixi.js';
+import type { Graphics } from 'pixi.js';
 import type { Scene } from '@safehouse/contracts';
 import { TILE_HEIGHTS } from '@safehouse/rules';
 import { heightRise, metricsFor, worldFromGrid } from '../geometry.js';
+import type { LabelSink } from './ink.js';
 import { drawFog } from './layers.js';
 
 const iso = metricsFor({
@@ -58,10 +59,7 @@ function tracing(): { g: Graphics; cuts: number[][] } {
   return { g: g as unknown as Graphics, cuts };
 }
 
-const noLabels = () => ({
-  layer: { addChild: () => undefined } as unknown as Container,
-  pool: new Map<string, Text>(),
-});
+const noLabels = (): LabelSink => ({ put: () => undefined, sweep: () => undefined });
 
 /** A scene with one revealed square region, and nothing else. */
 function scene(): Scene {
@@ -99,8 +97,8 @@ const ys = (poly: number[]): number[] => poly.filter((_, i) => i % 2 === 1);
 describe('drawFog', () => {
   it('cuts a revealed region out of the cover', () => {
     const f = tracing();
-    const { layer, pool } = noLabels();
-    drawFog(f.g, layer, pool, scene(), flat, false);
+    const labels = noLabels();
+    drawFog(f.g, labels,scene(), flat, false);
     expect(f.cuts.length).toBeGreaterThan(0);
   });
 
@@ -108,8 +106,8 @@ describe('drawFog', () => {
     // One cut, the floor polygon, and nothing swept: a plan-view scene has no
     // extrusion for the hole to miss.
     const f = tracing();
-    const { layer, pool } = noLabels();
-    drawFog(f.g, layer, pool, scene(), flat, false);
+    const labels = noLabels();
+    drawFog(f.g, labels,scene(), flat, false);
     expect(f.cuts).toHaveLength(1);
     const corner = worldFromGrid(flat, { x: 2, y: 2 });
     expect(f.cuts[0]!.slice(0, 2)).toEqual([corner.x, corner.y]);
@@ -120,8 +118,8 @@ describe('drawFog', () => {
     // revealed room with their tops and upper faces still under the opaque
     // cover — a room revealed with the roof left on.
     const f = tracing();
-    const { layer, pool } = noLabels();
-    drawFog(f.g, layer, pool, scene(), iso, false);
+    const labels = noLabels();
+    drawFog(f.g, labels,scene(), iso, false);
 
     // The floor polygon, the same polygon lifted, and one band per edge.
     expect(f.cuts).toHaveLength(2 + 4);
@@ -136,8 +134,8 @@ describe('drawFog', () => {
     // The bands are what make the three cuts a single volume rather than two
     // holes with opaque cover stranded between them.
     const f = tracing();
-    const { layer, pool } = noLabels();
-    drawFog(f.g, layer, pool, scene(), iso, false);
+    const labels = noLabels();
+    drawFog(f.g, labels,scene(), iso, false);
 
     const rise = heightRise(iso, TILE_HEIGHTS.FULL);
     const bands = f.cuts.slice(2);
@@ -177,8 +175,8 @@ describe('drawFog', () => {
       },
     } as unknown as Scene;
     const f = tracing();
-    const { layer, pool } = noLabels();
-    drawFog(f.g, layer, pool, withShape, iso, false);
+    const labels = noLabels();
+    drawFog(f.g, labels,withShape, iso, false);
     // Floor, lifted, and one band per edge of the triangle.
     expect(f.cuts).toHaveLength(2 + 3);
   });
@@ -187,8 +185,8 @@ describe('drawFog', () => {
     const s = scene();
     const shut = { ...s, fog: { ...s.fog, revealed: [] } } as unknown as Scene;
     const f = tracing();
-    const { layer, pool } = noLabels();
-    drawFog(f.g, layer, pool, shut, iso, true);
+    const labels = noLabels();
+    drawFog(f.g, labels,shut, iso, true);
     expect(f.cuts).toEqual([]);
   });
 });
@@ -240,25 +238,25 @@ describe('drawFog with nothing defined', () => {
     // where a region was revealed, so a scene with no regions yet — every
     // freshly built one — reached the phones and the TV as a black screen.
     const f = tracingCover();
-    const { layer, pool } = noLabels();
-    drawFog(f.g, layer, pool, unfogged(), flat, false);
+    const labels = noLabels();
+    drawFog(f.g, labels,unfogged(), flat, false);
     expect(f.rects).toBe(0);
     expect(f.cuts).toBe(0);
   });
 
   it('draws no tint for the GM either, so the two screens agree', () => {
     const f = tracingCover();
-    const { layer, pool } = noLabels();
-    drawFog(f.g, layer, pool, unfogged(), iso, true);
+    const labels = noLabels();
+    drawFog(f.g, labels,unfogged(), iso, true);
     expect(f.rects).toBe(0);
   });
 
   it('still covers once a single region exists, revealed or not', () => {
     const f = tracingCover();
-    const { layer, pool } = noLabels();
+    const labels = noLabels();
     const s = scene();
     const hidden = { ...s, fog: { ...s.fog, revealed: [] } } as Scene;
-    drawFog(f.g, layer, pool, hidden, flat, false);
+    drawFog(f.g, labels,hidden, flat, false);
     expect(f.rects).toBe(1);
     expect(f.cuts).toBe(0);
   });

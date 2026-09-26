@@ -1,8 +1,11 @@
 /**
  * Static scene layers: 1m grid overlay, fog of war, GM geometry (walls,
  * zones, doors). Redrawn only when the scene object changes — never per frame.
+ *
+ * No pixi: each layer draws into an `Ink` and puts its text through a
+ * `LabelSink` (`ink.ts`). The 2D stage hands over a Graphics and its pooled
+ * Text; a 3D stage can hand over floor meshes and DOM labels.
  */
-import { Container, Graphics, Text } from 'pixi.js';
 import type { Point, Scene } from '@safehouse/contracts';
 import type { CameraCone, GeometrySelection } from '../types.js';
 import { TILE_HEIGHTS } from '@safehouse/rules';
@@ -16,7 +19,8 @@ import {
   type SceneMetrics,
 } from '../geometry.js';
 import { C, parseColor } from './colors.js';
-import { NOTE_FONT_PX, NOTE_LINE_PX, NOTE_PAD_PX, noteFrame } from './notes.js';
+import type { Ink, InkLabel, LabelSink } from './ink.js';
+import { NOTE_PAD_PX, noteFrame } from './notes.js';
 
 /**
  * Grid overlay per the scene grid config (FR9.1).
@@ -25,7 +29,7 @@ import { NOTE_FONT_PX, NOTE_LINE_PX, NOTE_PAD_PX, noteFrame } from './notes.js';
  * so an isometric scene gets a diamond lattice matching its tiles rather than
  * the square one this used to draw over the top of them.
  */
-export function drawGrid(g: Graphics, m: SceneMetrics): void {
+export function drawGrid(g: Ink, m: SceneMetrics): void {
   g.clear();
   const { lines, border } = gridOverlay(m);
   const outline = () => {
@@ -76,7 +80,7 @@ function flatPoly(m: SceneMetrics, poly: readonly Point[]): number[] {
  * wall above the boundary; a hole sized to the shortest shows a beheaded one.
  * Only one of those is a bug a GM would report.
  */
-function cutSwept(g: Graphics, m: SceneMetrics, poly: readonly Point[]): void {
+function cutSwept(g: Ink, m: SceneMetrics, poly: readonly Point[]): void {
   const flat = poly.map((p) => worldFromGrid(m, p));
   g.poly(flat.flatMap((p) => [p.x, p.y])).cut();
 
@@ -98,9 +102,8 @@ function cutSwept(g: Graphics, m: SceneMetrics, poly: readonly Point[]): void {
  * The GM gets the same shape as a 40% tint plus named-region outlines+labels.
  */
 export function drawFog(
-  g: Graphics,
-  labelLayer: Container,
-  labelPool: Map<string, Text>,
+  g: Ink,
+  labels: LabelSink,
   scene: Scene,
   m: SceneMetrics,
   isGm: boolean,
@@ -116,10 +119,7 @@ export function drawFog(
   // tint they could easily read straight through. Fog is something a GM adds
   // to a map, not something a map starts under.
   if (fog.regions.length === 0 && fog.revealedShapes.length === 0) {
-    for (const [id, label] of labelPool) {
-      label.destroy();
-      labelPool.delete(id);
-    }
+    labels.sweep();
     return;
   }
 
@@ -140,7 +140,6 @@ export function drawFog(
   }
 
   // GM extras: outlines + name labels for every named region (FR9.14).
-  const seen = new Set<string>();
   if (isGm) {
     for (const region of fog.regions) {
       const isOpen = revealed.has(region.id);
@@ -149,35 +148,16 @@ export function drawFog(
         color: isOpen ? C.ok : C.cyan,
         alpha: isOpen ? 0.5 : 0.8,
       });
-      seen.add(region.id);
-      let label = labelPool.get(region.id);
-      if (!label) {
-        label = new Text({
-          text: '',
-          style: {
-            fill: C.cyan,
-            fontSize: 12,
-            fontFamily: 'Inter, sans-serif',
-            stroke: { color: C.ground, width: 3 },
-          },
-        });
-        label.anchor.set(0.5);
-        labelPool.set(region.id, label);
-        labelLayer.addChild(label);
-      }
-      label.text = region.name;
-      label.style.fill = isOpen ? C.ok : C.cyan;
       const at = worldFromGrid(m, polygonCenter(region.polygon));
-      label.x = at.x;
-      label.y = at.y;
+      labels.put(region.id, tag(region.name, at.x, at.y, 0.5, isOpen ? C.ok : C.cyan));
     }
   }
-  for (const [id, label] of labelPool) {
-    if (!seen.has(id)) {
-      label.destroy();
-      labelPool.delete(id);
-    }
-  }
+  labels.sweep();
+}
+
+/** A one-line map label at (x, y), centred vertically there and anchored at `anchorX` across. */
+function tag(text: string, x: number, y: number, anchorX: number, color: number): InkLabel {
+  return { look: 'tag', text, x, y, anchorX, anchorY: 0.5, color };
 }
 
 /**
@@ -185,7 +165,7 @@ export function drawFog(
  * (they are part of the map) with an open/closed state (toggle is GM-only).
  */
 export function drawGeometry(
-  g: Graphics,
+  g: Ink,
   scene: Scene,
   m: SceneMetrics,
   isGm: boolean,
@@ -267,28 +247,6 @@ export function drawGeometry(
 const NOTE_PAPER = 0xf1d76a;
 const NOTE_EDGE = 0x8a6d1f;
 
-/** Pooled note text — wrapped inside the box, dark on the paper. */
-function ensureNoteText(layer: Container, pool: Map<string, Text>, key: string): Text {
-  const existing = pool.get(key);
-  if (existing) return existing;
-  const text = new Text({
-    text: '',
-    style: {
-      fill: C.ground,
-      fontSize: NOTE_FONT_PX,
-      lineHeight: NOTE_LINE_PX,
-      fontFamily: 'Inter, sans-serif',
-      wordWrap: true,
-      wordWrapWidth: 120,
-      breakWords: true,
-    },
-  });
-  text.anchor.set(0, 0);
-  pool.set(key, text);
-  layer.addChild(text);
-  return text;
-}
-
 /**
  * GM notes (FR9.25): a sticky note pinned to a point on the map, for the GM
  * alone. "How to run this room", "the guard is asleep until someone
@@ -299,16 +257,14 @@ function ensureNoteText(layer: Container, pool: Map<string, Text>, key: string):
  * their state. The box is `noteFrame`, the same frame the hit-test uses.
  */
 export function drawNotes(
-  g: Graphics,
-  labelLayer: Container,
-  labelPool: Map<string, Text>,
+  g: Ink,
+  labels: LabelSink,
   scene: Scene,
   m: SceneMetrics,
   selectedNoteId: string | null,
   isGm: boolean,
 ): void {
   g.clear();
-  const seen = new Set<string>();
   if (isGm) {
     for (const note of scene.geometry.gmNotes ?? []) {
       const f = noteFrame(m, note);
@@ -320,44 +276,20 @@ export function drawNotes(
       if (note.id === selectedNoteId) {
         g.rect(f.x - 3, f.y - 3, f.w + 6, f.h + 6).stroke({ width: 2, color: C.magenta, alpha: 0.95 });
       }
-      const key = `note:${note.id}`;
-      seen.add(key);
-      const text = ensureNoteText(labelLayer, labelPool, key);
-      text.text = note.text;
-      text.style.wordWrapWidth = f.wrap;
-      text.x = f.x + NOTE_PAD_PX;
-      text.y = f.y + NOTE_PAD_PX;
+      // The text, wrapped inside the box, dark on the paper.
+      labels.put(`note:${note.id}`, {
+        look: 'note',
+        text: note.text,
+        x: f.x + NOTE_PAD_PX,
+        y: f.y + NOTE_PAD_PX,
+        anchorX: 0,
+        anchorY: 0,
+        color: C.ground,
+        wrap: f.wrap,
+      });
     }
   }
-  for (const [id, text] of labelPool) {
-    if (seen.has(id)) continue;
-    text.destroy();
-    labelPool.delete(id);
-  }
-}
-
-/** Pooled label text — one per annotation id, created on first sight. */
-function ensureLabel(
-  layer: Container,
-  pool: Map<string, Text>,
-  key: string,
-  anchorX: number,
-): Text {
-  const existing = pool.get(key);
-  if (existing) return existing;
-  const label = new Text({
-    text: '',
-    style: {
-      fill: C.cyan,
-      fontSize: 12,
-      fontFamily: 'Inter, sans-serif',
-      stroke: { color: C.ground, width: 3 },
-    },
-  });
-  label.anchor.set(anchorX, 0.5);
-  pool.set(key, label);
-  layer.addChild(label);
-  return label;
+  labels.sweep();
 }
 
 /**
@@ -369,29 +301,21 @@ function ensureLabel(
  * a glance what the table can already see.
  */
 export function drawPins(
-  g: Graphics,
-  labelLayer: Container,
-  labelPool: Map<string, Text>,
+  g: Ink,
+  labels: LabelSink,
   scene: Scene,
   m: SceneMetrics,
   selectedPinId: string | null,
   isGm = false,
 ): void {
   g.clear();
-  const seen = new Set<string>();
   const r = Math.max(6, m.cell * 0.16);
 
   // Zone names double as the GM's map labels (FR9.2 "…, labels").
   if (isGm) {
     for (const zone of scene.geometry.zones) {
-      const key = `zone:${zone.id}`;
-      seen.add(key);
       const at = worldFromGrid(m, polygonCenter(zone.polygon));
-      const label = ensureLabel(labelLayer, labelPool, key, 0.5);
-      label.text = zone.name;
-      label.style.fill = parseColor(zone.color, C.cyanDim);
-      label.x = at.x;
-      label.y = at.y;
+      labels.put(`zone:${zone.id}`, tag(zone.name, at.x, at.y, 0.5, parseColor(zone.color, C.cyanDim)));
     }
   }
 
@@ -415,19 +339,10 @@ export function drawPins(
     }
 
     if (!pin.label) continue;
-    seen.add(pin.id);
-    const label = ensureLabel(labelLayer, labelPool, pin.id, 0);
-    label.text = pin.label;
-    label.style.fill = color;
-    label.x = at.x + r * 1.6;
-    label.y = at.y - r * 2.4;
+    labels.put(pin.id, tag(pin.label, at.x + r * 1.6, at.y - r * 2.4, 0, color));
   }
 
-  for (const [id, label] of labelPool) {
-    if (seen.has(id)) continue;
-    label.destroy();
-    labelPool.delete(id);
-  }
+  labels.sweep();
 }
 
 /**
@@ -468,9 +383,8 @@ function edgeReach(cells: ReadonlySet<string>, at: Point, bearing: number, range
 }
 
 export function drawCameras(
-  g: Graphics,
-  labelLayer: Container,
-  labelPool: Map<string, Text>,
+  g: Ink,
+  labels: LabelSink,
   scene: Scene,
   m: SceneMetrics,
   cones: readonly CameraCone[] | null | undefined,
@@ -479,7 +393,6 @@ export function drawCameras(
   level: number,
 ): void {
   g.clear();
-  const seen = new Set<string>();
 
   if (isGm) {
     for (const cam of scene.geometry.cameras ?? []) {
@@ -528,21 +441,11 @@ export function drawCameras(
         g.circle(eye.x, eye.y, 13).stroke({ width: 2, color: C.magenta, alpha: 0.95 });
       }
 
-      const key = `cam:${cam.id}`;
-      seen.add(key);
-      const label = ensureLabel(labelLayer, labelPool, key, 0);
-      label.text = cam.label ?? cam.id;
-      label.style.fill = color;
-      label.x = eye.x + 10;
-      label.y = eye.y - 12;
+      labels.put(`cam:${cam.id}`, tag(cam.label ?? cam.id, eye.x + 10, eye.y - 12, 0, color));
     }
   }
 
-  for (const [id, label] of labelPool) {
-    if (seen.has(id)) continue;
-    label.destroy();
-    labelPool.delete(id);
-  }
+  labels.sweep();
 }
 
 /**
@@ -557,9 +460,8 @@ export function drawCameras(
  * fixture to click. GM only, like the cameras.
  */
 export function drawLights(
-  g: Graphics,
-  labelLayer: Container,
-  labelPool: Map<string, Text>,
+  g: Ink,
+  labels: LabelSink,
   scene: Scene,
   m: SceneMetrics,
   selectedLightId: string | null,
@@ -567,7 +469,6 @@ export function drawLights(
   level: number,
 ): void {
   g.clear();
-  const seen = new Set<string>();
 
   if (isGm) {
     const r = Math.max(5, m.cell * 0.09);
@@ -620,19 +521,9 @@ export function drawLights(
       }
 
       if (!light.label) continue;
-      const key = `light:${light.id}`;
-      seen.add(key);
-      const label = ensureLabel(labelLayer, labelPool, key, 0);
-      label.text = light.label;
-      label.style.fill = on ? color : C.faint;
-      label.x = at.x + r * 2;
-      label.y = at.y - r * 1.5;
+      labels.put(`light:${light.id}`, tag(light.label, at.x + r * 2, at.y - r * 1.5, 0, on ? color : C.faint));
     }
   }
 
-  for (const [id, label] of labelPool) {
-    if (seen.has(id)) continue;
-    label.destroy();
-    labelPool.delete(id);
-  }
+  labels.sweep();
 }

@@ -6,7 +6,6 @@
  * TokenViews and pooled fx graphics, and layer redraws keyed on content hashes
  * so a pan/zoom or a token move never re-tessellates the grid, fog or geometry.
  */
-import type { GeometrySelection } from '../types.js';
 import { handlesOf, objectForSelection } from '../paintedObjects.js';
 import { allCells } from '../cellSelection.js';
 import { Application, Assets, ColorMatrixFilter, Container, Graphics, Text, type Texture } from 'pixi.js';
@@ -33,13 +32,28 @@ import {
 import { parserSafeUrlFor, type AssetRegistry } from './assetUrl.js';
 import { Camera } from './camera.js';
 import { C } from './colors.js';
-import { FxLayer } from './fx.js';
+import { FxLayer } from './fxLayer.js';
+import {
+  aoeKey,
+  cameraKey,
+  fogDraftKey,
+  fogKey,
+  geometryKey,
+  lightKey,
+  mapImagesKey,
+  noteKey,
+  paintedSelectionKey,
+  pinKey,
+  selectedOf,
+  tilesKey,
+} from './keys.js';
 import { drawCameras, drawFog, drawGeometry, drawGrid, drawLights, drawNotes, drawPins } from './layers.js';
 import { drawLightMap } from './lightLayer.js';
 import { drawShroud, shroudKey } from './shroudLayer.js';
 import { ChunkedTileLayer } from './tileChunks.js';
 import { BelowFloors } from './belowLayer.js';
-import { tileDrawInput, tileLayerKey } from './tileLayer.js';
+import { TextLabels } from './textLabels.js';
+import { tileDrawInput } from './tileLayer.js';
 import { MapLayer } from './mapLayer.js';
 import { drawOccluders } from './occlusion.js';
 import { PointerController, type Cell, type PointerHost } from './pointer.js';
@@ -66,95 +80,6 @@ const GHOST_TTL_MS = 4000;
  * trip — and the served palette still wins the moment it lands.
  */
 const CATALOGUE_DEFS: Record<string, TileDrawDef> = tileDefsFromSets(TILESETS);
-
-/** The selected id when the selection is one of `kinds`, else null. */
-function selectedOf(state: StageSceneState, ...kinds: GeometrySelection['kind'][]): string | null {
-  const sel = state.selection;
-  return sel && kinds.includes(sel.kind) ? sel.id : null;
-}
-
-/** The selection as a redraw-key fragment, for the layer that draws those kinds (§3.2). */
-function selectionKey(state: StageSceneState, ...kinds: GeometrySelection['kind'][]): string {
-  const id = selectedOf(state, ...kinds);
-  return id === null ? '' : `${state.selection?.kind}:${id}`;
-}
-
-function fogKey(state: StageSceneState): string {
-  const fog = state.scene.fog;
-  return [
-    state.role === 'gm' ? 'gm' : 'pc',
-    fog.regions.map((r) => `${r.id}:${r.name}:${r.polygon.length}`).join(','),
-    fog.revealed.join(','),
-    fog.revealedShapes.length,
-  ].join('|');
-}
-
-function geometryKey(state: StageSceneState): string {
-  const geo = state.scene.geometry;
-  return [
-    state.role === 'gm' ? 'gm' : 'pc',
-    selectionKey(state, 'wall', 'door', 'zone'),
-    // Endpoints, not just counts: editing a wall in place must redraw it.
-    geo.walls.map((w) => `${w.id}:${w.a.x},${w.a.y},${w.b.x},${w.b.y}`).join(','),
-    geo.zones.map((z) => `${z.id}:${z.name}:${z.color ?? ''}:${z.polygon.length}`).join(','),
-    geo.doors
-      .map((d) => `${d.id}:${d.open ? 1 : 0}:${d.locked ? 1 : 0}:${d.a.x},${d.a.y},${d.b.x},${d.b.y}`)
-      .join(','),
-  ].join('|');
-}
-
-/** Notes redraw on any edit of any note, and on selection (FR9.25). */
-function noteKey(state: StageSceneState): string {
-  return [
-    state.role === 'gm' ? 'gm' : 'pc',
-    selectionKey(state, 'note'),
-    (state.scene.geometry.gmNotes ?? [])
-      .map((n) => `${n.id}:${n.at.x},${n.at.y}:${n.width}:${n.color ?? ''}:${n.text}`)
-      .join('\u0001'),
-  ].join('|');
-}
-
-/** Pins redraw on any label/position/visibility edit, and on selection. */
-function cameraKey(state: StageSceneState): string {
-  const geo = state.scene.geometry;
-  return [
-    state.role === 'gm' ? 'gm' : 'pc',
-    state.level ?? 0,
-    selectionKey(state, 'camera'),
-    (geo.cameras ?? [])
-      .map((c) => `${c.id}:${c.at.x},${c.at.y}:${c.facing}:${c.fov}:${c.range}:${c.level}:${c.active ? 1 : 0}:${c.label ?? ''}`)
-      .join(','),
-    // The cones carry their own content signature (`useCameraCones`).
-    (state.cameraCones ?? []).map((c) => c.key).join('|'),
-  ].join('|');
-}
-
-/** The GM's light markers redraw on any edit of a light on this floor, and on selection. */
-function lightKey(state: StageSceneState): string {
-  const level = state.level ?? 0;
-  return [
-    state.role === 'gm' ? 'gm' : 'pc',
-    level,
-    selectionKey(state, 'light'),
-    // Metres a square: the selected light's reach is drawn in squares.
-    state.scene.grid.unitM,
-    (state.scene.geometry.lights ?? [])
-      .filter((l) => (l.level ?? 0) === level)
-      .map((l) => `${l.id}:${l.at.x},${l.at.y}:${l.radiusM}:${l.color}:${l.on ? 1 : 0}:${l.facing ?? ''}:${l.fov ?? ''}:${l.label ?? ''}`)
-      .join(','),
-  ].join('|');
-}
-
-function pinKey(state: StageSceneState): string {
-  const geo = state.scene.geometry;
-  return [
-    state.role === 'gm' ? 'gm' : 'pc',
-    selectionKey(state, 'pin'),
-    geo.pins.map((p) => `${p.id}:${p.at.x},${p.at.y}:${p.visibility}:${p.label ?? ''}`).join(','),
-    // Zone names render into the same label layer for the GM.
-    geo.zones.map((z) => `${z.id}:${z.name}`).join(','),
-  ].join('|');
-}
 
 /** Where the GM left each scene's camera, for the tab — so a reload lands where they were. */
 const CAMERA_KEY = (sceneId: string) => `safehouse.grid.camera.${sceneId}`;
@@ -196,7 +121,8 @@ function writeCamera(sceneId: string, cam: { x: number; y: number; scale: number
 }
 
 class Stage implements StageApi, PointerHost {
-  readonly camera = new Camera();
+  /** Pan/zoom, and the pointer's `ViewCamera`: it maps through the metrics current at each call. */
+  readonly camera = new Camera(() => this.m);
   readonly callbacks: StageOptions['callbacks'];
 
   private readonly app = new Application();
@@ -226,23 +152,28 @@ class Stage implements StageApi, PointerHost {
   private readonly fogG = new Graphics();
   private readonly fogLabels = new Container();
   private readonly fogLabelPool = new Map<string, Text>();
+  private readonly fogLabelSink = new TextLabels(this.fogLabels, this.fogLabelPool);
   private readonly pinG = new Graphics();
   private readonly pinLabels = new Container();
   private readonly pinLabelPool = new Map<string, Text>();
+  private readonly pinLabelSink = new TextLabels(this.pinLabels, this.pinLabelPool);
   /** The GM's security cameras and their cones (FR9.23). */
   private readonly cameraG = new Graphics();
   private readonly cameraLabels = new Container();
   private readonly cameraLabelPool = new Map<string, Text>();
+  private readonly cameraLabelSink = new TextLabels(this.cameraLabels, this.cameraLabelPool);
   private lastCameraKey = '';
   /** The GM's lights, as markers (VISION.md §4.1). */
   private readonly lightG = new Graphics();
   private readonly lightLabels = new Container();
   private readonly lightLabelPool = new Map<string, Text>();
+  private readonly lightLabelSink = new TextLabels(this.lightLabels, this.lightLabelPool);
   private lastLightKey = '';
   /** The GM's notes (FR9.25). */
   private readonly noteG = new Graphics();
   private readonly noteLabels = new Container();
   private readonly noteLabelPool = new Map<string, Text>();
+  private readonly noteLabelSink = new TextLabels(this.noteLabels, this.noteLabelPool);
   private lastNoteKey = '';
   private readonly tokenLayer = new Container();
   /** Over the tokens: their badges, bars and names, and the see-through figures. */
@@ -400,11 +331,13 @@ class Stage implements StageApi, PointerHost {
     return this.sceneState;
   }
 
-  localDrag(tokenId: string | null, world: Point | null): void {
+  localDrag(tokenId: string | null, grid: Point | null): void {
     if (this.localDragId && this.localDragId !== tokenId) {
       const prev = this.views.get(this.localDragId);
       if (prev) prev.localDrag = false;
     }
+    // The pointer speaks grid units; the views are placed in world px.
+    const world = grid ? worldFromGrid(this.m, grid) : null;
     this.localDragId = tokenId;
     this.localDragWorld = world;
     if (!tokenId || !world) return;
@@ -414,11 +347,13 @@ class Stage implements StageApi, PointerHost {
     view.place(world.x, world.y, true);
   }
 
-  echoPing(world: Point): void {
+  echoPing(grid: Point): void {
+    const world = worldFromGrid(this.m, grid);
     this.fx.ping(world.x, world.y);
   }
 
-  echoTrail(world: Point): void {
+  echoTrail(grid: Point): void {
+    const world = worldFromGrid(this.m, grid);
     this.fx.trailPoint(world.x, world.y);
   }
 
@@ -567,7 +502,7 @@ class Stage implements StageApi, PointerHost {
     // over the warehouse when the GM is looking at the ground.
     const level = next.level ?? 0;
     const tiles = levelTiles(next.scene, level) as TileLayer | undefined;
-    const tileKey = `L${level}|${tileLayerKey(next.scene.id, tiles)}`;
+    const tileKey = tilesKey(next.scene.id, level, tiles);
     if (tileKey !== this.lastTileKey) {
       this.lastTileKey = tileKey;
       if (tiles) {
@@ -599,11 +534,7 @@ class Stage implements StageApi, PointerHost {
     const multi = next.paintEdit && next.cellSelection && next.cellSelection.level === level
       ? allCells(next.cellSelection)
       : null;
-    const pselKey = multi
-      ? `M|${level}|${multi.join(';')}|${metricsKey(m)}`
-      : psel
-        ? `${level}|${(psel.covers ?? psel.cells).join(';')}|${metricsKey(m)}`
-        : '';
+    const pselKey = paintedSelectionKey(level, multi, psel ? (psel.covers ?? psel.cells) : null, m);
     if (pselKey !== this.lastPaintedSelKey) {
       this.lastPaintedSelKey = pselKey;
       if (multi) {
@@ -638,7 +569,7 @@ class Stage implements StageApi, PointerHost {
       drawLightMap(this.lightMapG, m, lightMap);
     }
 
-    const mapKey = next.scene.mapAttachmentIds.join(',');
+    const mapKey = mapImagesKey(next);
     if (mapKey !== this.lastMapKey) {
       this.lastMapKey = mapKey;
       this.map.setImages(next.scene.mapAttachmentIds, m);
@@ -647,7 +578,7 @@ class Stage implements StageApi, PointerHost {
     const fk = fogKey(next);
     if (fk !== this.lastFogKey) {
       this.lastFogKey = fk;
-      drawFog(this.fogG, this.fogLabels, this.fogLabelPool, next.scene, m, next.role === 'gm');
+      drawFog(this.fogG, this.fogLabelSink, next.scene, m, next.role === 'gm');
     }
 
     const gk = geometryKey(next);
@@ -661,8 +592,7 @@ class Stage implements StageApi, PointerHost {
       this.lastPinKey = pk;
       drawPins(
         this.pinG,
-        this.pinLabels,
-        this.pinLabelPool,
+        this.pinLabelSink,
         next.scene,
         m,
         selectedOf(next, 'pin'),
@@ -675,8 +605,7 @@ class Stage implements StageApi, PointerHost {
       this.lastCameraKey = ck;
       drawCameras(
         this.cameraG,
-        this.cameraLabels,
-        this.cameraLabelPool,
+        this.cameraLabelSink,
         next.scene,
         m,
         next.cameraCones,
@@ -691,8 +620,7 @@ class Stage implements StageApi, PointerHost {
       this.lastLightKey = lk;
       drawLights(
         this.lightG,
-        this.lightLabels,
-        this.lightLabelPool,
+        this.lightLabelSink,
         next.scene,
         m,
         selectedOf(next, 'light'),
@@ -706,8 +634,7 @@ class Stage implements StageApi, PointerHost {
       this.lastNoteKey = nk;
       drawNotes(
         this.noteG,
-        this.noteLabels,
-        this.noteLabelPool,
+        this.noteLabelSink,
         next.scene,
         m,
         selectedOf(next, 'note'),
@@ -715,15 +642,13 @@ class Stage implements StageApi, PointerHost {
       );
     }
 
-    const aoeKey = next.aoe
-      ? `${next.aoe.center.x},${next.aoe.center.y},${next.aoe.radiusM}|${next.scatter?.to.x ?? ''},${next.scatter?.to.y ?? ''}`
-      : '';
-    if (aoeKey !== this.lastAoeKey) {
-      this.lastAoeKey = aoeKey;
+    const ak = aoeKey(next);
+    if (ak !== this.lastAoeKey) {
+      this.lastAoeKey = ak;
       this.fx.setAoe(m, next.aoe, next.scatter);
     }
 
-    const draftKey = (next.fogDraft?.points ?? []).map((p) => `${p.x},${p.y}`).join(';');
+    const draftKey = fogDraftKey(next);
     if (draftKey !== this.lastFogDraftKey) {
       this.lastFogDraftKey = draftKey;
       this.fx.setFogDraft(m, next.fogDraft);

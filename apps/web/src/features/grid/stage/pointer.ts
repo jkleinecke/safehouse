@@ -5,21 +5,24 @@
  *
  * All handling lives on the DOM canvas — pixi's interaction tree is never
  * engaged, so there are no hit-area rebuilds and no per-frame event allocs.
+ *
+ * Renderer-neutral: the screen is reached only through the host's
+ * `ViewCamera` (pick, project, pxPerUnit, pan, zoom), and everything handed
+ * back to the host is in grid units, so the same controller drives the 2D
+ * and the 3D map.
  */
 import type { Point } from '@safehouse/contracts';
 import { bulgeThrough } from '@safehouse/rules';
 import {
-  gridFromWorld,
   isDegenerateSegment,
   metersBetween,
   snapCenter,
   snapVertex,
-  worldFromGrid,
   type SceneMetrics,
 } from '../geometry.js';
 import { pointInPolygon } from '../geometry.js';
 import type { ContextTarget, StageCallbacks, StageSceneState, TileRectMode } from '../types.js';
-import { Camera, wheelZoomFactor } from './camera.js';
+import { wheelZoomFactor } from './camera.js';
 import {
   hitCamera,
   hitLight,
@@ -30,10 +33,11 @@ import {
   hitToken,
   hitWall,
   isDoubleTap,
-  touchHitSlop,
-  worldTolerance,
+  screenHitSlop,
+  screenTolerance,
   type TapRecord,
 } from './hit.js';
+import type { ViewCamera } from './viewCamera.js';
 import {
   applyEdit,
   handlesOf,
@@ -67,15 +71,16 @@ type Mode =
 const RULER_REPORT_MS = 50;
 
 export interface PointerHost {
-  readonly camera: Camera;
+  /** The view the pointer is resolved through: screen ↔ grid, and pan/zoom. */
+  readonly camera: ViewCamera;
   metrics(): SceneMetrics;
   state(): StageSceneState;
   readonly callbacks: StageCallbacks;
-  /** Drive one token's view straight from the pointer (no lerp). */
-  localDrag(tokenId: string | null, world: Point | null): void;
-  /** Local echo so the actor sees their own ping/trail without a round trip. */
-  echoPing(world: Point): void;
-  echoTrail(world: Point): void;
+  /** Drive one token's view straight from the pointer (no lerp), at `grid` (grid units). */
+  localDrag(tokenId: string | null, grid: Point | null): void;
+  /** Local echo so the actor sees their own ping/trail without a round trip (grid units). */
+  echoPing(grid: Point): void;
+  echoTrail(grid: Point): void;
   drawRuler(from: Point, to: Point, meters: number): void;
   clearRuler(): void;
   /** Rubber band while drawing a wall/door (optional — the TV never draws). */
@@ -299,9 +304,22 @@ export class PointerController {
     this.host.callbacks.onTileStrokeEnd?.();
   }
 
-  private toGrid(screen: Point): Point {
-    const world = this.host.camera.toWorld(screen.x, screen.y);
-    return gridFromWorld(this.host.metrics(), world);
+  /**
+   * The grid point on the floor in view under a screen point, or null where
+   * the view shows no floor (a 3D camera's sky). Every caller guards.
+   */
+  private toGrid(screen: Point): Point | null {
+    return this.host.camera.pick(screen);
+  }
+
+  /** A click tolerance of `screenPx` screen px (world-px floored), at `at`. */
+  private tolerance(screenPx: number, at: Point): number {
+    return screenTolerance(this.host.camera, this.host.metrics(), screenPx, at);
+  }
+
+  /** The token slop for a pointer of type `pointerType`, in screen px. */
+  private hitSlop(pointerType: string | undefined, at: Point): number {
+    return screenHitSlop(this.host.camera, this.host.metrics(), pointerType, at);
   }
 
   private snapped(p: Point, size: number, raw: boolean): Point {
@@ -343,7 +361,8 @@ export class PointerController {
         if (this.moved || this.pointers.size !== 1) return;
         this.mode = 'idle';
         this.host.clearRuler?.();
-        this.openContextMenu(screen, this.toGrid(screen));
+        const under = this.toGrid(screen);
+        if (under) this.openContextMenu(screen, under);
       }, LONG_PRESS_MS);
     }
 
@@ -352,14 +371,15 @@ export class PointerController {
     // because on a phone the second tap is usually the player trying again.
     const tap: TapRecord = { x: screen.x, y: screen.y, t: e.timeStamp || Date.now() };
     const onToken =
-      hitToken(m, state.tokens, grid, {
-        minHitPx: touchHitSlop(this.host.camera.scale, e.pointerType),
+      grid !== null &&
+      hitToken(this.host.camera, m, state.tokens, grid, {
+        minHitPx: this.hitSlop(e.pointerType, grid),
       }) !== null;
-    if (isDoubleTap(this.lastTap, tap) && !onToken && !this.lastTapOnToken) {
+    if (grid && isDoubleTap(this.lastTap, tap) && !onToken && !this.lastTapOnToken) {
       this.lastTap = null;
       this.lastTapOnToken = false;
       this.mode = 'idle';
-      this.host.echoPing(worldFromGrid(m, grid));
+      this.host.echoPing(grid);
       this.host.callbacks.onPing(grid.x, grid.y);
       return;
     }
@@ -377,6 +397,13 @@ export class PointerController {
 
     // Middle/right button always pans, whatever tool is selected.
     if (e.button === 1 || e.button === 2) {
+      this.mode = 'pan';
+      return;
+    }
+
+    // A press where the view shows no floor (a 3D camera's sky) has nothing
+    // under it to place, hit or paint: all it can do is move the view.
+    if (grid === null) {
       this.mode = 'pan';
       return;
     }
@@ -408,7 +435,7 @@ export class PointerController {
         return;
       case 'pointer':
         this.mode = 'trail';
-        this.host.echoTrail(worldFromGrid(m, grid));
+        this.host.echoTrail(grid);
         this.host.callbacks.onPointer(grid.x, grid.y);
         return;
       case 'door':
@@ -508,7 +535,7 @@ export class PointerController {
   }
 
   private beginRuler(grid: Point, state: StageSceneState, m: SceneMetrics): void {
-    const token = hitToken(m, state.tokens, grid);
+    const token = hitToken(this.host.camera, m, state.tokens, grid);
     this.rulerTokenId = token?.id ?? null;
     this.rulerFrom = token ? { x: token.x, y: token.y } : grid;
     this.mode = 'ruler';
@@ -520,7 +547,7 @@ export class PointerController {
     // A selected painted object's handles, before anything else: they are
     // small, deliberate targets on its outer edge, and a GM reaching for one
     // meant it rather than the token standing next to the wall.
-    if (state.role === 'gm' && state.paintEdit && this.beginPaintedHandle(grid, state, m)) return;
+    if (state.role === 'gm' && state.paintEdit && this.beginPaintedHandle(grid, state)) return;
 
     if (state.role === 'gm' && state.paintEdit) {
       const cell = this.cellAt(grid);
@@ -547,8 +574,8 @@ export class PointerController {
     if (state.role === 'gm' && this.host.callbacks.onPinSelect) {
       // 14 screen px of slop around the head, floored so a zoomed-out map does
       // not shrink the target to nothing.
-      const pinTol = Math.max(14, worldTolerance(this.host.camera.scale, 14));
-      const pinId = hitPin(m, state.scene, grid, pinTol);
+      const pinTol = this.tolerance(14, grid);
+      const pinId = hitPin(this.host.camera, m, state.scene, grid, pinTol);
       if (pinId) {
         this.mode = 'idle';
         this.host.callbacks.onPinSelect(pinId);
@@ -558,8 +585,8 @@ export class PointerController {
     // A camera's eye, likewise — the GM's own payload is the only one that
     // has cameras in it at all (FR9.23).
     if (state.role === 'gm' && this.host.callbacks.onCameraSelect) {
-      const camTol = Math.max(14, worldTolerance(this.host.camera.scale, 14));
-      const cameraId = hitCamera(m, state.scene, grid, camTol);
+      const camTol = this.tolerance(14, grid);
+      const cameraId = hitCamera(this.host.camera, m, state.scene, grid, camTol);
       if (cameraId) {
         this.mode = 'idle';
         this.host.callbacks.onCameraSelect(cameraId);
@@ -569,8 +596,8 @@ export class PointerController {
 
     // A finger gets a bigger target than a mouse, and both grow as the map
     // zooms out (B6: a phone's default fit left tokens four pixels wide).
-    const token = hitToken(m, state.tokens, grid, {
-      minHitPx: touchHitSlop(this.host.camera.scale, this.pointerType),
+    const token = hitToken(this.host.camera, m, state.tokens, grid, {
+      minHitPx: this.hitSlop(this.pointerType, grid),
     });
     if (token) {
       this.host.callbacks.onSelectToken(token.id);
@@ -580,7 +607,7 @@ export class PointerController {
         this.dragSize = token.size;
         this.dragGrab = { x: grid.x - token.x, y: grid.y - token.y };
         this.dragAt = { x: token.x, y: token.y };
-        this.host.localDrag(token.id, worldFromGrid(m, this.dragAt));
+        this.host.localDrag(token.id, this.dragAt);
       } else {
         this.mode = 'pan';
       }
@@ -591,8 +618,8 @@ export class PointerController {
     // as it is drawn — a lamp sits on a square's centre, which is where a
     // guard stands, and a click on the guard is a click on the guard.
     if (state.role === 'gm' && this.host.callbacks.onLightSelect) {
-      const lightTol = Math.max(14, worldTolerance(this.host.camera.scale, 14));
-      const lightId = hitLight(m, state.scene, grid, state.level ?? 0, lightTol);
+      const lightTol = this.tolerance(14, grid);
+      const lightId = hitLight(this.host.camera, m, state.scene, grid, state.level ?? 0, lightTol);
       if (lightId) {
         this.mode = 'idle';
         this.host.callbacks.onLightSelect(lightId);
@@ -603,7 +630,7 @@ export class PointerController {
     // A GM note's box (FR9.25) — under the tokens, so a runner standing on
     // a note is still the runner. The GM's payload is the only one with notes.
     if (state.role === 'gm' && this.host.callbacks.onNoteSelect) {
-      const noteId = hitNote(m, state.scene, grid);
+      const noteId = hitNote(this.host.camera, m, state.scene, grid);
       if (noteId) {
         this.mode = 'idle';
         this.host.callbacks.onNoteSelect(noteId);
@@ -615,8 +642,8 @@ export class PointerController {
     // hand or a player's. The server knows the lock and says no to a player
     // at a locked one; a painted door is its whole cell.
     if (state.role === 'gm' || state.role === 'player') {
-      const tol = Math.max(12, worldTolerance(this.host.camera.scale, 12));
-      const doorId = hitDoor(m, state.scene, grid, tol);
+      const tol = this.tolerance(12, grid);
+      const doorId = hitDoor(this.host.camera, m, state.scene, grid, tol);
       if (doorId) {
         this.mode = 'idle';
         this.host.callbacks.onDoorToggle(doorId);
@@ -638,7 +665,7 @@ export class PointerController {
     // doors: a door's knob sits on the same line as the walls either side of
     // it, and the knob is the smaller target.
     if (state.role === 'gm' && this.host.callbacks.onWallSelect) {
-      const wallId = hitWall(m, state.scene, grid, Math.max(12, worldTolerance(this.host.camera.scale, 12)));
+      const wallId = hitWall(this.host.camera, m, state.scene, grid, this.tolerance(12, grid));
       if (wallId) {
         this.mode = 'idle';
         this.host.callbacks.onWallSelect(wallId);
@@ -665,17 +692,18 @@ export class PointerController {
   }
 
   /** Grab a handle of the selected painted object, if the pointer is on one. */
-  private beginPaintedHandle(grid: Point, state: StageSceneState, m: SceneMetrics): boolean {
+  private beginPaintedHandle(grid: Point, state: StageSceneState): boolean {
     const sel = state.selection;
     if (sel?.kind !== 'painted') return false;
     const level = state.level ?? 0;
     const obj = objectForSelection(state.scene, level, sel.id);
     if (!obj) return false;
-    const tol = Math.max(10, worldTolerance(this.host.camera.scale, 10));
-    const at = worldFromGrid(m, grid);
+    // Measured on the screen, where the handles are drawn (on the floor).
+    const tol = this.tolerance(10, grid);
+    const at = this.host.camera.project(grid);
     for (const h of handlesOf(obj)) {
-      const hw = worldFromGrid(m, h.at);
-      if (Math.hypot(hw.x - at.x, hw.y - at.y) > tol) continue;
+      const hs = this.host.camera.project(h.at);
+      if (Math.hypot(hs.x - at.x, hs.y - at.y) > tol) continue;
       this.startPaintedDrag(
         obj,
         h.id === 'corner' ? { kind: 'resize' } : { kind: 'stretch', handle: h.id },
@@ -723,7 +751,8 @@ export class PointerController {
     const grid = this.toGrid(this.local(e));
     const zones = state.scene.geometry.zones;
     // Later zones draw on top, so the last one containing the click wins.
-    for (let i = zones.length - 1; i >= 0; i -= 1) {
+    // A click off the floor is a click on nothing.
+    for (let i = zones.length - 1; i >= 0 && grid; i -= 1) {
       const zone = zones[i];
       if (zone && pointInPolygon(grid, zone.polygon)) {
         this.host.callbacks.onZoneSelect?.(zone.id);
@@ -739,14 +768,17 @@ export class PointerController {
     const tracked = this.pointers.get(e.pointerId);
     if (!tracked && this.mode === 'bend') {
       // No button held: the pointer pulls the arc's middle out.
-      this.bendTo(this.toGrid(this.local(e)), e.shiftKey);
+      const grid = this.toGrid(this.local(e));
+      if (grid) this.bendTo(grid, e.shiftKey);
       return;
     }
     if (!tracked) {
       // No button held: the only thing a hover does is carry a paste around.
       const state = this.host.state();
       if (state.role === 'gm' && state.paintEdit && state.pasting) {
-        const at = this.cellAt(this.toGrid(this.local(e)));
+        const grid = this.toGrid(this.local(e));
+        if (!grid) return;
+        const at = this.cellAt(grid);
         this.host.drawPaintedGhost?.(allCells(pastedSet(state.pasting, at, state.level ?? 0)));
       }
       return;
@@ -766,53 +798,58 @@ export class PointerController {
       return;
     }
 
+    if (this.mode === 'pan') {
+      this.host.camera.panBy(dx, dy);
+      return;
+    }
+
+    // Every other gesture follows the floor point under the pointer. Where
+    // the view shows no floor (a 3D camera's sky) it holds where it last was.
+    const grid = this.toGrid(screen);
+    if (grid === null) return;
+
     if (this.mode === 'painting') {
-      this.paintCell(this.toGrid(screen));
+      this.paintCell(grid);
       return;
     }
 
     switch (this.mode) {
-      case 'pan':
-        this.host.camera.panBy(dx, dy);
-        return;
       case 'token':
-        this.updateTokenDrag(this.toGrid(screen), e.shiftKey);
+        this.updateTokenDrag(grid, e.shiftKey);
         return;
       case 'ruler':
-        this.updateRuler(this.toGrid(screen), false);
+        this.updateRuler(grid, false);
         return;
       case 'trail': {
-        const grid = this.toGrid(screen);
-        this.host.echoTrail(worldFromGrid(this.host.metrics(), grid));
+        this.host.echoTrail(grid);
         this.host.callbacks.onPointer(grid.x, grid.y);
         return;
       }
       case 'segment': {
-        this.segmentTo = this.vertex(this.toGrid(screen), this.host.state(), e.shiftKey);
+        this.segmentTo = this.vertex(grid, this.host.state(), e.shiftKey);
         this.host.drawSegment?.(this.segmentKind, this.segmentFrom, this.segmentTo);
         return;
       }
       case 'arc': {
-        this.arcB = this.vertex(this.toGrid(screen), this.host.state(), e.shiftKey);
+        this.arcB = this.vertex(grid, this.host.state(), e.shiftKey);
         this.host.drawArc?.(this.arcA, this.arcB, 0);
         return;
       }
       case 'rect': {
-        const grid = this.toGrid(screen);
         this.rectTo = { col: Math.floor(grid.x), row: Math.floor(grid.y) };
         this.host.drawRect?.(this.rectMode, this.rectFrom, this.rectTo);
         return;
       }
       case 'marquee': {
         if (!this.moved) return;
-        this.boxTo = this.cellAt(this.toGrid(screen));
+        this.boxTo = this.cellAt(grid);
         this.host.drawRect?.('area', this.boxFrom, this.boxTo);
         return;
       }
       case 'group': {
         const sel = this.host.state().cellSelection;
         if (!sel) return;
-        const at = this.cellAt(this.toGrid(screen));
+        const at = this.cellAt(grid);
         this.groupDelta = { col: at.col - this.boxFrom.col, row: at.row - this.boxFrom.row };
         const { col, row } = this.groupDelta;
         // The ghost is what the move will paint — the stretched walls
@@ -830,7 +867,7 @@ export class PointerController {
           this.paintedObj,
           this.paintedOp,
           this.paintedFrom,
-          this.cellAt(this.toGrid(screen)),
+          this.cellAt(grid),
         );
         this.paintedResult = result;
         this.host.drawPaintedGhost?.(result.noop ? null : result.cells);
@@ -858,7 +895,7 @@ export class PointerController {
     const free = { x: grid.x - this.dragGrab.x, y: grid.y - this.dragGrab.y };
     const at = this.snapped(free, this.dragSize, raw);
     this.dragAt = at;
-    this.host.localDrag(this.dragTokenId, worldFromGrid(this.host.metrics(), at));
+    this.host.localDrag(this.dragTokenId, at);
     this.host.callbacks.onTokenDrag(this.dragTokenId, at.x, at.y);
   }
 
@@ -961,7 +998,8 @@ export class PointerController {
       // whatever is under the pointer. A right-drag stayed a pan.
       this.cancelLongPress();
       const screen = this.local(e);
-      this.openContextMenu(screen, this.toGrid(screen));
+      const grid = this.toGrid(screen);
+      if (grid) this.openContextMenu(screen, grid);
     } else if (this.mode === 'pan' && !this.moved) {
       this.host.callbacks.onSelectToken(null);
       this.clickOnFloor(e);
@@ -986,18 +1024,18 @@ export class PointerController {
   private contextTarget(grid: Point): ContextTarget {
     const state = this.host.state();
     const m = this.host.metrics();
-    const token = hitToken(m, state.tokens, grid, {
-      minHitPx: touchHitSlop(this.host.camera.scale, this.pointerType),
+    const token = hitToken(this.host.camera, m, state.tokens, grid, {
+      minHitPx: this.hitSlop(this.pointerType, grid),
     });
     if (token) return { kind: 'token', id: token.id };
-    const tol = Math.max(12, worldTolerance(this.host.camera.scale, 12));
-    const doorId = hitDoor(m, state.scene, grid, tol);
+    const tol = this.tolerance(12, grid);
+    const doorId = hitDoor(this.host.camera, m, state.scene, grid, tol);
     if (doorId) return { kind: 'door', id: doorId };
     const level = state.level ?? 0;
     const cell = hitTileDoor(state.scene, grid, level);
     if (cell) return { kind: 'tileDoor', cell, level };
     if (state.role === 'gm') {
-      const wallId = hitWall(m, state.scene, grid, tol);
+      const wallId = hitWall(this.host.camera, m, state.scene, grid, tol);
       if (wallId) return { kind: 'wall', id: wallId };
       // A painted wall's square, while building — last, because it is a
       // whole cell and every thinner target above had to miss first.

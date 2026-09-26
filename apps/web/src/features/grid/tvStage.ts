@@ -19,10 +19,12 @@
  * unrevealed fog and GM-only combatants were filtered server-side before this
  * device saw a byte. This renders exactly what arrived.
  *
- * `pixi.js` is reached only through the dynamic import in `createTvStage`, so
- * the TV bundle keeps the same lazy-chunk shape as the Grid's (D9).
+ * `pixi.js` is reached only through `loadStage`'s dynamic import, called from
+ * `createTvStage`, so the TV bundle keeps the same lazy-chunk shape as the
+ * Grid's (D9).
  */
 import type { Role, Scene, Token } from '@safehouse/contracts';
+import { loadStage } from './stageLoader.js';
 import type { StageApi, StageCallbacks, StageSceneState, TokenBars } from './types.js';
 
 /** The kiosk is a `display` device, always (FR9.19). */
@@ -166,23 +168,27 @@ export interface TvStageOptions {
 }
 
 /**
- * Mount the stage in read-only mode. The `import()` is the only reference to
- * the pixi subtree from the TV feature, so it stays in the Grid's lazy chunk.
+ * Mount the stage in read-only mode. `loadStage` is the only way to a
+ * renderer from the TV feature, and it reaches each by dynamic import, so the
+ * TV bundle keeps the Grid's lazy-chunk shape.
  *
  * Every method is guarded by `alive`: the TV runs unattended for hours and a
  * late `update` after teardown (an in-flight fetch resolving into an unmounted
  * page) must be a no-op, not a crash on a wall-sized screen.
  */
 export async function createTvStage(opts: TvStageOptions): Promise<TvStageHandle> {
-  // The one reference to the pixi subtree from the TV feature (D9). The URL
-  // parser wrap happens inside `createStage`, for every stage alike.
-  const { createStage } = await import('./stage/index.js');
-  const api: StageApi = await createStage({
-    host: opts.host,
-    state: tvStageState(opts.input),
-    callbacks: readOnlyStageCallbacks(),
-    urlFor: opts.urlFor,
-  });
+  // The loader picks the renderer by role; a `display` stays on the classic
+  // stage until the TV moves to 3D (P2). The URL parser wrap happens inside
+  // `createStage`, for every stage alike.
+  const api: StageApi = await loadStage(
+    {
+      host: opts.host,
+      state: tvStageState(opts.input),
+      callbacks: readOnlyStageCallbacks(),
+      urlFor: opts.urlFor,
+    },
+    { role: TV_STAGE_ROLE },
+  );
 
   let alive = true;
   return {

@@ -8,9 +8,10 @@
  * GM-only mark on a knob everyone can see.
  */
 import { describe, expect, it } from 'vitest';
-import type { Container, Graphics, Text } from 'pixi.js';
+import type { Graphics } from 'pixi.js';
 import type { Scene } from '@safehouse/contracts';
 import { metricsFor } from '../geometry.js';
+import type { InkLabel, LabelSink } from './ink.js';
 import { drawGeometry, drawNotes } from './layers.js';
 import { noteFrame, noteLines } from './notes.js';
 
@@ -31,17 +32,18 @@ function counting(): { g: Graphics; ops: string[]; rects: number[][] } {
   return { g: g as unknown as Graphics, ops, rects };
 }
 
-/** A pool that never misses, so no real pixi Text is constructed. */
-class StubPool extends Map<string, Text> {
+/** A label sink that records what it was asked to show, so no real pixi Text is constructed. */
+class StubPool extends Map<string, { text: string; style: { wordWrapWidth: number } }> implements LabelSink {
   readonly made: string[] = [];
-  override get(key: string): Text {
-    let t = super.get(key);
-    if (!t) {
-      this.made.push(key);
-      t = { text: '', style: { wordWrapWidth: 0 }, x: 0, y: 0, destroy: () => undefined } as unknown as Text;
-      super.set(key, t);
-    }
-    return t;
+  private readonly seen = new Set<string>();
+  put(key: string, label: InkLabel): void {
+    if (!this.has(key)) this.made.push(key);
+    this.set(key, { text: label.text, style: { wordWrapWidth: label.wrap ?? 0 } });
+    this.seen.add(key);
+  }
+  sweep(): void {
+    for (const key of [...this.keys()]) if (!this.seen.has(key)) this.delete(key);
+    this.seen.clear();
   }
 }
 
@@ -61,13 +63,12 @@ function scene(notes: Scene['geometry']['gmNotes'], doors: Scene['geometry']['do
 }
 
 const NOTE = { id: 'note_1', at: { x: 2, y: 2 }, text: 'The guard is asleep until someone shoots.', width: 4 };
-const layer = {} as Container;
 
 describe('drawNotes', () => {
   it('draws nothing at all for a player', () => {
     const c = counting();
     const pool = new StubPool();
-    drawNotes(c.g, layer, pool, scene([NOTE]), flat, null, false);
+    drawNotes(c.g,pool, scene([NOTE]), flat, null, false);
     expect(c.ops).toEqual(['clear']);
     expect(pool.made).toEqual([]);
   });
@@ -76,7 +77,7 @@ describe('drawNotes', () => {
     for (const m of [flat, iso]) {
       const c = counting();
       const pool = new StubPool();
-      drawNotes(c.g, layer, pool, scene([NOTE]), m, null, true);
+      drawNotes(c.g,pool, scene([NOTE]), m, null, true);
       expect(c.ops.filter((o) => o === 'rect').length).toBe(2); // shadow + paper
       expect(c.ops).toContain('circle');
       expect(pool.made).toEqual(['note:note_1']);
@@ -89,15 +90,15 @@ describe('drawNotes', () => {
   it('rings the selected note, and forgets the text of a note that is gone', () => {
     const c = counting();
     const pool = new StubPool();
-    drawNotes(c.g, layer, pool, scene([NOTE]), flat, 'note_1', true);
+    drawNotes(c.g,pool, scene([NOTE]), flat, 'note_1', true);
     expect(c.ops.filter((o) => o === 'rect').length).toBe(3);
-    drawNotes(counting().g, layer, pool, scene([]), flat, null, true);
+    drawNotes(counting().g,pool, scene([]), flat, null, true);
     expect(pool.size).toBe(0);
   });
 
   it('draws the box exactly where the hit-test looks', () => {
     const c = counting();
-    drawNotes(c.g, layer, new StubPool(), scene([NOTE]), flat, null, true);
+    drawNotes(c.g,new StubPool(), scene([NOTE]), flat, null, true);
     const f = noteFrame(flat, NOTE);
     expect(c.rects[1]).toEqual([f.x, f.y, f.w, f.h]);
   });

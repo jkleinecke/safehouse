@@ -110,7 +110,7 @@ function harness(tool: StageSceneState['tool']) {
   } as unknown as StageSceneState;
 
   const host: PointerHost = {
-    camera: new Camera(),
+    camera: new Camera(() => M),
     metrics: () => M,
     state: () => state,
     callbacks: cb,

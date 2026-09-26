@@ -13,10 +13,10 @@
  * square are not swept upward the way the shroud's scrim is: this is a map
  * of the floor's light, read from above, and the tiles stay legible under it.
  */
-import type { Graphics } from 'pixi.js';
 import type { LightMap } from '@safehouse/rules';
 import { cellCorners, type SceneMetrics } from '../geometry.js';
 import { C } from './colors.js';
+import type { Ink } from './ink.js';
 
 /** How dark each light row draws: 0 full light, 1 partial, 2 dim, 3 total darkness. */
 export const LIGHT_ROW_ALPHA: readonly [number, number, number, number] = [0, 0.18, 0.4, 0.65];
@@ -26,7 +26,7 @@ export const LIGHT_ROW_ALPHA: readonly [number, number, number, number] = [0, 0.
  * does not list are at the ambient row, so a pitch-black scene is one dark
  * sheet with its lamps cut out of it, and a daylit one draws nothing at all.
  */
-export function drawLightMap(g: Graphics, m: SceneMetrics, map: LightMap | null): void {
+export function drawLightMap(g: Ink, m: SceneMetrics, map: LightMap | null): void {
   g.clear();
   if (map === null) return;
   for (let col = 0; col < m.cols; col += 1) {

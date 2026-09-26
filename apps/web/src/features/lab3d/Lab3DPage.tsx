@@ -514,6 +514,9 @@ function Hud({ viewRef }: { viewRef: MutableRefObject<LabView | null> }) {
         </div>
       ))}
       {stats.benchmarking && <div className="mt-1 text-warn">benchmark running</div>}
+      {stats.idle && !stats.benchmarking && (
+        <div className="mt-1 text-faint">idle · draws on demand · numbers are from the last second drawn</div>
+      )}
     </div>
   );
 }

@@ -1,9 +1,11 @@
 /**
- * React lifecycle for the lazily-imported PixiJS stage.
- * `import('./stage/index.js')` is the ONLY reference to the stage subtree, so
- * pixi lands in its own chunk and never enters the initial bundle (D9).
+ * React lifecycle for the lazily-loaded map stage.
+ * `loadStage` (`stageLoader.ts`) is the ONLY way to a renderer: it picks the
+ * classic or the 3D stage and reaches it by dynamic import, so pixi and three
+ * each land in their own chunk and never enter the initial bundle (D9).
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { loadStage } from './stageLoader.js';
 import type { MovementThresholds, StageApi, StageCallbacks, StageSceneState } from './types.js';
 
 export interface UseStageResult {
@@ -101,15 +103,15 @@ export function useStage(params: UseStageParams): UseStageResult {
       onPaste: (at) => cbRef.current.onPaste?.(at),
     };
 
-    void import('./stage/index.js')
-      .then(({ createStage }) =>
-        createStage({
-          host,
-          state: initial,
-          callbacks: stable,
-          urlFor: (id) => urlRef.current(id),
-        }),
-      )
+    void loadStage(
+      {
+        host,
+        state: initial,
+        callbacks: stable,
+        urlFor: (id) => urlRef.current(id),
+      },
+      { role: initial.role },
+    )
       .then((stage) => {
         if (cancelled) {
           stage.destroy();

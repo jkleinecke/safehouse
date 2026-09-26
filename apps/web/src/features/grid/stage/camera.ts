@@ -4,8 +4,14 @@
  * Screen = world * scale + pan. The stage root Container mirrors {x,y,scale}
  * once per frame; nothing else touches transforms, so pan/zoom costs no
  * per-frame allocation and never invalidates the layer geometry.
+ *
+ * It is also the 2D stage's `ViewCamera` (`viewCamera.ts`): the pointer code
+ * reaches the map through `pick` and `project`, which are the grid ↔ world
+ * transform of `geometry.ts` composed with this screen ↔ world one.
  */
 import type { Point } from '@safehouse/contracts';
+import { CELL, gridFromWorld, heightRise, worldFromGrid, type SceneMetrics } from '../geometry.js';
+import type { Lift, ViewCamera } from './viewCamera.js';
 
 export const MIN_SCALE = 0.08;
 export const MAX_SCALE = 6;
@@ -19,7 +25,32 @@ export function clampScale(s: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
 }
 
-export class Camera {
+/**
+ * What a camera made without a scene maps through: plan view, 64 px squares,
+ * no offset — world px are grid units × 64. Only the pure pan/zoom maths
+ * runs without a real scene; the stage always passes its own metrics.
+ */
+const PLAN: SceneMetrics = {
+  cell: CELL,
+  cols: 1,
+  rows: 1,
+  unitM: 1,
+  offset: { x: 0, y: 0 },
+  opacity: 0,
+  projection: 'topdown',
+};
+
+/**
+ * A `Lift` as the 2D map draws it, in world px straight up the screen: its
+ * own `px` when it has one, else its storeys at the 2D storey height
+ * (`heightRise`, zero in plan view), else nothing.
+ */
+export function liftPx(m: SceneMetrics, lift: Lift | undefined): number {
+  if (!lift) return 0;
+  return lift.px ?? heightRise(m, lift.storeys ?? 0);
+}
+
+export class Camera implements ViewCamera {
   x = 0;
   y = 0;
   scale = 1;
@@ -32,6 +63,30 @@ export class Camera {
    * a GM who has framed a room keeps their framing when a panel opens.
    */
   touched = false;
+
+  /**
+   * @param metricsOf the scene's metrics as they are NOW — read on every
+   * `pick`/`project`, so a recalibration or a flip to isometric needs no
+   * call here. Left out, a plain plan grid (`PLAN`).
+   */
+  constructor(private readonly metricsOf: () => SceneMetrics = () => PLAN) {}
+
+  /** Screen px → grid units on the floor. The 2D map is one plane, so this never misses. */
+  pick(screen: Point): Point {
+    return gridFromWorld(this.metricsOf(), this.toWorld(screen.x, screen.y));
+  }
+
+  /** Grid units, raised by `lift` as the 2D map draws it (`liftPx`) → screen px. */
+  project(grid: Point, lift?: Lift): Point {
+    const m = this.metricsOf();
+    const w = worldFromGrid(m, grid);
+    return this.toScreen(w.x, w.y - liftPx(m, lift));
+  }
+
+  /** Screen px per grid unit: a square is `cell` world px across in both projections. */
+  pxPerUnit(): number {
+    return this.scale * this.metricsOf().cell;
+  }
 
   /** Screen px → world px. */
   toWorld(sx: number, sy: number): Point {

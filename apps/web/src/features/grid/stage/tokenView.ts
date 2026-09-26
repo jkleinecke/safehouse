@@ -33,13 +33,18 @@ import {
 } from '../geometry.js';
 import { C, parseColor } from './colors.js';
 import { drawFigure, lookFor, poseTop, type FigureLook, type FigurePose } from './figure.js';
-
-const SOURCE_COLORS: Record<Token['source'], number> = {
-  character: 0x1c4d5e,
-  combatant: 0x5e1c39,
-  npc_template: 0x4d3a1c,
-  prop: 0x2a3242,
-};
+import {
+  barColor,
+  barsKey,
+  downedBy,
+  monitorFill,
+  pipCount,
+  SOURCE_COLORS,
+  STEP_BODY,
+  tokenInitial,
+  tokenPose,
+  WALK_SQUARES_PER_S,
+} from './tokenState.js';
 
 export interface TokenVisual {
   selected: boolean;
@@ -56,24 +61,6 @@ export interface TokenVisual {
    */
   metrics: SceneMetrics;
 }
-
-function barColor(frac: number): number {
-  if (frac >= 0.85) return C.danger;
-  if (frac >= 0.5) return C.warn;
-  return C.ok;
-}
-
-/** A full monitor puts the figure on the floor; physical damage bleeds. */
-function downedBy(bars: TokenBars | null): 'physical' | 'stun' | null {
-  if (bars?.physical && bars.physical.max > 0 && bars.physical.filled >= bars.physical.max) return 'physical';
-  if (bars?.stun && bars.stun.max > 0 && bars.stun.filled >= bars.stun.max) return 'stun';
-  return null;
-}
-
-/** Grid units a figure covers in one walking step — a full cycle is two. */
-const STEP_BODY = 0.5;
-/** A remote token walks at least this many squares a second, faster over a long move. */
-const WALK_SQUARES_PER_S = 1.8;
 
 export class TokenView {
   /** On the floor: sorted by depth with the scene, masked by what stands in front. */
@@ -235,7 +222,7 @@ export class TokenView {
     }
     const bars = v.bars;
     const down = downedBy(bars);
-    const pose: FigurePose = down ? 'down' : (token.pose ?? 'stand');
+    const pose: FigurePose = tokenPose(token, down);
     const H = iso ? figureHeightPx(m, token.size) : 0;
     // The SAME number the hit test uses (geometry.ts), because a disc drawn
     // one size and clicked at another is a token that ignores the GM. On the
@@ -255,7 +242,7 @@ export class TokenView {
       down,
       H,
       JSON.stringify(token.look ?? null),
-      bars ? `${bars.physical?.filled}/${bars.physical?.max}:${bars.stun?.filled}/${bars.stun?.max}:${bars.effectCount}` : '',
+      barsKey(bars),
     ].join('|');
     this.acting = v.acting;
     if (key === this.key) return;
@@ -269,7 +256,7 @@ export class TokenView {
       .fill({ color: SOURCE_COLORS[token.source] ?? C.raised, alpha: 1 })
       .stroke({ width: iso ? 1.5 : 2, color: v.ghosted ? C.magenta : C.edgeBright, alpha: 0.9 });
     this.fitArt();
-    this.initial.text = (token.name[0] ?? '?').toUpperCase();
+    this.initial.text = tokenInitial(token.name);
     this.initial.style.fontSize = Math.max(iso ? 8 : 12, radius * 0.9);
 
     // Aura ring (FR9.6): radius in meters → world px. An aura is a radius on
@@ -325,7 +312,7 @@ export class TokenView {
       let y = top - radius - (iso ? 6 : 10) - (bars.physical && bars.stun ? h + 2 : 0);
       for (const mon of [bars.physical, bars.stun] as const) {
         if (!mon || mon.max <= 0) continue;
-        const frac = Math.min(1, mon.filled / mon.max);
+        const frac = monitorFill(mon);
         this.bars.rect(-half, y, w, h).fill({ color: C.panel, alpha: 0.9 });
         if (frac > 0) this.bars.rect(-half, y, w * frac, h).fill({ color: barColor(frac), alpha: 1 });
         this.bars.rect(-half, y, w, h).stroke({ width: 1, color: C.edge, alpha: 1 });
@@ -335,9 +322,9 @@ export class TokenView {
 
     // Status-effect pips along the top of the badge (FR4.7 sync).
     this.pips.clear();
-    const pipCount = Math.min(6, bars?.effectCount ?? 0);
+    const pipsShown = pipCount(bars);
     const pipGap = iso ? 6 : 8;
-    for (let i = 0; i < pipCount; i += 1) {
+    for (let i = 0; i < pipsShown; i += 1) {
       this.pips
         .circle(radius - 4 - i * pipGap, top - radius - 2, iso ? 2.5 : 3)
         .fill({ color: C.magenta, alpha: 1 })

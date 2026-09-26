@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Scene, Token } from '@safehouse/contracts';
 import { gridFromWorld, metricsFor, pinHeadRise, tokenHitLift, worldFromGrid } from '../geometry.js';
+import { Camera } from './camera.js';
 import {
   hitDoor,
   hitNote,
@@ -33,6 +34,9 @@ const iso = metricsFor({
   offset: { x: 0, y: 0 },
   projection: 'iso' as const,
 });
+/** The hit tests measure through a view; at 1:1 with no pan, screen px ARE world px. */
+const cam = new Camera(() => m);
+const isoCam = new Camera(() => iso);
 
 function token(id: string, x: number, y: number, size = 1): Token {
   return {
@@ -55,18 +59,18 @@ describe('hitToken', () => {
   const tokens = [token('a', 2.5, 2.5), token('b', 10.5, 4.5, 3)];
 
   it('hits inside the token circle and misses outside', () => {
-    expect(hitToken(m, tokens, { x: 2.6, y: 2.4 })?.id).toBe('a');
-    expect(hitToken(m, tokens, { x: 5, y: 5 })).toBeNull();
+    expect(hitToken(cam, m, tokens, { x: 2.6, y: 2.4 })?.id).toBe('a');
+    expect(hitToken(cam, m, tokens, { x: 5, y: 5 })).toBeNull();
   });
 
   it('scales the hit radius with token size', () => {
-    expect(hitToken(m, tokens, { x: 11.8, y: 4.5 })?.id).toBe('b');
-    expect(hitToken(m, tokens, { x: 12.6, y: 4.5 })).toBeNull();
+    expect(hitToken(cam, m, tokens, { x: 11.8, y: 4.5 })?.id).toBe('b');
+    expect(hitToken(cam, m, tokens, { x: 12.6, y: 4.5 })).toBeNull();
   });
 
   it('respects an id allow-list', () => {
-    expect(hitToken(m, tokens, { x: 2.5, y: 2.5 }, { onlyIds: new Set(['b']) })).toBeNull();
-    expect(hitToken(m, tokens, { x: 2.5, y: 2.5 }, { onlyIds: new Set(['a']) })?.id).toBe('a');
+    expect(hitToken(cam, m, tokens, { x: 2.5, y: 2.5 }, { onlyIds: new Set(['b']) })).toBeNull();
+    expect(hitToken(cam, m, tokens, { x: 2.5, y: 2.5 }, { onlyIds: new Set(['a']) })?.id).toBe('a');
   });
 
   it('grows the target for a finger and for a zoomed-out camera (B6)', () => {
@@ -85,13 +89,13 @@ describe('hitToken', () => {
     // 0.7 cells (45 px) away misses with mouse slop and lands with a
     // zoomed-out finger's (22 px / 0.4 = 55 px).
     const at = { x: 3.2, y: 2.5 };
-    expect(hitToken(m, tokens, at)).toBeNull();
-    expect(hitToken(m, tokens, at, { minHitPx: touchHitSlop(0.4, 'touch') })?.id).toBe('a');
+    expect(hitToken(cam, m, tokens, at)).toBeNull();
+    expect(hitToken(cam, m, tokens, at, { minHitPx: touchHitSlop(0.4, 'touch') })?.id).toBe('a');
   });
 
   it('prefers the last token when circles overlap', () => {
     const stacked = [token('under', 3, 3), token('over', 3, 3)];
-    expect(hitToken(m, stacked, { x: 3, y: 3 })?.id).toBe('over');
+    expect(hitToken(cam, m, stacked, { x: 3, y: 3 })?.id).toBe('over');
   });
 });
 
@@ -110,21 +114,21 @@ describe('hitNote (FR9.25)', () => {
   } as unknown as Scene;
 
   it('hits inside the box the note is drawn in, and misses outside it', () => {
-    expect(hitNote(m, scene, { x: 2.5, y: 2.2 })).toBe('n1');
-    expect(hitNote(m, scene, { x: 1.9, y: 2.2 })).toBeNull();
-    expect(hitNote(m, scene, { x: 12, y: 12 })).toBeNull();
+    expect(hitNote(cam, m, scene, { x: 2.5, y: 2.2 })).toBe('n1');
+    expect(hitNote(cam, m, scene, { x: 1.9, y: 2.2 })).toBeNull();
+    expect(hitNote(cam, m, scene, { x: 12, y: 12 })).toBeNull();
     // The bottom edge is where the frame says it is — the same measurement the drawing uses.
     const f = noteFrame(m, scene.geometry.gmNotes![0]!);
     const under = gridFromWorld(m, { x: f.x + 4, y: f.y + f.h + 2 });
-    expect(hitNote(m, scene, under)).toBeNull();
+    expect(hitNote(cam, m, scene, under)).toBeNull();
   });
 
   it('gives an overlap to the later note, which draws on top', () => {
-    expect(hitNote(m, scene, { x: 3.2, y: 3.1 })).toBe('n2');
+    expect(hitNote(cam, m, scene, { x: 3.2, y: 3.1 })).toBe('n2');
   });
 
   it('reads a scene with no notes as nothing to hit', () => {
-    expect(hitNote(m, { geometry: { walls: [], zones: [], pins: [], doors: [] } } as unknown as Scene, { x: 1, y: 1 })).toBeNull();
+    expect(hitNote(cam, m, { geometry: { walls: [], zones: [], pins: [], doors: [] } } as unknown as Scene, { x: 1, y: 1 })).toBeNull();
   });
 });
 
@@ -162,12 +166,12 @@ describe('hitDoor', () => {
   } as unknown as Scene;
 
   it('finds a door within tolerance', () => {
-    expect(hitDoor(m, scene, { x: 2, y: 0.3 })).toBe('d1');
-    expect(hitDoor(m, scene, { x: 2, y: 8.8 })).toBe('d2');
+    expect(hitDoor(cam, m, scene, { x: 2, y: 0.3 })).toBe('d1');
+    expect(hitDoor(cam, m, scene, { x: 2, y: 8.8 })).toBe('d2');
   });
 
   it('misses when nothing is near', () => {
-    expect(hitDoor(m, scene, { x: 2, y: 4 })).toBeNull();
+    expect(hitDoor(cam, m, scene, { x: 2, y: 4 })).toBeNull();
   });
 });
 
@@ -189,15 +193,15 @@ describe('hitPin / hitWall (FR9.2/9.3 authoring)', () => {
   } as unknown as Scene;
 
   it('picks the pin under the click, latest on top when they stack', () => {
-    expect(hitPin(m, scene, { x: 3.1, y: 3.05 })).toBe('p2');
-    expect(hitPin(m, scene, { x: 8.9, y: 1.1 })).toBe('p3');
-    expect(hitPin(m, scene, { x: 7, y: 7 })).toBeNull();
+    expect(hitPin(cam, m, scene, { x: 3.1, y: 3.05 })).toBe('p2');
+    expect(hitPin(cam, m, scene, { x: 8.9, y: 1.1 })).toBe('p3');
+    expect(hitPin(cam, m, scene, { x: 7, y: 7 })).toBeNull();
   });
 
   it('finds a wall segment near the click', () => {
-    expect(hitWall(m, scene, { x: 4, y: 0.2 })).toBe('w1');
-    expect(hitWall(m, scene, { x: 8.1, y: 3 })).toBe('w2');
-    expect(hitWall(m, scene, { x: 4, y: 3 })).toBeNull();
+    expect(hitWall(cam, m, scene, { x: 4, y: 0.2 })).toBe('w1');
+    expect(hitWall(cam, m, scene, { x: 8.1, y: 3 })).toBe('w2');
+    expect(hitWall(cam, m, scene, { x: 4, y: 3 })).toBeNull();
   });
 });
 
@@ -233,9 +237,9 @@ describe('isometric hit-testing', () => {
     // disc that is drawn, and 1.25 GRID units away, which the old test
     // rejected out of hand.
     const above = gridFromWorld(iso, { x: centre.x, y: centre.y - 20 });
-    expect(hitToken(iso, one, above)?.id).toBe('a');
+    expect(hitToken(isoCam, iso, one, above)?.id).toBe('a');
     const below = gridFromWorld(iso, { x: centre.x, y: centre.y + 20 });
-    expect(hitToken(iso, one, below)?.id).toBe('a');
+    expect(hitToken(isoCam, iso, one, below)?.id).toBe('a');
   });
 
   it('misses outside the drawn disc, in every direction equally', () => {
@@ -248,7 +252,7 @@ describe('isometric hit-testing', () => {
       [0, -80],
     ] as const) {
       const out = gridFromWorld(iso, { x: centre.x + dx, y: centre.y + dy });
-      expect(hitToken(iso, one, out)).toBeNull();
+      expect(hitToken(isoCam, iso, one, out)).toBeNull();
     }
   });
 
@@ -259,12 +263,12 @@ describe('isometric hit-testing', () => {
     for (const px of [10, 25, 40, 100]) {
       const hitFlat = (() => {
         const c = worldFromGrid(m, { x: 5.5, y: 5.5 });
-        return hitToken(m, flatT, gridFromWorld(m, { x: c.x, y: c.y - px })) !== null;
+        return hitToken(cam, m, flatT, gridFromWorld(m, { x: c.x, y: c.y - px })) !== null;
       })();
       const hitIso = (() => {
         const f = worldFromGrid(iso, { x: 5.5, y: 5.5 });
         const c = { x: f.x, y: f.y - tokenHitLift(iso, 1) };
-        return hitToken(iso, flatT, gridFromWorld(iso, { x: c.x, y: c.y - px })) !== null;
+        return hitToken(isoCam, iso, flatT, gridFromWorld(iso, { x: c.x, y: c.y - px })) !== null;
       })();
       expect({ px, hitIso }).toEqual({ px, hitIso: hitFlat });
     }
@@ -284,10 +288,10 @@ describe('isometric hit-testing', () => {
     // isometric that inverts to over a grid unit away, so the old grid-space
     // test rejected the only part of the pin that looks clickable.
     const head = gridFromWorld(iso, { x: foot.x, y: foot.y - pinHeadRise(iso) });
-    expect(hitPin(iso, scene, head)).toBe('p1');
+    expect(hitPin(isoCam, iso, scene, head)).toBe('p1');
     // And the anchor still works, because the stem is drawn too.
-    expect(hitPin(iso, scene, { x: 4, y: 4 })).toBe('p1');
-    expect(hitPin(iso, scene, { x: 9, y: 9 })).toBeNull();
+    expect(hitPin(isoCam, iso, scene, { x: 4, y: 4 })).toBe('p1');
+    expect(hitPin(isoCam, iso, scene, { x: 9, y: 9 })).toBeNull();
   });
 });
 
