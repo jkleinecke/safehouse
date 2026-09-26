@@ -544,3 +544,95 @@ export function drawCameras(
     labelPool.delete(id);
   }
 }
+
+/**
+ * The GM's lights (docs/VISION.md §4.1): a small lamp on each one on the
+ * floor being drawn, in the light's own colour — bright with rays while it
+ * is on, faded and struck through when it is off. The selected one is
+ * ringed, and its reach is drawn out round it (a wedge for a spotlight), so
+ * the GM dialling it in can see how far it goes.
+ *
+ * Markers only. What the lights DO to the floor is the light-map view's
+ * business (`lightLayer.ts`), and the table's; this is how the GM finds a
+ * fixture to click. GM only, like the cameras.
+ */
+export function drawLights(
+  g: Graphics,
+  labelLayer: Container,
+  labelPool: Map<string, Text>,
+  scene: Scene,
+  m: SceneMetrics,
+  selectedLightId: string | null,
+  isGm: boolean,
+  level: number,
+): void {
+  g.clear();
+  const seen = new Set<string>();
+
+  if (isGm) {
+    const r = Math.max(5, m.cell * 0.09);
+    for (const light of scene.geometry.lights ?? []) {
+      if ((light.level ?? 0) !== level) continue;
+      const on = light.on !== false;
+      const color = parseColor(light.color, C.warn);
+      const at = worldFromGrid(m, light.at);
+      const spot = light.fov !== undefined && light.fov < 360;
+
+      if (light.id === selectedLightId) {
+        // Its reach, in grid space and projected, so it lies on the floor.
+        const reach = light.radiusM / Math.max(0.01, scene.grid.unitM);
+        const from = spot ? (light.facing ?? 0) - (light.fov ?? 360) / 2 : 0;
+        const sweep = spot ? (light.fov ?? 360) : 360;
+        const steps = Math.max(8, Math.ceil(sweep / 7.5));
+        const outline: number[] = spot ? [at.x, at.y] : [];
+        for (let i = 0; i <= steps; i += 1) {
+          const p = worldFromGrid(m, alongBearing(light.at, from + (sweep * i) / steps, reach));
+          outline.push(p.x, p.y);
+        }
+        g.poly(outline, true)
+          .fill({ color, alpha: on ? 0.06 : 0.02 })
+          .stroke({ width: 1, color, alpha: on ? 0.6 : 0.3 });
+        g.circle(at.x, at.y, r * 2.4).stroke({ width: 2, color: C.magenta, alpha: 0.95 });
+      }
+
+      if (on) {
+        // Rays round the bulb — or, for a beam, a short throw along its aim.
+        if (spot) {
+          const tip = worldFromGrid(m, alongBearing(light.at, light.facing ?? 0, 0.6));
+          g.moveTo(at.x, at.y).lineTo(tip.x, tip.y).stroke({ width: 2, color, alpha: 0.9 });
+        } else {
+          for (let k = 0; k < 8; k += 1) {
+            const a = (k * Math.PI) / 4;
+            g.moveTo(at.x + Math.cos(a) * r * 1.35, at.y + Math.sin(a) * r * 1.35)
+              .lineTo(at.x + Math.cos(a) * r * 1.9, at.y + Math.sin(a) * r * 1.9)
+              .stroke({ width: 1.5, color, alpha: 0.85 });
+          }
+        }
+      }
+      g.circle(at.x, at.y, r)
+        .fill({ color, alpha: on ? 0.95 : 0.35 })
+        .stroke({ width: 1.5, color: C.ground, alpha: 0.9 });
+      if (!on) {
+        // Switched off: struck through, so "off" reads without a label.
+        g.moveTo(at.x - r * 1.3, at.y - r * 1.3)
+          .lineTo(at.x + r * 1.3, at.y + r * 1.3)
+          .stroke({ width: 2, color: C.danger, alpha: 0.9 });
+      }
+
+      if (!light.label) continue;
+      const key = `light:${light.id}`;
+      seen.add(key);
+      const label = ensureLabel(labelLayer, labelPool, key, 0);
+      label.text = light.label;
+      label.style.fill = on ? color : C.faint;
+      label.x = at.x + r * 2;
+      label.y = at.y - r * 1.5;
+    }
+  }
+
+  for (const [id, label] of labelPool) {
+    if (seen.has(id)) continue;
+    label.destroy();
+    labelPool.delete(id);
+  }
+}

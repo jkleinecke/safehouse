@@ -9,7 +9,7 @@
  * `GridPage` supplies the actions, which are the same mutations the panel
  * tabs and the inspector already call.
  */
-import type { Point, Scene, Token, TokenPose } from '@safehouse/contracts';
+import type { Point, Scene, Token, TokenLight, TokenPose } from '@safehouse/contracts';
 import { sceneLevels } from '@safehouse/rules';
 import type { DoorOpInput } from '../api.js';
 import { pointInPolygon } from '../geometry.js';
@@ -37,6 +37,8 @@ export interface ContextMenuActions {
   customiseLook(tokenId: string): void;
   /** Stand, crouch or go prone — the figure on the isometric map. */
   setPose(tokenId: string, pose: TokenPose): void;
+  /** Save the light a token carries (VISION.md §4.1) — here, the same one switched on or off. */
+  setLight(tokenId: string, light: TokenLight | null): void;
   removeToken(tokenId: string): void;
   doorOp(input: DoorOpInput): void;
   pinHere(x: number, y: number): void;
@@ -131,6 +133,19 @@ function tokenItems(input: ContextMenuInput, token: Token): MenuItem[] {
       label: 'Customise look…',
       hint: 'describe it to the AI, or dress it by hand',
       run: () => actions.customiseLook(token.id),
+    });
+  }
+  // A flashlight, a lantern: whoever may pose the token may flick its light.
+  // A prop can carry one too — a flare, a burning barrel — so props are not
+  // left out here the way they are from posing.
+  const light = token.light;
+  if (light && (role === 'gm' || mine)) {
+    const lit = light.on !== false;
+    items.push({
+      id: 'light',
+      label: lit ? 'Switch light off' : 'Switch light on',
+      hint: lit ? 'it stops lighting the squares round it' : 'it lights the squares round it again',
+      run: () => actions.setLight(token.id, { ...light, on: !lit }),
     });
   }
   if (role === 'gm') {

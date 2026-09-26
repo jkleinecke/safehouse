@@ -43,7 +43,7 @@ export const MODE_TOOLS: Record<GridMode, readonly GridTool[]> = {
   // The arc wall took the old traced "wall line"'s place: the same drag, a real
   // wall on its own floor, straight at any angle or curved.
   build: ['select', 'tile-room', 'tile-area', 'tile', 'arc', 'tile-erase', 'door', 'zone', 'pin'],
-  prep: ['select', 'token', 'fogdef', 'camera', 'note'],
+  prep: ['select', 'token', 'fogdef', 'camera', 'light', 'note'],
   play: ['select', 'ruler', 'aoe', 'pointer', 'focus'],
 };
 
@@ -112,6 +112,7 @@ export const SHORTCUTS: ReadonlyArray<{ key: string; tool: GridTool; gmOnly: boo
   { key: 'p', tool: 'pin', gmOnly: true },
   { key: 'f', tool: 'fogdef', gmOnly: true },
   { key: 'c', tool: 'camera', gmOnly: true },
+  { key: 'l', tool: 'light', gmOnly: true },
   { key: 'n', tool: 'note', gmOnly: true },
   { key: 'g', tool: 'focus', gmOnly: true },
 ];

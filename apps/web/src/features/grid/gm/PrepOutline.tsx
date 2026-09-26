@@ -4,7 +4,7 @@
  *
  * The map shows where things are; this is how a GM finds what the map does
  * NOT show well: a hidden token, a fog region not yet revealed, a camera in
- * a corner, a note under a crate. One list, four kinds, each row a click
+ * a corner, a lamp switched off, a note under a crate. One list, five kinds, each row a click
  * that picks the thing up and brings the map to it. It replaces the Tokens,
  * Fog and Cams & notes tabs' lists — the same rows, in one place.
  */
@@ -56,18 +56,19 @@ export default function PrepOutline({
   const layerHidden = hiddenLayerTokenIds(layersOf(scene));
   const revealed = new Set(scene.fog.revealed);
   const cameras = (scene.geometry.cameras ?? []).filter((c) => (c.level ?? 0) === level);
+  const lights = (scene.geometry.lights ?? []).filter((l) => (l.level ?? 0) === level);
   const notes = scene.geometry.gmNotes ?? [];
   const centre = (poly: ReadonlyArray<{ x: number; y: number }>) => ({
     x: poly.reduce((n, p) => n + p.x, 0) / Math.max(1, poly.length),
     y: poly.reduce((n, p) => n + p.y, 0) / Math.max(1, poly.length),
   });
-  const nothing = here.length + scene.fog.regions.length + cameras.length + notes.length === 0;
+  const nothing = here.length + scene.fog.regions.length + cameras.length + lights.length + notes.length === 0;
 
   return (
     <div data-testid="prep-outline">
       {nothing && (
         <div className="p-3">
-          <Empty>nothing placed on this floor yet — pick Token, Fog, Camera or Note on the toolbar</Empty>
+          <Empty>nothing placed on this floor yet — pick Token, Fog, Camera, Light or Note on the toolbar</Empty>
         </div>
       )}
       {here.length > 0 && (
@@ -132,6 +133,24 @@ export default function PrepOutline({
                   selectToken(null);
                   select({ kind: 'camera', id: c.id });
                   onCenter(c.at.x, c.at.y);
+                }}
+              />
+            ))}
+          </ul>
+        </PanelSection>
+      )}
+      {lights.length > 0 && (
+        <PanelSection title="Lights" hint={`${lights.length}`}>
+          <ul>
+            {lights.map((l) => (
+              <Line
+                key={l.id}
+                name={l.label ?? l.id}
+                tag={l.on === false ? 'off' : undefined}
+                onClick={() => {
+                  selectToken(null);
+                  select({ kind: 'light', id: l.id });
+                  onCenter(l.at.x, l.at.y);
                 }}
               />
             ))}

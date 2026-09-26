@@ -234,7 +234,7 @@ describe('geometryCounts', () => {
     geo = addDoor(geo, { x: 4, y: 0 }, { x: 5, y: 0 });
     geo = addZone(geo, square);
     geo = addPin(geo, { x: 2, y: 2 });
-    expect(geometryCounts(geo)).toEqual({ wall: 1, door: 1, zone: 1, pin: 1, camera: 0, note: 0 });
+    expect(geometryCounts(geo)).toEqual({ wall: 1, door: 1, zone: 1, pin: 1, camera: 0, note: 0, light: 0 });
     expect(geometryCounts(addNote(geo, { x: 1, y: 1 })).note).toBe(1);
     expect(geometryCounts(addCamera(geo, { x: 3, y: 3 })).camera).toBe(1);
   });

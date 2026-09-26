@@ -53,6 +53,7 @@ const TOOL_DEFS: Record<GridTool, Omit<ToolDef, 'id'>> = {
   pin: { label: 'Pin', glyph: '⚑' },
   fogdef: { label: 'Fog', glyph: '⬡' },
   camera: { label: 'Camera', glyph: '◉' },
+  light: { label: 'Light', glyph: '✹' },
   note: { label: 'Note', glyph: '🗒' },
 };
 
@@ -142,7 +143,7 @@ export default function Toolbar(props: ToolbarProps) {
   */
   const build = props.isGm && props.mode === 'build';
   // Prep has its own placing row (PrepPlacing): what goes on the map, each
-  // with its caret — Token, Fog, Camera, Note.
+  // with its caret — Token, Fog, Camera, Light, Note.
   const prep = props.isGm && props.mode === 'prep' && props.placing !== undefined;
   /*
     Select, and in Build mode Erase, lead the row apart from everything else:

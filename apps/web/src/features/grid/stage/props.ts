@@ -74,18 +74,18 @@ interface CylOpts {
 export class PropKit {
   readonly plan: boolean;
   /** Where the design lands on this grid and how big (`propPlacement`). */
-  private readonly place: PropPlacement;
+  protected readonly place: PropPlacement;
 
   constructor(
     readonly g: Graphics,
-    private readonly m: SceneMetrics,
-    private readonly col: number,
-    private readonly row: number,
+    protected readonly m: SceneMetrics,
+    protected readonly col: number,
+    protected readonly row: number,
     readonly unit: number,
     readonly t: PropTones,
     private readonly seed: number,
     /** Cells below the floor the whole design stands: a boat floating in sunk water. */
-    private readonly sink = 0,
+    protected readonly sink = 0,
     place: PropPlacement = UNIT_PLACEMENT,
   ) {
     this.plan = unit <= 0;
@@ -183,7 +183,7 @@ export class PropKit {
   }
 
   /** The ring of a horizontal circle, in cell space. */
-  private circle(cu: number, cv: number, r: number, z: number, sides: number, jitter = 0, salt = 0): P3[] {
+  protected circle(cu: number, cv: number, r: number, z: number, sides: number, jitter = 0, salt = 0): P3[] {
     const pts: P3[] = [];
     for (let i = 0; i < sides; i += 1) {
       const a = (i / sides) * Math.PI * 2 + Math.PI / sides;

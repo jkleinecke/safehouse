@@ -4,7 +4,7 @@
  * Three things a GM sets for the whole scene rather than for a square: the
  * environment (light, visibility, glare, wind — the modifier they compose to),
  * whose eyes the GM is looking through, and whether players see only their
- * own sightline. They were panel tabs — Env and LOS — each a page for one or
+ * own sightline — and one lens of the GM's own, the light map. They were panel tabs — Env and LOS — each a page for one or
  * two controls; up here they are one click away from any tool, and the panel
  * is left for the thing that is picked.
  */
@@ -170,12 +170,36 @@ function PlayerSightToggle({ scene }: { scene: Scene }) {
   );
 }
 
+/**
+ * The GM's light map (docs/VISION.md §4.1): the floor washed darker where it
+ * is darker, so the shadows a runner could use are plain before the fight.
+ * On this screen only, not saved — a lens, like "See as".
+ */
+function LightMapToggle() {
+  const on = useGridStore((s) => s.showLightMap);
+  const setOn = useGridStore((s) => s.setShowLightMap);
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      data-testid="prep-light-map"
+      title={on ? 'Hide the light map' : 'Light map — shade each square by how lit it is (only you see it)'}
+      onClick={() => setOn(!on)}
+      className={'btn min-h-9 gap-1 px-2 py-1 text-xs ' + (on ? 'border-cyan text-cyan' : 'text-dim')}
+    >
+      <span aria-hidden>✹</span>
+      <span className="mono-label">Light map</span>
+    </button>
+  );
+}
+
 export default function PrepControls({ scene, tokens }: { scene: Scene; tokens: readonly Token[] }) {
   return (
     <div className="flex items-center gap-1.5" role="group" aria-label="Scene settings">
       <EnvironmentMenu scene={scene} />
       <SeeAsMenu scene={scene} tokens={tokens} />
       <PlayerSightToggle scene={scene} />
+      <LightMapToggle />
     </div>
   );
 }

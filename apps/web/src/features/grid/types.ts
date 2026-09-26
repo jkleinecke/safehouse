@@ -5,7 +5,7 @@
 import type { Point, Role, Scene, Token } from '@safehouse/contracts';
 import type { PaintDelta } from './paintedObjects.js';
 import type { CellSet, Clipboard } from './cellSelection.js';
-import type { TileCut, TileLiquid, TilePattern, TileProp, TileShore, VisionMode } from '@safehouse/rules';
+import type { LightMap, TileCut, TileLiquid, TilePattern, TileProp, TileShore, VisionMode } from '@safehouse/rules';
 import { slotOf, slotUniverse, tileBySlot } from '@safehouse/rules';
 
 /** Active pointer tool on the canvas. */
@@ -20,6 +20,7 @@ export type GridTool =
   | 'zone' // GM: click vertices to draw a named zone
   | 'pin' // GM: click to drop a map pin
   | 'camera' // GM: click to mount a security camera; only the GM sees it
+  | 'light' // GM: click to put a lamp down on the square
   | 'note' // GM: click to drop a GM note; only the GM ever sees it
   | 'tile' // GM: paint tiles from a tileset (FR9.2 "assemble")
   | 'tile-area' // GM: drag a rectangle, fill it with the chosen ground
@@ -29,7 +30,7 @@ export type GridTool =
   | 'tile-erase'; // GM: clear painted cells
 
 /** GM drawing tools that author scene geometry rather than play with it. */
-export const GEOMETRY_TOOLS: readonly GridTool[] = ['arc', 'door', 'zone', 'pin', 'camera', 'note'];
+export const GEOMETRY_TOOLS: readonly GridTool[] = ['arc', 'door', 'zone', 'pin', 'camera', 'light', 'note'];
 
 /**
  * The tools that lay tiles down. Kept as one list because the palette's
@@ -345,7 +346,7 @@ export interface GeometrySelection {
    * geometry; its id is `"<layer>:<col>,<row>"` for one cell of it, and the
    * whole object is read back from that cell (`paintedObjects.ts`).
    */
-  kind: 'wall' | 'door' | 'zone' | 'pin' | 'camera' | 'note' | 'painted' | 'fog';
+  kind: 'wall' | 'door' | 'zone' | 'pin' | 'camera' | 'note' | 'light' | 'painted' | 'fog';
   id: string;
 }
 
@@ -381,6 +382,13 @@ export interface StageSceneState {
    * never carries cameras.
    */
   cameraCones?: readonly CameraCone[] | null;
+  /**
+   * The GM's light-map view (docs/VISION.md §4.1): how lit every square of
+   * this floor is, drawn as a wash darkest where the light is worst. Null or
+   * absent draws nothing — the view is a GM toggle, off by default, and a
+   * player's state never carries one.
+   */
+  lightMap?: LightMap | null;
   /**
    * Tokens on a HIDDEN token layer (FR9.26), drawn ghosted for the GM the
    * way a hidden token is. A player's state never has any: the server
@@ -474,6 +482,10 @@ export interface StageCallbacks {
   onCameraPlace?(x: number, y: number): void;
   /** select-tool click on a camera's eye — open it in the editor. */
   onCameraSelect?(cameraId: string): void;
+  /** light tool click — put a lamp down at grid coords (VISION.md §4.1). */
+  onLightPlace?(x: number, y: number): void;
+  /** select-tool click on a light's marker — open it in the editor. */
+  onLightSelect?(lightId: string): void;
   /** note tool click — drop a GM note at grid coords (FR9.25). */
   onNotePlace?(x: number, y: number): void;
   /** select-tool click inside a GM note's box — open it in the editor. */

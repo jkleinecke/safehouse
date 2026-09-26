@@ -1,5 +1,5 @@
 /** Small form atoms for the Grid's GM authoring panel (desktop-first, NG5). */
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 
 export const inputCls =
   'w-full rounded border border-edge bg-deck px-2 py-1 text-xs text-ink ' +
@@ -41,6 +41,46 @@ export function Num({
       onChange={(e) => {
         const n = Number(e.target.value);
         if (Number.isFinite(n)) onChange(n);
+      }}
+    />
+  );
+}
+
+/**
+ * A name field that saves when the GM leaves it or presses Enter, not on
+ * every keystroke. The save trims, and nothing in the panel is optimistic:
+ * a field fed back from the server per keystroke ate each space as it was
+ * typed, dropped what was typed while a save was in flight, and made every
+ * letter its own undo step.
+ */
+export function LabelField({
+  value,
+  onCommit,
+  placeholder,
+  ariaLabel,
+  maxLength = 60,
+}: {
+  value: string;
+  onCommit: (label: string) => void;
+  placeholder?: string;
+  ariaLabel: string;
+  maxLength?: number;
+}) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  return (
+    <input
+      className={inputCls}
+      aria-label={ariaLabel}
+      value={draft}
+      placeholder={placeholder}
+      maxLength={maxLength}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        if (draft.trim() !== value) onCommit(draft);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur();
       }}
     />
   );

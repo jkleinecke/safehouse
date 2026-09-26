@@ -19,6 +19,7 @@ import {
   type Pin,
   type Point,
   type SceneGeometry,
+  type SceneLight,
   type Wall,
   type Zone,
 } from '@safehouse/contracts';
@@ -31,7 +32,7 @@ import { gridDist, isDegenerateSegment, MIN_SEGMENT, snapVertex } from './geomet
 export { isDegenerateSegment, MIN_SEGMENT, snapVertex };
 
 /** What the GM's active drawing tool is authoring. */
-export type GeometryKind = 'wall' | 'door' | 'zone' | 'pin' | 'camera' | 'note';
+export type GeometryKind = 'wall' | 'door' | 'zone' | 'pin' | 'camera' | 'note' | 'light';
 
 /** A zone needs three vertices to be a polygon at all. */
 export const MIN_POLYGON_POINTS = 3;
@@ -314,6 +315,7 @@ export function geometryCounts(geo: SceneGeometry): Record<GeometryKind, number>
     pin: geo.pins.length,
     camera: camerasOf(geo).length,
     note: notesOf(geo).length,
+    light: lightsOf(geo).length,
   };
 }
 
@@ -394,6 +396,122 @@ export function updateCamera(geo: SceneGeometry, id: string, patch: CameraPatch)
 
 export function removeCamera(geo: SceneGeometry, id: string): SceneGeometry {
   return { ...geo, cameras: camerasOf(geo).filter((c) => c.id !== id) };
+}
+
+// ---------------------------------------------------------------------------
+// Lights (docs/VISION.md §4.1 — a lamp the tiles do not have)
+// ---------------------------------------------------------------------------
+
+/**
+ * What a click puts down, before the GM has touched a dial: a proper lamp,
+ * six metres of it, warm, hung near the ceiling. The same numbers the
+ * contract defaults to, so a light saved without them reads back unchanged.
+ */
+export const LIGHT_DEFAULTS = { radiusM: 6, rows: 2, color: '#ffd9a0', height: 0.8 } as const;
+
+/** The list, whether or not the scene has ever had one. */
+export function lightsOf(geo: SceneGeometry): readonly SceneLight[] {
+  return geo.lights ?? [];
+}
+
+export interface LightOptions {
+  id?: string;
+  level?: number;
+  radiusM?: number;
+  rows?: number;
+  color?: string;
+  height?: number;
+  label?: string;
+}
+
+export function addLight(geo: SceneGeometry, at: Point, opts: LightOptions = {}): SceneGeometry {
+  const lights = lightsOf(geo);
+  const light: SceneLight = {
+    id: opts.id ?? nextGeometryId('light', lights),
+    at: roundPoint(at),
+    level: Math.max(0, Math.floor(opts.level ?? 0)),
+    radiusM: clampLightReach(opts.radiusM ?? LIGHT_DEFAULTS.radiusM),
+    rows: clampLightRows(opts.rows ?? LIGHT_DEFAULTS.rows),
+    color: isLightColor(opts.color) ? opts.color : LIGHT_DEFAULTS.color,
+    height: clampLightHeight(opts.height ?? LIGHT_DEFAULTS.height),
+    on: true,
+    ...(opts.label?.trim() ? { label: opts.label.trim() } : {}),
+  };
+  return { ...geo, lights: [...lights, light] };
+}
+
+export type LightPatch = {
+  at?: Point;
+  level?: number;
+  radiusM?: number;
+  rows?: number;
+  color?: string;
+  height?: number;
+  /** `null` clears the aim; with `fov` cleared too the light shines all round again. */
+  facing?: number | null;
+  /** `null` clears the beam: the light shines all round. */
+  fov?: number | null;
+  on?: boolean;
+  /** `null` clears the label. */
+  label?: string | null;
+};
+
+/** Every dial kept inside the contract, whatever the GM types. */
+export function updateLight(geo: SceneGeometry, id: string, patch: LightPatch): SceneGeometry {
+  return {
+    ...geo,
+    lights: lightsOf(geo).map((l) => {
+      if (l.id !== id) return l;
+      const next: SceneLight = { ...l };
+      if (patch.at) next.at = roundPoint(patch.at);
+      if (patch.level !== undefined) next.level = Math.max(0, Math.floor(patch.level));
+      if (patch.radiusM !== undefined) next.radiusM = clampLightReach(patch.radiusM);
+      if (patch.rows !== undefined) next.rows = clampLightRows(patch.rows);
+      if (patch.color !== undefined && isLightColor(patch.color)) next.color = patch.color;
+      if (patch.height !== undefined) next.height = clampLightHeight(patch.height);
+      if (patch.facing === null) delete next.facing;
+      else if (patch.facing !== undefined) next.facing = normalizeFacing(patch.facing);
+      if (patch.fov === null) delete next.fov;
+      else if (patch.fov !== undefined) next.fov = clampFov(patch.fov);
+      if (patch.on !== undefined) next.on = patch.on;
+      if (patch.label !== undefined) {
+        const label = patch.label?.trim() ?? '';
+        if (label === '') delete next.label;
+        else next.label = label.slice(0, 60);
+      }
+      return next;
+    }),
+  };
+}
+
+export function removeLight(geo: SceneGeometry, id: string): SceneGeometry {
+  return { ...geo, lights: lightsOf(geo).filter((l) => l.id !== id) };
+}
+
+/** A beam rather than a bulb: a spread narrower than all the way round. */
+export function isSpotlight(light: Pick<SceneLight, 'fov'>): boolean {
+  return light.fov !== undefined && light.fov < 360;
+}
+
+function isLightColor(c: string | undefined): c is string {
+  return c !== undefined && /^#[0-9a-fA-F]{6}$/.test(c);
+}
+
+/** Metres, to a tenth; half a metre is a candle, two hundred a stadium. */
+function clampLightReach(m: number): number {
+  const n = Number.isFinite(m) ? m : LIGHT_DEFAULTS.radiusM;
+  return Math.min(200, Math.max(0.5, Math.round(n * 10) / 10));
+}
+
+function clampLightRows(rows: number): 1 | 2 | 3 {
+  const n = Math.round(Number.isFinite(rows) ? rows : LIGHT_DEFAULTS.rows);
+  return n <= 1 ? 1 : n >= 3 ? 3 : 2;
+}
+
+/** Storeys, to a hundredth; the contract allows up to three. */
+function clampLightHeight(h: number): number {
+  const n = Number.isFinite(h) ? h : LIGHT_DEFAULTS.height;
+  return Math.min(3, Math.max(0, Math.round(n * 100) / 100));
 }
 
 // ---------------------------------------------------------------------------
@@ -489,7 +607,7 @@ export function removeSelection(
   geo: SceneGeometry,
   // `painted` is accepted and left alone: a painted object is squares on a
   // tile layer, not geometry, and is erased through the paint endpoint.
-  selection: { kind: 'wall' | 'door' | 'zone' | 'pin' | 'camera' | 'note' | 'painted' | 'fog'; id: string } | null,
+  selection: { kind: 'wall' | 'door' | 'zone' | 'pin' | 'camera' | 'note' | 'light' | 'painted' | 'fog'; id: string } | null,
 ): SceneGeometry {
   if (!selection) return geo;
   switch (selection.kind) {
@@ -505,6 +623,8 @@ export function removeSelection(
       return removeCamera(geo, selection.id);
     case 'note':
       return removeNote(geo, selection.id);
+    case 'light':
+      return removeLight(geo, selection.id);
     default:
       return geo;
   }

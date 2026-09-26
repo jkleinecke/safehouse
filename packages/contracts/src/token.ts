@@ -12,6 +12,24 @@ export const TokenAuraSchema = z.object({
 export type TokenAura = z.infer<typeof TokenAuraSchema>;
 
 /**
+ * A light the token carries (docs/VISION.md §4.1): a flashlight, a lantern,
+ * a spirit's own glow. It moves with the token and lights its floor like any
+ * other light. A beam aims where the token faces (`rotation`, degrees,
+ * 0 = east, 90 = south); without `fov` it shines all round.
+ */
+export const TokenLightSchema = z.object({
+  radiusM: z.number().positive().max(100),
+  /** Rows lifted at its core: 1 soft, 2 bright, 3 a floodlight. */
+  rows: z.number().int().min(1).max(3).default(1),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/).default('#fff2d6'),
+  /** A beam's spread in degrees; absent is all round. */
+  fov: z.number().min(5).max(360).optional(),
+  /** Switched off: carried, not shining. A player may flick their own runner's. */
+  on: z.boolean().default(true),
+});
+export type TokenLight = z.infer<typeof TokenLightSchema>;
+
+/**
  * How a figure holds itself on the isometric map. Standing is the default and
  * walking is drawn on its own while a token moves; crouched and prone are what
  * a runner chooses (behind cover, under a window). A runner whose condition
@@ -102,6 +120,8 @@ export const TokenSchema = z.object({
   pose: TokenPoseSchema.optional(),
   /** The figure's look on the isometric map (`TokenLookSchema`); null or absent is chosen for it. */
   look: TokenLookSchema.nullable().optional(),
+  /** A light the token carries (`TokenLightSchema`); null or absent is none. */
+  light: TokenLightSchema.nullable().optional(),
 });
 export type Token = z.infer<typeof TokenSchema>;
 export type TokenInput = z.input<typeof TokenSchema>;

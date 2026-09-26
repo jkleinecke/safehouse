@@ -282,6 +282,8 @@ export const tokens = pgTable(
     pose: text('pose').notNull().default('stand'),
     /** The figure's look on the isometric map (TokenLook); null is chosen for it. */
     look: jsonb('look'),
+    /** A light the token carries (TokenLight) — a flashlight, a lantern; null is none. */
+    light: jsonb('light'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('tokens_scene_idx').on(t.sceneId)],

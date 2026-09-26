@@ -21,6 +21,7 @@ import {
   GridSchema,
   SceneEnvironmentSchema,
   SceneGeometrySchema,
+  SceneLightSchema,
   SceneVisionSchema,
   type SceneVision,
   SceneLayerSchema,
@@ -30,7 +31,9 @@ import {
   FogStateSchema,
   SheetV1Schema,
   TokenAuraSchema,
+  TokenLightSchema,
   TokenLookSchema,
+  type TokenLight,
   type TokenLook,
   type FogRegion,
   type FogState,
@@ -114,8 +117,19 @@ export function normalizeEnvironment(raw: unknown): SceneEnvironment {
   return parsed.success ? parsed.data : SceneEnvironmentSchema.parse({});
 }
 
+/**
+ * A stored geometry, made safe to render — all-or-nothing, like the grid, with
+ * one exception for the same reason the grid has one. The GM's lights are
+ * checked one by one first and a light that does not fit is dropped: a lamp
+ * saved by a build with wider bounds must cost that lamp, not every wall on
+ * the map (an empty geometry is what the next write would then save).
+ */
 export function normalizeGeometry(raw: unknown): SceneGeometry {
-  const parsed = SceneGeometrySchema.safeParse(isRecord(raw) ? raw : {});
+  const merged: Record<string, unknown> = isRecord(raw) ? { ...raw } : {};
+  const lights = merged['lights'];
+  if (Array.isArray(lights)) merged['lights'] = lights.filter((l) => SceneLightSchema.safeParse(l).success);
+  else delete merged['lights'];
+  const parsed = SceneGeometrySchema.safeParse(merged);
   return parsed.success ? parsed.data : SceneGeometrySchema.parse({});
 }
 
@@ -267,6 +281,8 @@ export function sceneForViewer(scene: Scene, gm: boolean): Scene {
       doors: scene.geometry.doors.map(({ id, a, b, open }) => ({ id, a, b, open }) as Scene['geometry']['doors'][number]),
       zones: [],
       pins: scene.geometry.pins.filter((p) => p.visibility === 'public'),
+      // Lights, unlike cameras, are not secret: the glow is on every runner's screen whether or not the lamp is.
+      ...(scene.geometry.lights ? { lights: scene.geometry.lights } : {}),
     },
     ...(scene.tiles ? { tiles: tilesForPlayers(scene.tiles) } : {}),
     levels: scene.levels.map((l) => (l.tiles ? { ...l, tiles: tilesForPlayers(l.tiles) } : l)),
@@ -305,18 +321,21 @@ export function tokenHidden(token: { id: string; hidden: boolean }, scene: Pick<
 
 /**
  * A serialized token as the API emits it. `TokenSchema` leaves `sourceId` /
- * `artRef` / `aura` optional; the server always writes them (null when empty)
- * so consumers get a total shape without narrowing `undefined` away.
+ * `artRef` / `aura` / `light` optional; the server always writes them (null
+ * when empty) so consumers get a total shape without narrowing `undefined`
+ * away.
  */
 export type TokenDto = Token & {
   sourceId: string | null;
   artRef: string | null;
   aura: TokenAura | null;
+  light: TokenLight | null;
 };
 
 export function serializeToken(row: TokenRow): TokenDto {
   const bars = row.barsVisibility;
   const auraParsed = TokenAuraSchema.nullable().safeParse(row.aura ?? null);
+  const lightParsed = TokenLightSchema.nullable().safeParse(row.light ?? null);
   return {
     id: row.id,
     sceneId: row.sceneId,
@@ -334,6 +353,7 @@ export function serializeToken(row: TokenRow): TokenDto {
     aura: auraParsed.success ? auraParsed.data : null,
     pose: row.pose === 'crouch' || row.pose === 'prone' ? row.pose : 'stand',
     look: lookOf(row.look),
+    light: lightParsed.success ? lightParsed.data : null,
   };
 }
 
@@ -600,6 +620,8 @@ export interface TokenCreateInput {
   aura?: { radiusM: number; color?: string; label?: string } | null;
   pose?: 'stand' | 'crouch' | 'prone';
   look?: TokenLook | null;
+  /** A light the token carries (docs/VISION.md §4.1); null is none. */
+  light?: TokenLight | null;
 }
 
 export interface FogOpInput {
@@ -876,6 +898,7 @@ export class ScenesService {
           aura: input.aura ?? null,
           pose: input.pose ?? 'stand',
           look,
+          light: input.light ?? null,
         })
         .returning()
     )[0]!;
@@ -887,7 +910,7 @@ export class ScenesService {
     // `level` belongs in this list: the route already accepts it, and leaving
     // it out meant a token sent upstairs was written back unchanged — the
     // request succeeded, the response looked right, and the runner never moved.
-    for (const key of ['name', 'x', 'y', 'level', 'size', 'rotation', 'artRef', 'hidden', 'barsVisibility', 'aura', 'pose', 'look'] as const) {
+    for (const key of ['name', 'x', 'y', 'level', 'size', 'rotation', 'artRef', 'hidden', 'barsVisibility', 'aura', 'pose', 'look', 'light'] as const) {
       if (patch[key] !== undefined) set[key] = patch[key];
     }
     const row = (

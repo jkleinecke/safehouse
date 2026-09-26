@@ -212,3 +212,25 @@ export function hitCamera(m: SceneMetrics, scene: Scene, at: Point, tolerancePx 
   }
   return best;
 }
+
+/**
+ * GM light whose marker is within `tolerancePx` world px of `at`, on floor
+ * `level` only — the markers of other floors are not drawn, so they are not
+ * there to click (VISION.md §4.1).
+ */
+export function hitLight(m: SceneMetrics, scene: Scene, at: Point, level: number, tolerancePx = 20): string | null {
+  let best: string | null = null;
+  let bestDist = tolerancePx;
+  const p = worldFromGrid(m, at);
+  // Later lights draw on top, so a tie goes to the last one placed.
+  for (const light of scene.geometry.lights ?? []) {
+    if ((light.level ?? 0) !== level) continue;
+    const q = worldFromGrid(m, light.at);
+    const d = Math.hypot(p.x - q.x, p.y - q.y);
+    if (d <= bestDist) {
+      bestDist = d;
+      best = light.id;
+    }
+  }
+  return best;
+}

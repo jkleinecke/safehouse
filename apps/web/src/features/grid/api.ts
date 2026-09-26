@@ -479,12 +479,15 @@ export function useGridLiveSync(sceneId: string | null | undefined): void {
           const tokenId = (payload['tokenId'] ?? token['id']) as string | undefined;
           const x = (payload['x'] ?? token['x']) as number | undefined;
           const y = (payload['y'] ?? token['y']) as number | undefined;
+          // The facing rides along: a beam aims where the token faces.
+          const rotation = payload['rotation'] ?? token['rotation'];
+          const facing = typeof rotation === 'number' ? { rotation } : {};
           if (tokenId && typeof x === 'number' && typeof y === 'number') {
             qc.setQueryData<ComposedScene>(['scene', sceneId], (old) =>
               old
                 ? {
                     ...old,
-                    tokens: old.tokens.map((t) => (t.id === tokenId ? { ...t, x, y } : t)),
+                    tokens: old.tokens.map((t) => (t.id === tokenId ? { ...t, x, y, ...facing } : t)),
                   }
                 : old,
             );

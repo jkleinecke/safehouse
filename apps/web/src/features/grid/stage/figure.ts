@@ -274,7 +274,8 @@ function floorOval(g: Graphics, rig: Rig, f: number, sd: number, long: number, w
   g.poly(pts).fill({ color, alpha });
 }
 
-interface Skeleton {
+/** A pose's joints in body units — shared with the 3D lab, which builds its figures from the same bones. */
+export interface Skeleton {
   hip: V3;
   neck: V3;
   head: V3;
@@ -292,7 +293,8 @@ interface Skeleton {
   aiming: boolean;
 }
 
-function skeleton(frame: FigureFrame): Skeleton {
+/** Where a figure's joints are for one frame of one pose, in body units. */
+export function skeleton(frame: FigureFrame): Skeleton {
   switch (frame.pose) {
     case 'crouch':
       // Down on the right knee, left foot planted, both hands forward on a weapon.

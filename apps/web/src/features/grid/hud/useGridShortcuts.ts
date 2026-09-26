@@ -31,7 +31,7 @@ export function useGridShortcuts(
       if (e.defaultPrevented || e.repeat) return;
       if (isTypingTarget(e.target)) return;
       // Delete (or Backspace) removes what is selected — a token, a fog
-      // region, a wall, door, zone, pin, camera or note — with no confirmation: it is one undo step, and
+      // region, a wall, door, zone, pin, camera, light or note — with no confirmation: it is one undo step, and
       // a "sure?" on something undo can fix is a tax (docs/UX_MAP_BUILDER.md §3.6).
       if (isGm && scene && (e.key === 'Delete' || e.key === 'Backspace') && !e.ctrlKey && !e.metaKey && !e.altKey) {
         const s = useGridStore.getState();

@@ -22,6 +22,7 @@ import type { ContextTarget, StageCallbacks, StageSceneState, TileRectMode } fro
 import { Camera, wheelZoomFactor } from './camera.js';
 import {
   hitCamera,
+  hitLight,
   hitDoor,
   hitNote,
   hitPin,
@@ -437,6 +438,10 @@ export class PointerController {
         this.mode = 'idle';
         this.host.callbacks.onCameraPlace?.(grid.x, grid.y);
         return;
+      case 'light':
+        this.mode = 'idle';
+        this.host.callbacks.onLightPlace?.(grid.x, grid.y);
+        return;
       case 'note':
         this.mode = 'idle';
         this.host.callbacks.onNotePlace?.(grid.x, grid.y);
@@ -580,6 +585,19 @@ export class PointerController {
         this.mode = 'pan';
       }
       return;
+    }
+
+    // A light's marker: the GM's own lamps, on this floor. Under the tokens,
+    // as it is drawn — a lamp sits on a square's centre, which is where a
+    // guard stands, and a click on the guard is a click on the guard.
+    if (state.role === 'gm' && this.host.callbacks.onLightSelect) {
+      const lightTol = Math.max(14, worldTolerance(this.host.camera.scale, 14));
+      const lightId = hitLight(m, state.scene, grid, state.level ?? 0, lightTol);
+      if (lightId) {
+        this.mode = 'idle';
+        this.host.callbacks.onLightSelect(lightId);
+        return;
+      }
     }
 
     // A GM note's box (FR9.25) — under the tokens, so a runner standing on

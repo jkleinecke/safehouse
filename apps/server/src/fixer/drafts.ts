@@ -22,6 +22,7 @@ import {
   type Db,
 } from '@safehouse/db';
 import { httpError } from '../services/auth.js';
+import { normalizeGeometry } from '../services/scenes.js';
 import { gmOnlyNames } from './state.js';
 import type { LlmUsage } from './llm.js';
 
@@ -366,14 +367,19 @@ async function applyGeometryDraft(db: Db, row: GenerationRow): Promise<AppliedRe
   const out = output(row);
   const proposed = SceneGeometrySchema.parse(out['geometry'] ?? {});
   const merge = str(out['mode'], 'merge') !== 'replace';
-  const existing = merge
-    ? SceneGeometrySchema.parse(scene.geometry ?? {})
-    : SceneGeometrySchema.parse({});
+  // A layout is walls, doors and zones, and "replace" replaces only those.
+  // Everything else in the column — pins, cameras, lights, notes, painted
+  // floors, map images — is carried over as it was, read the way the scene
+  // itself is read, so one stored lamp that no longer fits costs that lamp
+  // rather than the whole apply.
+  const stored = asRecord(scene.geometry);
+  const existing = normalizeGeometry(stored);
   const geometry = {
-    walls: [...existing.walls, ...proposed.walls],
-    doors: [...existing.doors, ...proposed.doors],
-    zones: [...existing.zones, ...proposed.zones],
-    pins: existing.pins,
+    ...stored,
+    ...existing,
+    walls: merge ? [...existing.walls, ...proposed.walls] : proposed.walls,
+    doors: merge ? [...existing.doors, ...proposed.doors] : proposed.doors,
+    zones: merge ? [...existing.zones, ...proposed.zones] : proposed.zones,
   };
   const fog = FogStateSchema.parse(scene.fog ?? {});
   const known = new Set(fog.regions.map((r) => r.id));

@@ -1,6 +1,6 @@
 /**
  * The inspector (docs/UX_MAP_BUILDER.md §3.2): the one place a wall, door,
- * zone, pin, camera or note is edited. A click on the thing — on the canvas
+ * zone, pin, camera, light or note is edited. A click on the thing — on the canvas
  * or in a list — opens it here; the tool that made it lives on the toolbar.
  * Learning one teaches all.
  *
@@ -14,6 +14,7 @@
  * is a real state change, not a repaint.
  */
 import FogInspector from './FogInspector.js';
+import LightInspector from './LightInspector.js';
 import type { GridCommands } from '../commands.js';
 import { useRef, useState, type ReactNode } from 'react';
 import type { Camera, Door, Note, Pin, Point, Scene, Wall, Zone } from '@safehouse/contracts';
@@ -46,7 +47,7 @@ import {
 import { useGridStore } from '../store.js';
 import type { GeometrySelection } from '../types.js';
 import { cameraLensId } from '../useShroud.js';
-import { Empty, inputCls, Num, Row, TrashButton } from './ui.js';
+import { Empty, inputCls, LabelField, Num, Row, TrashButton } from './ui.js';
 
 
 export interface InspectorProps {
@@ -68,6 +69,7 @@ const TITLES: Record<GeometrySelection['kind'], string> = {
   pin: 'Pin',
   camera: 'Camera',
   note: 'Note',
+  light: 'Light',
   painted: 'Painted',
   fog: 'Fog region',
 };
@@ -102,6 +104,10 @@ export default function Inspector(props: InspectorProps) {
   // record, so it has an inspector of its own — and none of the geometry
   // fields, which describe things it does not have.
   if (props.selection.kind === 'painted') return <PaintedInspector {...props} />;
+  // A light has dials enough to want its own file (`LightInspector`).
+  if (props.selection.kind === 'light') {
+    return <LightInspector scene={props.scene} lightId={props.selection.id} onCenter={props.onCenter} />;
+  }
   if (props.selection.kind === 'fog') {
     return props.commands ? (
       <FogInspector scene={props.scene} regionId={props.selection.id} commands={props.commands} onCenter={props.onCenter} />
@@ -230,7 +236,8 @@ export function find(geo: Geo, sel: GeometrySelection): Found | null {
       return item ? { kind: 'note', item } : null;
     }
     default:
-      // Painted objects and fog regions are not geometry; each has its own inspector.
+      // Painted objects and fog regions are not geometry, and a light is
+      // geometry with an inspector of its own; each is opened elsewhere.
       return null;
   }
 }
@@ -581,12 +588,12 @@ function CameraFields({
   return (
     <>
       <Row label="label">
-        <input
-          className={inputCls}
-          aria-label="Camera label"
+        <LabelField
+          key={camera.id}
+          ariaLabel="Camera label"
           value={camera.label ?? ''}
           placeholder={camera.id}
-          onChange={(e) => onPatch({ label: e.target.value })}
+          onCommit={(label) => onPatch({ label })}
         />
       </Row>
       <Row label="facing">

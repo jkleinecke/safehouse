@@ -10,7 +10,7 @@ import type { GeometrySelection } from '../types.js';
 import { handlesOf, objectForSelection } from '../paintedObjects.js';
 import { allCells } from '../cellSelection.js';
 import { Application, Assets, ColorMatrixFilter, Container, Graphics, Text, type Texture } from 'pixi.js';
-import type { VisionMode } from '@safehouse/rules';
+import type { LightMap, VisionMode } from '@safehouse/rules';
 import type { Point, Token } from '@safehouse/contracts';
 import { TILESETS, levelTiles } from '@safehouse/rules';
 import type { TileLayer } from '@safehouse/contracts';
@@ -34,7 +34,8 @@ import { parserSafeUrlFor, type AssetRegistry } from './assetUrl.js';
 import { Camera } from './camera.js';
 import { C } from './colors.js';
 import { FxLayer } from './fx.js';
-import { drawCameras, drawFog, drawGeometry, drawGrid, drawNotes, drawPins } from './layers.js';
+import { drawCameras, drawFog, drawGeometry, drawGrid, drawLights, drawNotes, drawPins } from './layers.js';
+import { drawLightMap } from './lightLayer.js';
 import { drawShroud, shroudKey } from './shroudLayer.js';
 import { ChunkedTileLayer } from './tileChunks.js';
 import { BelowFloors } from './belowLayer.js';
@@ -128,6 +129,22 @@ function cameraKey(state: StageSceneState): string {
   ].join('|');
 }
 
+/** The GM's light markers redraw on any edit of a light on this floor, and on selection. */
+function lightKey(state: StageSceneState): string {
+  const level = state.level ?? 0;
+  return [
+    state.role === 'gm' ? 'gm' : 'pc',
+    level,
+    selectionKey(state, 'light'),
+    // Metres a square: the selected light's reach is drawn in squares.
+    state.scene.grid.unitM,
+    (state.scene.geometry.lights ?? [])
+      .filter((l) => (l.level ?? 0) === level)
+      .map((l) => `${l.id}:${l.at.x},${l.at.y}:${l.radiusM}:${l.color}:${l.on ? 1 : 0}:${l.facing ?? ''}:${l.fov ?? ''}:${l.label ?? ''}`)
+      .join(','),
+  ].join('|');
+}
+
 function pinKey(state: StageSceneState): string {
   const geo = state.scene.geometry;
   return [
@@ -197,6 +214,12 @@ class Stage implements StageApi, PointerHost {
   /** Cells outside the viewer's sightline (FR9.16). */
   private readonly shroudG = new Graphics();
   private lastShroudKey = '';
+  /** The GM's light-map wash (VISION.md §4.1), under the shroud. */
+  private readonly lightMapG = new Graphics();
+  // Redrawn when the map OBJECT changes (`useLightMap` memoises it), or the
+  // metrics it was drawn in — a flip to isometric moves every square.
+  private lastLightMap: LightMap | null = null;
+  private lastLightMapMetrics = '';
   private tileDefs: Record<string, TileDrawDef> = CATALOGUE_DEFS;
   private readonly gridG = new Graphics();
   private readonly geoG = new Graphics();
@@ -211,6 +234,11 @@ class Stage implements StageApi, PointerHost {
   private readonly cameraLabels = new Container();
   private readonly cameraLabelPool = new Map<string, Text>();
   private lastCameraKey = '';
+  /** The GM's lights, as markers (VISION.md §4.1). */
+  private readonly lightG = new Graphics();
+  private readonly lightLabels = new Container();
+  private readonly lightLabelPool = new Map<string, Text>();
+  private lastLightKey = '';
   /** The GM's notes (FR9.25). */
   private readonly noteG = new Graphics();
   private readonly noteLabels = new Container();
@@ -290,13 +318,16 @@ class Stage implements StageApi, PointerHost {
       this.map.root,
       this.below.root,
       this.tiles.root,
+      this.lightMapG,
       this.shroudG,
       this.gridG,
       this.geoG,
       this.cameraG,
+      this.lightG,
       this.pinG,
       this.pinLabels,
       this.cameraLabels,
+      this.lightLabels,
       this.noteG,
       this.noteLabels,
       this.tokenLayer,
@@ -527,6 +558,7 @@ class Stage implements StageApi, PointerHost {
       this.lastFogKey = ''; // fog/geometry/pins are metric-dependent
       this.lastGeoKey = '';
       this.lastPinKey = '';
+      this.lastLightKey = '';
     }
 
     // Painted tiles: content-hashed key so a redraw happens on any paint that
@@ -597,6 +629,15 @@ class Stage implements StageApi, PointerHost {
       drawShroud(this.shroudG, m, shroud);
     }
 
+    // The light map (GM only, a toggle): identity is the key, because the
+    // hook hands over the same object until something that moves light moves.
+    const lightMap = next.lightMap ?? null;
+    if (lightMap !== this.lastLightMap || mk !== this.lastLightMapMetrics) {
+      this.lastLightMap = lightMap;
+      this.lastLightMapMetrics = mk;
+      drawLightMap(this.lightMapG, m, lightMap);
+    }
+
     const mapKey = next.scene.mapAttachmentIds.join(',');
     if (mapKey !== this.lastMapKey) {
       this.lastMapKey = mapKey;
@@ -640,6 +681,21 @@ class Stage implements StageApi, PointerHost {
         m,
         next.cameraCones,
         selectedOf(next, 'camera'),
+        next.role === 'gm',
+        next.level ?? 0,
+      );
+    }
+
+    const lk = lightKey(next);
+    if (lk !== this.lastLightKey) {
+      this.lastLightKey = lk;
+      drawLights(
+        this.lightG,
+        this.lightLabels,
+        this.lightLabelPool,
+        next.scene,
+        m,
+        selectedOf(next, 'light'),
         next.role === 'gm',
         next.level ?? 0,
       );

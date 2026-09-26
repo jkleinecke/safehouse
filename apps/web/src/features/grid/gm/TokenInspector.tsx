@@ -2,12 +2,12 @@
  * A token's properties, in Prep's panel when one is picked (FR9.4/9.6/9.7).
  *
  * Everything the Tokens tab did to one token — hide it, put it on a layer,
- * size it, say who sees its bars, give it an aura, take it off — plus the
+ * size it, say who sees its bars, give it an aura or a light, take it off — plus the
  * cover reading the LOS tab gave: with a lens up ("See as" on the mode row),
  * this token is the target, and the panel says what stands between them and
  * lets the GM overrule the map.
  */
-import type { Scene, Token, TokenPose } from '@safehouse/contracts';
+import type { Scene, Token, TokenLight, TokenPose } from '@safehouse/contracts';
 import { coverCall, lineOfSight, sightModelFor, type CoverLevel } from '@safehouse/rules';
 import { useDeleteToken, usePatchScene, usePatchToken } from '../api.js';
 import { useGridStore } from '../store.js';
@@ -28,6 +28,24 @@ const POSES: ReadonlyArray<[TokenPose, string]> = [
   ['crouch', 'Crouch'],
   ['prone', 'Prone'],
 ];
+
+/**
+ * What a token can carry (docs/VISION.md §4.1), as the three a GM reaches
+ * for: a flashlight's beam where the figure faces, a lantern's pool, a
+ * spirit's glow. Anything finer is a GM light on the map.
+ */
+const LIGHTS: ReadonlyArray<[string, TokenLight | null]> = [
+  ['None', null],
+  ['Flashlight', { radiusM: 12, rows: 2, fov: 45, color: '#fff2d6', on: true }],
+  ['Lantern', { radiusM: 4, rows: 1, color: '#fff2d6', on: true }],
+  ['Glow', { radiusM: 2, rows: 1, color: '#b46cff', on: true }],
+];
+
+/** Is the token's light this preset, give or take the switch? */
+function sameLight(a: TokenLight | null | undefined, b: TokenLight | null): boolean {
+  if (!a || !b) return !a && !b;
+  return a.radiusM === b.radiusM && a.rows === b.rows && a.color === b.color && a.fov === b.fov;
+}
 
 const cellOf = (t: Token) => ({ col: Math.floor(t.x), row: Math.floor(t.y) });
 
@@ -141,6 +159,42 @@ export default function TokenInspector({
             }
           />
         </Row>
+        <Row label="Light">
+          <div className="flex flex-wrap gap-1" role="radiogroup" aria-label={`light for ${token.name}`}>
+            {LIGHTS.map(([label, light]) => {
+              const chosen = sameLight(token.light, light);
+              return (
+                <button
+                  key={label}
+                  type="button"
+                  role="radio"
+                  aria-checked={chosen}
+                  className={'btn px-2 py-0.5 text-xs ' + (chosen ? 'border-cyan text-cyan' : 'text-dim')}
+                  onClick={() => patch.mutate({ tokenId: token.id, patch: { light } })}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </Row>
+        {token.light && (
+          <Row label="">
+            <button
+              type="button"
+              aria-pressed={token.light.on !== false}
+              data-testid="token-light-on"
+              className={'btn px-2 py-0.5 text-xs ' + (token.light.on !== false ? 'border-warn text-warn' : 'text-dim')}
+              title="Carried either way; off, it lights nothing"
+              onClick={() => {
+                const light = token.light;
+                if (light) patch.mutate({ tokenId: token.id, patch: { light: { ...light, on: light.on === false } } });
+              }}
+            >
+              {token.light.on !== false ? 'switched on' : 'switched off'}
+            </button>
+          </Row>
+        )}
       </PanelSection>
       {ruling && viewer && (
         <PanelSection title="Cover" hint={`from ${viewer.name}`}>

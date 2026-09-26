@@ -192,8 +192,8 @@ export interface GridUiState {
   viewSceneId: string | null;
   pendingRollMod: PendingRollMod | null;
   /**
-   * The one thing picked on the map — a wall, door, zone, pin, camera or
-   * note — open in the panel's inspector and ringed on the canvas
+   * The one thing picked on the map — a wall, door, zone, pin, camera,
+   * light or note — open in the panel's inspector and ringed on the canvas
    * (docs/UX_MAP_BUILDER.md §3.2).
    */
   selected: GeometrySelection | null;
@@ -201,6 +201,12 @@ export interface GridUiState {
   zoneName: string;
   /** Last steering state the GM pushed to the TV (FR9.21), optimistic. */
   display: DisplayControls;
+  /**
+   * GM only: wash the floor by how lit each square is (docs/VISION.md §4.1).
+   * A prep lens, off by default and never persisted — the table does not
+   * see it, and a GM running the fight rarely wants it left on.
+   */
+  showLightMap: boolean;
 
   setTool: (tool: GridTool) => void;
   setTilesetId: (tilesetId: string) => void;
@@ -250,6 +256,7 @@ export interface GridUiState {
   setPasting: (on: boolean) => void;
   setZoneName: (name: string) => void;
   setDisplay: (patch: Partial<DisplayControls>) => void;
+  setShowLightMap: (on: boolean) => void;
 }
 
 /**
@@ -319,6 +326,7 @@ export const useGridStore = create<GridUiState>()((set) => ({
   selected: null,
   zoneName: '',
   display: DEFAULT_DISPLAY_CONTROLS,
+  showLightMap: false,
 
   toggleSnap: () => set((s) => ({ snapEnabled: !s.snapEnabled })),
   // A tab reached from anywhere (a pin just dropped opens Pins) brings its
@@ -440,6 +448,7 @@ export const useGridStore = create<GridUiState>()((set) => ({
   setPasting: (pasting) => set({ pasting }),
   setZoneName: (zoneName) => set({ zoneName }),
   setDisplay: (patch) => set((s) => ({ display: { ...s.display, ...patch } })),
+  setShowLightMap: (showLightMap) => set({ showLightMap }),
 }));
 
 /*

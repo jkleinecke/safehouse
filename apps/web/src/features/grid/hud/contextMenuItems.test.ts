@@ -59,6 +59,7 @@ function actions(): ContextMenuActions & Record<string, ReturnType<typeof vi.fn>
     openSheet: vi.fn(),
     setHidden: vi.fn(),
     setPose: vi.fn(),
+    setLight: vi.fn(),
     customiseLook: vi.fn(),
     removeToken: vi.fn(),
     doorOp: vi.fn(),

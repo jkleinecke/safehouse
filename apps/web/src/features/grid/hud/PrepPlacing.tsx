@@ -6,6 +6,7 @@
  *   Token ▾   which runner, NPC or prop, and how big — then click the map
  *   Fog ▾     a rectangle (two clicks) or a polygon (click round, back on the first)
  *   Camera    click to mount one
+ *   Light     click to put a lamp down on a square
  *   Note      click to drop one
  *
  * The Tokens tab's placement form (pick, size, "place at centre") and the Fog
@@ -228,6 +229,9 @@ function SizeMenu() {
   );
 }
 
+/** The tools with nothing to choose first: pick one up and click the map. */
+const PLAIN_GLYPHS = { camera: '◉', light: '✹', note: '🗒' } as const;
+
 export default function PrepPlacing({ campaignId }: { campaignId: string }) {
   const stamp = useGridStore((s) => s.tokenStamp);
   const setTool = useGridStore((s) => s.setTool);
@@ -277,7 +281,7 @@ export default function PrepPlacing({ campaignId }: { campaignId: string }) {
           </>
         )}
       </Split>
-      {(['camera', 'note'] as const).map((t) => (
+      {(['camera', 'light', 'note'] as const).map((t) => (
         <HudButton
           key={t}
           active={current === t}
@@ -285,7 +289,7 @@ export default function PrepPlacing({ campaignId }: { campaignId: string }) {
           testId={`tool-${t}`}
           onClick={() => setTool(t)}
         >
-          <HudIcon>{t === 'camera' ? '◉' : '🗒'}</HudIcon>
+          <HudIcon>{PLAIN_GLYPHS[t]}</HudIcon>
         </HudButton>
       ))}
     </div>

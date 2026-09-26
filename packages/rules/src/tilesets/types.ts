@@ -495,6 +495,21 @@ export const WALL_THICKNESS = 1 / 3;
 /** Where a ground tile belongs: a room's floor, or the ground around the building. */
 export type TileSetting = 'inside' | 'outside';
 
+/**
+ * A glowing tile as a light (docs/VISION.md §4.1): how far its light reaches,
+ * in metres, how many light rows it lifts at its core, and how high it hangs,
+ * in storeys — the renderer reads the height for how long the shadows run.
+ *
+ * Most tiles never state one: `tileLight` (vision/light.ts) gives a sensible
+ * default by what the tile is — a ceiling light, a street lamp, a fire, a
+ * screen. This is for the tile that default is wrong for.
+ */
+export interface TileLight {
+  radiusM: number;
+  rows: 1 | 2 | 3;
+  height: number;
+}
+
 export interface Tile {
   id: string;
   name: string;
@@ -554,6 +569,12 @@ export interface Tile {
    * reads at table distance where a 1px accent line at 40% alpha never did.
    */
   emissive?: string;
+  /**
+   * How far and how hard this tile's glow lights the floor around it, when
+   * the default for what it is does not fit (see `TileLight`). Read only on
+   * a tile with an `emissive` colour: a light has to have a colour to be one.
+   */
+  light?: TileLight;
   /**
    * A colour this surface REFLECTS — wet asphalt under a sign, a dance floor
    * lit from beneath, polished stone under a lobby's downlights.

@@ -50,6 +50,7 @@ import PrepControls from './hud/PrepControls.js';
 import {
   addCamera,
   addDoor,
+  addLight,
   addNote,
   addPin,
   addWall,
@@ -84,6 +85,7 @@ import {
 import { autoTileFor, topLayerAt } from './autoPlace.js';
 import { roomPlan, roomTileIds } from './roomFill.js';
 import { useCameraCones } from './useCameraCones.js';
+import { useLightMap } from './useLightMap.js';
 import { useShroud } from './useShroud.js';
 import { stairAdvice, useStairOffer } from './useStairs.js';
 import { editArcs, historyFor, useHistory } from './history.js';
@@ -358,6 +360,15 @@ export default function GridPage() {
   // What the GM's cameras cover on this floor (FR9.23). Null for players,
   // whose scene carries no cameras to begin with.
   const cameraCones = useCameraCones(scene, isGm, viewLevel);
+  // How lit each square of this floor is (VISION.md §4.1) — only while the
+  // GM has the light-map view on, and only in Prep, where its switch is: a
+  // wash left on would otherwise follow them into Play with no way to put it
+  // down there. A null scene computes nothing.
+  const lightMap = useLightMap(
+    isGm && store.mode === 'prep' && store.showLightMap ? scene : null,
+    viewLevel,
+    tokens,
+  );
   // Single-key tools and 1–9 for floors (docs/UX_MAP_BUILDER.md §3.3).
   const fogRemove = useCallback((sceneId: string, regionId: string) => commandsRef.current?.fogRemove(sceneId, regionId), []);
   useGridShortcuts(isGm, 1 + (scene?.levels?.length ?? 0), scene?.id ?? null, scene ?? null, fogRemove);
@@ -398,6 +409,7 @@ export default function GridPage() {
         ? {
             ...composed,
             paintEdit: building,
+            lightMap,
             cellSelection: building ? store.cellSelection : null,
             pasting: building && store.pasting ? store.clipboard : null,
           }
@@ -421,6 +433,7 @@ export default function GridPage() {
       store.fogDraft,
       store.selected,
       cameraCones,
+      lightMap,
       shroud,
       viewLevel,
     ],
@@ -437,10 +450,23 @@ export default function GridPage() {
   const closeMenu = useCallback(() => setMenu(null), []);
   const deleteToken = useDeleteToken(scene?.id);
   const navigate = useNavigate();
+  // Where each token stood before a drop, without rebuilding every stage
+  // callback whenever one moves.
+  const tokensRef = useRef(tokens);
+  tokensRef.current = tokens;
 
   const callbacks: StageCallbacks = useMemo(
     () => ({
-      onTokenMove: (id, x, y) => commands.move(id, x, y),
+      onTokenMove: (id, x, y) => {
+        // It faces the way it walked, as the figure on screen does, and the
+        // server keeps that: a flashlight's beam aims where the token faces
+        // (VISION.md §4.1). A drop back on its own spot keeps its facing.
+        const from = tokensRef.current.find((t) => t.id === id);
+        const dx = from ? x - from.x : 0;
+        const dy = from ? y - from.y : 0;
+        const rotation = Math.hypot(dx, dy) > 1e-6 ? (Math.atan2(dy, dx) * 180) / Math.PI : undefined;
+        commands.move(id, x, y, rotation);
+      },
       onTokenDrag: (id, x, y) => commands.drag(id, x, y),
       onSelectToken: (id) => useGridStore.getState().selectToken(id),
       onPing: (x, y) => commands.ping(x, y),
@@ -854,6 +880,24 @@ export default function GridPage() {
         s.select({ kind: 'camera', id: cameraId });
         s.openGmPanel();
       },
+      // -- Lights (VISION.md §4.1) --------------------------------------------
+      onLightPlace: (x, y) => {
+        if (!scene || !isGm) return;
+        // On the square's centre, on the floor the GM is looking at: a lamp
+        // lights squares, and one on a corner would light four of them unevenly.
+        const at = { x: Math.floor(x) + 0.5, y: Math.floor(y) + 0.5 };
+        const geometry = addLight(scene.geometry, at, { level: useGridStore.getState().activeLevel });
+        const placed = geometry.lights?.[geometry.lights.length - 1];
+        patchGeometry.mutate({ sceneId: scene.id, geometry });
+        const s = useGridStore.getState();
+        if (placed) s.select({ kind: 'light', id: placed.id });
+        s.openGmPanel();
+      },
+      onLightSelect: (lightId) => {
+        const s = useGridStore.getState();
+        s.select({ kind: 'light', id: lightId });
+        s.openGmPanel();
+      },
       // -- GM notes (FR9.25) -------------------------------------------------
       onNotePlace: (x, y) => {
         if (!scene || !isGm) return;
@@ -905,6 +949,7 @@ export default function GridPage() {
     openSheet: (characterId) => navigate(`/c/${campaignId}/sheet/${characterId}`),
     setHidden: (tokenId, hidden) => patchToken.mutate({ tokenId, patch: { hidden } }),
     setPose: (tokenId, pose) => patchToken.mutate({ tokenId, patch: { pose } }),
+    setLight: (tokenId, light) => patchToken.mutate({ tokenId, patch: { light } }),
     customiseLook: (tokenId) => useGridStore.getState().setLookTokenId(tokenId),
     removeToken: (tokenId) => deleteToken.mutate(tokenId),
     doorOp: (input) => doorOp.mutate(input, { onError: showDoorNotice }),

@@ -139,6 +139,45 @@ export const CameraSchema = z.object({
 });
 export type Camera = z.infer<typeof CameraSchema>;
 
+/** `#rrggbb` — a light's colour. */
+export const LightColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/);
+
+/**
+ * A light the GM placed (docs/VISION.md §4.1): a work lamp the tiles do not
+ * have, a flare, a drone's spotlight, a room's overheads as one fixture.
+ * Tiles that glow are lights already (`tileLight` in rules); these are the
+ * rest. Every renderer and the light map read the same fields.
+ *
+ * Not secret: a light is something the runners can see, so players receive
+ * the list (the effect is on their screen whether or not the fixture is).
+ */
+export const SceneLightSchema = z.object({
+  id: z.string(),
+  /** Where the lamp stands, in grid units (cell centres at .5). */
+  at: PointSchema,
+  /** Which floor it is on (FR9.22). */
+  level: z.number().int().min(0).default(0),
+  /** How far it reaches, in metres; the grid's `unitM` turns it into squares. */
+  radiusM: z.number().positive().max(200).default(6),
+  /**
+   * How many light rows it lifts at its core (§4.1): 1 a soft glow, 2 a
+   * proper lamp, 3 a floodlight. Its outer half lifts one row fewer (never
+   * less than one).
+   */
+  rows: z.number().int().min(1).max(3).default(2),
+  color: LightColorSchema.default('#ffd9a0'),
+  /** How high the lamp hangs, in storeys: 0 on the floor, ~0.9 at the ceiling. Renderers read it for shadow length. */
+  height: z.number().min(0).max(3).default(0.8),
+  /** A spotlight's aim, cameras' convention: degrees, 0 = east, 90 = south. Absent: all round. */
+  facing: z.number().min(0).max(360).optional(),
+  /** A spotlight's spread in degrees; absent or 360 is all round. */
+  fov: z.number().min(5).max(360).optional(),
+  /** Switched off — the decker killed the power — it lights nothing. */
+  on: z.boolean().default(true),
+  label: z.string().max(60).optional(),
+});
+export type SceneLight = z.infer<typeof SceneLightSchema>;
+
 /**
  * A GM note on the map (FR9.25): a box of text pinned to a point, for the GM
  * alone — how to run the room, what the guard says, where the loot is. Never
@@ -306,6 +345,8 @@ export const SceneGeometrySchema = z.object({
    * geometry is what the next write then saved.
    */
   gmNotes: z.array(NoteSchema).optional(),
+  /** Lights the GM placed (`SceneLightSchema`) — optional like cameras; read it as `geometry.lights ?? []`. */
+  lights: z.array(SceneLightSchema).optional(),
 });
 export type SceneGeometry = z.infer<typeof SceneGeometrySchema>;
 

@@ -42,6 +42,7 @@ import {
   TokenAuraSchema,
   TokenPoseSchema,
   SceneFileSchema,
+  TokenLightSchema,
   TokenLookSchema,
   VisibilitySchema,
   type Visibility,
@@ -209,6 +210,7 @@ const TokenCreateBody = z.object({
   aura: TokenAuraSchema.nullable().optional(),
   pose: TokenPoseSchema.optional(),
   look: TokenLookSchema.nullable().optional(),
+  light: TokenLightSchema.nullable().optional(),
 });
 
 const TokenPatchBody = z.object({
@@ -229,6 +231,8 @@ const TokenPatchBody = z.object({
   pose: TokenPoseSchema.optional(),
   /** The figure's look — a player may dress their own runner; null resets it. */
   look: TokenLookSchema.nullable().optional(),
+  /** The light it carries — a player may switch their own runner's flashlight; null takes it away. */
+  light: TokenLightSchema.nullable().optional(),
 });
 
 const SceneLevelsBody = z.object({
@@ -573,12 +577,24 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     if (auth.role !== 'gm') {
       // FR9.5: players may only reposition their own character's token —
       // and crouch it, or lie it down, which is where their runner is too.
-      const playerKeys = new Set(['x', 'y', 'rotation', 'pose', 'look']);
+      // And switch its flashlight on or off: whether the runner is showing a
+      // light in a dark corridor is the runner's call, not the GM's.
+      const playerKeys = new Set(['x', 'y', 'rotation', 'pose', 'look', 'light']);
       if (Object.keys(body).some((k) => !playerKeys.has(k))) {
         throw httpError(403, 'forbidden', 'only the GM may edit token properties');
       }
       if (!(await svc.canControlToken(auth, before))) {
         throw httpError(403, 'forbidden', 'you do not control this token');
+      }
+      // The switch and nothing else: what the runner carries and how far it
+      // throws is the GM's to say, so every other field stays as the GM
+      // left it, and a player can neither hand out a light nor take one away.
+      if (body.light !== undefined) {
+        const held = serializeToken(before).light;
+        if (held === null || body.light === null) {
+          throw httpError(403, 'forbidden', 'only the GM may give or take away a light');
+        }
+        body.light = { ...held, on: body.light.on };
       }
     }
     // The permission reads above are all hoisted out of the block; only the

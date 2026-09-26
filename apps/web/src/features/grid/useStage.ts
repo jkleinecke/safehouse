@@ -81,6 +81,8 @@ export function useStage(params: UseStageParams): UseStageResult {
       onPinSelect: (id) => cbRef.current.onPinSelect?.(id),
       onCameraPlace: (x, y) => cbRef.current.onCameraPlace?.(x, y),
       onCameraSelect: (id) => cbRef.current.onCameraSelect?.(id),
+      onLightPlace: (x, y) => cbRef.current.onLightPlace?.(x, y),
+      onLightSelect: (id) => cbRef.current.onLightSelect?.(id),
       onNotePlace: (x, y) => cbRef.current.onNotePlace?.(x, y),
       onNoteSelect: (id) => cbRef.current.onNoteSelect?.(id),
       onWallSelect: (id) => cbRef.current.onWallSelect?.(id),

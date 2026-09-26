@@ -305,13 +305,14 @@ export async function sendScenePatch(sceneId: string, patch: Record<string, unkn
   await apiPatch(`/api/scenes/${sceneId}`, patch);
 }
 
-const KIND_WORD: Record<'walls' | 'doors' | 'zones' | 'pins' | 'cameras' | 'gmNotes', [string, string]> = {
+const KIND_WORD: Record<'walls' | 'doors' | 'zones' | 'pins' | 'cameras' | 'gmNotes' | 'lights', [string, string]> = {
   walls: ['wall', 'walls'],
   doors: ['door', 'doors'],
   zones: ['zone', 'zones'],
   pins: ['pin', 'pins'],
   cameras: ['camera', 'cameras'],
   gmNotes: ['note', 'notes'],
+  lights: ['light', 'lights'],
 };
 
 /** "draw a wall", "delete 2 pins", "edit a door" — what a geometry patch did. */
