@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react';
 import type { Scene } from '@safehouse/contracts';
 import type { GridCommands } from '../commands.js';
 import { useGridStore } from '../store.js';
-import { inputCls, PanelSection } from './ui.js';
+import { inputCls, PanelSection, TrashButton } from './ui.js';
 
 export default function FogInspector({
   scene,
@@ -71,16 +71,14 @@ export default function FogInspector({
         </label>
       </PanelSection>
       <div className="flex justify-end px-3 pb-3">
-        <button
-          type="button"
-          className="btn py-1 text-danger"
+        <TrashButton
+          label="Delete the region"
+          testId="fog-delete"
           onClick={() => {
             select(null);
             commands.fogRemove(scene.id, region.id);
           }}
-        >
-          delete the region
-        </button>
+        />
       </div>
     </section>
   );

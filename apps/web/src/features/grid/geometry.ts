@@ -140,6 +140,29 @@ export function tokenRadiusPx(m: SceneMetrics, size: number): number {
 }
 
 /**
+ * How tall a standing figure is on the isometric map, in storeys: a head
+ * just under the lintel. Measured against the walls rather than in metres
+ * because the walls are what it stands among — the storey is drawn squat
+ * so rooms can be seen into, and a figure to true scale beside it would
+ * tower over the doors.
+ */
+export const FIGURE_STOREYS = 0.95;
+
+/** Screen height of a token's standing figure, in world px (zero in plan view). */
+export function figureHeightPx(m: SceneMetrics, size: number): number {
+  return heightRise(m, FIGURE_STOREYS) * Math.sqrt(Math.max(0.5, size));
+}
+
+/**
+ * Where a click is measured from on a token. In plan the disc's centre; on
+ * the isometric map the figure's chest, since that is what the GM aims at —
+ * not the floor under its feet.
+ */
+export function tokenHitLift(m: SceneMetrics, size: number): number {
+  return figureHeightPx(m, size) * 0.75;
+}
+
+/**
  * How far above its anchor a map pin's head is drawn, in world px, and how big
  * that head is. Shared with the hit test for the same reason as the token
  * radius: the head is what the GM aims at.

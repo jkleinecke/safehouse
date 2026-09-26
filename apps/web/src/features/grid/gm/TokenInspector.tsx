@@ -7,18 +7,26 @@
  * this token is the target, and the panel says what stands between them and
  * lets the GM overrule the map.
  */
-import type { Scene, Token } from '@safehouse/contracts';
+import type { Scene, Token, TokenPose } from '@safehouse/contracts';
 import { coverCall, lineOfSight, sightModelFor, type CoverLevel } from '@safehouse/rules';
 import { useDeleteToken, usePatchScene, usePatchToken } from '../api.js';
 import { useGridStore } from '../store.js';
 import { assignToken, layerOfToken, layersOf, type TokenLayers } from '../tokenLayers.js';
-import { inputCls, Num, PanelSection, Row } from './ui.js';
+import { inputCls, Num, PanelSection, Row, TrashButton } from './ui.js';
+import LookEditor from './LookEditor.js';
 
 const COVER_CHOICES: readonly { value: CoverLevel | 'auto'; label: string }[] = [
   { value: 'auto', label: 'From the map' },
   { value: 'none', label: 'No cover' },
   { value: 'partial', label: 'Partial' },
   { value: 'full', label: 'Full — no shot' },
+];
+
+/** How a figure stands on the isometric map (`figure.ts`). */
+const POSES: ReadonlyArray<[TokenPose, string]> = [
+  ['stand', 'Stand'],
+  ['crouch', 'Crouch'],
+  ['prone', 'Prone'],
 ];
 
 const cellOf = (t: Token) => ({ col: Math.floor(t.x), row: Math.floor(t.y) });
@@ -91,6 +99,26 @@ export default function TokenInspector({
         <Row label="Size">
           <Num value={token.size} min={1} onChange={(n) => patch.mutate({ tokenId: token.id, patch: { size: Math.max(1, Math.round(n)) } })} />
         </Row>
+        {token.source !== 'prop' && (
+          // How the figure holds itself on the isometric map. Down is not a
+          // choice here: a full condition monitor lays it down on its own.
+          <Row label="Pose">
+            <div className="flex gap-1" role="radiogroup" aria-label={`pose for ${token.name}`}>
+              {POSES.map(([pose, label]) => (
+                <button
+                  key={pose}
+                  type="button"
+                  role="radio"
+                  aria-checked={(token.pose ?? 'stand') === pose}
+                  className={'btn px-2 py-0.5 text-xs ' + ((token.pose ?? 'stand') === pose ? 'border-cyan text-cyan' : 'text-dim')}
+                  onClick={() => patch.mutate({ tokenId: token.id, patch: { pose } })}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </Row>
+        )}
         <Row label="Bars">
           <select
             className={inputCls}
@@ -135,17 +163,20 @@ export default function TokenInspector({
           {ruling.call.overridden && <p className="text-xs text-magenta">Your call overrides the map. The roll will say so.</p>}
         </PanelSection>
       )}
+      {token.source !== 'prop' && (
+        <PanelSection title="Look" hint="the figure on the isometric map">
+          <LookEditor token={token} />
+        </PanelSection>
+      )}
       <div className="flex justify-end px-3 pb-3">
-        <button
-          type="button"
-          className="btn py-1 text-danger"
+        <TrashButton
+          label="Remove from the scene"
+          testId="token-delete"
           onClick={() => {
             selectToken(null);
             remove.mutate(token.id);
           }}
-        >
-          remove from the scene
-        </button>
+        />
       </div>
     </section>
   );

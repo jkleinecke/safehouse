@@ -5,7 +5,7 @@
  */
 import { useEffect } from 'react';
 import type { Scene } from '@safehouse/contracts';
-import { usePaintBatch, usePaintTiles, usePatchGeometry } from '../api.js';
+import { useDeleteToken, usePaintBatch, usePaintTiles, usePatchGeometry } from '../api.js';
 import { copySet, eraseBodies, setOfObject } from '../cellSelection.js';
 import { objectForSelection } from '../paintedObjects.js';
 import { removeSelection } from '../geometryEdit.js';
@@ -18,17 +18,20 @@ export function useGridShortcuts(
   floorCount: number,
   sceneId: string | null = null,
   scene: Scene | null = null,
+  /** Take a fog region off the scene (the socket command; see `GridCommands.fogRemove`). */
+  fogRemove: (sceneId: string, regionId: string) => void = () => undefined,
 ): void {
   // `mutate` is the stable half of the mutation; the object itself is not.
   const patchGeometry = usePatchGeometry().mutate;
   const paintTiles = usePaintTiles().mutate;
   const paintBatch = usePaintBatch().mutate;
+  const deleteToken = useDeleteToken(sceneId).mutate;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.repeat) return;
       if (isTypingTarget(e.target)) return;
-      // Delete (or Backspace) removes what is selected — a wall, door, zone,
-      // pin, camera or note — with no confirmation: it is one undo step, and
+      // Delete (or Backspace) removes what is selected — a token, a fog
+      // region, a wall, door, zone, pin, camera or note — with no confirmation: it is one undo step, and
       // a "sure?" on something undo can fix is a tax (docs/UX_MAP_BUILDER.md §3.6).
       if (isGm && scene && (e.key === 'Delete' || e.key === 'Backspace') && !e.ctrlKey && !e.metaKey && !e.altKey) {
         const s = useGridStore.getState();
@@ -52,10 +55,22 @@ export function useGridShortcuts(
           e.preventDefault();
           return;
         }
+        // A token picked on the map (2026-09-26: the key did nothing to one).
+        if (s.selectedTokenId && !s.selected) {
+          const id = s.selectedTokenId;
+          s.selectToken(null);
+          deleteToken(id);
+          e.preventDefault();
+          return;
+        }
         if (!s.selected) return;
-        // A fog region is deleted from its inspector, where the GM can see
-        // what they are taking away; the Delete key leaves it be.
-        if (s.selected.kind === 'fog') return;
+        if (s.selected.kind === 'fog') {
+          const id = s.selected.id;
+          s.select(null);
+          fogRemove(scene.id, id);
+          e.preventDefault();
+          return;
+        }
         // A painted wall, door or prop is squares on a layer, not geometry:
         // it goes as an erase of exactly its own cells, on its own layer, so
         // the floor under a deleted bench stays floor.
@@ -147,5 +162,5 @@ export function useGridShortcuts(
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isGm, floorCount, sceneId, scene, patchGeometry, paintTiles, paintBatch]);
+  }, [isGm, floorCount, sceneId, scene, patchGeometry, paintTiles, paintBatch, deleteToken, fogRemove]);
 }

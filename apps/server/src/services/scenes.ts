@@ -30,6 +30,8 @@ import {
   FogStateSchema,
   SheetV1Schema,
   TokenAuraSchema,
+  TokenLookSchema,
+  type TokenLook,
   type FogRegion,
   type FogState,
   type Grid,
@@ -330,7 +332,16 @@ export function serializeToken(row: TokenRow): TokenDto {
     hidden: row.hidden,
     barsVisibility: bars === 'gm' || bars === 'owner' || bars === 'public' ? bars : 'owner',
     aura: auraParsed.success ? auraParsed.data : null,
+    pose: row.pose === 'crouch' || row.pose === 'prone' ? row.pose : 'stand',
+    look: lookOf(row.look),
   };
+}
+
+/** A stored look, or null when there is none or it no longer fits the schema. */
+export function lookOf(raw: unknown): TokenLook | null {
+  if (raw === null || raw === undefined) return null;
+  const parsed = TokenLookSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
 }
 
 export interface DrawingDto {
@@ -587,6 +598,8 @@ export interface TokenCreateInput {
   hidden?: boolean;
   barsVisibility?: 'gm' | 'owner' | 'public';
   aura?: { radiusM: number; color?: string; label?: string } | null;
+  pose?: 'stand' | 'crouch' | 'prone';
+  look?: TokenLook | null;
 }
 
 export interface FogOpInput {
@@ -820,12 +833,15 @@ export class ScenesService {
   async createToken(scene: SceneRow, input: TokenCreateInput): Promise<TokenDto> {
     let name = input.name;
     let artRef = input.artRef ?? null;
+    let look = input.look ?? null;
     if (input.source === 'character' && input.sourceId) {
       const c = (
         await this.db.select().from(characters).where(eq(characters.id, input.sourceId)).limit(1)
       )[0];
       if (!c) throw httpError(404, 'not_found', 'unknown character');
       name ??= c.name;
+      // The runner's own look, as they dressed it (0011_token_look).
+      look ??= lookOf(c.tokenLook);
       if (!artRef) {
         const sheet = c.sheet as { identity?: { portraitId?: string | null } } | null;
         artRef = sheet?.identity?.portraitId ?? null;
@@ -858,6 +874,8 @@ export class ScenesService {
           hidden: input.hidden ?? false,
           barsVisibility: input.barsVisibility ?? 'owner',
           aura: input.aura ?? null,
+          pose: input.pose ?? 'stand',
+          look,
         })
         .returning()
     )[0]!;
@@ -869,7 +887,7 @@ export class ScenesService {
     // `level` belongs in this list: the route already accepts it, and leaving
     // it out meant a token sent upstairs was written back unchanged — the
     // request succeeded, the response looked right, and the runner never moved.
-    for (const key of ['name', 'x', 'y', 'level', 'size', 'rotation', 'artRef', 'hidden', 'barsVisibility', 'aura'] as const) {
+    for (const key of ['name', 'x', 'y', 'level', 'size', 'rotation', 'artRef', 'hidden', 'barsVisibility', 'aura', 'pose', 'look'] as const) {
       if (patch[key] !== undefined) set[key] = patch[key];
     }
     const row = (
@@ -921,6 +939,19 @@ export class ScenesService {
   }
 
   /** FR9.5: GM moves anything; a player only their own character's token. */
+  /**
+   * Dress a runner: their look, on the character and on every token of theirs
+   * in every scene. Returns the tokens it changed, for their events.
+   */
+  async setCharacterLook(characterId: string, look: TokenLook | null): Promise<TokenRow[]> {
+    await this.db.update(characters).set({ tokenLook: look }).where(eq(characters.id, characterId));
+    return this.db
+      .update(tokens)
+      .set({ look })
+      .where(and(eq(tokens.source, 'character'), eq(tokens.sourceId, characterId)))
+      .returning();
+  }
+
   async canControlToken(auth: { role: string; userId: string }, token: TokenRow): Promise<boolean> {
     if (auth.role === 'gm') return true;
     if (auth.role !== 'player') return false;

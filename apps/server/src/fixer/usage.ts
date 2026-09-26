@@ -117,7 +117,7 @@ export const usageMeter = new UsageMeter();
  * small for the lane, or that somebody is retrying a description that will
  * never work.
  */
-export type UsageKind = 'chat' | 'npc' | 'draft' | 'draft:failed' | 'tool';
+export type UsageKind = 'chat' | 'npc' | 'draft' | 'draft:failed' | 'tool' | 'look';
 
 export interface TurnUsageInput {
   campaignId: string;

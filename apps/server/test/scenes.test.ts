@@ -233,6 +233,46 @@ describe('hidden tokens and fog never reach a player payload (Principle 4)', () 
     expect(notAProperty.statusCode).toBe(403);
   });
 
+  it("lets a player dress and pose their own runner — in every scene — and nobody else's", async () => {
+    const look = { archetype: 'decker', metatype: 'elf', colors: { coat: '#202830' } };
+    const ok = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/tokens/${visibleTokenId}`,
+      headers: as(player.token),
+      payload: { look, pose: 'crouch' },
+    });
+    expect(ok.statusCode).toBe(200);
+    const dressed = (ok.json() as { token: { look: typeof look; pose: string } }).token;
+    expect(dressed.look).toMatchObject(look);
+    expect(dressed.pose).toBe('crouch');
+
+    // The look is the runner's: a token of theirs placed in another scene arrives dressed.
+    const rooftop = await post(`/api/campaigns/${boot.campaignId}/scenes`, boot.gmToken, { name: 'Rooftop' });
+    const rooftopId = (rooftop.json() as { scene: { id: string } }).scene.id;
+    const placed = await post(`/api/scenes/${rooftopId}/tokens`, boot.gmToken, { source: 'character', sourceId: characterId, x: 1, y: 1 });
+    expect((placed.json() as { token: { look: unknown } }).token.look).toMatchObject(look);
+
+    // Only the lists the figure is drawn from.
+    const bad = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/tokens/${visibleTokenId}`,
+      headers: as(player.token),
+      payload: { look: { archetype: 'dragon' } },
+    });
+    expect(bad.statusCode).toBe(400);
+
+    // Another player can neither dress it nor ask the AI to.
+    const nope = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/tokens/${visibleTokenId}`,
+      headers: as(other.token),
+      payload: { look },
+    });
+    expect(nope.statusCode).toBe(403);
+    const ask = await post(`/api/tokens/${visibleTokenId}/look/describe`, other.token, { description: 'a troll in a pink suit' });
+    expect(ask.statusCode).toBe(403);
+  });
+
   it('lets only the GM move a token between floors (FR9.5/9.22)', async () => {
     // Which storey somebody is on is a GM call, not a player one. A player may
     // walk their own token around a floor; taking the stairs is the GM saying

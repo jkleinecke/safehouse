@@ -19,6 +19,7 @@
  * dropdown and its images to the toolbar. Build's authoring is all on the
  * map now, and this panel serves Prep and Play.
  */
+import { TrashButton } from './ui.js';
 import type { Scene, Token } from '@safehouse/contracts';
 import type { GridCommands } from '../commands.js';
 import { useGridStore, type GmTab } from '../store.js';
@@ -282,11 +283,9 @@ function SelectionInspector({ scene }: { scene: Scene }) {
         >
           {clipboard ? 'copy again' : 'copy'}
         </button>
-        <button
-          type="button"
-          className="btn py-1 text-danger"
-          data-testid="selection-delete"
-          title="Delete (Del) — Ctrl+Z puts it back"
+        <TrashButton
+          label="Delete the selection"
+          testId="selection-delete"
           onClick={() => {
             const bodies = eraseBodies(scene, sel);
             setCellSelection(null);
@@ -302,9 +301,7 @@ function SelectionInspector({ scene }: { scene: Scene }) {
               });
             }
           }}
-        >
-          delete
-        </button>
+        />
       </div>
     </section>
   );

@@ -49,12 +49,21 @@ import {
 import { floorPlanJsonSchema, proposeFloor } from './floor-plan.js';
 import { layoutJsonSchema, LayoutDoorSchema, LayoutRoomSchema } from './geometry.js';
 import { resolveLlmConfig } from './providers.js';
+import { describeLook } from './token-look.js';
+import { ScenesService } from '../services/scenes.js';
+import { TokenLookSchema } from '@safehouse/contracts';
 import { persistTurnUsage, type UsageKind, type UsageRecord } from './usage.js';
 import { emitFogProximity, fogProximityState } from './proximity.js';
 import { identifyTokensState } from './token-id.js';
 import { FIXER_TOOLS, TOOLS_BY_NAME, toolParameters } from './tools.js';
 import type { ToolContext } from './tool-kit.js';
 import { mapVisionJsonSchema, proposeGeometryFromMap } from './vision.js';
+
+const DescribeLookBody = z.object({
+  description: z.string().trim().min(1).max(600),
+  /** The look as the editor has it now, hand changes included. */
+  current: TokenLookSchema.nullable().optional(),
+});
 
 const IdentifyBody = z.object({
   campaignId: z.string().optional(),
@@ -464,6 +473,43 @@ export default async function fixerToolRoutes(app: FastifyInstance): Promise<voi
     }
     await meterDraftTurns(app.db, rec.campaignId, turns, 'draft');
     return reply.send(result);
+  });
+
+  /**
+   * Dress a token's figure from a description: the GM for any token, a
+   * player for their own runner. Answers the look; saving it is the token
+   * PATCH, so the player sees it before the table does.
+   */
+  app.post('/api/tokens/:id/look/describe', async (req, reply) => {
+    const auth = requireAuth(req);
+    const { id } = req.params as { id: string };
+    const body = parse(DescribeLookBody, req.body);
+    const svc = new ScenesService(app.db);
+    const { token, scene } = await svc.tokenWithScene(id);
+    assertCampaign(auth, scene.campaignId);
+    if (!(await svc.canControlToken(auth, token))) throw httpError(403, 'forbidden', 'you do not control this token');
+    const config = resolveLlmConfig(await campaignSettings(app.db, scene.campaignId));
+    let result: Awaited<ReturnType<typeof describeLook>>;
+    try {
+      result = await describeLook(config, {
+        campaignId: scene.campaignId,
+        description: body.description,
+        name: token.name,
+        current: body.current ?? (TokenLookSchema.nullable().safeParse(token.look ?? null).data ?? null),
+      });
+    } catch (err) {
+      const told = sanitizeAiError(err, { forGm: auth.role === 'gm' });
+      if (told !== err) req.log.warn({ err }, 'a token look failed for a player; the provider text was kept back');
+      throw told;
+    }
+    await persistTurnUsage(app.db, {
+      campaignId: scene.campaignId,
+      model: result.model,
+      usage: result.usage,
+      latencyMs: result.latencyMs,
+      kind: 'look',
+    });
+    return reply.send({ look: result.look });
   });
 
   /** Stop this build's draft; the running request answers `ai_cancelled`. */

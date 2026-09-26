@@ -46,7 +46,7 @@ import {
 import { useGridStore } from '../store.js';
 import type { GeometrySelection } from '../types.js';
 import { cameraLensId } from '../useShroud.js';
-import { Empty, inputCls, Num, Row } from './ui.js';
+import { Empty, inputCls, Num, Row, TrashButton } from './ui.js';
 
 
 export interface InspectorProps {
@@ -335,18 +335,8 @@ function PaintedInspector({ scene, selection, onCenter }: InspectorProps) {
   );
 }
 
-function DeleteButton({ onClick, label = 'delete' }: { onClick: () => void; label?: string }) {
-  return (
-    <button
-      type="button"
-      className="btn py-1 text-danger"
-      onClick={onClick}
-      data-testid="inspector-delete"
-      title="Removes it — Ctrl+Z puts it back"
-    >
-      {label}
-    </button>
-  );
+function DeleteButton({ onClick, label = 'Delete' }: { onClick: () => void; label?: string }) {
+  return <TrashButton onClick={onClick} label={label} testId="inspector-delete" />;
 }
 
 function WallFields({ wall, geo, save, remove }: { wall: Wall; geo: Geo; save: Save; remove: (g: Geo) => void }) {
@@ -680,7 +670,7 @@ function CameraFields({
           {lensOn ? 'stop looking through it' : 'look through it'}
         </button>
         <DeleteButton
-          label="remove"
+          label="Remove the camera"
           onClick={() => {
             if (lensOn) setLosTokenId(null);
             remove(removeCamera(geo, camera.id));

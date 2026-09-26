@@ -70,3 +70,28 @@ export function newId(prefix: string): string {
       : Math.random().toString(36).slice(2);
   return `${prefix}_${rand}`;
 }
+
+/**
+ * The properties panel's delete: a trash can, not a word. `label` is what it
+ * says to a screen reader and in its tooltip — what goes, and that Delete
+ * does the same.
+ */
+export function TrashButton({ onClick, label, testId }: { onClick: () => void; label: string; testId?: string }) {
+  return (
+    <button
+      type="button"
+      className="btn px-2 py-1 text-danger"
+      onClick={onClick}
+      data-testid={testId}
+      aria-label={label}
+      title={`${label} (Del) — Ctrl+Z puts it back`}
+    >
+      <svg aria-hidden width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 6h18" />
+        <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+        <path d="M10 11v6M14 11v6" />
+      </svg>
+    </button>
+  );
+}

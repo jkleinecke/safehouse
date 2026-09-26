@@ -17,6 +17,7 @@ import type {
   SceneInput,
   Token,
   TokenInput,
+  TokenLook,
 } from '@safehouse/contracts';
 import type { TilePattern } from '@safehouse/rules';
 import { apiDelete, apiGet, apiPatch, apiPut, apiPost, queryClient } from '../../api/client.js';
@@ -213,6 +214,28 @@ export function usePatchToken(sceneId: string | null | undefined) {
     onSuccess: () => {
       if (sceneId) invalidateScene(sceneId);
     },
+  });
+}
+
+/**
+ * Save a token's look (null resets it). A runner's look is saved onto the
+ * character and every token of theirs; the server says so with events.
+ */
+export function useSetTokenLook(sceneId: string | null | undefined) {
+  return useMutation({
+    mutationFn: async ({ tokenId, look }: { tokenId: string; look: TokenLook | null }) =>
+      (await apiPatch<{ token: Token }>(`/api/tokens/${tokenId}`, { look })).token,
+    onSuccess: () => {
+      if (sceneId) invalidateScene(sceneId);
+    },
+  });
+}
+
+/** Ask the AI to dress a token from a description; answers the look, unsaved. */
+export function useDescribeLook() {
+  return useMutation({
+    mutationFn: async ({ tokenId, description, current }: { tokenId: string; description: string; current: TokenLook | null }) =>
+      (await apiPost<{ look: TokenLook }>(`/api/tokens/${tokenId}/look/describe`, { description, current })).look,
   });
 }
 

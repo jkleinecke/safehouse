@@ -40,6 +40,7 @@ import { ChunkedTileLayer } from './tileChunks.js';
 import { BelowFloors } from './belowLayer.js';
 import { tileDrawInput, tileLayerKey } from './tileLayer.js';
 import { MapLayer } from './mapLayer.js';
+import { drawOccluders } from './occlusion.js';
 import { PointerController, type Cell, type PointerHost } from './pointer.js';
 import { TokenView } from './tokenView.js';
 
@@ -216,6 +217,15 @@ class Stage implements StageApi, PointerHost {
   private readonly noteLabelPool = new Map<string, Text>();
   private lastNoteKey = '';
   private readonly tokenLayer = new Container();
+  /** Over the tokens: their badges, bars and names, and the see-through figures. */
+  private readonly tokenOverlay = new Container();
+  /**
+   * The walls and furniture standing in front of each figure, drawn as masks:
+   * hidden behind them on the floor, seen faintly through them over it.
+   * Never drawn themselves — a mask is not rendered.
+   */
+  private readonly occluderLayer = new Container();
+  private readonly occluders = new Map<string, { hide: Graphics; show: Graphics; key: string }>();
   private readonly fx = new FxLayer();
   private readonly map: MapLayer;
 
@@ -290,11 +300,16 @@ class Stage implements StageApi, PointerHost {
       this.noteG,
       this.noteLabels,
       this.tokenLayer,
+      this.tokenOverlay,
+      this.occluderLayer,
       this.fogG,
       this.fogLabels,
       this.fx.root,
     );
     this.world.eventMode = 'none';
+    // Figures on the isometric map overlap: the nearer one is drawn last.
+    this.tokenLayer.sortableChildren = true;
+    this.tokenOverlay.sortableChildren = true;
     this.app.stage.addChild(this.world);
     this.app.stage.eventMode = 'none';
 
@@ -365,7 +380,7 @@ class Stage implements StageApi, PointerHost {
     const view = this.views.get(tokenId);
     if (!view) return;
     view.localDrag = true;
-    view.place(world.x, world.y);
+    view.place(world.x, world.y, true);
   }
 
   echoPing(world: Point): void {
@@ -452,6 +467,7 @@ class Stage implements StageApi, PointerHost {
     if (mode === 'normal' || mode === 'astral') {
       for (const c of floor) clear(c);
       clear(this.tokenLayer);
+      clear(this.tokenOverlay);
       return;
     }
     const floorFilter = new ColorMatrixFilter();
@@ -489,6 +505,7 @@ class Stage implements StageApi, PointerHost {
     }
     for (const c of floor) c.filters = [floorFilter];
     this.tokenLayer.filters = [tokenFilter];
+    this.tokenOverlay.filters = [tokenFilter];
   }
 
   update(next: StageSceneState): void {
@@ -676,6 +693,7 @@ class Stage implements StageApi, PointerHost {
         view = new TokenView();
         this.views.set(token.id, view);
         this.tokenLayer.addChild(view.root);
+        this.tokenOverlay.addChild(view.overlay);
       }
       view.update(token, {
         selected: next.selectedTokenId === token.id,
@@ -696,6 +714,7 @@ class Stage implements StageApi, PointerHost {
       if (seen.has(id)) continue;
       view.destroy();
       this.views.delete(id);
+      this.dropOccluder(id);
       if (this.localDragId === id) this.localDragId = null;
     }
     this.applyTargets();
@@ -735,7 +754,7 @@ class Stage implements StageApi, PointerHost {
       if (!view) continue;
       if (token.id === this.localDragId) {
         view.localDrag = true;
-        if (this.localDragWorld) view.place(this.localDragWorld.x, this.localDragWorld.y);
+        if (this.localDragWorld) view.place(this.localDragWorld.x, this.localDragWorld.y, true);
         continue;
       }
       view.localDrag = false;
@@ -814,7 +833,53 @@ class Stage implements StageApi, PointerHost {
       if (this.camera.touched) writeCamera(this.framedSceneId, this.camera);
     }
     for (const view of this.views.values()) view.tick(deltaMS);
+    this.updateOccluders();
     this.fx.tick(deltaMS);
+  }
+
+  /**
+   * On the isometric map, what stands in front of each figure: redrawn when
+   * the figure steps into another square or the floor is repainted, not per
+   * frame. The walls themselves are drawn once, by the tile layer; these are
+   * only masks cut to their shape, so nothing about the floor — the shroud,
+   * the grid, the lights — is painted twice.
+   */
+  private updateOccluders(): void {
+    const plan = this.m.projection === 'iso' ? this.tiles.plan : null;
+    for (const [id, view] of this.views) {
+      const at = plan ? view.gridAt() : null;
+      let occ = this.occluders.get(id);
+      if (!plan || !at) {
+        if (occ && occ.key !== '') {
+          occ.key = '';
+          occ.hide.clear();
+          view.setXray(false);
+        }
+        continue;
+      }
+      if (!occ) {
+        const hide = new Graphics();
+        const show = new Graphics(hide.context);
+        this.occluderLayer.addChild(hide, show);
+        view.root.setMask({ mask: hide, inverse: true });
+        view.ghost.mask = show;
+        occ = { hide, show, key: '' };
+        this.occluders.set(id, occ);
+      }
+      const key = `${Math.floor(at.x)},${Math.floor(at.y)}|${view.size}|${this.tiles.version}`;
+      if (key === occ.key) continue;
+      occ.key = key;
+      view.setXray(drawOccluders(occ.hide, this.m, plan, at, view.size));
+    }
+  }
+
+  private dropOccluder(id: string): void {
+    const occ = this.occluders.get(id);
+    if (!occ) return;
+    // The copy borrows the original's drawing; it goes first.
+    occ.show.destroy();
+    occ.hide.destroy();
+    this.occluders.delete(id);
   }
 
   destroy(): void {

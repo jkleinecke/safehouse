@@ -91,6 +91,13 @@ export const characters = pgTable(
      * import or a hand-typed sheet. Nothing in play reads it.
      */
     build: jsonb('build'),
+    /**
+     * How this runner's figure looks on the isometric map (TokenLook), set by
+     * the player or the GM. Copied onto every token of theirs, and onto each
+     * new one, so the runner looks the same in every scene. Null: chosen for
+     * them.
+     */
+    tokenLook: jsonb('token_look'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -271,6 +278,10 @@ export const tokens = pgTable(
     hidden: boolean('hidden').notNull().default(false),
     barsVisibility: text('bars_visibility').notNull().default('public'),
     aura: jsonb('aura'),
+    /** 'stand' | 'crouch' | 'prone' — how the figure holds itself on the iso map. */
+    pose: text('pose').notNull().default('stand'),
+    /** The figure's look on the isometric map (TokenLook); null is chosen for it. */
+    look: jsonb('look'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('tokens_scene_idx').on(t.sceneId)],

@@ -9,7 +9,7 @@
  * `GridPage` supplies the actions, which are the same mutations the panel
  * tabs and the inspector already call.
  */
-import type { Point, Scene, Token } from '@safehouse/contracts';
+import type { Point, Scene, Token, TokenPose } from '@safehouse/contracts';
 import { sceneLevels } from '@safehouse/rules';
 import type { DoorOpInput } from '../api.js';
 import { pointInPolygon } from '../geometry.js';
@@ -33,6 +33,10 @@ export interface ContextMenuActions {
   rangeBetween(from: Token, to: Token): void;
   openSheet(characterId: string): void;
   setHidden(tokenId: string, hidden: boolean): void;
+  /** Open the look editor for a token: describe it to the AI, or dress it by hand. */
+  customiseLook(tokenId: string): void;
+  /** Stand, crouch or go prone — the figure on the isometric map. */
+  setPose(tokenId: string, pose: TokenPose): void;
   removeToken(tokenId: string): void;
   doorOp(input: DoorOpInput): void;
   pinHere(x: number, y: number): void;
@@ -109,6 +113,25 @@ function tokenItems(input: ContextMenuInput, token: Token): MenuItem[] {
   if (token.source === 'character' && token.sourceId && (role === 'gm' || mine)) {
     const id = token.sourceId;
     items.push({ id: 'sheet', label: mine ? 'Open my sheet' : `Open ${token.name}'s sheet`, run: () => actions.openSheet(id) });
+  }
+  // Crouch behind the crates, drop flat under the window: the GM for anyone,
+  // a player for their own runner. A prop has no pose.
+  if (token.source !== 'prop' && (role === 'gm' || mine)) {
+    const now = token.pose ?? 'stand';
+    const poses: Array<[TokenPose, string]> = [
+      ['stand', now === 'prone' ? 'Get up' : 'Stand up'],
+      ['crouch', 'Crouch'],
+      ['prone', 'Go prone'],
+    ];
+    for (const [pose, label] of poses) {
+      if (pose !== now) items.push({ id: `pose-${pose}`, label, run: () => actions.setPose(token.id, pose) });
+    }
+    items.push({
+      id: 'look',
+      label: 'Customise look…',
+      hint: 'describe it to the AI, or dress it by hand',
+      run: () => actions.customiseLook(token.id),
+    });
   }
   if (role === 'gm') {
     items.push({

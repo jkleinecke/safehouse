@@ -102,7 +102,7 @@ test.describe('Delete on the map', () => {
     const inspector = page.getByTestId('inspector');
     await expect(inspector).toBeVisible();
     await expect(inspector).toContainText('wall', { ignoreCase: true });
-    await expect(page.getByTestId('inspector-delete')).toHaveText('delete');
+    await expect(page.getByTestId('inspector-delete')).toHaveAttribute('aria-label', 'Delete');
 
     await page.keyboard.press('Delete');
     await expect

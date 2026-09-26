@@ -60,6 +60,7 @@ import {
 } from './geometryEdit.js';
 import GmPanel from './gm/GmPanel.js';
 import ContextMenu from './hud/ContextMenu.js';
+import LookEditor from './gm/LookEditor.js';
 import { contextMenuItems, type ContextMenuActions, type ContextMenuInput } from './hud/contextMenuItems.js';
 import MeasurePanel from './hud/MeasurePanel.js';
 import PlayRail from './hud/PlayRail.js';
@@ -358,7 +359,8 @@ export default function GridPage() {
   // whose scene carries no cameras to begin with.
   const cameraCones = useCameraCones(scene, isGm, viewLevel);
   // Single-key tools and 1–9 for floors (docs/UX_MAP_BUILDER.md §3.3).
-  useGridShortcuts(isGm, 1 + (scene?.levels?.length ?? 0), scene?.id ?? null, scene ?? null);
+  const fogRemove = useCallback((sceneId: string, regionId: string) => commandsRef.current?.fogRemove(sceneId, regionId), []);
+  useGridShortcuts(isGm, 1 + (scene?.levels?.length ?? 0), scene?.id ?? null, scene ?? null, fogRemove);
   // Undo and redo for the toolbar (`history.ts`): the next step each way, for
   // the scene on screen, and whether one is in flight.
   const historyPast = useHistory((s) => s.past);
@@ -902,6 +904,8 @@ export default function GridPage() {
     },
     openSheet: (characterId) => navigate(`/c/${campaignId}/sheet/${characterId}`),
     setHidden: (tokenId, hidden) => patchToken.mutate({ tokenId, patch: { hidden } }),
+    setPose: (tokenId, pose) => patchToken.mutate({ tokenId, patch: { pose } }),
+    customiseLook: (tokenId) => useGridStore.getState().setLookTokenId(tokenId),
     removeToken: (tokenId) => deleteToken.mutate(tokenId),
     doorOp: (input) => doorOp.mutate(input, { onError: showDoorNotice }),
     pinHere: (x, y) => callbacks.onPinPlace?.(x, y),
@@ -1292,6 +1296,27 @@ export default function GridPage() {
             onClose={closeMenu}
           />
         )}
+
+        {/* The look editor, from the right-click menu: a player's way in to their runner. */}
+        {(() => {
+          const t = store.lookTokenId ? tokens.find((k) => k.id === store.lookTokenId) : undefined;
+          if (!t) return null;
+          const close = () => useGridStore.getState().setLookTokenId(null);
+          return (
+            <div
+              data-testid="look-panel"
+              className="absolute right-3 top-3 z-30 max-h-[85%] w-80 overflow-y-auto rounded-lg border border-edge bg-panel p-3 shadow-lg"
+            >
+              <div className="mb-2 flex items-center gap-2">
+                <span className="mono-label flex-1 truncate text-dim">Look — {t.name}</span>
+                <button type="button" className="btn px-2 py-0.5" title="Close" aria-label="Close" onClick={close}>
+                  ✕
+                </button>
+              </div>
+              <LookEditor token={t} onDone={close} />
+            </div>
+          );
+        })()}
 
         <MeasurePanel
           tool={store.tool}

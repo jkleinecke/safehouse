@@ -24,9 +24,9 @@ import { sceneLevels, tileById } from '@safehouse/rules';
 import {
   distToSegment,
   pinHeadRise,
+  tokenHitLift,
   tokenRadiusPx,
   worldFromGrid,
-  worldGap,
   type SceneMetrics,
 } from '../geometry.js';
 import { inNoteFrame, noteFrame } from './notes.js';
@@ -64,7 +64,11 @@ export function hitToken(
     // The disc the renderer actually draws — not a second guess at its size —
     // or the pointer's own slop, whichever is the more forgiving.
     const radius = Math.max(floor, tokenRadiusPx(m, token.size));
-    const d = worldGap(m, at, { x: token.x, y: token.y });
+    // On the isometric map the figure stands up from its square: measure
+    // from its chest (zero lift in plan, where this is the old disc test).
+    const p = worldFromGrid(m, at);
+    const q = worldFromGrid(m, { x: token.x, y: token.y });
+    const d = Math.hypot(p.x - q.x, p.y - (q.y - tokenHitLift(m, token.size)));
     if (d > radius) continue;
     // Prefer the smaller/closer token when they overlap; ties go to the later
     // token (drawn on top).

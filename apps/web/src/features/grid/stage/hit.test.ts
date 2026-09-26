@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Scene, Token } from '@safehouse/contracts';
-import { gridFromWorld, metricsFor, pinHeadRise, worldFromGrid } from '../geometry.js';
+import { gridFromWorld, metricsFor, pinHeadRise, tokenHitLift, worldFromGrid } from '../geometry.js';
 import {
   hitDoor,
   hitNote,
@@ -225,7 +225,10 @@ describe('isometric hit-testing', () => {
 
   it('hits the top and bottom of a token, not just its waist', () => {
     const one = [token('a', 5.5, 5.5)];
-    const centre = worldFromGrid(iso, { x: 5.5, y: 5.5 });
+    // On the isometric map a token is a figure standing up from its square:
+    // the click is measured from its chest, not the floor under its feet.
+    const feet = worldFromGrid(iso, { x: 5.5, y: 5.5 });
+    const centre = { x: feet.x, y: feet.y - tokenHitLift(iso, 1) };
     // 20 px straight up the screen from the centre — well inside the 30 px
     // disc that is drawn, and 1.25 GRID units away, which the old test
     // rejected out of hand.
@@ -259,7 +262,8 @@ describe('isometric hit-testing', () => {
         return hitToken(m, flatT, gridFromWorld(m, { x: c.x, y: c.y - px })) !== null;
       })();
       const hitIso = (() => {
-        const c = worldFromGrid(iso, { x: 5.5, y: 5.5 });
+        const f = worldFromGrid(iso, { x: 5.5, y: 5.5 });
+        const c = { x: f.x, y: f.y - tokenHitLift(iso, 1) };
         return hitToken(iso, flatT, gridFromWorld(iso, { x: c.x, y: c.y - px })) !== null;
       })();
       expect({ px, hitIso }).toEqual({ px, hitIso: hitFlat });

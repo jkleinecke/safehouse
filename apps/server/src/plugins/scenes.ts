@@ -40,6 +40,8 @@ import {
   ArcWallSchema,
   TileLayerSchema,
   TokenAuraSchema,
+  TokenPoseSchema,
+  TokenLookSchema,
   VisibilitySchema,
   type Visibility,
   TILE_LAYERS,
@@ -203,6 +205,7 @@ const TokenCreateBody = z.object({
   hidden: z.boolean().default(false),
   barsVisibility: z.enum(['gm', 'owner', 'public']).default('owner'),
   aura: TokenAuraSchema.nullable().optional(),
+  pose: TokenPoseSchema.optional(),
 });
 
 const TokenPatchBody = z.object({
@@ -219,6 +222,10 @@ const TokenPatchBody = z.object({
   hidden: z.boolean().optional(),
   barsVisibility: z.enum(['gm', 'owner', 'public']).optional(),
   aura: TokenAuraSchema.nullable().optional(),
+  /** Standing, crouched or prone — a player may set their own runner's. */
+  pose: TokenPoseSchema.optional(),
+  /** The figure's look — a player may dress their own runner; null resets it. */
+  look: TokenLookSchema.nullable().optional(),
 });
 
 const SceneLevelsBody = z.object({
@@ -521,8 +528,12 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     const positional = body.x !== undefined || body.y !== undefined || body.rotation !== undefined;
     const nonPositional = Object.keys(body).some((k) => k !== 'x' && k !== 'y' && k !== 'rotation');
     if (auth.role !== 'gm') {
-      // FR9.5: players may only reposition their own character's token.
-      if (nonPositional) throw httpError(403, 'forbidden', 'only the GM may edit token properties');
+      // FR9.5: players may only reposition their own character's token —
+      // and crouch it, or lie it down, which is where their runner is too.
+      const playerKeys = new Set(['x', 'y', 'rotation', 'pose', 'look']);
+      if (Object.keys(body).some((k) => !playerKeys.has(k))) {
+        throw httpError(403, 'forbidden', 'only the GM may edit token properties');
+      }
       if (!(await svc.canControlToken(auth, before))) {
         throw httpError(403, 'forbidden', 'you do not control this token');
       }
@@ -532,6 +543,15 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     const after = await app.hub.atomic(scene.campaignId, async (tx) => {
       const written = await svc.withDb(tx.db).patchToken(id, body);
       await emitTokenChange(tx, scene, before, written, { positional, nonPositional });
+      // A runner's look is the runner's: it goes onto the character and onto
+      // every token of theirs, in this scene and every other.
+      if (body.look !== undefined && written.source === 'character' && written.sourceId) {
+        const others = await svc.withDb(tx.db).setCharacterLook(written.sourceId, body.look);
+        for (const t of others) {
+          if (t.id === written.id) continue;
+          await tx.emit({ type: 'token.updated', payload: { token: serializeToken(t) }, visibility: t.hidden ? 'gm' : 'public' });
+        }
+      }
       return written;
     });
     return { token: serializeToken(after) };

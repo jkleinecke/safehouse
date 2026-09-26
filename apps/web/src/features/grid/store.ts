@@ -182,6 +182,8 @@ export interface GridUiState {
   tokenStamp: TokenStamp | null;
   /** How many squares across the next token placed covers (Prep's Size menu). */
   tokenSize: number;
+  /** The token whose look is being edited in the floating editor (the right-click menu's "Customise look"). */
+  lookTokenId: string | null;
   /** How the Fog tool draws a region: two corners, or round the corners back to the first. */
   fogShape: 'rect' | 'polygon';
   /** Build · Prep · Play — which of the Grid's three jobs the GM is doing (hud/modes.ts). */
@@ -228,6 +230,7 @@ export interface GridUiState {
   setPlaceAt: (at: Point | null) => void;
   setTokenStamp: (stamp: TokenStamp | null) => void;
   setTokenSize: (size: number) => void;
+  setLookTokenId: (id: string | null) => void;
   setFogShape: (shape: 'rect' | 'polygon') => void;
   setViewSceneId: (id: string | null) => void;
   setPendingRollMod: (mod: PendingRollMod | null) => void;
@@ -307,6 +310,7 @@ export const useGridStore = create<GridUiState>()((set) => ({
   placeAt: null,
   tokenStamp: null,
   tokenSize: 1,
+  lookTokenId: null,
   fogShape: 'rect',
   gmTab: 'tokens',
   mode: readStoredMode(),
@@ -413,6 +417,7 @@ export const useGridStore = create<GridUiState>()((set) => ({
   setPlaceAt: (placeAt) => set({ placeAt }),
   setTokenStamp: (tokenStamp) => set({ tokenStamp }),
   setTokenSize: (n) => set({ tokenSize: Math.max(1, Math.min(8, Math.round(n))) }),
+  setLookTokenId: (lookTokenId) => set({ lookTokenId }),
   setFogShape: (fogShape) => set({ fogShape }),
   setViewSceneId: (viewSceneId) =>
     set((s) => {

@@ -105,7 +105,7 @@ export class BelowFloors {
         entry = { view: new TokenView(), art: null };
         this.views.set(token.id, entry);
       }
-      if (entry.view.root.parent !== floor.tokens) floor.tokens.addChild(entry.view.root);
+      if (entry.view.root.parent !== floor.tokens) floor.tokens.addChild(entry.view.root, entry.view.overlay);
       entry.view.update(token, { selected: false, acting: false, draggable: false, bars: null, ghosted: token.hidden, metrics: m });
       const at = worldFromGrid(m, { x: token.x, y: token.y });
       entry.view.place(at.x, at.y + (this.drops[lvl] ?? 0));

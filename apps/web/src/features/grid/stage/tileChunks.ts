@@ -53,6 +53,10 @@ export class ChunkedTileLayer {
   private readonly floorChunks = new Map<string, Graphics>();
   private readonly standingChunks = new Map<string, Graphics>();
   private readonly chunkLights = new Map<string, PendingLight[]>();
+  /** The floor as last planned — what stands where, for the figures' occluders. */
+  plan: TilePlan | null = null;
+  /** Bumped whenever `plan` changes, so a reader knows to look again. */
+  version = 0;
   /** What was drawn last time: the world it belongs to, and each cell's signature. */
   private last: { world: string; cells: Map<string, string>; input: TileDrawInput } | null = null;
 
@@ -76,6 +80,8 @@ export class ChunkedTileLayer {
     this.shadows.clear();
     this.lights.clear();
     this.last = null;
+    this.plan = null;
+    this.version += 1;
   }
 
   /**
@@ -102,6 +108,8 @@ export class ChunkedTileLayer {
       );
     }
     this.last = { world, cells, input };
+    this.plan = plan;
+    this.version += 1;
 
     if (dirty.size > 0) {
       const t0 = performance.now();

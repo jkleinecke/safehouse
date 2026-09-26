@@ -58,6 +58,8 @@ function actions(): ContextMenuActions & Record<string, ReturnType<typeof vi.fn>
     rangeBetween: vi.fn(),
     openSheet: vi.fn(),
     setHidden: vi.fn(),
+    setPose: vi.fn(),
+    customiseLook: vi.fn(),
     removeToken: vi.fn(),
     doorOp: vi.fn(),
     pinHere: vi.fn(),
@@ -93,7 +95,10 @@ describe('the token menu', () => {
   it('gives the GM the token verbs and runs the same mutations the panel does', () => {
     const inp = input({ target: { kind: 'token', id: 'Ganger' } });
     const items = contextMenuItems(inp);
-    expect(ids(items)).toEqual(['center', 'hidden', 'remove']);
+    // A standing figure can crouch or go prone (2026-09-25: tokens are figures on the iso map).
+    expect(ids(items)).toEqual(['center', 'pose-crouch', 'pose-prone', 'look', 'hidden', 'remove']);
+    items.find((i) => i.id === 'pose-prone')!.run();
+    expect(inp.actions.setPose).toHaveBeenCalledWith('Ganger', 'prone');
     items.find((i) => i.id === 'hidden')!.run();
     expect(inp.actions.setHidden).toHaveBeenCalledWith('Ganger', false);
     expect(items.find((i) => i.id === 'hidden')!.label).toBe('Reveal to players');
@@ -102,7 +107,7 @@ describe('the token menu', () => {
   it('offers range from the selected token, and the sheet for a character', () => {
     const inp = input({ target: { kind: 'token', id: 'Ganger' }, selectedTokenId: 'Whisper' });
     const items = contextMenuItems(inp);
-    expect(ids(items)).toEqual(['range', 'center', 'hidden', 'remove']);
+    expect(ids(items)).toEqual(['range', 'center', 'pose-crouch', 'pose-prone', 'look', 'hidden', 'remove']);
     items[0]!.run();
     expect(inp.actions.rangeBetween).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'Whisper' }),
@@ -113,7 +118,8 @@ describe('the token menu', () => {
 
   it('shows a player their own sheet and range from their runner, never hide or remove', () => {
     const own = contextMenuItems(input({ role: 'player', myCharacterId: 'char-Whisper', target: { kind: 'token', id: 'Whisper' } }));
-    expect(ids(own)).toEqual(['center', 'sheet']);
+    // Their own runner's pose is theirs to set; nobody else's is.
+    expect(ids(own)).toEqual(['center', 'sheet', 'pose-crouch', 'pose-prone', 'look']);
     expect(own.find((i) => i.id === 'sheet')!.label).toBe('Open my sheet');
     const other = contextMenuItems(input({ role: 'player', myCharacterId: 'char-Whisper', target: { kind: 'token', id: 'Ganger' } }));
     expect(ids(other)).toEqual(['range', 'center']);
