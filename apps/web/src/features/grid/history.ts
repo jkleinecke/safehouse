@@ -18,7 +18,8 @@
 import { create } from 'zustand';
 import type { Scene } from '@safehouse/contracts';
 import { levelTiles } from '@safehouse/rules';
-import { apiPatch, apiPost, queryClient } from '../../api/client.js';
+import type { ArcWall } from '@safehouse/contracts';
+import { apiPatch, apiPost, apiPut, queryClient } from '../../api/client.js';
 
 export interface HistoryEntry {
   sceneId: string;
@@ -265,6 +266,33 @@ export async function sendPaint(sceneId: string, body: PaintBody): Promise<void>
 /** Draw the scene, or one floor of it, in another set — a render decision. */
 export async function sendTileset(sceneId: string, tilesetId: string, level?: number): Promise<void> {
   await apiPost(`/api/scenes/${sceneId}/tileset`, level === undefined ? { tilesetId } : { tilesetId, level });
+}
+
+/** A floor's arc walls, whole list at once, straight to the server. */
+export async function sendArcs(sceneId: string, level: number, tilesetId: string, arcs: readonly ArcWall[]): Promise<void> {
+  await apiPut(`/api/scenes/${sceneId}/arcs`, { level, tilesetId, arcs });
+}
+
+/**
+ * Change a floor's arc walls as one step on the history: the list before
+ * and after, each the other's undo.
+ */
+export async function editArcs(
+  sceneId: string,
+  level: number,
+  tilesetId: string,
+  before: readonly ArcWall[],
+  after: readonly ArcWall[],
+  label: string,
+): Promise<void> {
+  await sendArcs(sceneId, level, tilesetId, after);
+  invalidate(sceneId);
+  useHistory.getState().push({
+    sceneId,
+    label,
+    undo: () => sendArcs(sceneId, level, tilesetId, before),
+    redo: () => sendArcs(sceneId, level, tilesetId, after),
+  });
 }
 
 /** Send one geometry, straight to the server. */

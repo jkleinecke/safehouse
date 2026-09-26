@@ -16,7 +16,6 @@ export type GridTool =
   | 'pointer' // pointer trail broadcast
   | 'fogdef' // GM: click vertices to define a named fog region
   | 'focus' // GM: next click broadcasts "focus here"
-  | 'wall' // GM: drag to draw a wall segment
   | 'door' // GM: drag to draw a door segment
   | 'zone' // GM: click vertices to draw a named zone
   | 'pin' // GM: click to drop a map pin
@@ -25,17 +24,20 @@ export type GridTool =
   | 'tile' // GM: paint tiles from a tileset (FR9.2 "assemble")
   | 'tile-area' // GM: drag a rectangle, fill it with the chosen ground
   | 'tile-room' // GM: drag a rectangle, floor inside and walls around it
+  | 'arc' // GM: drag a wall's two ends, then pull it into a curve (any angle, straight or curved)
   | 'tile-erase'; // GM: clear painted cells
 
 /** GM drawing tools that author scene geometry rather than play with it. */
-export const GEOMETRY_TOOLS: readonly GridTool[] = ['wall', 'door', 'zone', 'pin', 'camera', 'note'];
+export const GEOMETRY_TOOLS: readonly GridTool[] = ['arc', 'door', 'zone', 'pin', 'camera', 'note'];
 
 /**
  * The tools that lay tiles down. Kept as one list because the palette's
  * "which tile" choice must survive switching between them: picking a floor and
  * then picking the room tool is one intention, not two.
  */
-export const TILE_TOOLS: readonly GridTool[] = ['tile', 'tile-area', 'tile-room'];
+// The arc wall is one of them: picking which wall it is built of must not
+// swap it for the brush.
+export const TILE_TOOLS: readonly GridTool[] = ['tile', 'tile-area', 'tile-room', 'arc'];
 
 /**
  * How a rectangle drag lays tiles. `area` fills the ground; `room` fills the
@@ -437,6 +439,8 @@ export interface StageCallbacks {
 
   /** wall/door drag finished — endpoints in grid units, already snapped. */
   onSegmentDraw?(kind: 'wall' | 'door', a: Point, b: Point): void;
+  /** An arc wall placed: its ends in grid units, and its bulge (rules: arcs.ts). */
+  onArcDraw?(a: Point, b: Point, bulge: number): void;
   /** pin tool click — drop a pin at grid coords (FR9.3). */
   onPinPlace?(x: number, y: number): void;
   /** One cell of a tile paint stroke (FR9.2); `erase` clears instead. */

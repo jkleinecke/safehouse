@@ -216,6 +216,29 @@ export const TileDoorStateSchema = z.object({
 });
 export type TileDoorState = z.infer<typeof TileDoorStateSchema>;
 
+/**
+ * A wall that is not made of squares: a straight run at any angle, or a
+ * curve, from `a` to `b` in grid units (squares from the top-left corner).
+ * `bulge` is the curve's sagitta — how far the middle of the wall stands off
+ * the straight line from `a` to `b`, in squares, to the LEFT of a→b as the
+ * grid is drawn (y down); negative bulges right, 0 is straight.
+ *
+ * Painted walls are cells and can only run along the grid or at 45°; the
+ * ballroom's bowed south wall and a tower's octagon are not either. An arc is
+ * drawn as a wall in the floor's own tileset (`tile`, a wall slot or id) and
+ * stops sight and gives cover in every square it passes through, exactly as
+ * a painted wall in that square would. A door or window painted in a square
+ * the arc crosses opens it there.
+ */
+export const ArcWallSchema = z.object({
+  id: z.string().min(1).max(64),
+  a: PointSchema,
+  b: PointSchema,
+  bulge: z.number().min(-500).max(500).default(0),
+  tile: z.string().min(1).max(64),
+});
+export type ArcWall = z.infer<typeof ArcWallSchema>;
+
 export const TileLayerSchema = z.object({
   /** Catalogue id the cell ids belong to (e.g. `docklands`). */
   tilesetId: z.string().min(1),
@@ -235,6 +258,8 @@ export const TileLayerSchema = z.object({
   object: CellMap,
   /** Open/locked state of painted doors, keyed by cell. Absent means all shut and unlocked. */
   doors: z.record(z.string(), TileDoorStateSchema).optional(),
+  /** Walls at any angle and curved walls (`ArcWallSchema`). */
+  arcs: z.array(ArcWallSchema).max(500).optional(),
 });
 export type TileLayer = z.infer<typeof TileLayerSchema>;
 

@@ -13,8 +13,8 @@ import {
 } from './modes.js';
 
 const ALL_TOOLS: GridTool[] = [
-  'select', 'ruler', 'aoe', 'pointer', 'fogdef', 'focus', 'wall', 'door', 'zone', 'pin', 'camera', 'note',
-  'tile', 'tile-area', 'tile-room', 'tile-erase',
+  'select', 'ruler', 'aoe', 'pointer', 'fogdef', 'focus', 'door', 'zone', 'pin', 'camera', 'note',
+  'tile', 'tile-area', 'tile-room', 'tile-erase', 'arc',
 ];
 
 describe('the three modes', () => {
@@ -38,7 +38,7 @@ describe('the three modes', () => {
   });
 
   it('know which mode a tool or a tab lives in, and keep the current one when both would do', () => {
-    expect(modeOfTool('wall')).toBe('build');
+    expect(modeOfTool('arc')).toBe('build');
     expect(modeOfTool('camera')).toBe('prep');
     expect(modeOfTool('ruler')).toBe('play');
     expect(modeOfTool('select')).toBeNull();
@@ -55,14 +55,14 @@ describe('single-key tools', () => {
   it('use each letter once and name it in the tooltip', () => {
     const keys = SHORTCUTS.map((s) => s.key);
     expect(new Set(keys).size).toBe(keys.length);
-    expect(shortcutFor('wall')).toBe('W');
+    expect(shortcutFor('arc')).toBe('W');
     expect(shortcutFor('tile-room')).toBe('R');
     expect(shortcutFor('select')).toBe('V');
   });
 
   it('turn a key into a tool, a floor, or nothing — and never for a player’s GM tool', () => {
-    expect(shortcutAction('w', true)).toEqual({ kind: 'tool', tool: 'wall' });
-    expect(shortcutAction('W', true)).toEqual({ kind: 'tool', tool: 'wall' });
+    expect(shortcutAction('w', true)).toEqual({ kind: 'tool', tool: 'arc' });
+    expect(shortcutAction('W', true)).toEqual({ kind: 'tool', tool: 'arc' });
     expect(shortcutAction('w', false)).toBeNull();
     expect(shortcutAction('m', false)).toEqual({ kind: 'tool', tool: 'ruler' });
     expect(shortcutAction('Escape', false)).toEqual({ kind: 'escape' });

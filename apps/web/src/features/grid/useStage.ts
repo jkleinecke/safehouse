@@ -75,6 +75,7 @@ export function useStage(params: UseStageParams): UseStageResult {
       onFogVertex: (x, y) => cbRef.current.onFogVertex(x, y),
       onFocus: (x, y) => cbRef.current.onFocus(x, y),
       onSegmentDraw: (kind, a, b) => cbRef.current.onSegmentDraw?.(kind, a, b),
+      onArcDraw: (a, b, bulge) => cbRef.current.onArcDraw?.(a, b, bulge),
       onPinPlace: (x, y) => cbRef.current.onPinPlace?.(x, y),
       onPinSelect: (id) => cbRef.current.onPinSelect?.(id),
       onCameraPlace: (x, y) => cbRef.current.onCameraPlace?.(x, y),

@@ -18,6 +18,7 @@
 import { tilesetById } from './catalogue.js';
 import { resolveTile, toSlot } from './slots.js';
 import { layerOf } from './types.js';
+import type { ArcLike } from './arcs.js';
 
 /** The layered shape, structural so contracts stays the owner of the schema. */
 /** Open/locked state of a painted door, keyed by its cell (FR9.24). */
@@ -33,6 +34,8 @@ export interface LayeredTiles {
   structure?: Record<string, string> | undefined;
   object?: Record<string, string> | undefined;
   doors?: Record<string, TileDoorStateLike> | undefined;
+  /** Walls at any angle and curved walls (arcs.ts). */
+  arcs?: readonly ArcLike[] | undefined;
 }
 
 /** A painted door's state once resolved: both switches answered. */
@@ -47,6 +50,7 @@ export interface ResolvedTileLayers {
   structure: Record<string, string>;
   object: Record<string, string>;
   doors?: Record<string, TileDoorState> | undefined;
+  arcs?: ArcLike[] | undefined;
 }
 
 /**
@@ -70,6 +74,8 @@ export function migrateTileLayer(tiles: LayeredTiles): ResolvedTileLayers {
     // Door state rides along, keyed by cell rather than by layer; a switch
     // left unsaid is off.
     ...(tiles.doors !== undefined ? { doors: resolveDoors(tiles.doors) } : {}),
+    // Arcs are the floor's too, and travel with it untouched.
+    ...(tiles.arcs !== undefined ? { arcs: [...tiles.arcs] } : {}),
   };
 
   const set = tilesetById(tiles.tilesetId);

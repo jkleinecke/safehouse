@@ -18,10 +18,10 @@ function render(isGm: boolean, mode: GridMode, tool: GridTool = 'select'): strin
 
 describe('<Toolbar>', () => {
   it('shows the GM only that mode’s tools, and never the mode switch', () => {
-    const build = render(true, 'build', 'wall');
+    const build = render(true, 'build', 'arc');
     // Build · Prep · Play live in <ModeBar>, above the map.
     expect(build).not.toContain('data-testid="mode-switch"');
-    expect(build).toContain('data-testid="tool-wall"');
+    expect(build).toContain('data-testid="tool-arc"');
     expect(build).toContain('data-testid="tool-tile-room"');
     expect(build).not.toContain('data-testid="tool-ruler"');
     expect(build).not.toContain('data-testid="tool-camera"');
@@ -29,7 +29,7 @@ describe('<Toolbar>', () => {
     const prep = render(true, 'prep');
     expect(prep).toContain('data-testid="tool-camera"');
     expect(prep).toContain('data-testid="tool-fogdef"');
-    expect(prep).not.toContain('data-testid="tool-wall"');
+    expect(prep).not.toContain('data-testid="tool-arc"');
 
     // Select and Erase lead the Build row, apart from the tools.
     expect(build).toContain('aria-label="Select and erase"');
@@ -45,14 +45,14 @@ describe('<Toolbar>', () => {
   it('shows a player the four play tools, whatever mode the store holds', () => {
     const html = render(false, 'build');
     for (const t of ['select', 'ruler', 'aoe', 'pointer']) expect(html).toContain(`data-testid="tool-${t}"`);
-    expect(html).not.toContain('data-testid="tool-wall"');
+    expect(html).not.toContain('data-testid="tool-arc"');
     expect(html).not.toContain('data-testid="tool-focus"');
   });
 
   it('gives every tooltip the name and the key, and nothing longer', () => {
-    expect(toolTitle('wall')).toBe('Wall line (W)');
+    expect(toolTitle('arc')).toBe('Arc wall (W)');
     expect(toolTitle('tile-room')).toBe('Room (R)');
-    const html = render(true, 'build', 'wall');
+    const html = render(true, 'build', 'arc');
     // Nothing spelled out under the buttons (§3.7) — the tooltip carries it.
     expect(html).not.toContain('data-testid="tool-hint"');
     // No spec ids anywhere a GM reads.
@@ -62,17 +62,17 @@ describe('<Toolbar>', () => {
 
 describe('<Toolbar> buttons', () => {
   it('draws icons only, with the name in the tooltip and for a screen reader', () => {
-    const html = render(true, 'build', 'wall');
+    const html = render(true, 'build', 'arc');
     // The label is not body text on the button...
-    expect(html).not.toMatch(/>Wall line</);
+    expect(html).not.toMatch(/>Arc wall</);
     // ...it is the tooltip and the accessible name.
-    const title = 'Wall line (W)';
+    const title = 'Arc wall (W)';
     expect(html).toContain(`title="${title}"`);
     expect(html).toContain(`aria-label="${title}"`);
   });
 
   it('carries no undo or redo — those are in the mode row', () => {
-    const html = render(true, 'build', 'wall');
+    const html = render(true, 'build', 'arc');
     expect(html).not.toContain('data-testid="undo"');
     expect(html).not.toContain('data-testid="redo"');
   });

@@ -7,11 +7,12 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import type { Scene, Token } from '@safehouse/contracts';
+import type { ArcWall, Scene, Token } from '@safehouse/contracts';
 import {
   GROUND_LEVEL_NAME,
   VISION_MODE_LABELS,
   deriveCharacter,
+  distanceToArc,
   levelTiles,
   objectCoverage,
   propCoverage,
@@ -80,7 +81,7 @@ import { roomPlan, roomTileIds } from './roomFill.js';
 import { useCameraCones } from './useCameraCones.js';
 import { useShroud } from './useShroud.js';
 import { stairAdvice, useStairOffer } from './useStairs.js';
-import { historyFor, useHistory } from './history.js';
+import { editArcs, historyFor, useHistory } from './history.js';
 import { useGridStore } from './store.js';
 import {
   boxSelect,
@@ -220,6 +221,8 @@ export default function GridPage() {
   // steps over them, so a dragged desk brush lays desks side by side rather
   // than a desk on every square it crosses.
   const strokeCovered = useRef(new Set<string>());
+  // Arc walls the eraser has already taken in the stroke under way.
+  const arcsErased = useRef(new Set<string>());
 
 
   // -- commands -------------------------------------------------------------
@@ -471,6 +474,20 @@ export default function GridPage() {
         if (geometry === scene.geometry) return; // degenerate drag, nothing drawn
         patchGeometry.mutate({ sceneId: scene.id, geometry });
       },
+      // An arc wall — straight at any angle, or curved — built of the wall
+      // in hand, or the set's own wall when none is.
+      onArcDraw: (a, b, bulge) => {
+        if (!scene || !isGm) return;
+        const st = useGridStore.getState();
+        const floor = levelTiles(scene, st.activeLevel);
+        const held = st.tileCategory === 'building' && st.tileId ? tileById(st.tilesetId, st.tileId) : null;
+        const tile = held && held.kind === 'wall' ? held.id : 'building/wall';
+        const before = (floor?.arcs ?? []) as ArcWall[];
+        const after = [...before, { id: `arc_${Date.now().toString(36)}`, a, b, bulge, tile }];
+        void editArcs(scene.id, st.activeLevel, floor?.tilesetId ?? st.tilesetId, before, after, bulge === 0 ? 'draw an angled wall' : 'draw a curved wall').catch(
+          () => setTileNotice('that wall did not save — draw it again'),
+        );
+      },
       onPinPlace: (x, y) => {
         if (!scene || !isGm) return;
         const geometry = addPin(scene.geometry, { x, y });
@@ -527,6 +544,18 @@ export default function GridPage() {
           if ((covering !== undefined && covering !== key) || strokeCovered.current.has(key)) return;
           for (const k of propCoverage(prop, col, row, unitM)) strokeCovered.current.add(k);
         }
+        // The eraser on an arc wall takes the arc — once per stroke.
+        if (erase && floor?.arcs && floor.arcs.length > 0) {
+          const centre = { x: col + 0.5, y: row + 0.5 };
+          const hit = floor.arcs.filter((a) => !arcsErased.current.has(a.id) && distanceToArc(a, centre) < 0.5);
+          if (hit.length > 0) {
+            for (const a of hit) arcsErased.current.add(a.id);
+            const before = floor.arcs as ArcWall[];
+            const after = before.filter((a) => !arcsErased.current.has(a.id));
+            void editArcs(scene.id, st.activeLevel, floor.tilesetId, before, after, 'erase a wall');
+            return;
+          }
+        }
         // The eraser on any square a piece covers takes the piece.
         if (erase && covering !== undefined && covering !== key) {
           strokeRef.current?.add(scene.id, st.tilesetId, covering, null, st.activeLevel, 'object');
@@ -547,6 +576,7 @@ export default function GridPage() {
       },
       onTileStrokeEnd: () => {
         strokeCovered.current.clear();
+        arcsErased.current.clear();
         strokeRef.current?.flush();
       },
       // -- room / area rectangles (FR9.2) -----------------------------------

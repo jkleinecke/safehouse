@@ -32,6 +32,7 @@ import {
   tileDrawInput,
   tileLayerKey,
   wallBoxes,
+  wallDiagonals,
 } from './tileLayer.js';
 
 const M = metricsFor({ unitM: 1, cols: 10, rows: 8, offset: { x: 0, y: 0 }, projection: 'topdown' as const });
@@ -541,6 +542,12 @@ describe('thin walls orient themselves from their neighbours', () => {
   it('makes a T and a crossing from the same rule', () => {
     expect(wallBoxes({ n: true, e: true, s: true, w: false })).toHaveLength(4);
     expect(wallBoxes({ n: true, e: true, s: true, w: true })).toHaveLength(5);
+    // Walls touching only at a corner join along the diagonal: one band from
+    // the middle to that corner, and none where a neighbour beside already
+    // turns the wall there.
+    expect(wallDiagonals({ ...none, ne: true })).toHaveLength(1);
+    expect(wallDiagonals({ ...none, ne: true, n: true })).toHaveLength(0);
+    expect(wallDiagonals({ ...none, ne: true, sw: true })).toHaveLength(2);
     // Walls side by side close up: the corner facing a square of wall fills,
     // so two rows read as one thick wall, and a cell walled all round is solid.
     expect(wallBoxes({ n: true, e: true, s: false, w: false, ne: true })).toContainEqual([expect.any(Number), 0, 1, expect.any(Number)]);

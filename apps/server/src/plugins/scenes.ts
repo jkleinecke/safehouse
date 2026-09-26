@@ -37,6 +37,7 @@ import {
   SceneGeometrySchema,
   SceneLayerSchema,
   SceneVisionSchema,
+  ArcWallSchema,
   TileLayerSchema,
   TokenAuraSchema,
   VisibilitySchema,
@@ -141,6 +142,14 @@ const DoorOpBody = z.object({
   cell: CellKeySchema.optional(),
   level: z.number().int().min(0).max(MAX_LEVELS - 1).default(0),
   op: z.enum(['open', 'close', 'lock', 'unlock']),
+});
+
+/** A floor's walls at any angle and curved walls, whole list at once (FR9.2). */
+const ArcsBody = z.object({
+  level: z.number().int().min(0).max(MAX_LEVELS - 1).default(0),
+  /** The set the floor is drawn in, for a floor that has no tiles yet. */
+  tilesetId: z.string().min(1).max(64).optional(),
+  arcs: z.array(ArcWallSchema).max(500),
 });
 
 const TilesetSwitchBody = z.object({
@@ -732,6 +741,53 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
           Object.keys(t.object ?? {}).length
         : 0,
     };
+  });
+
+  /**
+   * A floor's walls at any angle and curved walls, replaced whole (FR9.2).
+   *
+   * Whole-list, like the floors: an arc is added, bent, moved or deleted by
+   * sending the floor's list as it should now be, which is also exactly what
+   * undo sends back. Every arc's tile must be a wall in the floor's set.
+   */
+  app.put('/api/scenes/:id/arcs', async (req) => {
+    const { id } = req.params as { id: string };
+    const { scene } = await openScene(req, id, { gmOnly: true });
+    const body = parseBody(ArcsBody, req.body);
+    const updated = await app.hub.atomic(scene.campaignId, async (tx) => {
+      const txSvc = svc.withDb(tx.db);
+      const fresh = await txSvc.sceneRow(id);
+      const scene0 = serializeScene(fresh);
+      const floors = sceneLevels(scene0);
+      if (body.level >= floors.length) {
+        throw httpError(400, 'unknown_level', `this scene has ${floors.length} level(s); no level ${body.level}`);
+      }
+      const existing = floors[body.level]?.tiles;
+      const tilesetId = existing?.tilesetId ?? body.tilesetId;
+      if (tilesetId === undefined || tilesetById(tilesetId) === null) {
+        throw httpError(400, 'unknown_tileset', 'say which tileset this floor is drawn in');
+      }
+      for (const arc of body.arcs) {
+        const tile = tileById(tilesetId, arc.tile);
+        if (tile === null || layerOf(tile) !== 'structure') {
+          throw httpError(400, 'unknown_tile', `an arc is built of a wall in the floor's set, not "${arc.tile}"`);
+        }
+      }
+      const base = existing
+        ? migrateTileLayer(existing)
+        : { tilesetId, ground: {}, structure: {}, object: {} };
+      const tiles = { ...base, cells: {}, arcs: body.arcs };
+      const patch =
+        body.level === 0
+          ? { tiles }
+          : {
+              levels: (scene0.levels ?? []).map((l, i) => (i === body.level - 1 ? { ...l, tiles } : l)),
+            };
+      const written = await txSvc.updateScene(fresh, patch);
+      await tx.emit({ type: 'scene.updated', payload: { sceneId: id, changed: written.changed } });
+      return written.scene;
+    });
+    return { scene: updated };
   });
 
   /**

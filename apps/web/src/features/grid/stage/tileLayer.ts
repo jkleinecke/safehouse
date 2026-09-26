@@ -25,7 +25,7 @@ import { tileDefKey, type TileDrawDef } from '../types.js';
 import type { TileCut, TilePattern } from '@safehouse/rules';
 import { C, FACE_FOOT, FACE_SHADE, parseColor, shade } from './colors.js';
 import { drawCut, type CutRun } from './cuts.js';
-import { propCells } from '@safehouse/rules';
+import { arcPoints, propCells, type ArcLike } from '@safehouse/rules';
 import { designFootprint, drawProp, propFootprint, propPlacement } from './props.js';
 import {
   drawShoreTop,
@@ -59,6 +59,8 @@ export interface TileDrawInput {
   object?: Record<string, string> | undefined;
   /** Painted doors' state by cell (FR9.24): an open one draws open. */
   doors?: Record<string, { open: boolean; locked: boolean }> | undefined;
+  /** Walls at any angle and curved walls (rules: arcs.ts). */
+  arcs?: readonly ArcLike[] | undefined;
   defs: Record<string, TileDrawDef>;
 }
 
@@ -86,6 +88,7 @@ export function tileDrawInput(
     structure: tiles.structure,
     object: tiles.object,
     doors: tiles.doors,
+    arcs: tiles.arcs,
     defs,
   };
 }
@@ -344,6 +347,200 @@ function drawBox(
 }
 
 /**
+ * An extruded slab of any convex footprint, given in GRID coordinates — the
+ * piece of a wall that does not run along the grid: a diagonal join, a
+ * stretch of a curved wall.
+ *
+ * Only the faces turned toward the viewer are drawn (their outward normal
+ * points down or right on the grid), shaded between the two lit faces a box
+ * has by which way they face, back to front.
+ */
+function drawSlabPoly(
+  g: Graphics,
+  m: SceneMetrics,
+  ground: ReadonlyArray<{ x: number; y: number }>,
+  rise: number,
+  base: number,
+  tones?: Tones,
+): Point[] {
+  const world = ground.map((p) => worldFromGrid(m, p));
+  const top = world.map((p) => ({ x: p.x, y: p.y - rise }));
+  if (rise > 0) {
+    const cx = ground.reduce((n, p) => n + p.x, 0) / ground.length;
+    const cy = ground.reduce((n, p) => n + p.y, 0) / ground.length;
+    const faces: Array<{ depth: number; i: number; lit: number }> = [];
+    for (let i = 0; i < ground.length; i += 1) {
+      const p = ground[i]!;
+      const q = ground[(i + 1) % ground.length]!;
+      let nx = q.y - p.y;
+      let ny = p.x - q.x;
+      // Outward: away from the middle of the slab.
+      if (nx * ((p.x + q.x) / 2 - cx) + ny * ((p.y + q.y) / 2 - cy) < 0) {
+        nx = -nx;
+        ny = -ny;
+      }
+      const len = Math.hypot(nx, ny) || 1;
+      const ex = Math.max(0, nx / len);
+      const ey = Math.max(0, ny / len);
+      if (ex + ey < 1e-3) continue;
+      faces.push({ depth: p.x + p.y + q.x + q.y, i, lit: (ey * FACE_SHADE.left + ex * FACE_SHADE.right) / (ex + ey) });
+    }
+    faces.sort((a, b) => a.depth - b.depth);
+    for (const f of faces) {
+      drawStandingFace(g, world[f.i]!, world[(f.i + 1) % world.length]!, rise, base, f.lit);
+    }
+  }
+  poly(g, top).fill({ color: rise > 0 ? shade(base, FACE_SHADE.top) : base });
+  if (tones) poly(g, top).stroke({ width: 1, color: tones.ink, alpha: 0.5, pixelLine: true });
+  if (rise > 0) drawCrown(g, top, base);
+  return top;
+}
+
+/** A band of wall thickness along a line, as four grid points, reaching `over` past each end. */
+function band(a: { x: number; y: number }, b: { x: number; y: number }, over = 0): Array<{ x: number; y: number }> {
+  const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+  const ux = (b.x - a.x) / len;
+  const uy = (b.y - a.y) / len;
+  const h = WALL_THICKNESS / 2;
+  const a2 = { x: a.x - ux * over, y: a.y - uy * over };
+  const b2 = { x: b.x + ux * over, y: b.y + uy * over };
+  return [
+    { x: a2.x - uy * h, y: a2.y + ux * h },
+    { x: b2.x - uy * h, y: b2.y + ux * h },
+    { x: b2.x + uy * h, y: b2.y - ux * h },
+    { x: a2.x + uy * h, y: a2.y - ux * h },
+  ];
+}
+
+/** The rect around a piece of an arc, for its shadow. */
+function segRect(seg: { a: { x: number; y: number }; b: { x: number; y: number } }): FaceRect {
+  const h = WALL_THICKNESS / 2;
+  return [
+    Math.min(seg.a.x, seg.b.x) - h,
+    Math.min(seg.a.y, seg.b.y) - h,
+    Math.max(seg.a.x, seg.b.x) + h,
+    Math.max(seg.a.y, seg.b.y) + h,
+  ];
+}
+
+/** A stretch of a wall at any angle or a curved wall, in its tile's material. */
+function drawArcPiece(
+  g: Graphics,
+  def: TileDrawDef,
+  m: SceneMetrics,
+  seg: { a: { x: number; y: number }; b: { x: number; y: number } },
+  opening?: { open: boolean },
+): void {
+  const base = parseColor(def.colors[0], 0x3b3f45);
+  const accent = parseColor(def.colors[1], 0x5a6068);
+  const tones = tonesOf(base, accent);
+  if (opening !== undefined) {
+    // A door along the curve: open, it is a gap with its threshold on the
+    // floor; shut, a leaf the door's colours with its seam down the middle.
+    // A window is glass to sill height, see-through.
+    if (opening.open) {
+      const t = band(seg.a, seg.b, 0.04).map((p) => worldFromGrid(m, p));
+      poly(g, t).fill({ color: tones.dark, alpha: 0.5 });
+      return;
+    }
+    const glass = def.blocksSight === false;
+    const rise = heightRise(m, glass ? Math.min(def.height ?? 1, 1) : (def.height ?? 1));
+    const top = drawSlabPoly(g, m, band(seg.a, seg.b, 0.04), rise, glass ? shade(base, 1.1) : base, tones);
+    const mid = [seg.a, seg.b].map((p) => {
+      const w = worldFromGrid(m, p);
+      return { x: w.x, y: w.y - rise };
+    });
+    g.moveTo(mid[0]!.x, mid[0]!.y).lineTo(mid[1]!.x, mid[1]!.y).stroke({
+      width: glass ? 2 : 1,
+      color: glass ? 0x9fd4e6 : tones.ink,
+      alpha: glass ? 0.7 : 0.6,
+      ...(glass ? {} : { pixelLine: true }),
+    });
+    drawGlow(g, m, def, accent, top);
+    return;
+  }
+  // A hair past each end, so the pieces of a curve close up without a seam.
+  const top = drawSlabPoly(g, m, band(seg.a, seg.b, 0.04), heightRise(m, def.height ?? 1), base, tones);
+  drawGlow(g, m, def, accent, top);
+}
+
+/**
+ * A square of ground split along a wall that crosses it at an angle: each
+ * half drawn as the ground beside it on that side, its texture clipped to the
+ * half, so the floor runs up to the wall on both sides as if the square were
+ * theirs. A side with nothing beside it stays open.
+ */
+function drawSplitGround(
+  g: Graphics,
+  m: SceneMetrics,
+  cell: TileCell,
+  split: GroundSplit,
+  defs: Record<string, TileDrawDef> | undefined,
+  tilesetId: string | undefined,
+): void {
+  const { col, row } = cell;
+  const len = Math.hypot(split.d.x, split.d.y) || 1;
+  const square: Array<[number, number]> = [
+    [0, 0],
+    [1, 0],
+    [1, 1],
+    [0, 1],
+  ];
+  for (const side of split.sides) {
+    if (side.id === null) continue;
+    const def = defs && tilesetId !== undefined ? defs[tileDefKey(tilesetId, side.id)] : cell.def;
+    if (def === undefined) continue;
+    const nx = (-split.d.y / len) * side.sign;
+    const ny = (split.d.x / len) * side.sign;
+    CLIP = (u, v) => (u - split.p.x) * nx + (v - split.p.y) * ny;
+    try {
+      const half = clipPoly(square);
+      if (half.length < 3) continue;
+      const base = grained(parseColor(def.colors[0], 0x3b3f45), col, row);
+      const accent = parseColor(def.colors[1], 0x5a6068);
+      poly(
+        g,
+        half.map(([u, v]) => worldFromGrid(m, { x: col + u, y: row + v })),
+      ).fill({ color: base });
+      drawPattern(g, m, def, tonesOf(base, accent), [col, row, col + 1, row + 1], 0, cellSeed(col, row));
+    } finally {
+      CLIP = null;
+    }
+  }
+}
+
+/**
+ * The slabs that join a wall cell to walls touching it only at a CORNER — a
+ * diagonal run, painted square by square, draws as one straight 45° wall.
+ * In cell-local coordinates (0..1). A corner already joined through a
+ * neighbour beside it needs nothing: the wall turns there on its own.
+ */
+export function wallDiagonals(joins: WallJoins): Array<Array<{ x: number; y: number }>> {
+  const out: Array<Array<{ x: number; y: number }>> = [];
+  const centre = { x: 0.5, y: 0.5 };
+  const to = (dx: number, dy: number) => band(centre, { x: 0.5 + dx * 0.5, y: 0.5 + dy * 0.5 });
+  if (joins.ne && !joins.n && !joins.e) out.push(to(1, -1));
+  if (joins.nw && !joins.n && !joins.w) out.push(to(-1, -1));
+  if (joins.se && !joins.s && !joins.e) out.push(to(1, 1));
+  if (joins.sw && !joins.s && !joins.w) out.push(to(-1, 1));
+  return out;
+}
+
+/** A cell joined only at its corners: a diagonal run passing through, with no square post. */
+function diagonalOnly(joins: WallJoins): boolean {
+  return !joins.n && !joins.e && !joins.s && !joins.w && Boolean(joins.ne || joins.nw || joins.se || joins.sw);
+}
+
+/** The eight-sided post at the middle of a diagonal cell, where its bands meet. */
+function diagonalPost(): Array<{ x: number; y: number }> {
+  const r = WALL_THICKNESS / 2 / Math.cos(Math.PI / 8);
+  return Array.from({ length: 8 }, (_, i) => {
+    const a = Math.PI / 8 + (i / 8) * Math.PI * 2;
+    return { x: 0.5 + Math.cos(a) * r, y: 0.5 + Math.sin(a) * r };
+  });
+}
+
+/**
  * An extruded PRISM — a cylinder, near enough.
  *
  * A four-sided box makes a tree crown read as a green cube, which is exactly
@@ -443,9 +640,60 @@ function tonesOf(base: number, accent: number): Tones {
   };
 }
 
+/**
+ * A half-plane in cell-local (u, v) that every pattern primitive is clipped
+ * to while it is set — how half a square takes the carpet and the other half
+ * the paving where a wall runs through it at an angle (`groundSplits`).
+ * Positive or zero is kept.
+ */
+let CLIP: ((u: number, v: number) => number) | null = null;
+
+/** Sutherland–Hodgman against `CLIP`: the part of a polygon on the kept side. */
+function clipPoly(pts: ReadonlyArray<readonly [number, number]>): Array<[number, number]> {
+  if (CLIP === null) return pts.map(([u, v]) => [u, v]);
+  const out: Array<[number, number]> = [];
+  for (let i = 0; i < pts.length; i += 1) {
+    const a = pts[i]!;
+    const b = pts[(i + 1) % pts.length]!;
+    const da = CLIP(a[0], a[1]);
+    const db = CLIP(b[0], b[1]);
+    if (da >= 0) out.push([a[0], a[1]]);
+    if ((da >= 0) !== (db >= 0)) {
+      const t = da / (da - db);
+      out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+    }
+  }
+  return out;
+}
+
 function uvLine(g: Graphics, P: FaceMap, pts: ReadonlyArray<readonly [number, number]>): Graphics {
   const first = pts[0];
   if (first === undefined) return g;
+  if (CLIP !== null) {
+    // Only the pieces on the kept side, each its own run.
+    const clip = CLIP;
+    for (let i = 0; i + 1 < pts.length; i += 1) {
+      let [au, av] = pts[i]!;
+      let [bu, bv] = pts[i + 1]!;
+      const da = clip(au, av);
+      const db = clip(bu, bv);
+      if (da < 0 && db < 0) continue;
+      if (da < 0) {
+        const t = da / (da - db);
+        au += (bu - au) * t;
+        av += (bv - av) * t;
+      } else if (db < 0) {
+        const t = da / (da - db);
+        bu = au + (bu - au) * t;
+        bv = av + (bv - av) * t;
+      }
+      const a = P(au, av);
+      const b = P(bu, bv);
+      g.moveTo(a.x, a.y);
+      g.lineTo(b.x, b.y);
+    }
+    return g;
+  }
   const a = P(first[0], first[1]);
   g.moveTo(a.x, a.y);
   for (let i = 1; i < pts.length; i += 1) {
@@ -456,9 +704,13 @@ function uvLine(g: Graphics, P: FaceMap, pts: ReadonlyArray<readonly [number, nu
 }
 
 function uvPoly(g: Graphics, P: FaceMap, pts: ReadonlyArray<readonly [number, number]>): Graphics {
+  const kept = clipPoly(pts);
+  // Nothing on the kept side: an empty path, so the fill or stroke that
+  // follows has nothing to paint.
+  if (kept.length < 3) return g.beginPath();
   return poly(
     g,
-    pts.map(([u, v]) => P(u, v)),
+    kept.map(([u, v]) => P(u, v)),
   );
 }
 
@@ -490,6 +742,7 @@ function uvDot(
   r: number,
   style: { color: number; alpha: number },
 ): void {
+  if (CLIP !== null && CLIP(u, v) < 0) return;
   const c = P(u, v);
   const { rx, ry } = groundRadius(m, r);
   g.ellipse(c.x, c.y, Math.max(0.6, rx), Math.max(0.5, ry)).fill(style);
@@ -1314,7 +1567,15 @@ function drawWallTile(
   const opening = cutOf(def) !== null;
 
   let lastTop: Point[] = [];
-  for (const r of wallRects(col, row, joins)) {
+  const diagonal = diagonalOnly(joins);
+  // A diagonal door or window: its opening design is drawn along the grid,
+  // so across a 45° run it is the wall in the opening's own colours, and an
+  // open one is a gap.
+  if (diagonal && opening && open[0] === true) return;
+  const toGrid = (poly: Array<{ x: number; y: number }>) => poly.map((p) => ({ x: col + p.x, y: row + p.y }));
+  if (diagonal) lastTop = drawSlabPoly(g, m, toGrid(diagonalPost()), rise, base, tones);
+  for (const d of wallDiagonals(joins)) lastTop = drawSlabPoly(g, m, toGrid(d), rise, base, tones);
+  for (const r of diagonal ? [] : wallRects(col, row, joins)) {
     lastTop = drawBox(g, m, r, rise, base, true, material);
     // The material runs along the top of the slab too — brick courses, mesh,
     // boards. A panel's bevel and rivets would be nonsense on a strip a third
@@ -1325,7 +1586,7 @@ function drawWallTile(
     }
   }
   // The opening's design, once per run, from the run's last cell.
-  if (run !== null) {
+  if (run !== null && !diagonal) {
     const cut = cutOf(def);
     if (cut !== null) drawCut(g, m, cut, run, rise, tones, def.emissive, open);
   }
@@ -1545,6 +1806,98 @@ export interface TileCell {
    * (rules: footprint.ts). Absent is one square.
    */
   span?: readonly [number, number];
+  /**
+   * A piece of a wall at any angle or a curved wall (an arc): the stretch of
+   * its centre line, in grid units, that falls in this square. Drawn in the
+   * standing pass with everything else in the square, so it sorts with them.
+   */
+  seg?: { a: { x: number; y: number }; b: { x: number; y: number } };
+  /**
+   * The door or window an arc passes through in this square: the arc draws
+   * the opening along its curve, and the straight door tile stands down.
+   */
+  opening?: { open: boolean };
+  /** A ground square a wall runs through at an angle: each side takes its neighbours' ground (`groundSplits`). */
+  split?: GroundSplit;
+}
+
+/**
+ * A square a diagonal or curved wall runs through, split along the wall: the
+ * line in cell-local (u, v) — through `p` along `d` — and the ground tile on
+ * each side of it, read off the squares beside it on that side. A side with
+ * nothing painted is left open (on an upper floor, the floor below shows).
+ */
+export interface GroundSplit {
+  p: { x: number; y: number };
+  d: { x: number; y: number };
+  sides: Array<{ sign: 1 | -1; id: string | null }>;
+}
+
+/**
+ * Every square a wall crosses at an angle, and how to split its ground.
+ *
+ * Without this the square under a 45° wall or a curve was ONE tile, its own
+ * — a stripe of corridor tile under the ballroom's bowed wall, carpet on the
+ * terrace side of it. Each side of the wall should look like the floor it is
+ * part of: the ballroom's carpet on the inside, the paving on the terrace.
+ */
+export function groundSplits(input: TileDrawInput): Map<string, GroundSplit> {
+  const out = new Map<string, { p: { x: number; y: number }; d: { x: number; y: number } }>();
+  const def = (id: string | undefined) => (id === undefined ? undefined : input.defs[tileDefKey(input.tilesetId, id)]);
+  const walls = new Set<string>();
+  for (const [key, id] of Object.entries(input.structure ?? {})) if (def(id)?.footprint === 'wall') walls.add(key);
+  // Painted walls joined only at their corners: a straight diagonal through the square.
+  for (const key of walls) {
+    const at = parseKey(key);
+    if (at === null) continue;
+    const j = joinsOf(walls, at.col, at.row);
+    if (!diagonalOnly(j)) continue;
+    const a = Boolean(j.ne || j.sw);
+    const b = Boolean(j.nw || j.se);
+    if (a && !b) out.set(key, { p: { x: 1, y: 0 }, d: { x: -1, y: 1 } });
+    else if (b && !a) out.set(key, { p: { x: 0, y: 0 }, d: { x: 1, y: 1 } });
+  }
+  // Arcs: where each one enters and leaves each square it crosses.
+  for (const arc of input.arcs ?? []) {
+    const pts = arcPoints(arc, 0.05);
+    let i = 0;
+    while (i < pts.length) {
+      const c = Math.floor(pts[i]!.x);
+      const r = Math.floor(pts[i]!.y);
+      let j = i;
+      while (j + 1 < pts.length && Math.floor(pts[j + 1]!.x) === c && Math.floor(pts[j + 1]!.y) === r) j += 1;
+      const first = pts[Math.max(0, i - 1)]!;
+      const last = pts[Math.min(pts.length - 1, j + 1)]!;
+      const dx = last.x - first.x;
+      const dy = last.y - first.y;
+      const key = `${c},${r}`;
+      if (Math.hypot(dx, dy) > 0.2 && !out.has(key)) out.set(key, { p: { x: first.x - c, y: first.y - r }, d: { x: dx, y: dy } });
+      i = j + 1;
+    }
+  }
+  const ground = { ...(input.cells ?? {}), ...(input.ground ?? {}) };
+  const result = new Map<string, GroundSplit>();
+  for (const [key, line] of out) {
+    const at = parseKey(key)!;
+    const len = Math.hypot(line.d.x, line.d.y) || 1;
+    const sides = ([1, -1] as const).map((sign) => {
+      // Normal to the wall, toward this side.
+      const nx = (-line.d.y / len) * sign;
+      const ny = (line.d.x / len) * sign;
+      for (const t of [0.8, 1.6, 2.4]) {
+        const k2 = `${Math.floor(at.col + 0.5 + nx * t)},${Math.floor(at.row + 0.5 + ny * t)}`;
+        if (out.has(k2) || walls.has(k2)) continue;
+        const id = ground[k2];
+        const d2 = def(id);
+        if (id !== undefined && d2 !== undefined && !isStanding(d2)) return { sign, id };
+        // Nothing painted beside it on this side: open.
+        if (id === undefined) return { sign, id: null };
+      }
+      return { sign, id: ground[key] ?? null };
+    });
+    result.set(key, { p: line.p, d: line.d, sides });
+  }
+  return result;
 }
 
 /**
@@ -1571,6 +1924,9 @@ export interface TilePlan {
   openDoors: Set<string>;
   /** The floor's water, resolved as bodies, and the shores around them (`water.ts`). */
   water: WaterMap;
+  /** The palette and set, for ground split under an angled wall. */
+  defs: Record<string, TileDrawDef>;
+  tilesetId: string;
 }
 
 export function planTiles(m: SceneMetrics, input: TileDrawInput): TilePlan {
@@ -1605,6 +1961,34 @@ export function planTiles(m: SceneMetrics, input: TileDrawInput): TilePlan {
     if (c.def.footprint === 'wall') structure.set(`${c.col},${c.row}`, c.id);
   }
 
+  // Walls at any angle and curved walls, cut into pieces half a square long,
+  // each filed under the square its middle is in. Where a door or window is
+  // painted in that square, the opening stands there instead.
+  const arcOpenings = new Set<string>();
+  for (const arc of input.arcs ?? []) {
+    const def = input.defs[tileDefKey(input.tilesetId, arc.tile)];
+    if (def === undefined) continue;
+    const pts = arcPoints(arc, 0.5);
+    for (let i = 0; i + 1 < pts.length; i += 1) {
+      const a = pts[i]!;
+      const b = pts[i + 1]!;
+      const col = Math.floor((a.x + b.x) / 2);
+      const row = Math.floor((a.y + b.y) / 2);
+      if (col < 0 || row < 0 || col >= m.cols || row >= m.rows) continue;
+      const key = `${col},${row}`;
+      const here = structure.get(key);
+      const hereDef = here === undefined ? undefined : input.defs[tileDefKey(input.tilesetId, here)];
+      if (hereDef !== undefined && cutOf(hereDef) !== null) {
+        // A door or window where the arc runs: it follows the curve, drawn by
+        // the arc in its own colours, and the straight tile stands down.
+        cells.push({ col, row, id: here!, def: hereDef, layer: 1, seg: { a, b }, opening: { open: input.doors?.[key]?.open === true } });
+        arcOpenings.add(key);
+        continue;
+      }
+      cells.push({ col, row, id: arc.tile, def, layer: 1, seg: { a, b } });
+    }
+  }
+
   // A piece of furniture over several squares is as near as its nearest
   // corner: drawn after whatever stands behind any part of it.
   const depthOf = (c: TileCell) => cellDepth(c.col + (c.span?.[0] ?? 1) - 1, c.row + (c.span?.[1] ?? 1) - 1);
@@ -1630,16 +2014,51 @@ export function planTiles(m: SceneMetrics, input: TileDrawInput): TilePlan {
   }
 
   const occupied = new Set<string>();
-  for (const c of cells) occupied.add(`${c.col},${c.row}`);
+  // Where the map is: what was painted. An arc crossing bare ground does not
+  // make the ground there part of the map.
+  for (const c of cells) if (c.seg === undefined) occupied.add(`${c.col},${c.row}`);
+
+  // The straight door tiles an arc now draws.
+  if (arcOpenings.size > 0) {
+    for (let i = cells.length - 1; i >= 0; i -= 1) {
+      const c = cells[i]!;
+      if (c.layer === 1 && c.seg === undefined && arcOpenings.has(`${c.col},${c.row}`)) cells.splice(i, 1);
+    }
+  }
+
+  // Ground under an angled or curved wall, split along it.
+  const splits = groundSplits(input);
+  for (const [key, split] of splits) {
+    const at = parseKey(key)!;
+    if (at.col < 0 || at.row < 0 || at.col >= m.cols || at.row >= m.rows) continue;
+    const own = cells.find((c) => c.layer === 0 && c.seg === undefined && c.col === at.col && c.row === at.row);
+    if (own) {
+      own.split = split;
+      continue;
+    }
+    // No ground of its own: the split stands in for it, if either side has any.
+    const side = split.sides.find((sd) => sd.id !== null);
+    const d = side ? input.defs[tileDefKey(input.tilesetId, side.id!)] : undefined;
+    if (side && d) cells.push({ col: at.col, row: at.row, id: side.id!, def: d, layer: 0, split });
+  }
+
+  cells.sort(
+    (a, b) =>
+      depthOf(a) - depthOf(b) ||
+      a.layer - b.layer ||
+      a.col - b.col,
+  );
 
   // Flat furniture over several squares — a mattress, a pallet — joins the
   // standing pass: drawn with the floor, the next square's floor would be
   // painted over the part of it that reaches there.
-  const standing = cells.filter((c) => isStanding(c.def) || c.def.footprint === 'wall' || c.span !== undefined);
+  const standing = cells.filter(
+    (c) => isStanding(c.def) || c.def.footprint === 'wall' || c.span !== undefined || c.seg !== undefined,
+  );
   const openDoors = new Set<string>();
   for (const [key, d] of Object.entries(input.doors ?? {})) if (d.open) openDoors.add(key);
   const water = waterOf(input);
-  return { cells, walls, grounded, occupied, structure, standing, openDoors, water };
+  return { cells, walls, grounded, occupied, structure, standing, openDoors, water, defs: input.defs, tilesetId: input.tilesetId };
 }
 
 /**
@@ -1834,9 +2253,14 @@ export function drawFloorCell(
   g: Graphics,
   m: SceneMetrics,
   cell: TileCell,
-  plan: Pick<TilePlan, 'grounded' | 'occupied'> & Partial<Pick<TilePlan, 'water'>>,
+  plan: Pick<TilePlan, 'grounded' | 'occupied'> & Partial<Pick<TilePlan, 'water' | 'defs' | 'tilesetId'>>,
 ): void {
   const key = `${cell.col},${cell.row}`;
+  if (cell.seg !== undefined) return;
+  if (cell.split !== undefined && cell.layer === 0) {
+    drawSplitGround(g, m, cell, cell.split, plan.defs, plan.tilesetId);
+    return;
+  }
   if (isStanding(cell.def) || cell.def.footprint === 'wall' || cell.span !== undefined) {
     if (!plan.grounded.has(key)) {
       drawUnderlay(g, cell.def, m, cell.col, cell.row);
@@ -1878,7 +2302,7 @@ export function drawAmbientFor(
   cell: TileCell,
   plan: Pick<TilePlan, 'walls'>,
 ): void {
-  if ((cell.def.height ?? 0) < 1) return;
+  if ((cell.def.height ?? 0) < 1 || cell.seg !== undefined) return;
   const shape = cell.def.footprint;
   if (cell.def.prop !== undefined) {
     // A designed thing takes light from the floor around its own footprint,
@@ -1903,6 +2327,11 @@ export function drawShadowFor(
 ): void {
   const h = cell.def.height ?? (cell.def.footprint === 'stair' ? 0.5 : 0);
   const shape = cell.def.footprint;
+  if (cell.seg !== undefined) {
+    // A piece of an arc casts from its own slab.
+    if (h > 0) drawGroundShadow(g, m, segRect(cell.seg), h);
+    return;
+  }
   if (cell.def.prop !== undefined) {
     // A flat designed prop lies on the floor and casts nothing; a standing
     // one casts from the footprint its design declares — on the water, where
@@ -1935,6 +2364,10 @@ export function drawStandingCell(
   plan: Pick<TilePlan, 'walls' | 'structure'> & Partial<Pick<TilePlan, 'openDoors' | 'water'>>,
 ): void {
   const shape = cell.def.footprint;
+  if (cell.seg !== undefined) {
+    drawArcPiece(g, cell.def, m, cell.seg, cell.opening);
+    return;
+  }
   if (cell.def.prop !== undefined) {
     // A design beats a footprint: the footprint still says where the shadow
     // falls, but the thing itself is built by its design.
@@ -2026,6 +2459,19 @@ export function cellSignatures(input: TileDrawInput): Map<string, string> {
   add(input.ground, 'g');
   add(input.structure, 's');
   add(input.object, 'o');
+  // A split square reads its neighbours' ground: when they change, it does.
+  for (const [key, split] of groundSplits(input)) {
+    out.set(key, `${out.get(key) ?? ''}x=${split.sides.map((sd) => sd.id ?? '-').join('/')};`);
+  }
+  // An arc is in every square it crosses: moving or bending it is a change
+  // there, so the chunks it runs through redraw.
+  for (const arc of input.arcs ?? []) {
+    const sig = `a=${arc.id}:${arc.tile}@${arc.a.x},${arc.a.y},${arc.b.x},${arc.b.y},${arc.bulge};`;
+    for (const p of arcPoints(arc, 0.5)) {
+      const key = `${Math.floor(p.x)},${Math.floor(p.y)}`;
+      out.set(key, `${out.get(key) ?? ''}${sig}`);
+    }
+  }
   // A door swinging open is a change in its cell (FR9.24), and the run rule
   // widens it to the whole opening.
   for (const [key, d] of Object.entries(input.doors ?? {})) {
@@ -2187,6 +2633,10 @@ export function tileLayerKey(sceneId: string, tiles: TileLayer | null | undefine
       acc = (acc + hash32(`${layer}/${key}=${tileId}`)) >>> 0;
       count += 1;
     }
+  }
+  for (const arc of tiles.arcs ?? []) {
+    acc = (acc + hash32(`arc/${arc.id}=${arc.tile}@${arc.a.x},${arc.a.y},${arc.b.x},${arc.b.y},${arc.bulge}`)) >>> 0;
+    count += 1;
   }
   return `${sceneId}|${tiles.tilesetId}|${count}|${acc.toString(16)}`;
 }

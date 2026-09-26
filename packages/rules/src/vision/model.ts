@@ -10,6 +10,7 @@
 import type { Point } from '@safehouse/contracts';
 import { tilesetById } from '../tilesets/catalogue.js';
 import { resolveTile } from '../tilesets/slots.js';
+import { arcCells } from '../tilesets/arcs.js';
 import { objectCoverage } from '../tilesets/footprint.js';
 import { levelTiles, migrateTileLayer, type LayeredTiles } from '../tilesets/layers.js';
 import { givesCover, parseCellKey, stopsMovement, stopsSight } from '../tilesets/types.js';
@@ -67,7 +68,19 @@ export function sightModelFor(scene: SightSceneInput, level = 0): SightModel {
         const v = layers.object[anchor];
         if (v !== undefined) objectCells[key] = v;
       }
-      for (const map of [layers.ground, layers.structure, objectCells]) {
+      // Walls at any angle and curved walls stand in every square they pass
+      // through, as a painted wall of their tile would — except where a door
+      // or window is painted in the square: the opening is the wall there.
+      const arcCellsMap: Record<string, string> = {};
+      for (const arc of layers.arcs ?? []) {
+        for (const key of arcCells(arc)) {
+          const here = layers.structure[key];
+          const opening = here !== undefined && byId.get(here)?.kind === 'door';
+          const glass = here !== undefined && byId.get(here)?.placement?.inWall === true;
+          if (!opening && !glass) arcCellsMap[key] = arc.tile;
+        }
+      }
+      for (const map of [layers.ground, layers.structure, objectCells, arcCellsMap]) {
         for (const [key, tileId] of Object.entries(map)) {
           if (parseCellKey(key) === null) continue;
           const tile = byId.get(tileId);

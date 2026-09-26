@@ -37,6 +37,7 @@ import { FxLayer } from './fx.js';
 import { drawCameras, drawFog, drawGeometry, drawGrid, drawNotes, drawPins } from './layers.js';
 import { drawShroud, shroudKey } from './shroudLayer.js';
 import { ChunkedTileLayer } from './tileChunks.js';
+import { BelowFloors } from './belowLayer.js';
 import { tileDrawInput, tileLayerKey } from './tileLayer.js';
 import { MapLayer } from './mapLayer.js';
 import { PointerController, type Cell, type PointerHost } from './pointer.js';
@@ -147,6 +148,8 @@ class Stage implements StageApi, PointerHost {
   private viewMode: VisionMode = 'normal';
   /** Painted floor (FR9.2) — under the grid, above the map image. */
   private readonly tiles = new ChunkedTileLayer();
+  /** The floors below, seen where this one is open (`belowLayer.ts`). */
+  private readonly below = new BelowFloors();
   private lastTileKey = '';
   // Seeded with the shipped catalogue: the served palette is the same data
   // from the same build, so its arrival must not cost a second full draw.
@@ -236,6 +239,7 @@ class Stage implements StageApi, PointerHost {
     // server-side, but the GM's own view has to occlude too).
     this.world.addChild(
       this.map.root,
+      this.below.root,
       this.tiles.root,
       this.shroudG,
       this.gridG,
@@ -331,6 +335,14 @@ class Stage implements StageApi, PointerHost {
     this.fx.clearSegmentDraft();
   }
 
+  drawArc(a: Point, b: Point, bulge: number): void {
+    this.fx.setArcDraft(this.m, a, b, bulge);
+  }
+
+  clearArc(): void {
+    this.fx.clearSegmentDraft();
+  }
+
   drawRect(mode: TileRectMode, from: Cell, to: Cell): void {
     this.fx.setRectDraft(this.m, mode, from, to);
   }
@@ -360,6 +372,7 @@ class Stage implements StageApi, PointerHost {
     // A new palette changes what every cell looks like without changing any
     // cell's id, which is the one edit the chunk diff cannot see.
     this.tiles.invalidate();
+    this.below.invalidate();
   }
 
   /**
@@ -375,7 +388,7 @@ class Stage implements StageApi, PointerHost {
   setViewMode(mode: VisionMode): void {
     if (this.disposed || mode === this.viewMode) return;
     this.viewMode = mode;
-    const floor = [this.map.root, this.tiles.root];
+    const floor = [this.map.root, this.below.root, this.tiles.root];
     const clear = (c: Container) => {
       c.filters = [];
     };
@@ -459,6 +472,9 @@ class Stage implements StageApi, PointerHost {
         this.tiles.clear();
       }
     }
+    // What shows through where this floor is open. Keyed inside, on the
+    // floors it reads, so it redraws only when one of them changes.
+    this.below.update(m, next.scene, level, this.tileDefs);
 
     // A paste that was waiting and no longer is — placed, or Esc — takes its
     // ghost with it rather than leaving it until the pointer next moves.

@@ -7,6 +7,7 @@
  * engaged, so there are no hit-area rebuilds and no per-frame event allocs.
  */
 import type { Point } from '@safehouse/contracts';
+import { bulgeThrough } from '@safehouse/rules';
 import {
   gridFromWorld,
   isDegenerateSegment,
@@ -56,7 +57,10 @@ type Mode =
   | 'rect'
   | 'painted'
   | 'marquee'
-  | 'group';
+  | 'group'
+  // An arc wall: dragging its ends, then (no button held) pulling its bulge.
+  | 'arc'
+  | 'bend';
 
 /** React-facing ruler updates are rate-limited; the pixi line is not. */
 const RULER_REPORT_MS = 50;
@@ -76,6 +80,9 @@ export interface PointerHost {
   /** Rubber band while drawing a wall/door (optional — the TV never draws). */
   drawSegment?(kind: 'wall' | 'door', from: Point, to: Point): void;
   clearSegment?(): void;
+  /** The arc wall being placed (rules: arcs.ts). */
+  drawArc?(a: Point, b: Point, bulge: number): void;
+  clearArc?(): void;
   /** The cell rectangle a room/area drag is about to fill (FR9.2). */
   drawRect?(mode: TileRectMode, from: Cell, to: Cell): void;
   clearRect?(): void;
@@ -134,6 +141,10 @@ export function cellsBetween(from: Cell, to: Cell): Cell[] {
 const LONG_PRESS_MS = 500;
 
 export class PointerController {
+  /** The arc wall being placed: its ends, and how far its middle stands off the line between them. */
+  private arcA: Point = { x: 0, y: 0 };
+  private arcB: Point = { x: 0, y: 0 };
+  private arcBulge = 0;
   private mode: Mode = 'idle';
   /** Cells already sent this stroke, so a wandering drag sends each once. */
   private readonly painted = new Set<string>();
@@ -354,6 +365,15 @@ export class PointerController {
     this.lastTap = tap;
     this.lastTapOnToken = onToken;
 
+    // An arc being bent: a click places it where it is; any other button
+    // lets it go.
+    if (this.mode === 'bend') {
+      this.host.clearArc?.();
+      this.mode = 'idle';
+      if (e.button === 0 && state.tool === 'arc') this.host.callbacks.onArcDraw?.(this.arcA, this.arcB, this.arcBulge);
+      return;
+    }
+
     // Middle/right button always pans, whatever tool is selected.
     if (e.button === 1 || e.button === 2) {
       this.mode = 'pan';
@@ -390,9 +410,15 @@ export class PointerController {
         this.host.echoTrail(worldFromGrid(m, grid));
         this.host.callbacks.onPointer(grid.x, grid.y);
         return;
-      case 'wall':
       case 'door':
         this.beginSegment(state.tool, grid, state, e.shiftKey);
+        return;
+      case 'arc':
+        this.arcA = this.vertex(grid, state, e.shiftKey);
+        this.arcB = this.arcA;
+        this.arcBulge = 0;
+        this.mode = 'arc';
+        this.host.drawArc?.(this.arcA, this.arcB, 0);
         return;
       case 'zone':
         // Zones and fog regions share one polygon draft (FR9.2 / FR9.14).
@@ -444,6 +470,19 @@ export class PointerController {
   /** Walls and doors sit on cell edges, so authoring snaps to intersections. */
   private vertex(grid: Point, state: StageSceneState, raw: boolean): Point {
     return snapVertex(grid, state.snapEnabled && !raw);
+  }
+
+  /**
+   * Where the arc's middle goes: through the pointer, in half squares so a
+   * curve lands on the grid it is drawn over (Shift for any amount), and dead
+   * straight when the pointer is near the line between its ends.
+   */
+  private bendTo(grid: Point, raw: boolean): void {
+    let bulge = bulgeThrough(this.arcA, this.arcB, grid);
+    if (!raw) bulge = Math.round(bulge * 2) / 2;
+    if (Math.abs(bulge) < 0.25) bulge = 0;
+    this.arcBulge = bulge;
+    this.host.drawArc?.(this.arcA, this.arcB, bulge);
   }
 
   private beginSegment(
@@ -676,6 +715,11 @@ export class PointerController {
 
   private handleMove(e: PointerEvent): void {
     const tracked = this.pointers.get(e.pointerId);
+    if (!tracked && this.mode === 'bend') {
+      // No button held: the pointer pulls the arc's middle out.
+      this.bendTo(this.toGrid(this.local(e)), e.shiftKey);
+      return;
+    }
     if (!tracked) {
       // No button held: the only thing a hover does is carry a paste around.
       const state = this.host.state();
@@ -724,6 +768,11 @@ export class PointerController {
       case 'segment': {
         this.segmentTo = this.vertex(this.toGrid(screen), this.host.state(), e.shiftKey);
         this.host.drawSegment?.(this.segmentKind, this.segmentFrom, this.segmentTo);
+        return;
+      }
+      case 'arc': {
+        this.arcB = this.vertex(this.toGrid(screen), this.host.state(), e.shiftKey);
+        this.host.drawArc?.(this.arcA, this.arcB, 0);
         return;
       }
       case 'rect': {
@@ -830,6 +879,16 @@ export class PointerController {
       this.dragTokenId = null;
       this.host.localDrag(null, null);
       this.host.callbacks.onTokenMove(id, at.x, at.y);
+    } else if (this.mode === 'arc') {
+      // The ends are down; now the pointer pulls the middle out, and the next
+      // click places it. A click that never moved is not a wall.
+      if (isDegenerateSegment(this.arcA, this.arcB)) {
+        this.host.clearArc?.();
+      } else {
+        this.mode = 'bend';
+        this.host.drawArc?.(this.arcA, this.arcB, 0);
+        return;
+      }
     } else if (this.mode === 'segment') {
       this.host.clearSegment?.();
       // A click that never moved is not a wall — the editor stays untouched.
@@ -954,6 +1013,7 @@ export class PointerController {
     }
     if (this.mode === 'ruler') this.host.clearRuler();
     if (this.mode === 'segment') this.host.clearSegment?.();
+    if (this.mode === 'arc' || this.mode === 'bend') this.host.clearArc?.();
     // A rectangle is abandoned, not filled: unlike a stroke it has laid
     // nothing down yet, so a pinch simply takes it away.
     if (this.mode === 'rect') this.host.clearRect?.();

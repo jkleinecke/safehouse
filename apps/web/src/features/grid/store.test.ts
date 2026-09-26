@@ -34,7 +34,7 @@ describe('grid modes in the store', () => {
   });
 
   it('drops a foreign tool and lands on a real tab when the mode changes', () => {
-    s().setTool('wall');
+    s().setTool('arc');
     s().setMode('play');
     expect(s().tool).toBe('select');
     expect(s().gmTab).toBe('tokens');
@@ -64,7 +64,7 @@ describe('the inspector’s selection (docs/UX_MAP_BUILDER.md §3.2)', () => {
 
   it('survives picking up a drawing tool, and closes when the GM leaves authoring', () => {
     s().select({ kind: 'pin', id: 'p1' });
-    s().setTool('wall');
+    s().setTool('arc');
     expect(s().selected).toEqual({ kind: 'pin', id: 'p1' });
     s().setTool('select');
     expect(s().selected).toEqual({ kind: 'pin', id: 'p1' });
@@ -81,7 +81,7 @@ describe('the inspector’s selection (docs/UX_MAP_BUILDER.md §3.2)', () => {
   });
 
   it('closes when the mode drops the tool that was in hand', () => {
-    s().setTool('wall');
+    s().setTool('arc');
     s().select({ kind: 'wall', id: 'w1' });
     s().setMode('play');
     expect(s().tool).toBe('select');

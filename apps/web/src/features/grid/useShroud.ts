@@ -131,6 +131,9 @@ export function useShroud(inputs: ShroudInputs): ShroudState | null {
     // fresh objects on every fetch and identity would defeat the memo.
     JSON.stringify(scene?.tiles?.structure ?? {}),
     JSON.stringify(scene?.tiles?.object ?? {}),
+    // Upper floors and walls at any angle are sightlines too.
+    JSON.stringify(scene?.tiles?.arcs ?? []),
+    JSON.stringify(scene?.levels ?? []),
     JSON.stringify(scene?.geometry.walls ?? []),
     JSON.stringify(scene?.geometry.doors ?? []),
     scene?.grid.cols,

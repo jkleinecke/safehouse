@@ -4,6 +4,7 @@
  * by scale/alpha only — no per-frame Graphics rebuilds or allocations.
  */
 import { Container, Graphics } from 'pixi.js';
+import { arcPoints } from '@safehouse/rules';
 import type { Point } from '@safehouse/contracts';
 import {
   groundRadius,
@@ -205,6 +206,22 @@ export class FxLayer {
     g.moveTo(a.x, a.y).lineTo(b.x, b.y).stroke({ width: 4, color, alpha: 0.9 });
     g.circle(a.x, a.y, 5).fill({ color, alpha: 1 });
     g.circle(b.x, b.y, 5).stroke({ width: 2, color, alpha: 1 });
+  }
+
+  /** The arc wall being placed: the curve, its two ends, and the handle at its middle. */
+  setArcDraft(m: SceneMetrics, a: Point, b: Point, bulge: number): void {
+    const g = this.segment;
+    g.clear();
+    const pts = arcPoints({ id: 'draft', a, b, bulge, tile: '' }, 0.25).map((p) => worldFromGrid(m, p));
+    g.moveTo(pts[0]!.x, pts[0]!.y);
+    for (const p of pts.slice(1)) g.lineTo(p.x, p.y);
+    g.stroke({ width: 4, color: C.ink, alpha: 0.9 });
+    const wa = worldFromGrid(m, a);
+    const wb = worldFromGrid(m, b);
+    g.circle(wa.x, wa.y, 5).fill({ color: C.ink, alpha: 1 });
+    g.circle(wb.x, wb.y, 5).stroke({ width: 2, color: C.ink, alpha: 1 });
+    const mid = pts[Math.floor(pts.length / 2)]!;
+    g.circle(mid.x, mid.y, 4).stroke({ width: 2, color: C.cyan, alpha: 1 });
   }
 
   clearSegmentDraft(): void {

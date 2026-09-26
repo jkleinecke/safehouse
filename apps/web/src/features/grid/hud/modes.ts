@@ -40,7 +40,9 @@ export const MODE_TABS: Record<GridMode, readonly GmTab[]> = {
 
 /** Which tools each mode's toolbar offers a GM, in order. */
 export const MODE_TOOLS: Record<GridMode, readonly GridTool[]> = {
-  build: ['select', 'tile-room', 'tile-area', 'tile', 'tile-erase', 'wall', 'door', 'zone', 'pin'],
+  // The arc wall took the old traced "wall line"'s place: the same drag, a real
+  // wall on its own floor, straight at any angle or curved.
+  build: ['select', 'tile-room', 'tile-area', 'tile', 'arc', 'tile-erase', 'door', 'zone', 'pin'],
   prep: ['select', 'fogdef', 'camera', 'note'],
   play: ['select', 'ruler', 'aoe', 'pointer', 'focus'],
 };
@@ -67,7 +69,7 @@ export const BUILD_TOOLS: readonly GridTool[] = [
   'tile-room',
   'tile-area',
   'tile',
-  'wall',
+  'arc',
   'door',
   'zone',
   'pin',
@@ -104,7 +106,7 @@ export const SHORTCUTS: ReadonlyArray<{ key: string; tool: GridTool; gmOnly: boo
   { key: 'a', tool: 'tile-area', gmOnly: true },
   { key: 'b', tool: 'tile', gmOnly: true },
   { key: 'e', tool: 'tile-erase', gmOnly: true },
-  { key: 'w', tool: 'wall', gmOnly: true },
+  { key: 'w', tool: 'arc', gmOnly: true },
   { key: 'd', tool: 'door', gmOnly: true },
   { key: 'z', tool: 'zone', gmOnly: true },
   { key: 'p', tool: 'pin', gmOnly: true },
