@@ -18,7 +18,7 @@
  */
 import { useEffect, useRef } from 'react';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { FogRegion, FogState, Scene, SceneInput } from '@safehouse/contracts';
+import type { FogRegion, FogState, Scene, SceneFile, SceneInput } from '@safehouse/contracts';
 import { apiDelete, apiGet, apiPost, apiPatch, queryClient } from '../../../api/client.js';
 import { useLiveStore } from '../../../live/store.js';
 import type { AttachmentDto, ComposedScene } from '../../grid/api.js';
@@ -112,6 +112,40 @@ export async function duplicateScene(
     await apiPost<{ fog: FogState }>(`/api/scenes/${created.id}/fog`, { op: 'define', region: body });
   }
   return created;
+}
+
+/**
+ * Download a scene as a file: the map, its tokens and the images it draws
+ * on, in one `.safehouse-scene.json` (server: services/scene-transfer.ts).
+ */
+export async function exportSceneFile(scene: Pick<Scene, 'id' | 'name'>): Promise<void> {
+  const file = await apiGet<SceneFile>(`/api/scenes/${scene.id}/export`);
+  const blob = new Blob([JSON.stringify(file)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${scene.name.replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') || 'scene'}.safehouse-scene.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // After the click has had its turn with the url.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** Read a scene file the GM picked and rebuild it here as a new draft scene. */
+export function useImportScene(campaignId: string | undefined) {
+  return useMutation({
+    mutationFn: async (file: File): Promise<Scene> => {
+      let body: unknown;
+      try {
+        body = JSON.parse(await file.text());
+      } catch {
+        throw new Error(`${file.name} is not a scene file`);
+      }
+      return (await apiPost<{ scene: Scene }>(`/api/campaigns/${campaignId ?? ''}/scenes/import`, body)).scene;
+    },
+    onSuccess: () => invalidateList(campaignId),
+  });
 }
 
 // ---------------------------------------------------------------------------

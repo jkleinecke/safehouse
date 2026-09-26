@@ -28,7 +28,7 @@ import {
   type SceneSummary,
 } from './summary.js';
 
-export type SceneBusy = 'activate' | 'duplicate' | 'archive' | 'delete' | 'rename' | 'save' | null;
+export type SceneBusy = 'activate' | 'duplicate' | 'export' | 'archive' | 'delete' | 'rename' | 'save' | null;
 
 export interface SceneCardProps {
   scene: Scene;
@@ -47,6 +47,8 @@ export interface SceneCardProps {
   onCommitRename: () => void;
   onCancelRename: () => void;
   onDuplicate: () => void;
+  /** Download the scene as a file, to import here or in another campaign. */
+  onExport: () => void;
   onArchive: () => void;
   onRestore: () => void;
   onAskDelete: () => void;
@@ -318,6 +320,16 @@ export default function SceneCard(props: SceneCardProps) {
           title="Copy the map, calibration, environment, geometry and fog regions into a new scene"
         >
           {busy === 'duplicate' ? 'duplicating…' : 'duplicate'}
+        </button>
+        <button
+          type="button"
+          className={btn + ' py-1'}
+          disabled={anyBusy}
+          onClick={props.onExport}
+          data-testid="scene-export"
+          title="Download the scene as a file — map, floors, walls, fog, tokens and its images — to import here or in another campaign"
+        >
+          {busy === 'export' ? 'exporting…' : 'export'}
         </button>
         {summary.isArchived ? (
           <button type="button" className={btn + ' py-1'} disabled={anyBusy} onClick={props.onRestore}>

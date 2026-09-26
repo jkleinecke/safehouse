@@ -13,6 +13,7 @@ export * from './roll.js';
 export * from './events.js';
 export * from './scene.js';
 export * from './token.js';
+export * from './scene-file.js';
 export * from './encounter.js';
 export * from './generator.js';
 export * from './campaign.js';

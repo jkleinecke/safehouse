@@ -41,6 +41,7 @@ import {
   TileLayerSchema,
   TokenAuraSchema,
   TokenPoseSchema,
+  SceneFileSchema,
   TokenLookSchema,
   VisibilitySchema,
   type Visibility,
@@ -54,6 +55,7 @@ import {
   type AuthContext,
 } from '../services/auth.js';
 import type { EventTx } from '../hub.js';
+import { checkSceneFileHeader, exportScene, importScene, unpackFiles } from '../services/scene-transfer.js';
 import { emitFogProximity } from '../fixer/proximity.js';
 import { applyDoorOp, doorRefusal, tileDoorState, withTileDoor, withTracedDoor } from '../services/doors.js';
 import {
@@ -206,6 +208,7 @@ const TokenCreateBody = z.object({
   barsVisibility: z.enum(['gm', 'owner', 'public']).default('owner'),
   aura: TokenAuraSchema.nullable().optional(),
   pose: TokenPoseSchema.optional(),
+  look: TokenLookSchema.nullable().optional(),
 });
 
 const TokenPatchBody = z.object({
@@ -326,6 +329,46 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     });
     return reply.status(201).send({ scene });
   });
+
+  /**
+   * A scene as a file (`SceneFile`): the map, its tokens, and the images it
+   * draws on, packed into one download. GM only — it carries everything the
+   * GM sees, hidden tokens and notes included.
+   */
+  app.get('/api/scenes/:id/export', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const { scene } = await openScene(req, id, { gmOnly: true });
+    const file = await exportScene(app.db, scene.id);
+    const safe = scene.name.replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') || 'scene';
+    return reply
+      .header('content-disposition', `attachment; filename="${safe}.safehouse-scene.json"`)
+      .send(file);
+  });
+
+  /**
+   * A scene file, rebuilt as a new draft scene of this campaign. Its files
+   * are unpacked first (outside the transaction — bytes on disk); the scene
+   * and its tokens are one atomic step after.
+   */
+  app.post(
+    '/api/campaigns/:id/scenes/import',
+    // A scene file carries its map images: a battlemap scan or two in base64.
+    { bodyLimit: 200 * 1024 * 1024 },
+    async (req, reply) => {
+      const { id: campaignId } = req.params as { id: string };
+      const auth = requireRole(req, 'gm');
+      assertCampaign(auth, campaignId);
+      checkSceneFileHeader(req.body);
+      const file = parseBody(SceneFileSchema, req.body);
+      const fileIds = await unpackFiles(app.db, campaignId, file);
+      const scene = await app.hub.atomic(campaignId, async (tx) => {
+        const created = await importScene(tx.db, campaignId, file, fileIds);
+        await tx.emit({ type: 'scene.updated', payload: { sceneId: created.id, changed: ['created'] } });
+        return created;
+      });
+      return reply.status(201).send({ scene });
+    },
+  );
 
   /**
    * Role-filtered composed payload (scene + tokens + live drawings). Hidden

@@ -32,6 +32,8 @@ import {
   useDeleteScene,
   useDuplicateScene,
   useFogOp,
+  useImportScene,
+  exportSceneFile,
   usePatchScene,
   useSceneTokenCounts,
   useScenes,
@@ -68,6 +70,7 @@ export default function ScenesPage() {
   const duplicate = useDuplicateScene(campaignId);
   const fog = useFogOp(campaignId);
   const upload = useUploadMapImage();
+  const importScene = useImportScene(campaignId);
 
   const [busy, setBusy] = useState<BusyState | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -194,6 +197,7 @@ export default function ScenesPage() {
             }),
           )
         }
+        onExport={() => void run(scene.id, 'export', () => exportSceneFile(scene))}
         onArchive={() =>
           void run(scene.id, 'archive', () =>
             patch.mutateAsync({ sceneId: scene.id, patch: { state: 'archived' } }),
@@ -289,7 +293,8 @@ export default function ScenesPage() {
         )}
 
         {loaded && all.length === 0 && (
-          <div className="mt-4 max-w-3xl">
+          <div className="mt-4 max-w-3xl space-y-3">
+            <ImportSceneButton importing={importScene.isPending} error={importScene.error} onFile={(f) => importScene.mutate(f)} />
             <CreateSceneForm
               emptyState
               pending={creating}
@@ -317,7 +322,8 @@ export default function ScenesPage() {
         )}
 
         {loaded && all.length > 0 && (
-          <div className="mt-6 max-w-3xl">
+          <div className="mt-6 max-w-3xl space-y-3">
+            <ImportSceneButton importing={importScene.isPending} error={importScene.error} onFile={(f) => importScene.mutate(f)} />
             <CreateSceneForm
               pending={creating}
               error={createError}
@@ -327,5 +333,32 @@ export default function ScenesPage() {
         )}
       </div>
     </GmGuard>
+  );
+}
+
+/**
+ * Bring in a scene exported from here or from another campaign: it arrives as
+ * a new draft, with its own copies of the images it carries.
+ */
+function ImportSceneButton({ importing, error, onFile }: { importing: boolean; error: unknown; onFile: (file: File) => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2" data-testid="scene-import">
+      <label className={'btn cursor-pointer px-3 py-1.5' + (importing ? ' pointer-events-none opacity-40' : '')}>
+        {importing ? 'importing…' : 'import scene…'}
+        <input
+          type="file"
+          accept=".json,application/json"
+          className="sr-only"
+          disabled={importing}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (file) onFile(file);
+          }}
+        />
+      </label>
+      <span className="mono-label text-faint">a .safehouse-scene.json exported from any campaign — it arrives as a draft</span>
+      <ErrorNote error={error} />
+    </div>
   );
 }
