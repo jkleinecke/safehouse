@@ -8,6 +8,7 @@ import {
   mergeEncounter,
   pickEncounterId,
   resolveSceneId,
+  tokensBelow,
   tokensInSight,
 } from './hydration.js';
 import type { Viewer } from './projection.js';
@@ -340,3 +341,23 @@ describe('tokensInSight (FR9.16)', () => {
     expect(state?.tokens.map((t) => t.id)).toEqual(['me']);
   });
 });
+
+describe('tokens on the floors below', () => {
+  // A mezzanine over a ballroom: the ring is painted, the void over the
+  // dance floor is not.
+  const scene = {
+    tiles: { tilesetId: 'corp', cells: {}, ground: { '5,5': 'carpet', '1,1': 'carpet' }, structure: {}, object: {} },
+    levels: [{ id: 'mezz', name: 'Mezzanine', tiles: { tilesetId: 'corp', cells: {}, ground: { '1,1': 'carpet' }, structure: {}, object: {} } }],
+  } as unknown as Scene;
+  const token = (id: string, x: number, y: number, level: number) => ({ id, x, y, level }) as unknown as Token;
+
+  it('shows a token below where every floor between leaves its square empty', () => {
+    const below = tokensBelow(scene, [token('dancer', 5.5, 5.5, 0), token('waiter', 1.5, 1.5, 0), token('up', 5.5, 5.5, 1)], 1);
+    expect(below.map((b) => [b.token.id, b.depth])).toEqual([['dancer', 1]]);
+  });
+
+  it('shows nothing below from the ground floor', () => {
+    expect(tokensBelow(scene, [token('dancer', 5.5, 5.5, 0)], 0)).toEqual([]);
+  });
+});
+

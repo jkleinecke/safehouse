@@ -600,6 +600,8 @@ class Stage implements StageApi, PointerHost {
     }
 
     this.syncTokens(next);
+    // The tokens seen down through this floor's open squares.
+    this.below.syncTokens(this.m, next.belowTokens ?? [], (ref) => this.opts.urlFor(ref));
 
     if (next.scene.id !== this.framedSceneId) {
       this.framedSceneId = next.scene.id;

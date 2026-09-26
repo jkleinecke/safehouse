@@ -351,6 +351,13 @@ export interface GeometrySelection {
 export interface StageSceneState {
   scene: Scene;
   tokens: Token[];
+  /**
+   * Tokens on the floors below that can be seen from this one, through
+   * squares every floor in between leaves empty — each with how many floors
+   * down it is. Drawn under this floor, a storey lower per floor; never
+   * dragged or selected from here.
+   */
+  belowTokens?: ReadonlyArray<{ token: Token; depth: number }>;
   role: Role;
   /** Token ids this client may drag (own tokens; GM: all) — FR9.5. */
   draggableIds: ReadonlySet<string>;

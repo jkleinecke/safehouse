@@ -9,6 +9,7 @@
  */
 import type { GeometrySelection } from './types.js';
 import type { Encounter, Role, Scene, Token } from '@safehouse/contracts';
+import { levelTiles } from '@safehouse/rules';
 import { hiddenLayerTokenIds, layersOf } from './tokenLayers.js';
 import {
   actingTokenId,
@@ -185,6 +186,33 @@ export function tokensInSight(
 }
 
 /**
+ * The tokens on the floors below that can be seen from `level`: a token shows
+ * where every floor between it and this one leaves its square empty —
+ * nothing painted there at all, which is what an open floor is.
+ */
+export function tokensBelow(
+  scene: Pick<Scene, 'tiles' | 'levels'>,
+  tokens: readonly Token[],
+  level: number,
+): Array<{ token: Token; depth: number }> {
+  if (level <= 0) return [];
+  const painted = (l: number, key: string): boolean => {
+    const t = levelTiles(scene, l);
+    return t !== undefined && (t.ground?.[key] !== undefined || t.structure?.[key] !== undefined || t.object?.[key] !== undefined);
+  };
+  const out: Array<{ token: Token; depth: number }> = [];
+  for (const token of tokens) {
+    const on = token.level ?? 0;
+    if (on >= level) continue;
+    const key = `${Math.floor(token.x)},${Math.floor(token.y)}`;
+    let open = true;
+    for (let l = on + 1; l <= level && open; l += 1) if (painted(l, key)) open = false;
+    if (open) out.push({ token, depth: level - on });
+  }
+  return out;
+}
+
+/**
  * Build one complete frame of stage state from server data alone. With zero
  * WebSocket traffic this still yields a drawable scene — tokens placed, bars
  * filled from the hydrated encounter, the acting token glowing.
@@ -202,9 +230,20 @@ export function composeStageState(input: StageComposeInput): StageSceneState | n
   const onFloor = input.tokens.filter((t) => (t.level ?? 0) === level);
   const role: Role = input.viewer.role;
   const tokens = tokensInSight(onFloor, input.viewer, input.shroud ?? null);
+  // Down through the open squares: under the same sightline as this floor's
+  // own tokens, so a player sees below only what they could see from here.
+  const seenBelow = new Set(
+    tokensInSight(
+      tokensBelow(scene, input.tokens, level).map((b) => b.token),
+      input.viewer,
+      input.shroud ?? null,
+    ).map((t) => t.id),
+  );
+  const belowTokens = tokensBelow(scene, input.tokens, level).filter((b) => seenBelow.has(b.token.id));
   return {
     scene,
     tokens,
+    belowTokens,
     role,
     draggableIds: draggableTokenIds(tokens, input.viewer),
     bars: barsByToken(input.encounter, tokens, input.viewer),

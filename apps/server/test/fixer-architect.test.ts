@@ -73,6 +73,8 @@ async function architectBox(slowPagesMs = 0): Promise<MockLlmServer> {
       if (req.messages.some((m) => Array.isArray(m.content as unknown))) return { content: 'ok' };
       const text = textOf(req);
       if (text.includes('campaign architect')) return { content: `<think>plan it</think>\n${JSON.stringify(OUTLINE)}`, usage: { promptTokens: 900, completionTokens: 500 } };
+      // A floor is two passes: the layout, then its furniture a few rooms at a time.
+      if (text.includes('You furnish rooms')) return { content: JSON.stringify({ rooms: [] }), usage: { promptTokens: 100, completionTokens: 20 } };
       if (text.includes('lay out one floor')) return { content: JSON.stringify(PLAN), usage: { promptTokens: 400, completionTokens: 200 } };
       if (text.includes('codex pages')) {
         return { content: '# Pier 23\n\nA container pier that answers to nobody on paper.\n\n- Six cranes\n- One office', usage: { promptTokens: 300, completionTokens: 120 }, delayMs: slowPagesMs };
@@ -146,7 +148,7 @@ describe('the outline', () => {
 
 describe('the build', () => {
   it('lands pages and NPCs as drafts and a scene as a staged floor, one label per item', async () => {
-    await architectBox();
+    const mock = await architectBox();
     const ws = await WsTestClient.connect(wsUrl(t.app, boot.campaignId, boot.gmToken));
     sockets.push(ws);
     await ws.next((f) => f.type === 'hello');
@@ -171,8 +173,11 @@ describe('the build', () => {
     ]);
     expect(body.results[2]?.note).toContain('Street enforcer');
     expect(body.results[3]?.note).toMatch(/2 rooms, \d+ floor squares, \d+ doors/);
-    // Two pages and the floor were model turns; the NPC was rolled, not asked.
-    expect(body.usage.totalTokens).toBe(420 * 2 + 600);
+    // Two pages and the floor were model turns — the floor's layout and its
+    // furnishing pass; the NPC was rolled, not asked.
+    const furnishing = mock.requests.filter((r) => textOf(r).includes('You furnish rooms')).length;
+    expect(furnishing).toBeGreaterThan(0);
+    expect(body.usage.totalTokens).toBe(420 * 2 + 600 + 120 * furnishing);
 
     // The drafts are the inbox's shapes.
     const drafts = await t.app.inject({ method: 'GET', url: `/api/campaigns/${boot.campaignId}/generations`, headers: auth() });

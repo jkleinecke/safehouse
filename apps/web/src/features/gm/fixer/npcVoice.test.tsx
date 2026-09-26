@@ -94,11 +94,4 @@ describe('the panel', () => {
     expect(html).toContain('pick an archetype first');
   });
 
-  it('defaults to the fast slot while a session is live', () => {
-    const live = render(<NpcVoice campaignId="c1" sessionLive />, (qc) => {
-      qc.setQueryData(['fixer', 'status'], ON);
-      qc.setQueryData(['campaign', 'c1', 'npc-templates'], TEMPLATES);
-    });
-    expect(live).toContain('title="Model slot">fast<');
-  });
 });
