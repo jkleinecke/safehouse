@@ -9,8 +9,8 @@
  *
  * Without a scene id it is a picker. With one, the canvas fills the screen and
  * a small panel over it switches quality, ambient light, walls, the floor in
- * view (and what the floors below it do), and the camera — iso, a top-down
- * plan, or a real lens — with a HUD of frame times and a benchmark whose
+ * view (and what the floors below it do), and the camera — iso or a
+ * top-down plan — with a HUD of frame times and a benchmark whose
  * results copy out as text, so each device's run can be pasted side by side.
  *
  * The whole of `features/lab3d/` is one lazy chunk behind this route
@@ -56,7 +56,6 @@ const WALL_OPTIONS: ReadonlyArray<{ value: LabWalls; label: string; title: strin
 const CAMERA_OPTIONS: ReadonlyArray<{ value: LabCamera; label: string; title: string }> = [
   { value: 'iso', label: 'Iso', title: 'Orthographic, from the 2D iso angle (45°, 35.264°); drag to turn it' },
   { value: 'top', label: 'Top', title: 'Straight down, north up, like the 2D plan view: pan and zoom only' },
-  { value: 'perspective', label: 'Perspective', title: 'A real lens, 40° field of view' },
 ];
 
 const BELOW_OPTIONS: ReadonlyArray<{ value: LabBelow; label: string; title: string }> = [

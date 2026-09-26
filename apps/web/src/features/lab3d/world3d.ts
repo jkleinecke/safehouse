@@ -489,6 +489,15 @@ interface LevelCtx {
   opts: WorldOptions;
   plan: TilePlan;
   chunk(col: number, row: number): MeshBuilder;
+  /**
+   * The chunk for things that are themselves lights — a ceiling light, a
+   * lamppost, a terminal. Built apart because they cast no shadow: a live
+   * lamp sits inside its own fixture, and a pendant's shade under its bulb
+   * shadowed the lamp's whole pool off the floor (2026-09-26: High, which
+   * shadows the most lamps, had no pools at all). They still take light and
+   * still hide what is behind them.
+   */
+  emitterChunk(col: number, row: number): MeshBuilder;
   propFailures: number;
 }
 
@@ -537,11 +546,14 @@ function emitFloor(ctx: LevelCtx, f: FloorSquare, has: (col: number, row: number
 /**
  * A square split along an angled wall: each side's half clipped by the line
  * and drawn in the ground beside it on that side (as `drawSplitGround`
- * does). A side with nothing beside it stays open.
+ * does). A side with nothing beside it stays open — unless the square has
+ * ground of its own painted, in which case that half is its own ground: a
+ * floored square is never half a hole.
  */
 function emitSplit(ctx: LevelCtx, cell: TileCell, split: GroundSplit): void {
   const b = ctx.chunk(cell.col, cell.row);
   const len = Math.hypot(split.d.x, split.d.y) || 1;
+  const own = ctx.plan.grounded.has(`${cell.col},${cell.row}`);
   const square: Array<[number, number]> = [
     [0, 0],
     [1, 0],
@@ -549,8 +561,8 @@ function emitSplit(ctx: LevelCtx, cell: TileCell, split: GroundSplit): void {
     [0, 1],
   ];
   for (const side of split.sides) {
-    if (side.id === null) continue;
-    const def = ctx.plan.defs[tileDefKey(ctx.plan.tilesetId, side.id)] ?? cell.def;
+    if (side.id === null && !own) continue;
+    const def = (side.id === null ? undefined : ctx.plan.defs[tileDefKey(ctx.plan.tilesetId, side.id)]) ?? cell.def;
     const nx = (-split.d.y / len) * side.sign;
     const ny = (split.d.x / len) * side.sign;
     const keep = (u: number, v: number) => (u - split.p.x) * nx + (v - split.p.y) * ny;
@@ -761,11 +773,15 @@ function buildBlock(ctx: LevelCtx, cell: TileCell): void {
 /** Everything standing on one square: a prop, a wall, stairs, an object or a block. */
 function buildStanding(ctx: LevelCtx, cell: TileCell): void {
   const { def } = cell;
+  // A glowing thing standing in the room is a light's fixture (a sign in a
+  // wall is a wall, and keeps its shadow).
+  const emits = def.emissive !== undefined && def.emissive !== '' && def.footprint !== 'wall';
+  const at: LevelCtx = emits ? { ...ctx, chunk: ctx.emitterChunk } : ctx;
   if (def.prop !== undefined) {
     // The kit's sink is in storeys; the water's drop is in squares.
     const sink = ctx.plan.water.water.has(`${cell.col},${cell.row}`) && ctx.storey > 0 ? WATER_DROP / ctx.storey : 0;
     try {
-      buildProp(ctx.chunk(cell.col, cell.row), def, cell.col, cell.row, { unitM: ctx.unitM, storey: ctx.storey, baseY: ctx.y }, sink > 0 ? { sink } : undefined);
+      buildProp(at.chunk(cell.col, cell.row), def, cell.col, cell.row, { unitM: ctx.unitM, storey: ctx.storey, baseY: ctx.y }, sink > 0 ? { sink } : undefined);
     } catch {
       // One broken design must not cost the whole floor.
       ctx.propFailures += 1;
@@ -773,10 +789,10 @@ function buildStanding(ctx: LevelCtx, cell: TileCell): void {
     return;
   }
   if (def.footprint === 'wall') buildWallCell(ctx, cell);
-  else if (def.footprint === 'stair') buildStair(ctx, cell);
+  else if (def.footprint === 'stair') buildStair(at, cell);
   else if (!isStanding(def)) return;
-  else if (def.footprint === 'post' || def.footprint === 'canopy' || def.footprint === 'round') buildObject(ctx, cell);
-  else buildBlock(ctx, cell);
+  else if (def.footprint === 'post' || def.footprint === 'canopy' || def.footprint === 'round') buildObject(at, cell);
+  else buildBlock(at, cell);
 }
 
 function buildLevel(
@@ -792,6 +808,7 @@ function buildLevel(
   const m = metricsFor(scene.grid);
   const plan = planTiles(m, tileDrawInput(tiles, defs as Record<string, TileDrawDef>));
   const builders = new Map<string, MeshBuilder>();
+  const emitters = new Map<string, MeshBuilder>();
   const ctx: LevelCtx = {
     level,
     y: level * storey,
@@ -805,6 +822,15 @@ function buildLevel(
       if (b === undefined) {
         b = new MeshBuilder();
         builders.set(key, b);
+      }
+      return b;
+    },
+    emitterChunk(col, row) {
+      const key = `${Math.floor(col / CHUNK)},${Math.floor(row / CHUNK)}`;
+      let b = emitters.get(key);
+      if (b === undefined) {
+        b = new MeshBuilder();
+        emitters.set(key, b);
       }
       return b;
     },
@@ -829,6 +855,8 @@ function buildLevel(
   const waterKeys = new Set(waterCells.map((c) => `${c.col},${c.row}`));
 
   const floors = new Map<string, FloorSquare>();
+  /** The plain (unlit) ground painted in each square, for filling under unpainted walls. */
+  const groundOf = new Map<string, TileDrawDef>();
   const decals: Array<{ cell: TileCell; color: number; kind: Kind }> = [];
   const underlay = (cell: TileCell) => {
     const key = `${cell.col},${cell.row}`;
@@ -852,8 +880,47 @@ function buildLevel(
     const glow = glowOf(def, tones);
     const color = glow !== null ? mix(tones.base, glow, 0.5) : grained(tones.base, cell.col, cell.row);
     const kind: Kind = glow !== null ? 'glow' : 'solid';
-    if (cell.layer === 0) floors.set(key, { col: cell.col, row: cell.row, color, kind });
-    else decals.push({ cell, color, kind });
+    if (cell.layer === 0) {
+      floors.set(key, { col: cell.col, row: cell.row, color, kind });
+      if (glow === null) groundOf.set(key, def);
+    } else decals.push({ cell, color, kind });
+  }
+
+  // Ground under a wall or a piece of furniture the GM never painted: the
+  // floor most of its neighbours have. A wall stands on a floor; drawn
+  // without one, the square was a hole down to the (shaded, nearly black)
+  // floor below — 93 of them on Sapphire's security floor, most under its
+  // diagonal walls (2026-09-26). A square with no painted ground round it at
+  // all stays open: that is outside, not a gap.
+  const neighbourGround = (col: number, row: number): TileDrawDef | null => {
+    const count = new Map<TileDrawDef, number>();
+    for (let dr = -1; dr <= 1; dr += 1) {
+      for (let dc = -1; dc <= 1; dc += 1) {
+        if (dc === 0 && dr === 0) continue;
+        const d = groundOf.get(`${col + dc},${row + dr}`);
+        if (d !== undefined) count.set(d, (count.get(d) ?? 0) + 1);
+      }
+    }
+    let best: TileDrawDef | null = null;
+    let most = 0;
+    for (const [d, n] of count) {
+      if (n > most) {
+        best = d;
+        most = n;
+      }
+    }
+    return best;
+  };
+  for (const cell of plan.cells) {
+    if (cell.seg !== undefined) continue;
+    const key = `${cell.col},${cell.row}`;
+    if (floors.has(key) || special.has(key) || plan.grounded.has(key)) continue;
+    const { def } = cell;
+    const standingish = isStanding(def) || def.footprint === 'wall' || cell.span !== undefined || def.prop !== undefined;
+    if (!standingish) continue;
+    const ground = neighbourGround(cell.col, cell.row);
+    if (ground === null) continue;
+    floors.set(key, { col: cell.col, row: cell.row, color: grained(tonesOf(ground).base, cell.col, cell.row), kind: 'solid' });
   }
 
   const has = (col: number, row: number) => {
@@ -884,6 +951,14 @@ function buildLevel(
     for (const o of meshes.all) o.name = `level-${level}:chunk-${key}`;
     built.push(meshes);
     chunkKeys.push(key);
+  }
+  for (const [key, b] of emitters) {
+    if (b.empty) continue;
+    const meshes = b.finish(materials);
+    if (meshes.solid) meshes.solid.castShadow = false;
+    for (const o of meshes.all) o.name = `level-${level}:lights-${key}`;
+    built.push(meshes);
+    chunkKeys.push(`lights:${key}`);
   }
   return { built, chunkKeys, propFailures: ctx.propFailures };
 }

@@ -203,11 +203,13 @@ const KEY_SHARE = 0.35;
 const KEY_DIR = new Vector3(-0.35, 1.2, 0.75).normalize();
 
 /**
- * High's lamps are this much brighter than Medium's, baked and real-time
- * alike (2026-09-26: with more of them shadowed, High read dimmer than
- * Medium, and the lamps were hard to place).
+ * High's lamps over Medium's: none. A tier changes how faithfully the light
+ * is drawn (more lamps live, more and sharper shadows), never how bright it
+ * is — High once ran 1.3x hotter to make up for floors shadowing themselves
+ * (fixed in geometry3d's normals), and on top of Dark's doubled lamps that
+ * blew the dark scenes out (2026-09-26).
  */
-const HIGH_BOOST = 1.3;
+const HIGH_BOOST = 1;
 /**
  * High marks each lamp with a soft glow where it hangs — what bloom was
  * meant to do, without smearing the room. Its size in squares per row of
@@ -225,7 +227,7 @@ const HALO_SQUARES = 0.35;
  * dark one.
  */
 const LAMP_GAIN: readonly [number, number, number, number] = [2, 1, 1, 2];
-const HALO_OPACITY: readonly [number, number, number, number] = [0.3, 0.45, 0.65, 0.8];
+const HALO_OPACITY: readonly [number, number, number, number] = [0.2, 0.26, 0.32, 0.38];
 
 /** Stickiness when re-picking: a lamp already real-time counts as this much nearer. */
 const STICK_FACTOR = 0.85;

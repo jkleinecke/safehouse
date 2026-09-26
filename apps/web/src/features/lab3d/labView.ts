@@ -27,7 +27,6 @@ import {
   MeshBasicMaterial,
   OrthographicCamera,
   PCFSoftShadowMap,
-  PerspectiveCamera,
   Scene as ThreeScene,
   SRGBColorSpace,
   Spherical,
@@ -47,9 +46,10 @@ export type { LabQuality } from './lighting3d.js';
 
 /**
  * Iso is the 2D map's angle as a true orthographic camera; top is the 2D plan
- * view — straight down, north up, no tilting; perspective is a real lens.
+ * view — straight down, north up, no tilting. Both orthographic: a
+ * perspective lens was tried and dropped (2026-09-26 — not useful on a map).
  */
-export type LabCamera = 'iso' | 'top' | 'perspective';
+export type LabCamera = 'iso' | 'top';
 /** What the floors below the one in view do: shaded (as the 2D map shades them), gone, or drawn as they are. */
 export type LabBelow = 'dim' | 'hide' | 'show';
 /** Walls at full height, or cut down so the rooms can be seen into (the world builder decides how). */
@@ -163,7 +163,6 @@ const BACKGROUND = 0x060a12;
 const ISO_AZIMUTH = Math.PI / 4;
 /** True isometric: the angle whose tangent is 1/√2, 35.264°. */
 const ISO_ELEVATION = Math.atan(1 / Math.SQRT2);
-const PERSPECTIVE_FOV = 40;
 /**
  * The top view's tilt off straight down, in radians: exactly vertical has no
  * "up" to orient the screen by, so it sits a hair south of the zenith, which
@@ -260,8 +259,7 @@ export function createLabView(host: HTMLElement, initial: LabViewOptions): LabVi
   });
 
   const ortho = new OrthographicCamera(-1, 1, 1, -1, 0.1, 1000);
-  const persp = new PerspectiveCamera(PERSPECTIVE_FOV, 1, 0.1, 1000);
-  let camera: OrthographicCamera | PerspectiveCamera = opts.camera === 'perspective' ? persp : ortho;
+  const camera = ortho;
   /** Which way the camera looks: the ortho camera serves both iso and top. */
   let cameraKind: LabCamera = opts.camera;
   /** Half the ortho camera's view height at zoom 1, in world units. */
@@ -537,8 +535,6 @@ export function createLabView(host: HTMLElement, initial: LabViewOptions): LabVi
     ortho.top = viewHalf;
     ortho.bottom = -viewHalf;
     ortho.updateProjectionMatrix();
-    persp.aspect = aspect;
-    persp.updateProjectionMatrix();
   }
 
   function applySize(): void {
@@ -575,33 +571,23 @@ export function createLabView(host: HTMLElement, initial: LabViewOptions): LabVi
             Math.sin(ISO_ELEVATION),
             Math.cos(ISO_ELEVATION) * Math.sin(ISO_AZIMUTH),
           );
-    if (camera === ortho) {
-      const dist = radius * 4;
-      ortho.position.copy(center).addScaledVector(dir, dist);
-      ortho.zoom = 1;
-      ortho.near = 0.1;
-      ortho.far = dist + radius * 4;
-      ortho.lookAt(center);
-      ortho.updateMatrixWorld();
-      // The target sits on the view axis, so each corner's camera-space x and
-      // y is how far off centre it lands on screen.
-      let mx = 0;
-      let my = 0;
-      for (const c of corners) {
-        const v = c.clone().applyMatrix4(ortho.matrixWorldInverse);
-        mx = Math.max(mx, Math.abs(v.x));
-        my = Math.max(my, Math.abs(v.y));
-      }
-      viewHalf = Math.max(my, mx / aspect, 1) * 1.06;
-    } else {
-      const vfov = (persp.fov * Math.PI) / 180;
-      const hfov = 2 * Math.atan(Math.tan(vfov / 2) * aspect);
-      const dist = radius / Math.sin(Math.min(vfov, hfov) / 2);
-      persp.position.copy(center).addScaledVector(dir, dist);
-      persp.near = 0.1;
-      persp.far = dist + radius * 8;
-      persp.zoom = 1;
+    const dist = radius * 4;
+    ortho.position.copy(center).addScaledVector(dir, dist);
+    ortho.zoom = 1;
+    ortho.near = 0.1;
+    ortho.far = dist + radius * 4;
+    ortho.lookAt(center);
+    ortho.updateMatrixWorld();
+    // The target sits on the view axis, so each corner's camera-space x and
+    // y is how far off centre it lands on screen.
+    let mx = 0;
+    let my = 0;
+    for (const c of corners) {
+      const v = c.clone().applyMatrix4(ortho.matrixWorldInverse);
+      mx = Math.max(mx, Math.abs(v.x));
+      my = Math.max(my, Math.abs(v.y));
     }
+    viewHalf = Math.max(my, mx / aspect, 1) * 1.06;
     controls.maxDistance = Math.max(radius * 8, camera.position.distanceTo(center) * 1.5);
     controls.target.copy(center);
     applyProjection();
@@ -611,7 +597,6 @@ export function createLabView(host: HTMLElement, initial: LabViewOptions): LabVi
   function switchCamera(kind: LabCamera): void {
     if (kind === cameraKind) return;
     cameraKind = kind;
-    camera = kind === 'perspective' ? persp : ortho;
     const target = controls.target.clone();
     controls.dispose();
     controls = makeControls(target);
