@@ -590,7 +590,7 @@ export interface TokenCreateInput {
 }
 
 export interface FogOpInput {
-  op: 'reveal' | 'hide' | 'define';
+  op: 'reveal' | 'hide' | 'define' | 'remove';
   regionId?: string;
   region?: { id?: string; name: string; polygon: Point[] };
   shape?: Point[];
@@ -952,6 +952,13 @@ export class ScenesService {
         if (!fog.revealed.includes(op.regionId)) fog.revealed = [...fog.revealed, op.regionId];
       }
       if (op.shape) fog.revealedShapes = [...fog.revealedShapes, op.shape];
+    } else if (op.op === 'remove') {
+      // The region goes, and with it any reveal of it: the ground it covered
+      // is simply not fogged any more.
+      if (!op.regionId) throw httpError(400, 'bad_request', "op 'remove' needs a regionId");
+      region = fog.regions.find((r) => r.id === op.regionId);
+      fog.regions = fog.regions.filter((r) => r.id !== op.regionId);
+      fog.revealed = fog.revealed.filter((id) => id !== op.regionId);
     } else {
       // hide: one named region, or (no regionId) reset everything
       if (op.regionId) {

@@ -30,6 +30,8 @@ import DisplayTab from './DisplayTab.js';
 import EnvTab from './EnvTab.js';
 import FogTab from './FogTab.js';
 import Inspector from './Inspector.js';
+import PrepOutline from './PrepOutline.js';
+import TokenInspector from './TokenInspector.js';
 import ZoneDraft from './ZoneDraft.js';
 import LosTab from './LosTab.js';
 import TokensTab from './TokensTab.js';
@@ -77,6 +79,16 @@ export default function GmPanel(props: GmPanelProps) {
   */
   const build = mode === 'build';
   if (build && !selected && !cellSelection && tool !== 'zone') return null;
+
+  /*
+    Prep has no sections either (2026-09-25). What it places is on the
+    toolbar and what it sets for the whole scene is on the mode row; the
+    panel is the picked thing's properties — a token, a fog region, a
+    camera, a note — and, when nothing is picked, the one list of
+    everything on the floor, which is how a GM finds a hidden token or a
+    region not yet revealed.
+  */
+  if (mode === 'prep') return <PrepPanel {...props} />;
 
   return (
     <aside
@@ -155,6 +167,7 @@ export default function GmPanel(props: GmPanelProps) {
             scene={props.scene}
             selection={selected}
             onCenter={props.onCenter}
+            commands={props.commands}
           />
         </div>
       )}
@@ -180,6 +193,59 @@ export default function GmPanel(props: GmPanelProps) {
         {tab === 'tv' && <DisplayTab commands={props.commands} />}
       </div>
       )}
+    </aside>
+  );
+}
+
+/** Prep's panel: the picked thing's properties, or everything on the floor. */
+function PrepPanel(props: GmPanelProps) {
+  const selected = useGridStore((s) => s.selected);
+  const selectedTokenId = useGridStore((s) => s.selectedTokenId);
+  const select = useGridStore((s) => s.select);
+  const selectToken = useGridStore((s) => s.selectToken);
+  const toggle = useGridStore((s) => s.toggleGmPanel);
+  const token = props.tokens.find((t) => t.id === selectedTokenId) ?? null;
+  const picked = token !== null || selected !== null;
+  return (
+    <aside
+      data-testid="gm-panel"
+      className="flex w-full shrink-0 flex-col border-t border-edge bg-panel xl:h-full xl:w-80 xl:border-l xl:border-t-0"
+    >
+      <div className="flex items-center gap-1 border-b border-edge px-3 py-1.5">
+        <span className="mono-label flex-1 text-dim">{picked ? 'Properties' : 'On this floor'}</span>
+        {picked ? (
+          <button
+            type="button"
+            className="btn px-2 py-1"
+            title="Back to everything on this floor"
+            onClick={() => {
+              select(null);
+              selectToken(null);
+            }}
+          >
+            ✕
+          </button>
+        ) : (
+          <button type="button" className="btn px-2 py-1" title="Close panel" onClick={toggle}>
+            ✕
+          </button>
+        )}
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {token ? (
+          <TokenInspector scene={props.scene} tokens={props.tokens} token={token} onCenter={props.onCenter} />
+        ) : selected ? (
+          <Inspector
+            campaignId={props.campaignId}
+            scene={props.scene}
+            selection={selected}
+            onCenter={props.onCenter}
+            commands={props.commands}
+          />
+        ) : (
+          <PrepOutline scene={props.scene} tokens={props.tokens} commands={props.commands} onCenter={props.onCenter} />
+        )}
+      </div>
     </aside>
   );
 }

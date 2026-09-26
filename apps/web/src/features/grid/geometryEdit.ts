@@ -489,7 +489,7 @@ export function removeSelection(
   geo: SceneGeometry,
   // `painted` is accepted and left alone: a painted object is squares on a
   // tile layer, not geometry, and is erased through the paint endpoint.
-  selection: { kind: 'wall' | 'door' | 'zone' | 'pin' | 'camera' | 'note' | 'painted'; id: string } | null,
+  selection: { kind: 'wall' | 'door' | 'zone' | 'pin' | 'camera' | 'note' | 'painted' | 'fog'; id: string } | null,
 ): SceneGeometry {
   if (!selection) return geo;
   switch (selection.kind) {

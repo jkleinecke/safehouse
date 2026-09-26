@@ -30,6 +30,7 @@ import {
   usePatchGeometry,
   usePatchScene,
   usePatchToken,
+  usePlaceToken,
   useRefetchOnReconnect,
   useScene,
   useSceneTokens,
@@ -42,7 +43,10 @@ import {
   TileStrokeBuffer,
 } from './api.js';
 import { GridCommands } from './commands.js';
-import { metersBetween, metricsFor, rollScatter } from './geometry.js';
+import { metersBetween, metricsFor, rectPolygon, rollScatter } from './geometry.js';
+import { newId } from './gm/ui.js';
+import PrepPlacing from './hud/PrepPlacing.js';
+import PrepControls from './hud/PrepControls.js';
 import {
   addCamera,
   addDoor,
@@ -178,6 +182,7 @@ export default function GridPage() {
 
   const scene: Scene | null = sceneQuery.data ?? null;
   const tokens: Token[] = useMemo(() => tokensQuery.data ?? [], [tokensQuery.data]);
+  const placeToken = usePlaceToken();
   // Hydrated from REST, then merged with live `encounter.updated` (LIVE-1):
   // the acting-token glow and condition bars survive a page refresh.
   const encounter = useHydratedEncounter(campaignId, sceneId);
@@ -459,7 +464,73 @@ export default function GridPage() {
         const s = useGridStore.getState();
         s.setAoe({ center: { x, y }, radiusM: s.aoeRadiusM });
       },
-      onFogVertex: (x, y) => useGridStore.getState().addFogVertex(x, y),
+      // The Fog tool (Prep) draws and saves in one go: a rectangle on its
+      // second corner, a polygon when the GM clicks back on its first. The
+      // new region is named for its number and opened in the inspector,
+      // where it can be renamed. The zone tool drafts through the same
+      // points and saves from its own panel, as it always has.
+      onFogVertex: (x, y) => {
+        const st = useGridStore.getState();
+        if (st.tool !== 'fogdef' || !scene || !isGm) {
+          st.addFogVertex(x, y);
+          return;
+        }
+        const p = st.snapEnabled ? { x: Math.round(x), y: Math.round(y) } : { x, y };
+        const pts = st.fogDraft?.points ?? [];
+        const define = (polygon: Array<{ x: number; y: number }>) => {
+          const id = newId('fog');
+          commands.fogDefine(scene.id, { id, name: `Region ${scene.fog.regions.length + 1}`, polygon });
+          st.clearFogDraft();
+          st.selectToken(null);
+          st.select({ kind: 'fog', id });
+          st.openGmPanel();
+        };
+        if (st.fogShape === 'rect') {
+          const first = pts[0];
+          if (!first) {
+            st.addFogVertex(p.x, p.y);
+            return;
+          }
+          if (first.x === p.x || first.y === p.y) return; // no area yet
+          define(rectPolygon(first, p));
+          return;
+        }
+        const first = pts[0];
+        if (first && pts.length >= 3 && Math.hypot(p.x - first.x, p.y - first.y) < 0.6) {
+          define(pts);
+          return;
+        }
+        st.addFogVertex(p.x, p.y);
+      },
+      // The Token tool (Prep): the token picked in its menu, dropped in the
+      // square clicked, on the floor on screen. A runner is placed once, so
+      // the tool goes down after; NPCs and props keep coming.
+      onTokenPlace: (x, y) => {
+        if (!scene || !isGm) return;
+        const st = useGridStore.getState();
+        const stamp = st.tokenStamp;
+        if (!stamp) return;
+        const size = st.tokenSize;
+        const half = size / 2;
+        const at = st.snapEnabled
+          ? { x: Math.floor(x - half + 0.5) + half, y: Math.floor(y - half + 0.5) + half }
+          : { x, y };
+        placeToken.mutate({
+          sceneId: scene.id,
+          token: {
+            source: stamp.kind,
+            sourceId: stamp.sourceId,
+            name: stamp.name,
+            x: at.x,
+            y: at.y,
+            size,
+            hidden: stamp.kind !== 'character',
+            level: st.activeLevel,
+            barsVisibility: stamp.kind === 'character' ? 'owner' : 'gm',
+          },
+        });
+        if (stamp.kind === 'character') st.setTool('select');
+      },
       onFocus: (x, y) => {
         commands.focus(x, y);
         apiRef.current?.centerOn(x, y);
@@ -1011,7 +1082,15 @@ export default function GridPage() {
             floor={scene ? <FloorMenu scene={scene} /> : undefined}
             // Tokens are prep work — placed with the scene's encounter, not
             // while the floor they stand on is being laid.
-            tokenLayers={scene && store.mode !== 'build' ? <TokenLayersMenu scene={scene} /> : undefined}
+            tokenLayers={
+              scene && store.mode !== 'build' ? (
+                <>
+                  <TokenLayersMenu scene={scene} />
+                  {/* Prep's scene-wide settings: the environment, whose eyes, what players see. */}
+                  {store.mode === 'prep' && <PrepControls scene={scene} tokens={tokens} />}
+                </>
+              ) : undefined
+            }
             live={!!scene && scene.id === activeSceneId}
             tileset={store.mode === 'build' && scene ? <TilesetBar scene={scene} /> : undefined}
             history={{
@@ -1030,7 +1109,9 @@ export default function GridPage() {
           onTool={store.setTool}
           // What is being placed, each subject carrying the tile it lays:
           // Build mode's first step, and only a GM building has it.
-          placing={isGm ? <PlacingGroup /> : undefined}
+          placing={
+            isGm ? (store.mode === 'prep' && campaignId ? <PrepPlacing campaignId={campaignId} /> : <PlacingGroup />) : undefined
+          }
           mapImage={isGm && scene ? <MapImageButton scene={scene} /> : undefined}
         />
       </header>

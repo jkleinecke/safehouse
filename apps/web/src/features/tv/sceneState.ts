@@ -216,7 +216,9 @@ export function mergeSceneEvents(
         if (op === 'reveal') {
           revealRegion(draft, asRegion(p['region']), str(p['regionId']));
           addShape(draft, asPolygon(p['shape']), seenShapes);
-        } else if (op === 'hide') {
+        } else if (op === 'hide' || op === 'remove') {
+          // A removed region is gone from the TV's picture the same way a
+          // hidden one is; what it covered is the server's next answer.
           hideRegion(draft, str(p['regionId']));
         }
         // 'define' is GM-visibility and never arrives here.

@@ -35,6 +35,36 @@ function readStoredMode(): GridMode {
     return 'build';
   }
 }
+/**
+ * The scene the GM is staging and the floor they are on, kept for the tab.
+ * Neither survived a reload — nor, in development, a code change, which
+ * re-runs this module — so the map went back to the live scene's ground
+ * floor under the GM's feet. Per tab, not per device: two tabs may be on
+ * two scenes.
+ */
+const VIEW_KEY = 'safehouse.grid.view';
+function readStoredView(): { viewSceneId: string | null; activeLevel: number } {
+  try {
+    const v = JSON.parse(globalThis.sessionStorage?.getItem(VIEW_KEY) ?? 'null') as {
+      viewSceneId?: unknown;
+      activeLevel?: unknown;
+    } | null;
+    return {
+      viewSceneId: typeof v?.viewSceneId === 'string' ? v.viewSceneId : null,
+      activeLevel: typeof v?.activeLevel === 'number' && v.activeLevel >= 0 ? Math.floor(v.activeLevel) : 0,
+    };
+  } catch {
+    return { viewSceneId: null, activeLevel: 0 };
+  }
+}
+function storeView(view: { viewSceneId: string | null; activeLevel: number }): void {
+  try {
+    globalThis.sessionStorage?.setItem(VIEW_KEY, JSON.stringify(view));
+  } catch {
+    /* storage blocked: the view lasts until the page reloads */
+  }
+}
+
 function storeMode(mode: GridMode): void {
   try {
     globalThis.localStorage?.setItem(MODE_KEY, mode);
@@ -148,6 +178,12 @@ export interface GridUiState {
    * the map's context menu; the Tokens tab reads it once and clears it.
    */
   placeAt: Point | null;
+  /** What the Token tool places (Prep's Token menu): who, and from where. */
+  tokenStamp: TokenStamp | null;
+  /** How many squares across the next token placed covers (Prep's Size menu). */
+  tokenSize: number;
+  /** How the Fog tool draws a region: two corners, or round the corners back to the first. */
+  fogShape: 'rect' | 'polygon';
   /** Build · Prep · Play — which of the Grid's three jobs the GM is doing (hud/modes.ts). */
   mode: GridMode;
   /** GM only: view a non-active scene while staging (FR9.1). */
@@ -190,6 +226,9 @@ export interface GridUiState {
   togglePlayRail: () => void;
   setViewMode: (mode: VisionMode) => void;
   setPlaceAt: (at: Point | null) => void;
+  setTokenStamp: (stamp: TokenStamp | null) => void;
+  setTokenSize: (size: number) => void;
+  setFogShape: (shape: 'rect' | 'polygon') => void;
   setViewSceneId: (id: string | null) => void;
   setPendingRollMod: (mod: PendingRollMod | null) => void;
   select: (selected: GeometrySelection | null) => void;
@@ -234,12 +273,21 @@ function toolPatch(
   };
 }
 
+/** The token the Token tool places: a runner, an NPC template or a prop. */
+export interface TokenStamp {
+  kind: 'character' | 'npc_template' | 'prop';
+  sourceId: string | null;
+  name: string;
+}
+
+const initialView = readStoredView();
+
 export const useGridStore = create<GridUiState>()((set) => ({
   tool: 'select',
   tilesetId: DEFAULT_TILESET_ID,
   tileId: null,
   tileCategory: 'ground',
-  activeLevel: 0,
+  activeLevel: initialView.activeLevel,
   viewProjection: 'scene',
   losTokenId: null,
   coverOverride: null,
@@ -257,9 +305,12 @@ export const useGridStore = create<GridUiState>()((set) => ({
   playRailOpen: true,
   viewMode: 'normal',
   placeAt: null,
+  tokenStamp: null,
+  tokenSize: 1,
+  fogShape: 'rect',
   gmTab: 'tokens',
   mode: readStoredMode(),
-  viewSceneId: null,
+  viewSceneId: initialView.viewSceneId,
   pendingRollMod: null,
   selected: null,
   zoneName: '',
@@ -307,7 +358,12 @@ export const useGridStore = create<GridUiState>()((set) => ({
   // Changing floor drops the tile selection: a tile id means the same thing
   // on any storey, but the SELECTION is part of "what am I doing right now",
   // and arriving on a new floor mid-brush is how a GM paints the wrong one.
-  setActiveLevel: (activeLevel) => set({ activeLevel: Math.max(0, Math.floor(activeLevel)) }),
+  setActiveLevel: (level) =>
+    set((s) => {
+      const activeLevel = Math.max(0, Math.floor(level));
+      storeView({ viewSceneId: s.viewSceneId, activeLevel });
+      return { activeLevel };
+    }),
   setViewProjection: (viewProjection) => set({ viewProjection }),
   setLosTokenId: (losTokenId) => set({ losTokenId, coverOverride: null }),
   setCoverOverride: (coverOverride) => set({ coverOverride }),
@@ -355,7 +411,16 @@ export const useGridStore = create<GridUiState>()((set) => ({
   togglePlayRail: () => set((s) => ({ playRailOpen: !s.playRailOpen })),
   setViewMode: (viewMode) => set({ viewMode }),
   setPlaceAt: (placeAt) => set({ placeAt }),
-  setViewSceneId: (viewSceneId) => set({ viewSceneId }),
+  setTokenStamp: (tokenStamp) => set({ tokenStamp }),
+  setTokenSize: (n) => set({ tokenSize: Math.max(1, Math.min(8, Math.round(n))) }),
+  setFogShape: (fogShape) => set({ fogShape }),
+  setViewSceneId: (viewSceneId) =>
+    set((s) => {
+      // Another scene starts on its ground floor, unless it is the one already on screen.
+      const activeLevel = viewSceneId === s.viewSceneId ? s.activeLevel : 0;
+      storeView({ viewSceneId, activeLevel });
+      return { viewSceneId, activeLevel };
+    }),
   setPendingRollMod: (pendingRollMod) => {
     publishPendingRollMod(pendingRollMod);
     set({ pendingRollMod });
@@ -371,3 +436,20 @@ export const useGridStore = create<GridUiState>()((set) => ({
   setZoneName: (zoneName) => set({ zoneName }),
   setDisplay: (patch) => set((s) => ({ display: { ...s.display, ...patch } })),
 }));
+
+/*
+  Development only: a code change re-runs this module, and a fresh store is a
+  fresh map — the tool dropped, the selection gone, the panel reset. Hand the
+  old state (its values, not its functions, which belong to the old store) to
+  the new one.
+*/
+const hot = (import.meta as { hot?: { data: Record<string, unknown>; dispose: (cb: (data: Record<string, unknown>) => void) => void } }).hot;
+if (hot) {
+  const prev = hot.data['grid'] as Partial<GridUiState> | undefined;
+  if (prev) useGridStore.setState(prev);
+  hot.dispose((data) => {
+    data['grid'] = Object.fromEntries(
+      Object.entries(useGridStore.getState()).filter(([, v]) => typeof v !== 'function'),
+    );
+  });
+}

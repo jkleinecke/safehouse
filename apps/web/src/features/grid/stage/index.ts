@@ -138,6 +138,45 @@ function pinKey(state: StageSceneState): string {
   ].join('|');
 }
 
+/** Where the GM left each scene's camera, for the tab — so a reload lands where they were. */
+const CAMERA_KEY = (sceneId: string) => `safehouse.grid.camera.${sceneId}`;
+let cameraTimer: ReturnType<typeof setTimeout> | null = null;
+let cameraPending: { sceneId: string; x: number; y: number; scale: number } | null = null;
+
+function readCamera(sceneId: string): { x: number; y: number; scale: number } | null {
+  if (!sceneId) return null;
+  try {
+    const v = JSON.parse(globalThis.sessionStorage?.getItem(CAMERA_KEY(sceneId)) ?? 'null') as {
+      x?: unknown;
+      y?: unknown;
+      scale?: unknown;
+    } | null;
+    if (typeof v?.x !== 'number' || typeof v.y !== 'number' || typeof v.scale !== 'number' || v.scale <= 0) return null;
+    return { x: v.x, y: v.y, scale: v.scale };
+  } catch {
+    return null;
+  }
+}
+
+function writeCamera(sceneId: string, cam: { x: number; y: number; scale: number }): void {
+  // A pan is sixty frames a second; the tab needs to know where it ended —
+  // so the latest position is written once the camera has been still a moment.
+  if (!sceneId) return;
+  cameraPending = { sceneId, x: cam.x, y: cam.y, scale: cam.scale };
+  if (cameraTimer !== null) return;
+  cameraTimer = setTimeout(() => {
+    cameraTimer = null;
+    const p = cameraPending;
+    cameraPending = null;
+    if (!p) return;
+    try {
+      globalThis.sessionStorage?.setItem(CAMERA_KEY(p.sceneId), JSON.stringify({ x: p.x, y: p.y, scale: p.scale }));
+    } catch {
+      /* storage blocked */
+    }
+  }, 250);
+}
+
 class Stage implements StageApi, PointerHost {
   readonly camera = new Camera();
   readonly callbacks: StageOptions['callbacks'];
@@ -284,6 +323,24 @@ class Stage implements StageApi, PointerHost {
 
     this.app.ticker.add((ticker) => this.frame(ticker.deltaMS));
     this.update(this.sceneState);
+    this.frameScene();
+  }
+
+  /**
+   * Frame the scene: where the GM left it, if they have looked at it in this
+   * tab before — a reload, or in development a code change, must not throw
+   * the view back to the whole map — else the whole map.
+   */
+  private frameScene(): void {
+    const saved = readCamera(this.framedSceneId);
+    if (saved) {
+      this.camera.x = saved.x;
+      this.camera.y = saved.y;
+      this.camera.scale = saved.scale;
+      this.camera.touched = true;
+      this.camera.dirty = true;
+      return;
+    }
     this.fitScene();
   }
 
@@ -605,7 +662,7 @@ class Stage implements StageApi, PointerHost {
 
     if (next.scene.id !== this.framedSceneId) {
       this.framedSceneId = next.scene.id;
-      this.fitScene();
+      this.frameScene();
     }
   }
 
@@ -754,6 +811,7 @@ class Stage implements StageApi, PointerHost {
       this.world.y = this.camera.y;
       this.world.scale.set(this.camera.scale);
       this.camera.dirty = false;
+      if (this.camera.touched) writeCamera(this.framedSceneId, this.camera);
     }
     for (const view of this.views.values()) view.tick(deltaMS);
     this.fx.tick(deltaMS);

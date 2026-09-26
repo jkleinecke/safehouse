@@ -233,7 +233,7 @@ const SceneLevelsBody = z.object({
 });
 
 const FogOpBody = z.object({
-  op: z.enum(['reveal', 'hide', 'define']).default('reveal'),
+  op: z.enum(['reveal', 'hide', 'define', 'remove']).default('reveal'),
   regionId: z.string().optional(),
   region: FogRegionSchema.partial({ id: true }).optional(),
   shape: z.array(PointSchema).min(3).optional(),

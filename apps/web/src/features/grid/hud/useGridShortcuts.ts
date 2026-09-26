@@ -53,6 +53,9 @@ export function useGridShortcuts(
           return;
         }
         if (!s.selected) return;
+        // A fog region is deleted from its inspector, where the GM can see
+        // what they are taking away; the Delete key leaves it be.
+        if (s.selected.kind === 'fog') return;
         // A painted wall, door or prop is squares on a layer, not geometry:
         // it goes as an erase of exactly its own cells, on its own layer, so
         // the floor under a deleted bench stays floor.

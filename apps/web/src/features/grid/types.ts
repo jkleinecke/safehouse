@@ -25,6 +25,7 @@ export type GridTool =
   | 'tile-area' // GM: drag a rectangle, fill it with the chosen ground
   | 'tile-room' // GM: drag a rectangle, floor inside and walls around it
   | 'arc' // GM: drag a wall's two ends, then pull it into a curve (any angle, straight or curved)
+  | 'token' // GM: click to place the token picked in Prep's Token menu
   | 'tile-erase'; // GM: clear painted cells
 
 /** GM drawing tools that author scene geometry rather than play with it. */
@@ -344,7 +345,7 @@ export interface GeometrySelection {
    * geometry; its id is `"<layer>:<col>,<row>"` for one cell of it, and the
    * whole object is read back from that cell (`paintedObjects.ts`).
    */
-  kind: 'wall' | 'door' | 'zone' | 'pin' | 'camera' | 'note' | 'painted';
+  kind: 'wall' | 'door' | 'zone' | 'pin' | 'camera' | 'note' | 'painted' | 'fog';
   id: string;
 }
 
@@ -448,6 +449,8 @@ export interface StageCallbacks {
   onSegmentDraw?(kind: 'wall' | 'door', a: Point, b: Point): void;
   /** An arc wall placed: its ends in grid units, and its bulge (rules: arcs.ts). */
   onArcDraw?(a: Point, b: Point, bulge: number): void;
+  /** Token tool click (Prep): place the picked token here. */
+  onTokenPlace?(x: number, y: number): void;
   /** pin tool click — drop a pin at grid coords (FR9.3). */
   onPinPlace?(x: number, y: number): void;
   /** One cell of a tile paint stroke (FR9.2); `erase` clears instead. */

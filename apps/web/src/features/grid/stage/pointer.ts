@@ -413,6 +413,10 @@ export class PointerController {
       case 'door':
         this.beginSegment(state.tool, grid, state, e.shiftKey);
         return;
+      case 'token':
+        this.mode = 'idle';
+        this.host.callbacks.onTokenPlace?.(grid.x, grid.y);
+        return;
       case 'arc':
         this.arcA = this.vertex(grid, state, e.shiftKey);
         this.arcB = this.arcA;

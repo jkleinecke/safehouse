@@ -46,6 +46,7 @@ const TOOL_DEFS: Record<GridTool, Omit<ToolDef, 'id'>> = {
   'tile-area': { label: 'Area', glyph: '▭' },
   tile: { label: 'Brush', glyph: '🖌' },
   arc: { label: 'Arc wall', glyph: '◠' },
+  token: { label: 'Token', glyph: '●' },
   'tile-erase': { label: 'Erase', glyph: '⌫' },
   door: { label: 'Doorway', glyph: '⌷' },
   zone: { label: 'Zone', glyph: '▱' },
@@ -140,6 +141,9 @@ export default function Toolbar(props: ToolbarProps) {
     player.
   */
   const build = props.isGm && props.mode === 'build';
+  // Prep has its own placing row (PrepPlacing): what goes on the map, each
+  // with its caret — Token, Fog, Camera, Note.
+  const prep = props.isGm && props.mode === 'prep' && props.placing !== undefined;
   /*
     Select, and in Build mode Erase, lead the row apart from everything else:
     one puts the tools down and the other takes things off the map, and
@@ -173,6 +177,8 @@ export default function Toolbar(props: ToolbarProps) {
             <Divider />
             <ToolGroup label="Tools" tools={BUILD_TOOLS} tool={props.tool} onTool={props.onTool} />
           </>
+        ) : prep ? (
+          props.placing
         ) : (
           <ToolGroup label="Tools" tools={rest} tool={props.tool} onTool={props.onTool} />
         )}

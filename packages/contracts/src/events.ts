@@ -138,7 +138,7 @@ export type TokenDragCommand = z.infer<typeof TokenDragCommandSchema>;
 export const FogRevealCommandSchema = z.object({
   cmd: z.literal('fog.reveal'),
   sceneId: z.string(),
-  op: z.enum(['reveal', 'hide', 'define']).default('reveal'),
+  op: z.enum(['reveal', 'hide', 'define', 'remove']).default('reveal'),
   /** For reveal/hide of a named region. */
   regionId: z.string().optional(),
   /** For op 'define': the new named region. */

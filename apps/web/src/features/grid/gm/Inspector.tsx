@@ -13,6 +13,8 @@
  * stripped from player payloads SERVER-side (`sceneForViewer`), so "reveal"
  * is a real state change, not a repaint.
  */
+import FogInspector from './FogInspector.js';
+import type { GridCommands } from '../commands.js';
 import { useRef, useState, type ReactNode } from 'react';
 import type { Camera, Door, Note, Pin, Point, Scene, Wall, Zone } from '@safehouse/contracts';
 import { sceneLevels } from '@safehouse/rules';
@@ -52,6 +54,8 @@ export interface InspectorProps {
   scene: Scene;
   selection: GeometrySelection;
   onCenter: (x: number, y: number) => void;
+  /** The live commands, for what the server owns outright — a fog region. */
+  commands?: GridCommands;
 }
 
 type Geo = Scene['geometry'];
@@ -65,6 +69,7 @@ const TITLES: Record<GeometrySelection['kind'], string> = {
   camera: 'Camera',
   note: 'Note',
   painted: 'Painted',
+  fog: 'Fog region',
 };
 
 /** A few papers to pick from; the contract takes any hex. */
@@ -97,6 +102,11 @@ export default function Inspector(props: InspectorProps) {
   // record, so it has an inspector of its own — and none of the geometry
   // fields, which describe things it does not have.
   if (props.selection.kind === 'painted') return <PaintedInspector {...props} />;
+  if (props.selection.kind === 'fog') {
+    return props.commands ? (
+      <FogInspector scene={props.scene} regionId={props.selection.id} commands={props.commands} onCenter={props.onCenter} />
+    ) : null;
+  }
   return <GeometryInspector {...props} />;
 }
 
@@ -219,6 +229,9 @@ export function find(geo: Geo, sel: GeometrySelection): Found | null {
       const item = by(notesOf(geo));
       return item ? { kind: 'note', item } : null;
     }
+    default:
+      // Painted objects and fog regions are not geometry; each has its own inspector.
+      return null;
   }
 }
 

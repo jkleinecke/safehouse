@@ -187,6 +187,11 @@ export class GridCommands {
     post(this.socket, { cmd: 'fog.reveal', sceneId, op: 'define', region });
   }
 
+  /** Take a fog region off the scene — the ground it covered is no longer fogged. */
+  fogRemove(sceneId: string, regionId: string): void {
+    post(this.socket, { cmd: 'fog.reveal', sceneId, op: 'remove', regionId });
+  }
+
   dispose(): void {
     this.dragRelay.cancel();
     this.pointerRelay.cancel();

@@ -14,7 +14,7 @@ import {
 
 const ALL_TOOLS: GridTool[] = [
   'select', 'ruler', 'aoe', 'pointer', 'fogdef', 'focus', 'door', 'zone', 'pin', 'camera', 'note',
-  'tile', 'tile-area', 'tile-room', 'tile-erase', 'arc',
+  'tile', 'tile-area', 'tile-room', 'tile-erase', 'arc', 'token',
 ];
 
 describe('the three modes', () => {
