@@ -63,6 +63,15 @@
  * the new sight before the guards standing in it arrive. Runners are never
  * withheld, so only everyone else comes and goes.
  *
+ * And the pins: a public pin is sent only where the table is shown its
+ * ground (`pinsForTable`), so a change that uncovers or covers one tells the
+ * table to read the scene again (`scene.updated`, changed `['pins']`).
+ *
+ * All of that is the table's only while the scene is (`sceneOnTable`): on a
+ * scene the GM is still staging, the sight and the brush go to the GM alone,
+ * and no token arrives or leaves, because no phone holds the scene to put
+ * one on. The read on `scene.activated` is the table's first word of it.
+ *
  * Pooled (the GM, 2026-09-27): every phone and the TV get the same sight, the
  * union of every runner's. Nothing is kept per player.
  */
@@ -74,6 +83,7 @@ import {
   type FogSight,
   type FogSightLevel,
   type FogState,
+  type Pin,
   type Scene,
 } from '@safehouse/contracts';
 import {
@@ -94,14 +104,21 @@ import type { EventTx } from '../hub.js';
 import {
   ScenesService,
   concealer,
+  pinsForTable,
+  sceneEventVisibility,
+  sceneOnTable,
   serializeScene,
   serializeToken,
   tokenHidden,
   type TokenRow,
 } from './scenes.js';
 
-/** The parts of a scene the concealment diff reads: sightlines move the edge as much as the fog does. */
-export type ConcealmentScene = Pick<Scene, 'tokenLayers' | 'fog' | 'vision'>;
+/**
+ * The parts of a scene the concealment diff reads: sightlines move the edge
+ * as much as the fog does, and a staged scene (`state`) has no table for a
+ * token to arrive on.
+ */
+export type ConcealmentScene = Pick<Scene, 'state' | 'tokenLayers' | 'fog' | 'vision'>;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -336,6 +353,12 @@ export function affectsSight(token: { source: string; light?: unknown }): boolea
  * maps and the TV already fold both, so neither needs to know WHY a token
  * came or went: only the server knows that, and it is the server's secret.
  *
+ * Nothing at all on a scene that is not the table's once the change is made
+ * (`sceneOnTable`): a scene the GM is staging has no table to arrive on, and
+ * a guard "arriving" there was a public event with his name and where he
+ * stood, on a scene no player could open. The table reads the scene whole
+ * when it goes live.
+ *
  * Runs inside the caller's transaction, after the scene write, so the tokens
  * are read through the same handle and the events commit with it.
  */
@@ -345,6 +368,7 @@ export async function emitConcealmentChanges(
   before: ConcealmentScene,
   after: ConcealmentScene,
 ): Promise<void> {
+  if (!sceneOnTable(after)) return;
   const was = concealer(before);
   const now = concealer(after);
   for (const row of await new ScenesService(tx.db).tokensOf(sceneId)) {
@@ -440,7 +464,11 @@ export async function recomputeSight(tx: EventTx, sceneId: string, opts: SightPa
     await tx.db.update(scenes).set({ fog }).where(eq(scenes.id, sceneId));
   }
   const after: Scene = { ...stored, fog };
-  if (brushMoved) await tx.emit({ type: 'fog.updated', payload: brushEventPayload(sceneId, after, sceneFogOn(after)) });
+  // The table's, or the GM's alone while the scene is staged (`sceneOnTable`).
+  const heard = sceneEventVisibility(after);
+  if (brushMoved) {
+    await tx.emit({ type: 'fog.updated', payload: brushEventPayload(sceneId, after, sceneFogOn(after)), visibility: heard });
+  }
 
   const reference = opts.before !== undefined ? opts.before.fog.sight : prior;
   const told = !sameSight(reference, next) || opts.announce === true;
@@ -456,12 +484,26 @@ export async function recomputeSight(tx: EventTx, sceneId: string, opts: SightPa
         levels: grid.levels,
         active: sceneFogOn(after),
       },
+      visibility: heard,
     });
   }
   if (told || brushMoved || opts.before !== undefined) {
-    await emitConcealmentChanges(tx, sceneId, opts.before ?? stored, after);
+    const was = opts.before ?? stored;
+    await emitConcealmentChanges(tx, sceneId, was, after);
+    // The pins the table is sent moved with the fog under them (the pins
+    // themselves did not: a geometry write says so in its own event).
+    if (sceneOnTable(after) && !samePins(pinsForTable({ ...after, fog: was.fog, vision: was.vision }), pinsForTable(after))) {
+      await tx.emit({ type: 'scene.updated', payload: { sceneId, changed: ['pins'] } });
+    }
   }
   return { fog, told };
+}
+
+/** Two pin lists name the same pins, in any order. */
+function samePins(a: readonly Pin[], b: readonly Pin[]): boolean {
+  if (a.length !== b.length) return false;
+  const ids = new Set(a.map((p) => p.id));
+  return b.every((p) => ids.has(p.id));
 }
 
 /**

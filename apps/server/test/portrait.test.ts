@@ -239,4 +239,61 @@ describe('character portraits', () => {
     await upload(player.token, characterId);
     expect(await revs()).toBe(before);
   });
+
+  it('tells the table a new face only on the tokens it has: not one held back on a layer, nor one on a staged scene (P6)', async () => {
+    // The Alley was never made the table's scene: it is still being staged.
+    // The Roof goes live with two of the runner's tokens on it, one of them
+    // held back on a layer the GM has not shown.
+    const json = { 'content-type': 'application/json' };
+    const roof = await t.app.inject({
+      method: 'POST',
+      url: `/api/campaigns/${boot.campaignId}/scenes`,
+      headers: as(boot.gmToken, json),
+      payload: { name: 'Roof' },
+    });
+    const roofId = (roof.json() as { scene: { id: string } }).scene.id;
+    const live = await t.app.inject({ method: 'POST', url: `/api/scenes/${roofId}/activate`, headers: as(boot.gmToken) });
+    expect(live.statusCode).toBe(200);
+    const place = async (x: number) => {
+      const res = await t.app.inject({
+        method: 'POST',
+        url: `/api/scenes/${roofId}/tokens`,
+        headers: as(boot.gmToken, json),
+        payload: { source: 'character', sourceId: characterId, x, y: 1.5 },
+      });
+      return (res.json() as { token: { id: string } }).token.id;
+    };
+    const shownId = await place(1.5);
+    const heldId = await place(3.5);
+    const layered = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/scenes/${roofId}`,
+      headers: as(boot.gmToken, json),
+      payload: { tokenLayers: [{ id: 'layer-held', name: 'Held back', hidden: true, tokenIds: [heldId] }] },
+    });
+    expect(layered.statusCode).toBe(200);
+
+    /** The token.updated events `who` can read back, after event `from`, by token id. */
+    const told = async (who: string, from: number): Promise<string[]> => {
+      const res = await t.app.inject({
+        method: 'GET',
+        url: `/api/campaigns/${boot.campaignId}/log?limit=500&types=token.updated`,
+        headers: as(who),
+      });
+      const events = (res.json() as { events: { id: unknown; payload: { token: { id: string } } }[] }).events;
+      return events
+        .filter((e) => Number(e.id) > from)
+        .map((e) => e.payload.token.id)
+        .sort();
+    };
+    const everything = await t.app.inject({ method: 'GET', url: `/api/campaigns/${boot.campaignId}/log?limit=1`, headers: as(boot.gmToken) });
+    const from = Math.max(0, ...(everything.json() as { events: { id: unknown }[] }).events.map((e) => Number(e.id)));
+
+    const res = await upload(player.token, characterId);
+    expect(res.statusCode).toBe(201);
+    expect((res.json() as { tokens: number }).tokens).toBe(3);
+    // The GM hears all three; the table only the one it has.
+    expect(await told(boot.gmToken, from)).toEqual([tokenId, shownId, heldId].sort());
+    for (const who of [player.token, other.token]) expect(await told(who, from)).toEqual([shownId]);
+  });
 });

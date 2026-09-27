@@ -35,6 +35,13 @@
  * after any other op that moved it (a region revealed or hidden takes the
  * marks under it; the reset takes them all).
  *
+ * All of that is the table's only while the scene IS the table's, the active
+ * one (`sceneOnTable`). On a scene the GM is still staging, every event a
+ * fog op sends goes to the GM alone (`sceneEventVisibility`), the log line a
+ * reveal may ask for included: a region revealed there would otherwise put
+ * its name and outline on every phone's socket while the GM prepared it in
+ * private. The table reads the whole scene, fog and all, when it goes live.
+ *
  * Then the tokens. A fog op moves the edge of what the table may see, so
  * every token whose answer to `tokenConcealed` changed with it arrives
  * (`token.added`) or leaves (`token.removed`), exactly as a layer shown or
@@ -53,7 +60,7 @@
 import { sceneFogOn, type FogRegion, type FogState, type Scene } from '@safehouse/contracts';
 import { sameBrush } from '@safehouse/rules';
 import type { EventTx } from '../hub.js';
-import { ScenesService, serializeScene, type FogOpInput } from './scenes.js';
+import { ScenesService, sceneEventVisibility, serializeScene, type FogOpInput } from './scenes.js';
 import { brushEventPayload, recomputeSight } from './sight.js';
 
 /** A fog op as a caller asks for it: the op, and whether a reveal goes in the session log (FR9.14). */
@@ -110,6 +117,9 @@ export async function tellFogOp(tx: EventTx, sceneId: string, op: FogOpInput): P
   // fogged whatever the switch says, and says so.
   const active = sceneFogOn({ fog, vision: before.vision });
   const after: Scene = { ...before, fog };
+  // Who hears what the op tells the table: the table, or the GM alone while
+  // the scene is staged (see the top of this file).
+  const heard = sceneEventVisibility(before);
   await tx.emit({
     type: 'fog.updated',
     payload: isSwitch
@@ -139,7 +149,7 @@ export async function tellFogOp(tx: EventTx, sceneId: string, op: FogOpInput): P
               ...fashion,
               ...(isDefine ? {} : { active }),
             },
-    visibility: isDefine ? 'gm' : 'public',
+    visibility: isDefine ? 'gm' : heard,
   });
   // A `define` is the GM's, but two of them change what the table sees: one
   // that turns the fog on (the first region on a scene whose switch was
@@ -161,14 +171,14 @@ export async function tellFogOp(tx: EventTx, sceneId: string, op: FogOpInput): P
         active,
         ...(revealedRegion ? { regionId: revealedRegion.id, region: revealedRegion } : {}),
       },
-      visibility: 'public',
+      visibility: heard,
     });
   }
   // Any other op that moved the brush (a region revealed or hidden takes the
   // marks under it, the reset takes every one) tells the table the brush as
   // it now is, in the same shape a stroke does, after the op's own event.
   if (!isBrush && !sameBrush(before.fog.brush, fog.brush)) {
-    await tx.emit({ type: 'fog.updated', payload: brushEventPayload(sceneId, after, active) });
+    await tx.emit({ type: 'fog.updated', payload: brushEventPayload(sceneId, after, active), visibility: heard });
   }
   return region ? { before, fog, region } : { before, fog };
 }
@@ -191,6 +201,7 @@ export async function runFogOp(tx: EventTx, sceneId: string, op: FogOpRequest): 
     await tx.emit({
       type: 'log.posted',
       payload: { kind: 'scene', sceneId, text: `Revealed: ${told.region.name}` },
+      visibility: sceneEventVisibility(told.before),
     });
   }
   return { fog: pass.fog };

@@ -4,6 +4,13 @@
 §2 is the plan for the rest, written so it can be argued with before it is
 coded.*
 
+*Update, 2026-09-27: the party's sightlines and a fog of war kept by the
+server are built (FR9.13, FR9.16), with the GM's decisions of that day.
+They went another way from this plan in one large respect: the table shares
+one pooled sight, worked out on the server, rather than each phone drawing
+its own. §8 says what was built against the plan; §1–§7 are kept as
+written.*
+
 Roll20's dynamic lighting answers one question — "which pixels can this
 token's eyes reach" — with one model of eyes. Shadowrun has four kinds of
 eyes at every table, a light table that turns darkness into a dice
@@ -269,7 +276,8 @@ In rough priority, cheapest and most-used first:
 - Not secrecy. Fog and vision remain a presentation boundary for terrain
   and a secrecy boundary for everything else (hidden tokens, GM pins,
   cameras). The floor plan is still sent whole; what the player *can act
-  on* is what changes.
+  on* is what changes. *(2026-09-27: the fog became that secrecy boundary
+  for the tokens standing under it too, withheld by the server; §8.3.)*
 - Not a replacement for manual fog. FR9.13's fog stays first-class; the
   light map and the shroud draw under it.
 
@@ -288,3 +296,150 @@ In rough priority, cheapest and most-used first:
    the player's.
 6. Visibility zones (smoke/fog), flashlights, the decker's switches.
 7. Sensors, alarm state, camera feeds panel, drones.
+
+## 8. What was built, against this plan (2026-09-27)
+
+*The plan above is kept as it was written on 2026-09-08. This section says
+what was built since, where it follows the plan and where it went another
+way.* The biggest change of direction: the plan put a pair of eyes on each
+player's device, drawing its own shroud. What was built is the **table's
+shared sight, kept by the server**, because the GM decided so on
+2026-09-27 (`DESIGN.md` Q9):
+
+1. Sight is **pooled**: every phone and the TV show the union of all the
+   runners' sight. No phone is shown more or less than another, and the
+   older "dim outside own sight" switch (§1) keeps working unchanged: it
+   darkens a phone to its own runner's sightline and withholds nothing.
+2. Unmasking is **always automatic** while a scene's sightlines are on:
+   what any runner sees is live at once and joins the party's memory. The
+   GM can fog it again or forget it.
+3. **Strict SR5 darkness** (§3's table, per square).
+4. Tokens outside LIVE ground are **withheld by the server** from players,
+   the TV and observers; runners are always on the table.
+5. Scenes **start open**, with an explicit fog switch.
+6. Sightlines are a **per-scene** setting (`SceneVision.sight`).
+7. The GM reveals **live or explored** ("seen before": the map dimmed,
+   nobody on it).
+
+### 8.1 The order of work (§7), item by item
+
+1. **Vision modes on the sheet** — built by 2026-09-13: `visionModesFor`
+   (`packages/rules/src/vision/modes.ts`) reads metatype, 'ware, gear and
+   qualities. Not on the token: an NPC or a spirit has no modes, which
+   matters to nothing yet, since only runners are eyes for the sightlines.
+2. **Light map** — built 2026-09-26: `lightMapFor`
+   (`packages/rules/src/vision/light.ts`), from the ambient level, glowing
+   tiles, lamps the GM places (`SceneLight`) and lights tokens carry
+   (`TokenLight`), spread through the same walls and doors as sight, one
+   light row per square; the GM has a light-map view. Darkness zones are
+   not built.
+3. **Per-pair modifier** — not built. The dice still take the scene-wide
+   environment modifier; the light rows decide only what is seen.
+4. **Per-mode shroud and the player's mode selector** — the selector and
+   the restyle are built (`grid/hud/eyes.ts`, `grid/stage/viewModes.ts`),
+   showing a player only the modes their runner has. What the table is
+   SHOWN is no longer the phone's own shroud but the pooled sight (§8.2),
+   worked out on the server with each runner's own modes; the selector
+   changes how the map looks, not what is on it.
+5. **Heat** — the thermal restyle is built (a cold floor, warm bodies).
+   Per-tile and per-token heat are not.
+6. **Flashlights** — built as token lights, which a player may switch on
+   and off for their own runner. Smoke and visibility zones and the
+   decker's switches are not.
+7. **Sensors, alarm state, camera feeds, drones** — not built.
+
+### 8.2 Sightlines
+
+A per-scene switch. The rules are `partySight` and `sightFor`
+(`packages/rules/src/vision/sight.ts`); the server's pass is
+`recomputeSight` (`apps/server/src/services/sight.ts`).
+
+- **When.** After every committed change that can move the party's sight,
+  inside the same transaction: a runner's step (the drop, never a drag
+  frame), a door, a light switched or carried, paint and walls, a scene
+  edit, a fog op, the scene going live, a runner's sheet saved with other
+  eyes. Never per frame. A guard with no light moves nobody's sight and
+  costs nothing.
+- **What stops a look.** Walls and closed doors, painted or traced; an
+  open door is a doorway. A wall is seen by its face, from a seen open
+  square in front of it, so remembered rooms keep their walls; it is never
+  seen from its far side, and a corner is lent only where it is a corner.
+  A runner standing in a square that blocks sight sees that square alone.
+- **Darkness.** A square is seen when a look reaches it and it is not in
+  total darkness for the runner's eyes after compensation (§3). Low-light
+  vision helps the dice, not the map; thermographic vision shifts every row
+  up and so sees every square a look reaches; ultrasound sees within 50 m
+  in any light; astral perception changes nothing here. There is no range
+  cap: the light does the limiting, so a lit room across a dark hall is
+  seen.
+- **What is kept.** `FogState.sight`: per floor, `live` (what some runner
+  sees now) and `explored` (everything the party has seen), as bitsets.
+  Every pass ORs live into explored. With the sightlines off, live is
+  emptied and the memory kept. A scene imported into another campaign
+  loses the record; one imported back into its own keeps only the memory.
+- **What the table hears.** One public `fog.updated` op `sight` with the
+  whole record, only when it changed. Phones fold it in place and the TV
+  folds it; the tokens it uncovers or covers arrive and leave as
+  `token.added` / `token.removed`, after it.
+- **What each screen draws.** Phones and the TV stamp the squares into the
+  fog mask they already had (`stage3d/masks.ts`: live clear, seen before at
+  0.62, hidden solid). The GM sees every square tinted by its state, and
+  a **See as party** lens shows exactly what the table is shown.
+
+### 8.3 The fog: three states, and a secrecy boundary
+
+Per square and per floor, a square is **hidden**, **seen before** or
+**live** (`fogCells`, `packages/rules/src/vision/fogState.ts`): the fog
+off makes it live; then what a runner sees now; then the GM's brush mark;
+then a region or shape the GM revealed live; then the party's memory or a
+reveal as seen before; otherwise hidden. The GM reveals regions, drawn
+shapes and single squares (the brush) either way, fogs any of them again,
+and forgets one floor's memory or all of it; the switch turns the fog off
+without losing any of it.
+
+§6 said fog and vision are not secrecy for the terrain, and that holds:
+the floor plan, the walls and doors, the map images and the GM's lamps are
+still sent whole. But the fog is now the **secrecy boundary for everything
+standing on the map**, where it had been only a cover the client drew, with
+every guard behind it on every player's wire:
+
+- a token not on live ground is withheld, with its moves and drags, and
+  crosses the edge as a new token arriving or leaving;
+- a public pin on hidden ground is withheld (seen-before ground shows it);
+- the table's combat roster names a combatant's token only while the table
+  has that token;
+- a runner's new look or portrait is told only on the tokens the table has;
+- the Fixer's spoiler guard knows every name the map withholds;
+- nothing that happens on a scene the GM is still staging reaches the table
+  at all, until it goes live.
+
+Drawings, templates, pings and "focus here" stay public wherever they
+land: each is somebody's deliberate mark for the table, and a template the
+GM drops on a guard in the dark is the GM's call, as at a real table.
+
+### 8.4 Light at the fog's edge
+
+The lamps of a hidden room still light the revealed floor they reach
+(through an open door, across a doorway); their fittings and halos are
+hidden with the room. Lights carried by tokens come and go with their
+tokens. Walls under the fog still cast shadows, so a hidden room's lamp
+does not shine through its own walls.
+
+### 8.5 Still open
+
+- Traced walls and doors have no floor, so they block sight on every
+  floor; floors seen below through open squares use the mask of the floor
+  in view.
+- No "shares sight" flag for drones and spirits, and no sight per player
+  (that would need the hub to address one socket's tokens, and a sight
+  pass per player on every move).
+- Every sight change is a persisted event; if the event log swells, the
+  per-move ones can go ephemeral.
+- A token two or more squares across on the fog's edge is sent when any of
+  its squares is live, while its plate and carried light follow its centre.
+- At Medium and High quality only a few real-time lamps cast shadows (3 of
+  8 point lamps at Medium, 8 of 24 at High); the rest pass through walls,
+  fog or no fog, the GM's view included. A quality-tier approximation, not
+  a fog leak; the fix would clip each lamp to its light polygon.
+- The per-pair modifier (§4.3), heat (§4.4), visibility zones (§4.2) and
+  everything in §5 past flashlights.

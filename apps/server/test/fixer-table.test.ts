@@ -421,7 +421,13 @@ describe('an accepted fog or layout draft reaches the table like the GM’s own 
     return Math.max(0, ...events.map((e) => Number(e.id)));
   }
 
-  async function newScene(name: string, fog: Record<string, unknown>): Promise<string> {
+  /**
+   * A scene of the test's own. Made the table's scene (activated, as the GM
+   * would) unless `staged`: only the active scene has a table to tell, and
+   * everything that happens on a staged one is the GM's alone (P6 secrecy
+   * sweep, `sceneOnTable`).
+   */
+  async function newScene(name: string, fog: Record<string, unknown>, opts: { staged?: boolean } = {}): Promise<string> {
     const row = (
       await t.db
         .insert(scenes)
@@ -435,8 +441,14 @@ describe('an accepted fog or layout draft reaches the table like the GM’s own 
         })
         .returning()
     )[0]!;
+    if (!opts.staged) expect((await gmPost(`/api/scenes/${row.id}/activate`, {})).statusCode).toBe(200);
     return row.id;
   }
+
+  // The fixture's scene is the table's again for the blocks after this one.
+  afterAll(async () => {
+    expect((await gmPost(`/api/scenes/${fx.sceneId}/activate`, {})).statusCode).toBe(200);
+  });
 
   it('opens a region live, out of the seen-before list, and sends the guard standing in it', async () => {
     const vault = { id: 'region-vault', name: 'vault', polygon: box(10, 10, 14, 14) };
@@ -499,6 +511,31 @@ describe('an accepted fog or layout draft reaches the table like the GM’s own 
     expect(events[1]!.payload).toEqual({ sceneId: annexSceneId, op: 'define', active: true });
     expect(events[2]!.payload).toEqual({ tokenId: guard.id, sceneId: annexSceneId });
     expect(JSON.stringify(events)).not.toContain('Server room');
+  });
+
+  it('tells the table nothing of a draft accepted on a scene the GM is still staging but that the scene changed', async () => {
+    const vault = { id: 'region-back-vault', name: 'back vault', polygon: box(10, 10, 14, 14) };
+    const stagedId = await newScene('Back office', { regions: [vault], enabled: true }, { staged: true });
+    const guard = (
+      await t.db
+        .insert(tokens)
+        .values({ sceneId: stagedId, source: 'prop', name: 'Back office guard', x: 12.5, y: 12.5 })
+        .returning()
+    )[0]!;
+
+    const reveal = await call('suggest_fog_reveal', { sceneId: stagedId, regions: ['back vault'] });
+    const layout = await call('propose_geometry', { ...OFFICE, sceneId: stagedId, notes: 'the back office' });
+    const since = await mark();
+    await acceptDraft(t.app.hub, boot.campaignId, reveal['generationId'] as string);
+    await acceptDraft(t.app.hub, boot.campaignId, layout['generationId'] as string);
+
+    // The walls went up (a bare "the scene changed", as every scene edit
+    // says), and nothing else: no reveal with the vault's name and outline,
+    // no fog word, no guard arriving or leaving.
+    const events = await tableSince(since);
+    expect(events.map((e) => [e.type, e.payload['changed']])).toEqual([['scene.updated', ['geometry']]]);
+    const raw = JSON.stringify(events);
+    for (const secret of ['back vault', guard.id, 'Back office guard', 'Server room']) expect(raw).not.toContain(secret);
   });
 });
 

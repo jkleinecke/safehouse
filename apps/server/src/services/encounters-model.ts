@@ -177,9 +177,15 @@ export interface PlayerCombatantView {
    * the acting glow and the coarse condition bar on the right figure instead
    * of matching on display name (FR4.10/FR9.20).
    *
-   * Safe on a filtered view: a row only reaches this list because it is
-   * public or the viewer's own, and a public combatant's token is already on
-   * that socket. A hidden combatant was dropped above, token and all.
+   * Only when the table HAS that token (`encounterForViewer`'s
+   * `tokensOnTable`): on the active scene and not concealed there. A row is
+   * public from the moment it is staged, and nothing re-derives it; a guard
+   * staged in the open who then walks into the dark keeps his public row, and
+   * his token id on it was the table's way of knowing which of the tokens it
+   * would later be sent was him, and that he was still on the map somewhere.
+   * The name and the condition stay (the fight has him in it); the link to
+   * the map goes until his token is back on it. A hidden combatant was
+   * dropped above, token and all.
    */
   tokenId?: string;
   /** Own PCs only — never another combatant's exact boxes. */
@@ -204,12 +210,20 @@ export interface Viewer {
  * Compose the encounter for one viewer. GMs get everything; everyone else gets
  * turn order, their own monitors, and public condition only — GM-hidden
  * combatants are dropped before serialization, never hidden client-side.
+ *
+ * `tokensOnTable` is the ids of the tokens the table has right now
+ * (`ScenesService.tokensOnTable`: on the active scene, not concealed there).
+ * A row names its token (`tokenId`) to a non-GM viewer only when its token
+ * is one of them. Left out, no row names its token: the TV then matches rows
+ * to figures by name, and a caller that forgot the set costs a glow, never a
+ * guard's id.
  */
 export function encounterForViewer(
   row: EncounterRow,
   list: Combatant[],
   viewer: Viewer,
   ownerByCombatantId: ReadonlyMap<string, string | null> = new Map(),
+  tokensOnTable: ReadonlySet<string> = new Set(),
 ): EncounterView {
   const active = nextActorRules(list)?.id ?? null;
   if (viewer.role === 'gm') {
@@ -238,7 +252,7 @@ export function encounterForViewer(
       own,
       ...(own || c.source === 'character' ? { initBase: c.initBase, initDice: c.initDice } : {}),
       condition: conditionOf(c.monitors),
-      ...(c.tokenId ? { tokenId: c.tokenId } : {}),
+      ...(c.tokenId && tokensOnTable.has(c.tokenId) ? { tokenId: c.tokenId } : {}),
       ...(own ? { monitors: c.monitors } : {}),
       effects: c.effects.map((e) => ({
         id: e.id,

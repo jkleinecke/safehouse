@@ -765,6 +765,56 @@ describe('the party’s sight rides the token.move commit (P6)', () => {
   });
 });
 
+/**
+ * A scene the GM is staging has no table (P6 secrecy sweep): nobody but the
+ * GM can open it, so nothing that happens on it reaches a player's phone or
+ * the TV, not even the ephemeral frames of a guard being dragged across it.
+ * Before, a guard placed, dragged and dropped on a staged scene went out on
+ * every socket with his name and every square he crossed.
+ */
+describe('a scene the GM is staging exists only on GM sockets (P6)', () => {
+  it('keeps a guard placed, dragged and dropped there off the table, and the region revealed there too', async () => {
+    const made = await post(`/api/campaigns/${boot.campaignId}/scenes`, boot.gmToken, { name: 'Next job' });
+    expect(made.statusCode).toBe(201);
+    const stagedId = (made.json() as { scene: { id: string } }).scene.id;
+    const GUARD = 'Guard-Rho';
+    const ROOM = 'the room being staged';
+    const marks = { player: playerWs.frames.length, display: displayWs.frames.length };
+    const gmMark = gmWs.frames.length;
+
+    const guard = await post(`/api/scenes/${stagedId}/tokens`, boot.gmToken, { source: 'npc_template', name: GUARD, x: 5.4375, y: 6.5625 });
+    expect(guard.statusCode).toBe(201);
+    const guardId = (guard.json() as { token: { id: string } }).token.id;
+    const hasGuard = (f: Frame) => JSON.stringify(f).includes(guardId);
+    const added = await nextAfter(gmWs, gmMark, (f) => f.type === 'token.added' && hasGuard(f));
+    expect(added.visibility).toBe('gm');
+
+    gmWs.send({ cmd: 'token.drag', tokenId: guardId, x: 7.3125, y: 8.6875 });
+    await nextAfter(gmWs, gmMark, (f) => f.type === 'token.dragging' && hasGuard(f));
+    gmWs.send({ cmd: 'token.move', tokenId: guardId, x: 9.1875, y: 10.8125 });
+    const moved = await nextAfter(gmWs, gmMark, (f) => f.type === 'token.moved' && hasGuard(f));
+    expect(moved.visibility).toBe('gm');
+
+    const room = [
+      { x: 4, y: 4 },
+      { x: 12, y: 4 },
+      { x: 12, y: 12 },
+      { x: 4, y: 12 },
+    ];
+    gmWs.send({ cmd: 'fog.reveal', sceneId: stagedId, op: 'enable' });
+    gmWs.send({ cmd: 'fog.reveal', sceneId: stagedId, op: 'define', region: { id: 'staged-room', name: ROOM, polygon: room } });
+    gmWs.send({ cmd: 'fog.reveal', sceneId: stagedId, op: 'reveal', regionId: 'staged-room' });
+    const revealed = await nextAfter(gmWs, gmMark, (f) => isFog('reveal')(f) && JSON.stringify(f).includes(ROOM));
+    expect(revealed.visibility).toBe('gm');
+    await settle();
+
+    const table = tableSince(marks);
+    for (const secret of [guardId, GUARD, '7.3125', '8.6875', '9.1875', '10.8125', 'staged-room', ROOM]) {
+      expect(table, secret).not.toContain(secret);
+    }
+  });
+});
+
 describe('PerKeyThrottle (the ~15 Hz drag relay budget)', () => {
   it('passes the leading edge and swallows the rest of the window, per key', () => {
     let now = 1_000;

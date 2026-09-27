@@ -201,10 +201,10 @@ server-authoritative resolve chain. The list and the switch landed on
 | FR9.10 encounter ↔ scene both ways | done | `services/scenes.ts` `stageEncounter` derives through `deriveFor`, so wired reflexes and adept powers survive staging. |
 | FR9.11 scene environment as a modifier source with provenance | done | `rules/src/env.ts`, `activeSceneModifiers`. Applied **once** — see LIVE-2 in §3, pinned by `e2e/pool-parity.spec.ts`. |
 | FR9.12 AoE circles + grenade scatter helper | done | `POST /api/scenes/:id/scatter`; client `rollScatter`. |
-| FR9.13 manual fog, server-authoritative, persisted | done | `POST /api/scenes/:id/fog`. |
+| FR9.13 manual fog, server-authoritative, persisted | done | `POST /api/scenes/:id/fog`. **Extended 2026-09-27 (P6), and made a secrecy boundary.** Until then the fog was a cover the client drew and every guard behind it was on every player's wire. Now: an explicit per-scene switch (scenes start open); three states per square and floor, hidden / seen before / live (`rules/src/vision/fogState.ts` `fogCells`); reveals live or as seen before, a square brush, and forget (`services/fogOps.ts` `runFogOp`, the one path for the Fog panel, the Prep brush, the socket and an accepted Fixer draft); the server withholds every non-runner token not on live ground from players, observers and the TV, with its moves and drags (`services/scenes.ts` `tokenConcealed` / `concealer`), and sends crossings as `token.added` / `token.removed` (`services/sight.ts` `emitConcealmentChanges`). The secrecy sweep closed the other channels the fog review found: everything on a staged scene is GM-only (`sceneOnTable`), public pins on hidden ground are withheld (`pinsForTable`), the table's roster names a combatant's token only while the table has it (`tokensOnTable`), the look and portrait fan-outs judge each token where it stands, and the Fixer's spoiler guard knows every withheld name. Drawings, templates and pings stay public: they are somebody's deliberate mark for the table. Tests: rules `fog-state.test.ts`; server `scenes.test.ts`, `scenes-live.test.ts`, `fog-wire.test.ts`, `fixer-table.test.ts`, `fixer-tools.test.ts`, `portrait.test.ts`, `encounters.test.ts`; web `stage/layers.test.ts`, `stage3d/masks.test.ts`, `tv/sceneState.test.ts`, `hydration.test.ts`, `history.test.ts`. |
 | FR9.14 named staged reveals with announcement | done | Same. |
 | FR9.15 pings, pointer trails, drawings, GM "focus here" | done | `pointer` and `scene.focus` contracted (`contracts/src/events.ts`) with hub handlers and a GM console (`grid/gm/DisplayTab.tsx`). Drawings via `/api/scenes/:id/drawings`. |
-| FR9.16 wall-based vision + dynamic lighting | deferred | P6, and Q9 resolved the table does not use it. Manual fog is the permanent first-class path. |
+| FR9.16 wall-based vision + dynamic lighting | ~~deferred~~ **done 2026-09-27 (sightlines)** | ~~P6, and Q9 resolved the table does not use it. Manual fog is the permanent first-class path.~~ Q9 reversed: the GM wanted it once the three.js map (D9) made lighting the reason to leave Roll20. A per-scene switch (`SceneVision.sight`). The server works out the party's pooled sight after every committed change that can move it (`services/sight.ts` `recomputeSight`), on the rules in `rules/src/vision/sight.ts` (`partySight`: walls and closed doors stop a look, wall faces are seen from the floor in front, strict SR5 darkness through each runner's sheet-derived eyes, light from `light.ts`), keeps live and remembered squares as per-floor bitsets in the fog (`FogState.sight`), and tells the table in one `fog.updated` op `sight`. Phones and the TV stamp it into the fog mask (`stage3d/masks.ts`); the GM gets per-square tints and a See-as-party lens. Manual fog is still the first-class path: a scene without sightlines behaves exactly as before. **Not built:** per-player sight (pooled by the GM's choice), a "shares sight" flag for drones and spirits, a floor on traced walls and doors (they block every floor), and a per-target light modifier in the dice pool (docs/VISION.md §8). Tests: rules `sight.test.ts`, `light.test.ts`, `vision-modes.test.ts`; server `scenes.test.ts` (the sightlines block), `scenes-live.test.ts`; web `useShroud.test.ts`, `stage3d/masks.test.ts`. |
 | FR9.17 Matrix overlay | deferred | P6 stretch. |
 | FR9.18 ambient audio | superseded | Folded into FR12.10. `audio_tracks` table and `Scene.audioRef` exist; nothing reads them. |
 | FR9.19 TV joins as a `display` device, same server-side filtering | done | `e2e/join.spec.ts`, `e2e/tv.spec.ts`. |
@@ -360,7 +360,7 @@ bought in play; and no table has played with it yet.
 | P3 Opposition Kit | **Done.** FR10.10 hints were the last row and they shipped off by default, as the FR requires. |
 | P4 Campaign memory | **Done.** M5 codex, runs, calendar, contacts, handouts; M6 sessions; FR3.6 approvals; FR5.6 template↔codex linkage; FR12.12 AI recap drafting. |
 | P5 Deep SR5 | **Done bar FR12.10.** FR8.1–8.5 all ship; FR3.7 advancement landed with the builder (M13). Stagecraft audio remains deliberately unbuilt. |
-| P6 Stretch | **FR3.9 shipped** (M13). Still deferred as designed: M7, FR9.16, FR9.17, image adapter, PWA, export. |
+| P6 Stretch | **FR3.9 shipped** (M13). **FR9.16 shipped 2026-09-27** (sightlines, Q9 reversed). Still deferred as designed: M7, ~~FR9.16~~, FR9.17, image adapter, PWA, export. |
 
 **A note on these six "Done"s, since one of them just moved.** A phase was
 marked Done when its FRs were. FRs were marked done when the server was. That is
@@ -373,7 +373,8 @@ not the strongest.
 | Roll20 feature | State |
 | --- | --- |
 | Maps, grid, tokens | shipped |
-| Fog of war | shipped (manual + staged) |
+| Fog of war | shipped (manual + staged); since 2026-09-27 also seen-before reveals, the square brush, and tokens under the fog withheld by the server |
+| Dynamic lighting | ~~not used (Q9)~~ shipped 2026-09-27 as sightlines (FR9.16; Q9 reversed) |
 | Measurement / ruler | shipped, SR5-native |
 | Dice + macros | **shipped — macros now follow the person, not the handset** (FR2.8) |
 | Initiative tracker | shipped; picks its fight, starts it, rolls or takes the table's dice — see job 5 in §1 |
@@ -1692,8 +1693,8 @@ And the four browser/terminal findings from §3, unchanged since they closed:
 | L4 | Event log frozen on a seeded database | **closed** | Sequence guard + `Hub.atomic` + `DbError` surfacing + clean shutdown everywhere, now with both real restore paths under test. `seeded-boot.test.ts` (10), `restore-boot.test.ts` (19), `durability.test.ts`, `core-atomicity.test.ts` (9), `core-atomicity-domains.test.ts` (19), `core-atomicity-emits.test.ts` (22), `core-shutdown.test.ts` (8), `seed-durability.test.ts` (1), `e2e/log-append.spec.ts` (2). |
 
 **Deferred by design and not defects:** the Matrix toolkit (M7, Q3 — no decker
-at the table) and with it the sheet's Matrix tab, token vision and dynamic
-lighting (FR9.16, Q9), the Matrix overlay (FR9.17), native priority char-gen
+at the table) and with it the sheet's Matrix tab, ~~token vision and dynamic
+lighting (FR9.16, Q9)~~ (built 2026-09-27 as sightlines, Q9 reversed), the Matrix overlay (FR9.17), native priority char-gen
 (FR3.9, D5), the advancement editor (FR3.7), stagecraft audio (FR12.10 /
 FR9.18), the prop/tile stamp library (FR9.2's P3+ half), the image-gen adapter,
 the PWA offline cache, and campaign export. The full list with its reasons is
@@ -1777,8 +1778,9 @@ Ranked by the order in which they would actually matter:
    drag phase — but nobody has ever timed the gap between the two devices,
    because timing it needs two devices.
 7. **The rest of P6, when the table asks.** Deferred by design and not defects:
-   the Matrix toolkit (M7, Q3), token vision and dynamic lighting (FR9.16, Q9 —
-   manual fog is the permanent plan, not a placeholder), the Matrix overlay
+   the Matrix toolkit (M7, Q3), ~~token vision and dynamic lighting (FR9.16, Q9 —
+   manual fog is the permanent plan, not a placeholder)~~ (built 2026-09-27 as
+   sightlines; manual fog stays first-class beside them), the Matrix overlay
    (FR9.17), native priority char-gen (FR3.9, D5 — Chummer is the builder), the
    advancement editor (FR3.7), stagecraft audio (FR12.10 / FR9.18), the
    prop/tile stamp library (FR9.2's P3+ half), the image-gen adapter, the PWA

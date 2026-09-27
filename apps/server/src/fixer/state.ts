@@ -28,7 +28,7 @@ import {
   wikiPages,
   type Db,
 } from '@safehouse/db';
-import { serializeScene, serializeToken } from '../services/scenes.js';
+import { concealer, serializeScene, serializeToken } from '../services/scenes.js';
 import { httpError } from '../services/auth.js';
 import {
   NO_WOUNDS,
@@ -458,7 +458,23 @@ export async function searchBooksState(
   };
 }
 
-/** GM-only names the spoiler guard (FR12.19) watches for in player-facing prose. */
+/**
+ * GM-only names the spoiler guard (FR12.19) watches for in player-facing
+ * prose: GM-only codex pages, GM-only combatants, and every token the table
+ * is not sent where it stands.
+ *
+ * That last is the table's own rule (`concealer`, `tokenConcealed`): hidden
+ * by its flag, on a hidden layer (FR9.26), or standing on fogged ground that
+ * is not LIVE (FR9.13, P6: unrevealed, remembered only, or out of the
+ * party's sight). It used to be the `hidden` flag alone, so a guard the map
+ * was withholding because he stood in the dark, or on a layer the GM had not
+ * shown, could be named in a recap the Fixer drafted for the players with no
+ * flag raised. Runners are never fogged, so the party's own names are never
+ * flagged for standing in the dark.
+ *
+ * Asked of each scene as it now stands, staged or live: a name flagged is a
+ * name the GM is asked about before it is published, never one withheld.
+ */
 export async function gmOnlyNames(db: Db, campaignId: string): Promise<string[]> {
   const names = new Set<string>();
   const pages = await db
@@ -468,17 +484,16 @@ export async function gmOnlyNames(db: Db, campaignId: string): Promise<string[]>
   for (const page of pages) {
     if (page.visibility !== 'public') names.add(page.title);
   }
-  const sceneRows = await db
-    .select({ id: scenes.id })
-    .from(scenes)
-    .where(eq(scenes.campaignId, campaignId));
-  const sceneIds = sceneRows.map((s) => s.id);
-  if (sceneIds.length > 0) {
-    const hidden = await db
-      .select({ name: tokens.name, hidden: tokens.hidden })
+  const sceneRows = await db.select().from(scenes).where(eq(scenes.campaignId, campaignId));
+  if (sceneRows.length > 0) {
+    // Each scene read once (its layers gathered, its fog and the party's
+    // sight decoded once), then asked of each of its tokens.
+    const concealedOn = new Map(sceneRows.map((row) => [row.id, concealer(serializeScene(row))]));
+    const rows = await db
+      .select()
       .from(tokens)
-      .where(inArray(tokens.sceneId, sceneIds));
-    for (const token of hidden) if (token.hidden) names.add(token.name);
+      .where(inArray(tokens.sceneId, sceneRows.map((row) => row.id)));
+    for (const token of rows) if (concealedOn.get(token.sceneId)?.(token)) names.add(token.name);
   }
   const encounterRows = await db
     .select({ id: encounters.id })

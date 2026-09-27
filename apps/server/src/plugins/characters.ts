@@ -439,7 +439,8 @@ export default async function charactersPlugin(app: FastifyInstance): Promise<vo
 
     const moved = await app.hub.atomic(rec.campaignId, async (t) => {
       await saveCharacter(t.db, rec.id, { sheet, play: rec.play });
-      const changed = await new ScenesService(t.db).retargetCharacterArt(
+      const scenesSvc = new ScenesService(t.db);
+      const changed = await scenesSvc.retargetCharacterArt(
         rec.id,
         before,
         portraitId,
@@ -450,11 +451,18 @@ export default async function charactersPlugin(app: FastifyInstance): Promise<vo
       });
       // One event per token, in the same shape a GM's own art change makes, so
       // every canvas and the TV pick it up through the path they already have.
+      // Each told to whoever may see THAT token where it stands
+      // (`tokenEventVisibilities`): a runner's token on a hidden layer, or
+      // on a scene the GM is still staging, is the GM's alone. It was the
+      // token's own `hidden` flag alone: a runner the GM was holding back on
+      // a hidden layer arrived on the TV with a new face, and one placed in a
+      // staged scene put that scene's token on every phone's socket.
+      const heard = await scenesSvc.tokenEventVisibilities(changed);
       for (const token of changed) {
         await t.emit({
           type: 'token.updated',
           payload: { token: serializeToken(token) },
-          visibility: token.hidden ? 'gm' : 'public',
+          visibility: heard(token),
         });
       }
       return changed.length;

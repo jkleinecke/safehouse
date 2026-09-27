@@ -44,6 +44,7 @@ import {
   type FogState,
   type Grid,
   type Modifier,
+  type Pin,
   type Point,
   type Scene,
   type SceneEnvironment,
@@ -322,8 +323,21 @@ export function sceneForViewer(scene: Scene, gm: boolean): Scene {
       // defaults it, which is why the cast is honest.
       doors: scene.geometry.doors.map(({ id, a, b, open }) => ({ id, a, b, open }) as Scene['geometry']['doors'][number]),
       zones: [],
-      pins: scene.geometry.pins.filter((p) => p.visibility === 'public'),
-      // Lights, unlike cameras, are not secret: the glow is on every runner's screen whether or not the lamp is.
+      // The GM's public pins, less any standing on ground the table is shown
+      // as fog (`pinsForTable`, P6): a pin is a label the GM put there for the
+      // table to read, and one in a room they have not found names the room.
+      pins: pinsForTable(scene),
+      // Lights, unlike cameras and pins, are sent whole, fog or no fog (P6,
+      // decided 2026-09-27). A lamp inside a hidden room still lights the
+      // revealed floor its light reaches (through an open door, across a
+      // doorway), and a device can only draw that glow from the lamp itself:
+      // withheld, the lit corridor outside the room would go dark on every
+      // phone and the TV while the GM's map showed it lit. The lamp's fixture
+      // and halo are hidden with the room it hangs in (the client's cover), so
+      // what a lamp gives away is where it stands, which is where the map and
+      // its tiles (below) already are: the presentation boundary, not the
+      // secrecy one. Lights carried by TOKENS are the tokens', and go (and are
+      // withheld) with them.
       ...(scene.geometry.lights ? { lights: scene.geometry.lights } : {}),
     },
     ...(scene.tiles ? { tiles: tilesForPlayers(scene.tiles) } : {}),
@@ -500,6 +514,91 @@ export function concealer(
     // anyone else is when no square they stand on is LIVE.
     (token.source !== 'character' &&
       !cells.tokenLive({ x: token.x, y: token.y, level: token.level, size: token.size }));
+}
+
+/**
+ * Whether a scene is the table's at all: the one scene the campaign has
+ * active (FR9.1). A STAGED scene (a draft the GM is building, or an archived
+ * one) has no table. No player, observer or TV can read it (a 404, not a
+ * 403, so there is not even an existence oracle), and when it goes live
+ * every device reads it whole on `scene.activated`.
+ *
+ * So nothing that happens on a staged scene is the table's to hear either,
+ * and every event about what is ON it goes to the GM alone: a guard placed,
+ * moved, dragged, renamed or deleted; a fog region revealed (its name and
+ * outline); the party's sight and the brush; a drawing or a template; a
+ * token arriving or leaving through a fog op. Before this (P6 secrecy
+ * sweep, 2026-09-27) every one of those went out public, persisted for
+ * replay, with names and positions, while the GM prepared the ambush in
+ * private; and because scenes now start with their fog off, a guard placed
+ * before the GM thought of fog was on every phone's socket at once.
+ *
+ * Nothing is lost by it. The events are not needed to catch up: the read on
+ * `scene.activated` is the whole scene, as it then stands.
+ */
+export function sceneOnTable(scene: { state: string }): boolean {
+  return scene.state === 'active';
+}
+
+/**
+ * Who hears an event about scene `scene` itself (its fog, its sight, its
+ * drawings): the table when the scene is the table's (`sceneOnTable`), the
+ * GM alone while it is staged.
+ */
+export function sceneEventVisibility(scene: { state: string }): Visibility {
+  return sceneOnTable(scene) ? 'public' : 'gm';
+}
+
+/**
+ * Who hears an event that shows `token` where it stands (Principle 4): the
+ * table only when its scene is the table's (`sceneOnTable`) and the token is
+ * not concealed on it (`tokenConcealed`); otherwise the GM alone. Every token
+ * event that is not a concealment flip asks this.
+ */
+export function tokenEventVisibility(
+  token: ConcealableToken,
+  scene: Pick<Scene, 'state' | 'tokenLayers' | 'fog' | 'vision'>,
+): Visibility {
+  return sceneOnTable(scene) && !tokenConcealed(token, scene) ? 'public' : 'gm';
+}
+
+/**
+ * The GM's pins a player, an observer and the TV are sent (FR9.3; P6): the
+ * public ones, less any that stand on ground the table is shown as fog.
+ *
+ * A pin marks a point for the table to read (the loading bay, the stash),
+ * and its label names what is there; one standing in a room the table has
+ * not found is a spoiler with coordinates. So on a fogged scene a public pin
+ * is sent only where the table is shown the ground: LIVE, or EXPLORED
+ * (remembered ground is the map as it now is, pins and doors included, with
+ * nobody on it). Hidden ground withholds it, as it withholds a guard.
+ *
+ * A pin has no floor: the map stands it on whichever floor is in view. So it
+ * is sent when its square is shown on ANY floor of the scene (the ground and
+ * every floor above), and withheld only when every floor has it under fog.
+ * The GM's reveals are the same on every floor; the party's sight and the
+ * brush are per floor, and a pin in a room the runners have seen upstairs is
+ * the table's upstairs, where the map will draw it.
+ *
+ * The fog moves under a pin without the pin moving, so the set sent can
+ * change with a fog op or a runner's step. The sight pass (services/sight.ts)
+ * compares the set before and after and, when it changed, tells the table to
+ * read the scene again (`scene.updated`, changed `['pins']`).
+ */
+export function pinsForTable(scene: Pick<Scene, 'geometry' | 'fog' | 'vision' | 'levels'>): Pin[] {
+  const open = scene.geometry.pins.filter((p) => p.visibility === 'public');
+  if (open.length === 0) return open;
+  const cells = fogCells(scene.fog, { vision: scene.vision });
+  if (!cells.on) return open;
+  const floors = scene.levels.length + 1;
+  return open.filter((pin) => {
+    const col = Math.floor(pin.at.x);
+    const row = Math.floor(pin.at.y);
+    for (let level = 0; level < floors; level += 1) {
+      if (cells.state(level, col, row) !== 'hidden') return true;
+    }
+    return false;
+  });
 }
 
 /**
@@ -1088,6 +1187,49 @@ export class ScenesService {
   /** Every token on a scene, whatever its visibility — the GM's list. */
   async tokensOf(sceneId: string): Promise<TokenRow[]> {
     return this.db.select().from(tokens).where(eq(tokens.sceneId, sceneId));
+  }
+
+  /**
+   * Who may hear about each of `rows` where it stands (`tokenEventVisibility`),
+   * for tokens that may stand on different scenes: the fan-outs that touch
+   * every token of one runner at once (their look, their portrait), each
+   * token in a scene of its own. Each scene is read once, and the answer
+   * handed back as a question to ask of each row.
+   *
+   * Those fan-outs used to decide by the token's own `hidden` flag alone, so
+   * a runner's token on a hidden layer, or on a scene the GM is still
+   * staging, went out to every phone and the TV with the rest. A runner is
+   * never fogged, but a layer and a staged scene hide a runner as well as a
+   * guard.
+   */
+  async tokenEventVisibilities(rows: readonly TokenRow[]): Promise<(row: TokenRow) => Visibility> {
+    const sceneIds = [...new Set(rows.map((r) => r.sceneId))];
+    const judged = new Map<string, (token: ConcealableToken) => boolean>();
+    if (sceneIds.length > 0) {
+      for (const row of await this.db.select().from(scenes).where(inArray(scenes.id, sceneIds))) {
+        const scene = serializeScene(row);
+        judged.set(row.id, sceneOnTable(scene) ? concealer(scene) : () => true);
+      }
+    }
+    return (row) => {
+      const concealed = judged.get(row.sceneId);
+      // A token whose scene was not found is nobody's but the GM's.
+      return concealed !== undefined && !concealed(row) ? 'public' : 'gm';
+    };
+  }
+
+  /**
+   * Which of `tokenIds` are on the table right now: on the active scene, and
+   * not concealed there (`tokenEventVisibility`). A token that no longer
+   * exists is not. For the encounter roster a player and the TV are sent,
+   * which names each combatant's token only when the table has that token.
+   */
+  async tokensOnTable(tokenIds: readonly string[]): Promise<Set<string>> {
+    const ids = [...new Set(tokenIds)];
+    if (ids.length === 0) return new Set();
+    const rows = await this.db.select().from(tokens).where(inArray(tokens.id, ids));
+    const heard = await this.tokenEventVisibilities(rows);
+    return new Set(rows.filter((row) => heard(row) === 'public').map((row) => row.id));
   }
 
   async tokenWithScene(tokenId: string): Promise<{ token: TokenRow; scene: SceneRow }> {

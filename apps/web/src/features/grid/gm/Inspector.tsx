@@ -555,7 +555,7 @@ function PinFields({
           className={'btn flex-1 py-1 ' + (isPublic ? 'text-ok' : '')}
           aria-pressed={isPublic}
           data-testid="pin-visibility"
-          title="Public pins reach player and TV screens"
+          title="Public pins reach player and TV screens, once the fog shows the table their spot (live or seen before)"
           onClick={() => onPatch({ visibility: isPublic ? 'gm' : 'public' })}
         >
           {isPublic ? 'revealed — hide it' : 'private — reveal it'}

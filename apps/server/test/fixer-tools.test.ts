@@ -7,7 +7,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { aiGenerations, books, bookPages, npcTemplates, scenes, type Db } from '@safehouse/db';
+import { aiGenerations, books, bookPages, npcTemplates, scenes, tokens, type Db } from '@safehouse/db';
 import { FogStateSchema } from '@safehouse/contracts';
 import {
   bootstrapCampaign,
@@ -277,6 +277,74 @@ describe('spoiler guard (FR12.19)', () => {
       'The team escaped the roof, unaware of the Watcher on the water tower, and Mister Kavanagh paid up.',
     );
     expect(flags.map((f) => f.name).sort()).toEqual(['Mister Kavanagh', 'Watcher on the water tower']);
+  });
+
+  it('flags the names the map withholds: a token in the dark or on a hidden layer, not only one flagged hidden (P6)', async () => {
+    // A scene of its own, fogged, with the lobby revealed and the vault not,
+    // taken away again after, so the other cases read the fixture as it was.
+    const grid = { unitM: 1, cols: 20, rows: 20, offset: { x: 0, y: 0 }, projection: 'topdown' as const };
+    const vault = (
+      await t.db
+        .insert(scenes)
+        .values({
+          campaignId: boot.campaignId,
+          name: 'Vault, Redmond',
+          state: 'draft',
+          grid,
+          environment: { light: 0, visibility: 0, glare: 0, wind: 0 },
+          geometry: { walls: [], doors: [], zones: [], pins: [] },
+          fog: {
+            regions: [{ id: 'region-lobby', name: 'lobby', polygon: [{ x: 0, y: 0 }, { x: 6, y: 0 }, { x: 6, y: 6 }, { x: 0, y: 6 }] }],
+            revealed: ['region-lobby'],
+            revealedShapes: [],
+            enabled: true,
+          },
+        })
+        .returning()
+    )[0]!;
+    const placed = await t.db
+      .insert(tokens)
+      .values([
+        // Out in the unrevealed vault: the table is not sent him.
+        { sceneId: vault.id, source: 'npc_template', name: 'Sniper in the vault dark', x: 15.5, y: 15.5 },
+        // In the open lobby, but on a layer the GM has not shown.
+        { sceneId: vault.id, source: 'npc_template', name: 'Decoy on the held layer', x: 2.5, y: 2.5 },
+        // In the open lobby, on the table: his name is no secret.
+        { sceneId: vault.id, source: 'npc_template', name: 'Doorman in the lobby', x: 2.5, y: 3.5 },
+        // A runner in the dark is still a runner: the fog never hides the party.
+        { sceneId: vault.id, source: 'character', name: 'Kestrel in the dark', x: 16.5, y: 15.5 },
+      ])
+      .returning();
+    const decoy = placed.find((row) => row.name === 'Decoy on the held layer')!;
+    await t.db
+      .update(scenes)
+      .set({
+        geometry: {
+          walls: [],
+          doors: [],
+          zones: [],
+          pins: [],
+          tokenLayers: [{ id: 'layer-held', name: 'Held back', hidden: true, tokenIds: [decoy.id] }],
+        },
+      })
+      .where(eq(scenes.id, vault.id));
+
+    try {
+      const flags = await spoilerScan(
+        t.db as Db,
+        boot.campaignId,
+        'The Doorman in the lobby waved Kestrel in the dark through; nobody saw the Sniper in the vault dark, ' +
+          'or the Decoy on the held layer.',
+      );
+      const names = flags.map((f) => f.name);
+      expect(names).toContain('Sniper in the vault dark');
+      expect(names).toContain('Decoy on the held layer');
+      expect(names).not.toContain('Doorman in the lobby');
+      expect(names).not.toContain('Kestrel in the dark');
+    } finally {
+      await t.db.delete(tokens).where(eq(tokens.sceneId, vault.id));
+      await t.db.delete(scenes).where(eq(scenes.id, vault.id));
+    }
   });
 
   it('attaches the flags to a player-facing draft', async () => {

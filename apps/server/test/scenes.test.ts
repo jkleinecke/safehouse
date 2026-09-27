@@ -1531,6 +1531,14 @@ describe('scene → roll bridge and pin visibility (FR9.11, FR9.3)', () => {
   });
 
   it('sends players the sight geometry and the public pins, and none of the GM annotations', async () => {
+    // This scene's fog is on (the block above), and a public pin is sent
+    // only where the table is shown its ground (`pinsForTable`, P6): the
+    // loading bay is revealed first, so the pin in it is the table's.
+    const bay = await post(`/api/scenes/${sceneId}/fog`, boot.gmToken, {
+      op: 'reveal',
+      shape: [{ x: 1, y: 1 }, { x: 4, y: 1 }, { x: 4, y: 4 }, { x: 1, y: 4 }],
+    });
+    expect(bay.statusCode).toBe(200);
     await t.app.inject({
       method: 'PATCH',
       url: `/api/scenes/${sceneId}`,
@@ -1643,5 +1651,358 @@ describe('scatter helper math (FR9.12)', () => {
     const body = res.json() as { drawing: { kind: string; geometry: { radiusM: number } } };
     expect(body.drawing.kind).toBe('template');
     expect(body.drawing.geometry.radiusM).toBe(4);
+  });
+});
+
+/**
+ * The secrecy sweep (P6, 2026-09-27): what the map withholds from the table,
+ * no other channel carries. The fog review found these still open after the
+ * map itself was closed:
+ *
+ *   - a scene the GM is staging put every guard placed on it, every step he
+ *     took, every region revealed on it, the party's sight on it, every
+ *     drawing and its weather note on public events, persisted for replay;
+ *   - a public pin in a room the table had not found was sent, label and all;
+ *   - a combatant staged in the open kept his token's id on the table's
+ *     roster after his token walked into the dark;
+ *   - a runner's new look went out on every token of theirs, one held back on
+ *     a hidden layer or standing on a staged scene included (a new portrait
+ *     did the same: portrait.test.ts);
+ *   - and the Fixer's spoiler guard knew only the `hidden` flag
+ *     (fixer-tools.test.ts).
+ *
+ * Its own campaign, so the table's log is this block's alone.
+ */
+describe('the secrecy sweep: what the map withholds, no other channel carries (P6)', () => {
+  let sw: { campaignId: string; gmToken: string };
+  let viewers: { role: string; token: string }[];
+  let phoneToken: string;
+  let runnerCharacterId: string;
+  let houseId: string;
+  let guardId: string;
+  let crateId: string;
+  let runnerTokenId: string;
+  let roomId: string;
+
+  const GUARD = 'Guard-Tau';
+  const CRATE = 'Crate-Tau';
+  // Coordinates with more decimals than anything else in a log has, so a
+  // search of the raw events for one can only ever find the guard.
+  const GUARD_AT = { x: 16.4375, y: 15.5625 };
+  const MOVED_TO = { x: 17.4375, y: 16.5625 };
+  const OUT_IN_THE_DARK = { x: 25.4375, y: 5.5625 };
+  const ROOM = 'the counting room';
+  const ROOM_POLY = [
+    { x: 12, y: 12 },
+    { x: 20, y: 12 },
+    { x: 20, y: 20 },
+    { x: 12, y: 20 },
+  ];
+  const SMOKE = 'smoke pouring from the vents';
+  const DRAWING = 'kill zone by the safe';
+  const SAFE = 'the safe behind the painting';
+
+  interface Logged {
+    id: number;
+    type: string;
+    payload: Record<string, unknown>;
+    visibility: string;
+  }
+
+  /** Every event `token`'s holder can read back from the log, oldest first. */
+  async function logOf(token: string): Promise<Logged[]> {
+    const log = await t.app.inject({
+      method: 'GET',
+      url: `/api/campaigns/${sw.campaignId}/log?limit=500`,
+      headers: as(token),
+    });
+    expect(log.statusCode).toBe(200);
+    const events = (
+      log.json() as { events: { id: unknown; type: string; payload: Record<string, unknown>; visibility: string }[] }
+    ).events;
+    return events.map((e) => ({ id: Number(e.id), type: e.type, payload: e.payload, visibility: e.visibility })).reverse();
+  }
+
+  /** The newest event id of all (the GM reads every one): a mark to read "what came after" from. */
+  async function mark(): Promise<number> {
+    return Math.max(0, ...(await logOf(sw.gmToken)).map((e) => e.id));
+  }
+
+  async function since(token: string, from: number): Promise<Logged[]> {
+    return (await logOf(token)).filter((e) => e.id > from);
+  }
+
+  async function fogOp(sceneId: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const res = await post(`/api/scenes/${sceneId}/fog`, sw.gmToken, payload);
+    expect(res.statusCode, JSON.stringify(payload)).toBe(200);
+    return (res.json() as { fog: Record<string, unknown> }).fog;
+  }
+
+  async function patchScene(sceneId: string, payload: Record<string, unknown>): Promise<void> {
+    const res = await t.app.inject({ method: 'PATCH', url: `/api/scenes/${sceneId}`, headers: as(sw.gmToken), payload });
+    expect(res.statusCode, JSON.stringify(payload)).toBe(200);
+  }
+
+  async function patchToken(tokenId: string, payload: Record<string, unknown>, who?: string): Promise<void> {
+    const res = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/tokens/${tokenId}`,
+      headers: as(who ?? sw.gmToken),
+      payload,
+    });
+    expect(res.statusCode, JSON.stringify(payload)).toBe(200);
+  }
+
+  async function sceneFor(token: string, sceneId: string) {
+    const res = await t.app.inject({ method: 'GET', url: `/api/scenes/${sceneId}`, headers: as(token) });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      scene: { geometry: { pins: { id: string }[] }; fog: { regions: { id: string }[] } };
+      tokens: { id: string }[];
+    };
+    return {
+      raw: res.body,
+      pinIds: body.scene.geometry.pins.map((p) => p.id).sort(),
+      regionIds: body.scene.fog.regions.map((r) => r.id),
+      tokenIds: body.tokens.map((x) => x.id),
+    };
+  }
+
+  beforeAll(async () => {
+    const third = await t.app.inject({ method: 'POST', url: '/api/campaigns', headers: gm(), payload: { name: 'Counting House' } });
+    expect(third.statusCode).toBe(201);
+    const created = third.json() as { campaignId: string; token: string };
+    sw = { campaignId: created.campaignId, gmToken: created.token };
+    const phone = await joinAs(t.app, sw.campaignId, sw.gmToken, 'player', 'Wren');
+    const tv = await joinAs(t.app, sw.campaignId, sw.gmToken, 'display', 'Table TV');
+    phoneToken = phone.token;
+    viewers = [
+      { role: 'player', token: phone.token },
+      { role: 'display', token: tv.token },
+    ];
+    const inserted = await t.db
+      .insert(characters)
+      .values({
+        campaignId: sw.campaignId,
+        ownerUserId: phone.user.id,
+        name: 'Wren',
+        sheet: { v: 1, identity: { alias: 'Wren' }, attributes: { bod: 3, rea: 4, int: 4, wil: 3 } },
+      })
+      .returning();
+    runnerCharacterId = inserted[0]!.id;
+  }, 60_000);
+
+  it('keeps a scene the GM is staging off the table: its guard, his every step, its fog, its sight, its marks, its weather', async () => {
+    const made = await post(`/api/campaigns/${sw.campaignId}/scenes`, sw.gmToken, {
+      name: 'Counting house',
+      grid: { cols: 30, rows: 30 },
+    });
+    expect(made.statusCode).toBe(201);
+    houseId = (made.json() as { scene: { id: string } }).scene.id;
+    const from = await mark();
+
+    // The GM builds the job in private: a guard placed and walked, a crate
+    // placed and taken away again, the runner put at the door, the room
+    // fogged and opened (announced, as a GM might out of habit), the
+    // sightlines on, the weather written, and a template laid.
+    const guard = await post(`/api/scenes/${houseId}/tokens`, sw.gmToken, { source: 'npc_template', name: GUARD, ...GUARD_AT });
+    expect(guard.statusCode).toBe(201);
+    guardId = (guard.json() as { token: { id: string } }).token.id;
+    await patchToken(guardId, MOVED_TO);
+    const crate = await post(`/api/scenes/${houseId}/tokens`, sw.gmToken, { source: 'prop', name: CRATE, x: 3.5, y: 3.5 });
+    crateId = (crate.json() as { token: { id: string } }).token.id;
+    expect((await t.app.inject({ method: 'DELETE', url: `/api/tokens/${crateId}`, headers: as(sw.gmToken) })).statusCode).toBe(200);
+    const runner = await post(`/api/scenes/${houseId}/tokens`, sw.gmToken, {
+      source: 'character',
+      sourceId: runnerCharacterId,
+      x: 14.5,
+      y: 14.5,
+    });
+    runnerTokenId = (runner.json() as { token: { id: string } }).token.id;
+    await fogOp(houseId, { op: 'enable' });
+    const fog = await fogOp(houseId, { op: 'define', region: { name: ROOM, polygon: ROOM_POLY } });
+    roomId = (fog['regions'] as { id: string }[])[0]!.id;
+    await fogOp(houseId, { op: 'reveal', regionId: roomId, announce: true });
+    await patchScene(houseId, { vision: { sight: 'on' }, environment: { note: SMOKE } });
+    const drawn = await post(`/api/scenes/${houseId}/drawings`, sw.gmToken, {
+      kind: 'template',
+      geometry: { shape: 'circle', center: MOVED_TO, radiusM: 3, label: DRAWING },
+    });
+    expect(drawn.statusCode).toBe(201);
+
+    // The GM heard every step of it, on the GM's own sockets alone.
+    const gmHeard = await since(sw.gmToken, from);
+    const about = (e: Logged) => JSON.stringify(e.payload);
+    expect(gmHeard.some((e) => e.type === 'token.added' && about(e).includes(guardId))).toBe(true);
+    expect(gmHeard.some((e) => e.type === 'token.moved' && e.payload['tokenId'] === guardId)).toBe(true);
+    expect(gmHeard.some((e) => e.type === 'token.removed' && e.payload['tokenId'] === crateId)).toBe(true);
+    expect(gmHeard.some((e) => e.type === 'fog.updated' && e.payload['op'] === 'reveal')).toBe(true);
+    expect(gmHeard.some((e) => e.type === 'fog.updated' && e.payload['op'] === 'sight')).toBe(true);
+    expect(gmHeard.some((e) => e.type === 'log.posted' && about(e).includes(ROOM))).toBe(true);
+    expect(gmHeard.some((e) => e.type === 'drawing.added')).toBe(true);
+    const onTheScene = gmHeard.filter((e) => /^(token|fog|drawing)\./.test(e.type) || e.type === 'log.posted');
+    for (const e of onTheScene) expect(e.visibility, `${e.type} ${about(e)}`).toBe('gm');
+
+    // And the table none of it: no token, fog or drawing event, and not a
+    // trace of the guard, the crate, the runner's token there, the room, the
+    // weather note or the template. That the scene exists and was changed is
+    // all it hears (`scene.updated`, which says nothing of what is on it).
+    for (const { role, token } of viewers) {
+      const heard = await since(token, from);
+      expect(heard.filter((e) => /^(token|fog|drawing)\./.test(e.type) || e.type === 'log.posted'), role).toEqual([]);
+      const raw = JSON.stringify(heard);
+      for (const secret of [guardId, GUARD, crateId, CRATE, runnerTokenId, roomId, ROOM, SMOKE, DRAWING, String(MOVED_TO.x)]) {
+        expect(raw, `${role}: ${secret}`).not.toContain(secret);
+      }
+    }
+  });
+
+  it('goes live whole: the table’s first read of the scene has the room, the guard in it and the runner', async () => {
+    expect((await post(`/api/scenes/${houseId}/activate`, sw.gmToken, {})).statusCode).toBe(200);
+    for (const { role, token } of viewers) {
+      const v = await sceneFor(token, houseId);
+      expect(v.tokenIds.sort(), role).toEqual([guardId, runnerTokenId].sort());
+      expect(v.regionIds, role).toEqual([roomId]);
+    }
+  });
+
+  it('withholds a public pin under the fog, and tells the table to read the scene again when the fog moves off it or back', async () => {
+    // Only the GM's reveals decide from here: the sightlines off, the party's
+    // memory forgotten, the room fogged, and the front of the house open.
+    await patchScene(houseId, { vision: { sight: 'off' } });
+    await fogOp(houseId, { op: 'forget' });
+    await fogOp(houseId, { op: 'hide', regionId: roomId });
+    await fogOp(houseId, { op: 'reveal', shape: [{ x: 0, y: 0 }, { x: 6, y: 0 }, { x: 6, y: 6 }, { x: 0, y: 6 }] });
+    await patchScene(houseId, {
+      geometry: {
+        walls: [],
+        doors: [],
+        zones: [],
+        pins: [
+          { id: 'pin-safe', at: { x: 16.5, y: 17.5 }, label: SAFE, visibility: 'public' },
+          { id: 'pin-door', at: { x: 2.5, y: 2.5 }, label: 'the front door', visibility: 'public' },
+          { id: 'pin-note', at: { x: 3.5, y: 2.5 }, label: 'the GM’s own', visibility: 'gm' },
+        ],
+      },
+    });
+
+    for (const { role, token } of viewers) {
+      const v = await sceneFor(token, houseId);
+      expect(v.pinIds, role).toEqual(['pin-door']);
+      expect(v.raw, role).not.toContain('pin-safe');
+      expect(v.raw, role).not.toContain(SAFE);
+      // The scene list a device reads is the same filtered copy.
+      const list = await t.app.inject({ method: 'GET', url: `/api/campaigns/${sw.campaignId}/scenes`, headers: as(token) });
+      expect(list.statusCode, role).toBe(200);
+      expect(list.body, role).not.toContain(SAFE);
+    }
+    expect((await sceneFor(sw.gmToken, houseId)).pinIds).toEqual(['pin-door', 'pin-note', 'pin-safe']);
+
+    const pinsTold = (heard: Logged[]) =>
+      heard.filter((e) => e.type === 'scene.updated' && e.payload['sceneId'] === houseId).map((e) => e.payload['changed']);
+
+    // Revealed as seen before: the room's map is the table's, its pins
+    // included, and nobody in it.
+    let from = await mark();
+    await fogOp(houseId, { op: 'reveal', regionId: roomId, as: 'explored' });
+    for (const { role, token } of viewers) {
+      const v = await sceneFor(token, houseId);
+      expect(v.pinIds, role).toEqual(['pin-door', 'pin-safe']);
+      expect(v.tokenIds, role).not.toContain(guardId);
+      expect(pinsTold(await since(token, from)), role).toContainEqual(['pins']);
+    }
+
+    // Fogged again: the pin goes with the room, and the table is told so.
+    from = await mark();
+    await fogOp(houseId, { op: 'hide', regionId: roomId });
+    for (const { role, token } of viewers) {
+      expect((await sceneFor(token, houseId)).pinIds, role).toEqual(['pin-door']);
+      expect(pinsTold(await since(token, from)), role).toContainEqual(['pins']);
+    }
+
+    // A fog op that uncovers no pin says nothing of pins.
+    from = await mark();
+    await fogOp(houseId, { op: 'reveal', shape: [{ x: 25, y: 25 }, { x: 28, y: 25 }, { x: 28, y: 28 }] });
+    for (const { role, token } of viewers) expect(pinsTold(await since(token, from)), role).toEqual([]);
+  });
+
+  it('names a combatant’s token to the table only while the table has that token', async () => {
+    await fogOp(houseId, { op: 'reveal', regionId: roomId });
+    const res = await post(`/api/scenes/${houseId}/stage-encounter`, sw.gmToken, { name: 'Counting house job' });
+    expect(res.statusCode).toBe(201);
+    const encounterId = (res.json() as { encounterId: string }).encounterId;
+
+    async function roster(token: string) {
+      const read = await t.app.inject({ method: 'GET', url: `/api/encounters/${encounterId}`, headers: as(token) });
+      expect(read.statusCode).toBe(200);
+      const rows = (read.json() as { combatants: { name: string; tokenId?: string }[] }).combatants;
+      return {
+        raw: read.body,
+        names: rows.map((r) => r.name).sort(),
+        tokenOf: (name: string) => rows.find((r) => r.name === name)?.tokenId,
+      };
+    }
+
+    // Staged in the lit room: on the table's roster, and tied to his figure.
+    for (const { role, token } of viewers) {
+      const r = await roster(token);
+      expect(r.names, role).toEqual([GUARD, 'Wren'].sort());
+      expect(r.tokenOf(GUARD), role).toBe(guardId);
+      expect(r.tokenOf('Wren'), role).toBe(runnerTokenId);
+    }
+
+    // He walks out into the dark: still in the fight (his row, his name and
+    // his condition stay), but the link from his row to a figure goes, and
+    // his token's id with it, until the table has his token again.
+    await patchToken(guardId, OUT_IN_THE_DARK);
+    for (const { role, token } of viewers) {
+      const r = await roster(token);
+      expect(r.names, role).toEqual([GUARD, 'Wren'].sort());
+      expect(r.tokenOf(GUARD), role).toBeUndefined();
+      expect(r.raw, role).not.toContain(guardId);
+      expect(r.tokenOf('Wren'), role).toBe(runnerTokenId);
+    }
+    expect((await roster(sw.gmToken)).tokenOf(GUARD)).toBe(guardId);
+
+    // Back in the room, and back on his row.
+    await patchToken(guardId, MOVED_TO);
+    for (const { role, token } of viewers) expect((await roster(token)).tokenOf(GUARD), role).toBe(guardId);
+  });
+
+  it('tells the table a runner’s new look only on the tokens it has: not one held back on a layer, nor one on a staged scene', async () => {
+    const held = await post(`/api/scenes/${houseId}/tokens`, sw.gmToken, {
+      source: 'character',
+      sourceId: runnerCharacterId,
+      x: 4.5,
+      y: 4.5,
+    });
+    const heldId = (held.json() as { token: { id: string } }).token.id;
+    await patchScene(houseId, { tokenLayers: [{ id: 'layer-held', name: 'Held back', hidden: true, tokenIds: [heldId] }] });
+    const next = await post(`/api/campaigns/${sw.campaignId}/scenes`, sw.gmToken, { name: 'Next week' });
+    const nextId = (next.json() as { scene: { id: string } }).scene.id;
+    const elsewhere = await post(`/api/scenes/${nextId}/tokens`, sw.gmToken, {
+      source: 'character',
+      sourceId: runnerCharacterId,
+      x: 1.5,
+      y: 1.5,
+    });
+    const elsewhereId = (elsewhere.json() as { token: { id: string } }).token.id;
+
+    const from = await mark();
+    await patchToken(runnerTokenId, { look: { archetype: 'decker', metatype: 'elf' } }, phoneToken);
+    const dressed = (heard: Logged[]) =>
+      heard
+        .filter((e) => e.type === 'token.updated')
+        .map((e) => (e.payload['token'] as { id: string }).id)
+        .sort();
+
+    expect(dressed(await since(sw.gmToken, from))).toEqual([elsewhereId, heldId, runnerTokenId].sort());
+    for (const { role, token } of viewers) {
+      const heard = await since(token, from);
+      expect(dressed(heard), role).toEqual([runnerTokenId]);
+      const raw = JSON.stringify(heard);
+      expect(raw, role).not.toContain(heldId);
+      expect(raw, role).not.toContain(elsewhereId);
+    }
   });
 });

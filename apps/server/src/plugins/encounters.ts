@@ -35,6 +35,7 @@ import {
   type EncounterRow,
 } from '../services/encounters.js';
 import { CombatDamageService } from '../services/encounters-damage.js';
+import { ScenesService } from '../services/scenes.js';
 import { hintForCombatant } from '../services/tactical-hints.js';
 import {
   buildRack,
@@ -281,11 +282,21 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
     const { encounter, auth } = await scope(req, id, false);
     const list = await service.listCombatants(id);
     const owners = await service.ownersFor(list);
+    // Which combatants' tokens the table has right now: a row names its
+    // token to a player or the TV only then (`encounterForViewer`). The GM's
+    // view names every one, and needs no read for it.
+    const onTable =
+      auth.role === 'gm'
+        ? new Set<string>()
+        : await new ScenesService(app.db).tokensOnTable(
+            list.flatMap((c) => (c.tokenId ? [c.tokenId] : [])),
+          );
     const view = encounterForViewer(
       encounter,
       list,
       { userId: auth.userId, role: auth.role },
       owners,
+      onTable,
     );
     return {
       ...view,

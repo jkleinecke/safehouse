@@ -13,7 +13,11 @@
  * layer (`tokenConcealed`, `sceneForViewer`), and their events carry `gm`
  * visibility so the hub never serializes them onto player/display sockets.
  * Revealing a hidden token, or the fog it stands in, emits `token.added` (a
- * NEW entity arriving, FR9.7); hiding either emits `token.removed`.
+ * NEW entity arriving, FR9.7); hiding either emits `token.removed`. And a
+ * scene the GM is still staging has no table at all (`sceneOnTable`): every
+ * event about what is on it — its tokens, their drags, its fog, its sight,
+ * its drawings — goes to the GM alone until it goes live, when every device
+ * reads it whole (P6 secrecy sweep, 2026-09-27).
  *
  * Sightlines (P6): every committed write that can move the party's sight (a
  * runner's move, a door, a light, paint, a scene PATCH, a fog op, the scene
@@ -80,10 +84,13 @@ import {
   ScenesService,
   computeScatter,
   normalizeGrid,
+  sceneEventVisibility,
   sceneForViewer,
+  sceneOnTable,
   serializeScene,
   serializeToken,
   tokenConcealed,
+  tokenEventVisibility,
   type ConcealableToken,
   type SceneRow,
   type TokenRow,
@@ -343,9 +350,11 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
    * (FR9.26), or standing on fogged ground that is not LIVE (FR9.13, P6:
    * unrevealed, or revealed only as explored): the scene says which, so
    * every emit reads it from the row it has in hand (`tokenConcealed`).
+   * And every token of a STAGED scene is the GM's alone, however it stands
+   * (`sceneOnTable`): the table has no staged scene to put it on.
    */
   const tokenVis = (token: ConcealableToken, scene: SceneRow): Visibility =>
-    tokenConcealed(token, serializeScene(scene)) ? 'gm' : 'public';
+    tokenEventVisibility(token, serializeScene(scene));
 
   /** Load a scene, check campaign binding, and report whether the caller is GM. */
   async function openScene(
@@ -460,9 +469,16 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       });
       // Public delta signal only — the payload never carries GM-layer geometry;
       // clients re-GET the scene and receive their own role-filtered view.
+      // The environment rides along for the TV to fold, but only for the
+      // table's own scene: a staged scene's light, smoke and the GM's note on
+      // it ("the warehouse is burning") are the GM's until it goes live.
       await tx.emit({
         type: 'scene.updated',
-        payload: { sceneId: id, changed: written.changed, environment: written.scene.environment },
+        payload: {
+          sceneId: id,
+          changed: written.changed,
+          ...(sceneOnTable(written.scene) ? { environment: written.scene.environment } : {}),
+        },
       });
       // Then the party's sight, which a PATCH can move every way there is:
       // walls and the GM's lights (geometry), the ambient light
@@ -708,12 +724,19 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       // where the party is looking now.
       if (movesSight && (affectsSight(before) || affectsSight(written))) await recomputeSight(tx, scene.id);
       // A runner's look is the runner's: it goes onto the character and onto
-      // every token of theirs, in this scene and every other.
+      // every token of theirs, in this scene and every other. Each of those
+      // is told to whoever may see THAT token where it stands
+      // (`tokenEventVisibilities`): the table for one on the table, the GM
+      // alone for one on a hidden layer or on a scene still being staged. It
+      // used to be the token's own `hidden` flag alone, and a runner the GM
+      // had placed in next week's scene went out to every phone and the TV,
+      // with the scene it stands in.
       if (body.look !== undefined && written.source === 'character' && written.sourceId) {
-        const others = await svc.withDb(tx.db).setCharacterLook(written.sourceId, body.look);
+        const txSvc = svc.withDb(tx.db);
+        const others = (await txSvc.setCharacterLook(written.sourceId, body.look)).filter((t) => t.id !== written.id);
+        const heard = await txSvc.tokenEventVisibilities(others);
         for (const t of others) {
-          if (t.id === written.id) continue;
-          await tx.emit({ type: 'token.updated', payload: { token: serializeToken(t) }, visibility: t.hidden ? 'gm' : 'public' });
+          await tx.emit({ type: 'token.updated', payload: { token: serializeToken(t) }, visibility: heard(t) });
         }
       }
       return written;
@@ -727,11 +750,14 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     const { token, scene } = await svc.tokenWithScene(id);
     assertCampaign(auth, scene.campaignId);
     await app.hub.atomic(scene.campaignId, async (tx) => {
-      await svc.withDb(tx.db).deleteToken(id);
+      const txSvc = svc.withDb(tx.db);
+      await txSvc.deleteToken(id);
       await tx.emit({
         type: 'token.removed',
         payload: { tokenId: id, sceneId: scene.id },
-        visibility: tokenVis(token, scene),
+        // Judged against the scene as it stands inside this transaction, as
+        // the create and the move are, not the row read before it opened.
+        visibility: tokenVis(token, await txSvc.sceneRow(scene.id)),
       });
       // A runner taken off the map takes their eyes with them; a lamp-post
       // token its light.
@@ -753,7 +779,10 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
    * hidden one does — a public `token.removed`, then the GM's own copy of
    * where he went.
    * A token concealed both before and after (flipping `hidden` on one that
-   * stands in fog, moving a guard around inside it) is a GM-only edit.
+   * stands in fog, moving a guard around inside it) is a GM-only edit. So is
+   * every edit to a token on a STAGED scene (`sceneOnTable`): nothing on it
+   * is on the table, before or after, so nothing arrives or leaves, and the
+   * GM builds the ambush without a phone in the room hearing a step of it.
    *
    * Takes the caller's transaction, so a token whose row moved is a token the
    * table was told about — and a hide that rolls back never leaks the
@@ -774,8 +803,9 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     // the move: judged against the older fog, the drop went out as a public
     // `token.moved`, a position in a room the table had just lost.
     const current = serializeScene(await svc.withDb(tx.db).sceneRow(scene.id));
-    const was = tokenConcealed(before, current);
-    const now = tokenConcealed(after, current);
+    const table = sceneOnTable(current);
+    const was = !table || tokenConcealed(before, current);
+    const now = !table || tokenConcealed(after, current);
     if (was && !now) {
       await tx.emit({ type: 'token.added', payload: { token: dto } });
       return;
@@ -1072,6 +1102,20 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
   }
 
   // --- drawings, AoE templates, scatter (FR9.12/9.15) -----------------------
+  //
+  // A drawing or a template on the ACTIVE scene is public wherever it lies,
+  // fog or no fog (P6, decided 2026-09-27). It is somebody's deliberate mark
+  // for the table: a player's sketch is on ground they can see, and a
+  // template the GM drops is the GM saying "the grenade lands here" out
+  // loud. A template dropped on a guard in the dark does show where he is,
+  // and that is the GM's call to make, as it is at a real table; the server
+  // does not second-guess it. Pings, pointers and "focus here" (hub.ts) are
+  // the same kind of act and stay public too.
+  //
+  // On a STAGED scene there is no table (`sceneOnTable`), so a mark there is
+  // the GM's alone (`sceneEventVisibility`): the GM sketching next week's
+  // ambush is not drawing it on every phone's socket. The table gets the
+  // scene's drawings in the read it makes when the scene goes live.
 
   app.post('/api/scenes/:id/drawings', async (req, reply) => {
     const { id } = req.params as { id: string };
@@ -1084,7 +1128,7 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       const created = await svc
         .withDb(tx.db)
         .createDrawing(scene.id, { ...body, createdBy: auth.userId });
-      await tx.emit({ type: 'drawing.added', payload: { drawing: created } });
+      await tx.emit({ type: 'drawing.added', payload: { drawing: created }, visibility: sceneEventVisibility(scene) });
       return created;
     });
     return reply.status(201).send({ drawing });
@@ -1099,7 +1143,7 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     const geometry = parseBody(z.record(z.string(), z.unknown()), req.body);
     const drawing = await app.hub.atomic(scene.campaignId, async (tx) => {
       const updated = await svc.withDb(tx.db).updateDrawing(id, geometry);
-      await tx.emit({ type: 'drawing.added', payload: { drawing: updated } });
+      await tx.emit({ type: 'drawing.added', payload: { drawing: updated }, visibility: sceneEventVisibility(scene) });
       return updated;
     });
     return { drawing };
@@ -1116,6 +1160,7 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       await tx.emit({
         type: 'drawing.cleared',
         payload: { sceneId: scene.id, drawingIds: [id] },
+        visibility: sceneEventVisibility(scene),
       });
     });
     return { ok: true };
@@ -1129,6 +1174,7 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       await tx.emit({
         type: 'drawing.cleared',
         payload: { sceneId: scene.id, drawingIds: cleared },
+        visibility: sceneEventVisibility(scene),
       });
       return cleared;
     });
@@ -1168,7 +1214,7 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         },
         createdBy: auth.userId,
       });
-      await tx.emit({ type: 'drawing.added', payload: { drawing: created } });
+      await tx.emit({ type: 'drawing.added', payload: { drawing: created }, visibility: sceneEventVisibility(scene) });
       return created;
     });
     return { scatter, drawing };
@@ -1304,9 +1350,12 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     // not know; the second keeps the GM dragging a visible guard INTO the fog
     // from drawing his path through it on every player's socket. The drop
     // (`token.move`) then settles which side of the edge he ended up on.
+    // And on a staged scene no frame is the table's at all (`sceneOnTable`).
     const current = serializeScene(scene);
     const concealed =
-      tokenConcealed(token, current) || tokenConcealed({ ...token, x: parsed.data.x, y: parsed.data.y }, current);
+      !sceneOnTable(current) ||
+      tokenConcealed(token, current) ||
+      tokenConcealed({ ...token, x: parsed.data.x, y: parsed.data.y }, current);
     app.hub.emitEphemeral(ctx.campaignId, {
       type: 'token.dragging',
       payload: { tokenId: token.id, sceneId: scene.id, x: parsed.data.x, y: parsed.data.y, by: ctx.auth.userId },
