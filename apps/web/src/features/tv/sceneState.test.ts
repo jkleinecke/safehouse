@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { Scene, Token, Visibility, WsEvent } from '@safehouse/contracts';
+// The fog a display device is sent, shared with the server's tests (see the file for why).
+import { FOG_WIRE_UNREVEALED } from '../../../../../packages/contracts/test/fog-fixtures.js';
+import { metricsFor } from '../grid/geometry.js';
+import { CoverMasks } from '../grid/stage3d/masks.js';
 import { tvStageState } from '../grid/tvStage.js';
 import {
   mergeSceneEvents,
@@ -189,6 +193,69 @@ describe('mergeSceneEvents', () => {
     const base = snapshot({ asOfEventId: 1_000 });
     const stale = { ...evt('token.moved', { tokenId: 'wisp', x: 99, y: 99 }), id: 900 };
     expect(mergeSceneEvents(base, [stale])).toBe(base);
+  });
+});
+
+/**
+ * The TV's fog, folded from the public events (FR9.13).
+ *
+ * The TV reads the scene once and then folds the stream onto it, so whether
+ * the wall screen is covered depends on what the fold keeps. The server's
+ * public fog events never carry an unrevealed region. A scene fogged with
+ * nothing revealed, or reset, therefore folds down to no regions at all, and
+ * the one thing that keeps the TV covered is `active`, the bit each of those
+ * events carries. Before it existed the TV was never even told a scene had
+ * been fogged: the `define` went to the GM alone.
+ *
+ * The folded copy must come out as exactly the copy a fresh read would give
+ * (`FOG_WIRE_UNREVEALED`, the fixture the server's tests assert), and the
+ * TV's own stage must cover it (`CoverMasks` as `display`, which in node
+ * takes its fail-closed path; see stage3d/masks.test.ts).
+ */
+describe('the fog on the TV (FR9.13)', () => {
+  /** How covered the centre of every square is on the TV's stage, drawn from `snap`. */
+  function tvCover(masks: CoverMasks, snap: TvSceneSnapshot): number[] {
+    masks.update(tvStageState({ scene: snap.scene, tokens: snap.tokens }), metricsFor(snap.scene.grid));
+    const { cols, rows } = snap.scene.grid;
+    const out: number[] = [];
+    for (let row = 0; row < rows; row += 1) {
+      for (let col = 0; col < cols; col += 1) out.push(masks.coveredAt({ x: col + 0.5, y: row + 0.5 }, 'fog'));
+    }
+    return out;
+  }
+  const squares = (s: TvSceneSnapshot) => s.scene.grid.cols * s.scene.grid.rows;
+
+  it('stays covered through a define, a reveal and a hide, and opens when an event says the fog is off', () => {
+    // An open scene, as a fresh read of one says it.
+    const open = snapshot({
+      scene: scene({ fog: { regions: [], revealed: [], revealedShapes: [], active: false } }),
+    });
+    const region = { id: 'r1', name: 'east wing', polygon: square(2) };
+
+    // The GM fogs it: the table's word is one bit.
+    const fogged = mergeSceneEvents(open, [evt('fog.updated', { sceneId: 's1', op: 'define', active: true })]);
+    expect(fogged?.scene.fog).toEqual(FOG_WIRE_UNREVEALED);
+
+    // A region revealed and hidden again: the hole comes and goes, the fog stays.
+    const revealed = mergeSceneEvents(fogged, [
+      evt('fog.updated', { sceneId: 's1', op: 'reveal', regionId: 'r1', region, active: true }),
+    ]);
+    expect(revealed?.scene.fog).toEqual({ ...FOG_WIRE_UNREVEALED, regions: [region], revealed: ['r1'] });
+    const hidden = mergeSceneEvents(revealed, [evt('fog.updated', { sceneId: 's1', op: 'hide', regionId: 'r1', active: true })]);
+    expect(hidden?.scene.fog).toEqual(FOG_WIRE_UNREVEALED);
+
+    const masks = new CoverMasks('low');
+    try {
+      expect(tvCover(masks, hidden!)).toEqual(new Array<number>(squares(hidden!)).fill(1));
+
+      // The GM switches the fog off: the TV folds `active: false` and the
+      // whole map is on the wall again.
+      const off = mergeSceneEvents(hidden, [evt('fog.updated', { sceneId: 's1', op: 'disable', active: false })]);
+      expect(off?.scene.fog).toEqual({ ...FOG_WIRE_UNREVEALED, active: false });
+      expect(tvCover(masks, off!)).toEqual(new Array<number>(squares(off!)).fill(0));
+    } finally {
+      masks.dispose();
+    }
   });
 });
 

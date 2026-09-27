@@ -14,6 +14,7 @@
  * (`cellSignatures` and `changedCells`, in `lab3d/world3d.ts`), and rebuilds
  * only the chunks a stroke touched.
  */
+import { fogOn } from '@safehouse/contracts';
 import { metricsKey, type SceneMetrics } from '../geometry.js';
 import type { GeometrySelection, StageSceneState } from '../types.js';
 
@@ -81,8 +82,9 @@ function polygonsHash(polygons: ReadonlyArray<ReadonlyArray<{ x: number; y: numb
 
 /**
  * The fog: its regions (where each lies, to the point), what is revealed,
- * whether a player's copy says it is fogged at all (`FogState.active`), and
- * whether it is drawn for the GM.
+ * whether the scene is fogged at all (`fogOn`: a player's or the TV's copy
+ * says it with `active`, the GM's with the switch, `enabled`), and whether it
+ * is drawn for the GM.
  */
 export function fogKey(state: StageSceneState): string {
   const fog = state.scene.fog;
@@ -97,7 +99,9 @@ export function fogKey(state: StageSceneState): string {
     fog.regions.map((r) => `${r.id}:${r.name}:${r.polygon.length}`).join(','),
     fog.revealed.join(','),
     fog.revealedShapes.length,
-    fog.active === true ? 'on' : '',
+    // The switch, as `drawFog` reads it: flipping it on or off changes
+    // nothing else about the fog, and must still redraw it.
+    fogOn(fog) ? 'on' : 'off',
     shapes,
   ].join('|');
 }

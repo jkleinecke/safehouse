@@ -14,7 +14,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Scene } from '@safehouse/contracts';
 import { TILE_HEIGHTS } from '@safehouse/rules';
-import { heightRise, metricsFor, worldFromGrid } from '../geometry.js';
+import { heightRise, metricsFor, sceneWorldSize, worldFromGrid } from '../geometry.js';
+import { RecordingInk, type InkOp } from '../stage3d/floorInk.js';
+// The fog a player is sent, shared with the server's tests: what they assert
+// the server sends is exactly what these draw (see the file for why).
+import { FOG_WIRE_UNREVEALED } from '../../../../../../packages/contracts/test/fog-fixtures.js';
 import type { Ink, LabelSink } from './ink.js';
 import { drawFog } from './layers.js';
 
@@ -250,13 +254,99 @@ describe('drawFog with nothing defined', () => {
     expect(f.rects).toBe(0);
   });
 
-  it('still covers once a single region exists, revealed or not', () => {
-    const f = tracingCover();
-    const labels = noLabels();
-    const s = scene();
-    const hidden = { ...s, fog: { ...s.fog, revealed: [] } } as Scene;
-    drawFog(f.g, labels,hidden, flat, false);
-    expect(f.rects).toBe(1);
-    expect(f.cuts).toBe(0);
+});
+
+// ---------------------------------------------------------------------------
+// The copy a player and the TV are actually sent
+// ---------------------------------------------------------------------------
+
+/**
+ * `drawFog` fed what the server sends (FR9.13), not the GM's copy.
+ *
+ * This replaces a test that fed a player's `drawFog` the GM's copy of a
+ * fogged scene: one region, unrevealed. The GM's copy carries every region,
+ * so that test drew a cover and passed. A player's copy carries only the
+ * REVEALED regions, so the same scene reached every phone and the TV as
+ * `regions: []`. `drawFog` read that as a scene with no fog and drew nothing,
+ * and only the GM saw fog. The test checked a copy no player is ever sent.
+ *
+ * So the input here is `FOG_WIRE_UNREVEALED`, the fixture the server's tests
+ * assert a player's and a display device's payload equals. The paints are
+ * recorded by a `RecordingInk`, the same recorder the 3D map's inks and the
+ * players' fog mask are built on, so what is asserted is the list of fills
+ * and holes the mask is then painted from.
+ */
+describe('drawFog on the copy a player and the TV are sent', () => {
+  /** A `RecordingInk` with nothing to paint on: just the paints it recorded. */
+  class Recorder extends RecordingInk {
+    protected changed(): void {
+      // Nothing to repaint: the test reads the list.
+    }
+    get paints(): readonly InkOp[] {
+      return this.ops;
+    }
+  }
+
+  /** The scene of this file as a player receives it: its fog is the wire copy, varied by `fog`. */
+  const wire = (fog: Partial<Scene['fog']> = {}): Scene => ({ ...scene(), fog: { ...FOG_WIRE_UNREVEALED, ...fog } });
+
+  /** The cover `drawFog` lays down: the whole map plus the two-square pad, as `rect` records it. */
+  function coverShape(): { pts: number[]; closed: boolean } {
+    const { width, height } = sceneWorldSize(flat);
+    const pad = flat.cell * 2;
+    return { pts: [-pad, -pad, width + pad, -pad, width + pad, height + pad, -pad, height + pad], closed: true };
+  }
+
+  const region = scene().fog.regions[0]!;
+
+  it('covers the whole map at full opacity when the scene is fogged with nothing revealed', () => {
+    const ink = new Recorder();
+    drawFog(ink, noLabels(), wire(), flat, false);
+    expect(ink.paints).toHaveLength(1);
+    const cover = ink.paints[0]!;
+    expect(cover).toMatchObject({ kind: 'fill', alpha: 1 });
+    expect(cover.path.shapes).toEqual([coverShape()]);
+    expect(cover.path.holes).toEqual([]);
+  });
+
+  it('cuts one hole per revealed region, exactly that region, out of the same cover', () => {
+    const ink = new Recorder();
+    drawFog(ink, noLabels(), wire({ regions: [region], revealed: [region.id] }), flat, false);
+    expect(ink.paints).toHaveLength(1);
+    const cover = ink.paints[0]!;
+    expect(cover).toMatchObject({ kind: 'fill', alpha: 1 });
+    expect(cover.path.shapes).toEqual([coverShape()]);
+    const hole = region.polygon.flatMap((p) => {
+      const w = worldFromGrid(flat, p);
+      return [w.x, w.y];
+    });
+    expect(cover.path.holes).toEqual([{ pts: hole, closed: true }]);
+  });
+
+  it('draws nothing when the copy says the fog is off, revealed regions or not', () => {
+    // `active: false` is the server's answer, and it wins in both directions:
+    // a scene the GM has switched off still carries its revealed regions to
+    // the table, and must still open the whole map.
+    for (const fog of [{ active: false }, { active: false, regions: [region], revealed: [region.id] }]) {
+      const ink = new Recorder();
+      drawFog(ink, noLabels(), wire(fog), flat, false);
+      expect(ink.paints, JSON.stringify(fog)).toEqual([]);
+    }
+  });
+
+  it("follows the GM's switch on the GM's copy: off keeps the outlines and drops the tint, on tints a scene with no regions", () => {
+    // The GM's copy has no `active`: the switch (`enabled`) says it. Off,
+    // the GM keeps each region's outline to lay the scene out, and no tint.
+    const off = new Recorder();
+    drawFog(off, noLabels(), { ...scene(), fog: { ...scene().fog, enabled: false } }, flat, true);
+    expect(off.paints.map((p) => p.kind)).toEqual(['stroke']);
+
+    // On, with no regions at all: the whole map is under the fog for the
+    // table, so the GM sees it under the tint.
+    const on = new Recorder();
+    drawFog(on, noLabels(), { ...scene(), fog: { regions: [], revealed: [], revealedShapes: [], enabled: true } }, flat, true);
+    expect(on.paints).toHaveLength(1);
+    expect(on.paints[0]).toMatchObject({ kind: 'fill', alpha: 0.4 });
+    expect(on.paints[0]!.path.shapes).toEqual([coverShape()]);
   });
 });

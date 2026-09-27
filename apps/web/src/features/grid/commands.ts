@@ -192,6 +192,24 @@ export class GridCommands {
     post(this.socket, { cmd: 'fog.reveal', sceneId, op: 'remove', regionId });
   }
 
+  /**
+   * Switch the scene's fog on: the players and the TV see only what is
+   * revealed, and nothing at all while nothing is. The regions and reveals
+   * are whatever they were; this turns them back into a cover.
+   */
+  fogEnable(sceneId: string): void {
+    post(this.socket, { cmd: 'fog.reveal', sceneId, op: 'enable' });
+  }
+
+  /**
+   * Switch the scene's fog off: the players and the TV see the whole map.
+   * Every region and every reveal is kept, so the GM can lay the fog out while
+   * the table looks on, and `fogEnable` picks up exactly where this left it.
+   */
+  fogDisable(sceneId: string): void {
+    post(this.socket, { cmd: 'fog.reveal', sceneId, op: 'disable' });
+  }
+
   dispose(): void {
     this.dragRelay.cancel();
     this.pointerRelay.cancel();

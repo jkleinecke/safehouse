@@ -29,6 +29,8 @@ import {
   GenTemplateSchema,
   type CombatantMonitors,
   FogStateSchema,
+  fogOn,
+  type FogOp,
   SheetV1Schema,
   TokenAuraSchema,
   TokenLightSchema,
@@ -51,7 +53,7 @@ import {
   SceneLevelSchema,
   type SceneLevel,
 } from '@safehouse/contracts';
-import { deriveCharacter, environment, generateNpc } from '@safehouse/rules';
+import { deriveCharacter, environment, fogRevealedAt, generateNpc } from '@safehouse/rules';
 import {
   attachments,
   characters,
@@ -136,8 +138,11 @@ export function normalizeGeometry(raw: unknown): SceneGeometry {
 export function normalizeFog(raw: unknown): FogState {
   const parsed = FogStateSchema.safeParse(isRecord(raw) ? raw : {});
   const fog = parsed.success ? parsed.data : FogStateSchema.parse({});
-  // `active` is said on a player's copy (`sceneForViewer`), from the regions;
-  // it is never stored, so a stale one can never outlive them.
+  // `active` is said on a player's copy (`sceneForViewer`), worked out from
+  // the rest by `fogOn`; it is never stored, so a stale one can never outlive
+  // the state it was worked out from. `enabled` is the opposite case and is
+  // KEPT: it is the GM's switch, a decision nothing else can re-derive, and
+  // the schema parse above carries it through untouched.
   delete fog.active;
   return fog;
 }
@@ -299,7 +304,13 @@ export function sceneForViewer(scene: Scene, gm: boolean): Scene {
       // reset — would otherwise read as one with no fog, and every player
       // device and the TV would draw the whole map open (FR9.13). A count of
       // one bit: nothing of an unrevealed region's shape, name or number.
-      active: scene.fog.regions.length > 0,
+      //
+      // `fogOn` is the same rule the map and the TV apply, worked out here
+      // from the whole stored state: the GM's switch (`enabled`), or, for a
+      // scene whose switch was never flipped, whether there is anything to
+      // reveal. The switch itself stays off the wire. This bit is its answer,
+      // and `fogOn` reads this bit first on the copy it arrives in.
+      active: fogOn(scene.fog),
     },
   };
   delete (filtered as { notes?: string }).notes;
@@ -327,6 +338,58 @@ export function hiddenByLayer(scene: Pick<Scene, 'tokenLayers'>): Set<string> {
 /** Hidden to players: flagged hidden, or on a hidden layer. */
 export function tokenHidden(token: { id: string; hidden: boolean }, scene: Pick<Scene, 'tokenLayers'>): boolean {
   return token.hidden || hiddenByLayer(scene).has(token.id);
+}
+
+/** What `tokenConcealed` needs to know about a token: a row and a DTO both fit. */
+export interface ConcealableToken {
+  id: string;
+  hidden: boolean;
+  source: string;
+  x: number;
+  y: number;
+}
+
+/**
+ * Standing under the fog, as far as the table is concerned: the scene's fog
+ * is on (`fogOn`), and the point the token stands on is in no revealed region
+ * and no revealed shape (`fogRevealedAt`).
+ *
+ * The point is the token's own `x`/`y`, which the map keeps at the centre of
+ * the square (or squares) it stands on. That is the same point a player's
+ * map samples its cover at, so a token withheld here is one that map would
+ * have drawn under solid fog anyway, and the other way round. Fog has no
+ * floors: a region covers the same ground on every storey, so a token's
+ * level does not enter into it.
+ *
+ * Party tokens (`source: 'character'`) are NEVER fogged. A runner is always
+ * on their own player's screen and on the TV, wherever they walk: the fog
+ * hides what the runners have not found, never the runners themselves.
+ */
+export function tokenFogged(token: ConcealableToken, fog: FogState): boolean {
+  if (token.source === 'character') return false;
+  if (!fogOn(fog)) return false;
+  return !fogRevealedAt(fog, { x: token.x, y: token.y });
+}
+
+/**
+ * Withheld from players, the TV and observers (Principle 4): hidden by its
+ * own flag or its layer (`tokenHidden`), or standing under the fog
+ * (`tokenFogged`).
+ *
+ * This is the ONE question every path that puts a token on a non-GM wire
+ * asks: the composed scene, the visibility of each token event and drag
+ * frame, and the diffs that turn a change in the answer into the token
+ * arriving (`token.added`) or leaving (`token.removed`). So what counts as
+ * concealed can be redefined here, once, and every path follows. The next
+ * vision phase does exactly that, when "revealed" grows to mean "in a live
+ * area".
+ *
+ * Before this, fog was only ever a cover the client drew. Every guard behind
+ * it was on every player's wire, positions, moves and drags included, and
+ * one look at the network tab was a look behind the fog.
+ */
+export function tokenConcealed(token: ConcealableToken, scene: Pick<Scene, 'tokenLayers' | 'fog'>): boolean {
+  return tokenHidden(token, scene) || tokenFogged(token, scene.fog);
 }
 
 /**
@@ -635,7 +698,7 @@ export interface TokenCreateInput {
 }
 
 export interface FogOpInput {
-  op: 'reveal' | 'hide' | 'define' | 'remove';
+  op: FogOp;
   regionId?: string;
   region?: { id?: string; name: string; polygon: Point[] };
   shape?: Point[];
@@ -749,7 +812,16 @@ export class ScenesService {
     const grid = normalizeGrid(input.grid);
     const env = normalizeEnvironment(input.environment);
     const geometry = normalizeGeometry(input.geometry);
-    const fog = normalizeFog(input.fog);
+    // A new scene starts with its fog switched OFF, so drawing its first
+    // reveal area does not black out the table: fog is the GM's switch to
+    // throw (2026-09-27). A scene that arrives with regions of its own (an
+    // import, a seed) keeps the rule it was made under — on once a region
+    // exists — unless it says otherwise.
+    const given = normalizeFog(input.fog);
+    const fog: FogState =
+      given.enabled === undefined && given.regions.length === 0 && given.revealedShapes.length === 0
+        ? { ...given, enabled: false }
+        : given;
     const row = (
       await this.db
         .insert(scenes)
@@ -777,7 +849,6 @@ export class ScenesService {
         ? normalizeEnvironment({ ...current.environment, ...patch.environment })
         : current.environment;
     const geometry = patch.geometry !== undefined ? normalizeGeometry(patch.geometry) : current.geometry;
-    const fog = patch.fog !== undefined ? normalizeFog(patch.fog) : current.fog;
     const mapAttachmentIds = patch.mapAttachmentIds ?? current.mapAttachmentIds;
     const notes = patch.notes !== undefined ? patch.notes : current.notes;
     const tiles = patch.tiles !== undefined ? patch.tiles : current.tiles;
@@ -797,7 +868,17 @@ export class ScenesService {
           grid,
           environment: env,
           geometry: geometryColumn(geometry, mapAttachmentIds, notes, tiles, levels, vision, tokenLayers),
-          fog,
+          // The fog is written only when the patch carries it. Everything
+          // else here is re-derived from the row the caller hands in, and two
+          // callers hand in a row they read BEFORE their transaction opened:
+          // the scene PATCH, and a player trying a door. Writing the fog back
+          // from that row let either one silently undo a fog op that
+          // committed in between — a `hide` rolled back with no `fog.updated`
+          // to say so, and the room, and every guard standing in it, back on
+          // the players' screens at their next re-read. Fog changes go through
+          // `applyFogOp`, which owns the column; the returned scene carries
+          // whatever fog is stored now.
+          ...(patch.fog !== undefined ? { fog: normalizeFog(patch.fog) } : {}),
         })
         .where(eq(scenes.id, row.id))
         .returning()
@@ -823,8 +904,9 @@ export class ScenesService {
 
   /**
    * Role-filtered composed payload: scene + tokens + live drawings. Hidden
-   * tokens and unrevealed fog geometry are excluded for non-GM viewers HERE,
-   * at the query layer (Principle 4, FR9.7/9.13).
+   * tokens, tokens standing under the fog, and unrevealed fog geometry are
+   * excluded for non-GM viewers HERE, at the query layer (Principle 4,
+   * FR9.7/9.13).
    */
   async composedScene(
     row: SceneRow,
@@ -833,9 +915,10 @@ export class ScenesService {
     const tokenRows = await this.db.select().from(tokens).where(eq(tokens.sceneId, row.id));
     const drawingRows = await this.db.select().from(drawings).where(eq(drawings.sceneId, row.id));
     const now = Date.now();
-    // Hidden by flag or by layer (FR9.7 / FR9.26): either way, not on a player's wire.
+    // Hidden by flag or by layer (FR9.7 / FR9.26), or standing in fog nobody
+    // has revealed (FR9.13): any of those, and it is not on a player's wire.
     const dto = serializeScene(row);
-    const visibleTokens = tokenRows.filter((t) => gm || !tokenHidden(t, dto)).map(serializeToken);
+    const visibleTokens = tokenRows.filter((t) => gm || !tokenConcealed(t, dto)).map(serializeToken);
     const liveDrawings = drawingRows
       .filter((d) => !d.expiresAt || d.expiresAt.getTime() > now)
       .map(serializeDrawing);
@@ -1023,6 +1106,14 @@ export class ScenesService {
       region = fog.regions.find((r) => r.id === op.regionId);
       fog.regions = fog.regions.filter((r) => r.id !== op.regionId);
       fog.revealed = fog.revealed.filter((id) => id !== op.regionId);
+    } else if (op.op === 'enable' || op.op === 'disable') {
+      // The scene's fog switch (`FogState.enabled`). Only the switch moves:
+      // every region and every reveal stays exactly as it was. So a GM can
+      // prepare a scene's fog with it off and switch it on at the door, or
+      // switch it off for a moment and back on without losing the evening's
+      // reveals. Once flipped it is the answer (`fogOn`), and a scene with no
+      // regions at all can be fogged, which before the switch it could not.
+      fog.enabled = op.op === 'enable';
     } else {
       // hide: one named region, or (no regionId) reset everything
       if (op.regionId) {
@@ -1150,13 +1241,18 @@ export class ScenesService {
 
   /**
    * Create combatants from the scene's character/NPC tokens (props skipped;
-   * hidden tokens become gm-visibility combatants). Coordination with the
-   * encounters domain is via db rows only.
+   * concealed tokens — hidden, or standing under the fog — become
+   * gm-visibility combatants). Coordination with the encounters domain is via
+   * db rows only.
+   *
+   * `shown` is how many of the new combatants the table may see. It is the
+   * only count that can go on a public event: the whole count, less the
+   * shown ones, is exactly the number of foes the GM is holding back.
    */
   async stageEncounter(
     scene: SceneRow,
     opts: { name?: string; encounterId?: string },
-  ): Promise<{ encounterId: string; createdEncounter: boolean; combatantIds: string[] }> {
+  ): Promise<{ encounterId: string; createdEncounter: boolean; combatantIds: string[]; shown: number }> {
     const tokenRows = await this.db.select().from(tokens).where(eq(tokens.sceneId, scene.id));
     let stageable = tokenRows.filter((t) => t.source === 'character' || t.source === 'npc_template');
 
@@ -1210,6 +1306,9 @@ export class ScenesService {
     const templateById = new Map(templateRows.map((r) => [r.id, r]));
 
     const combatantIds: string[] = [];
+    let shown = 0;
+    // Read once: whether each token is on the table is asked of the same scene.
+    const current = serializeScene(scene);
     for (const t of stageable) {
       const raw = t.sourceId ? sheetById.get(t.sourceId) : undefined;
       // FR9.10/FR4.2: derive the initiative line through the ENGINE, exactly as
@@ -1229,6 +1328,14 @@ export class ScenesService {
         : derived
           ? derived.base
           : (stats?.attributes?.rea ?? 0) + (stats?.attributes?.int ?? 0);
+      // Concealed by flag, by layer (FR9.26) or by the fog (FR9.13): a
+      // combatant nobody was shown must not appear in the tracker, or on the
+      // TV's ribbon, before it appears on the map. This asked `tokenHidden`
+      // alone, so a guard the server was withholding from every player's map
+      // because he stood in unrevealed fog went onto the public roster by
+      // name the moment the GM staged the fight.
+      const visibility = tokenConcealed(t, current) ? 'gm' : 'public';
+      if (visibility === 'public') shown += 1;
       const row = (
         await this.db
           .insert(combatants)
@@ -1241,9 +1348,7 @@ export class ScenesService {
             initBase,
             initKind: 'physical',
             monitors: body ? body.monitors : derived ? derived.monitors : monitorsFrom(stats),
-            // Hidden by flag or by layer (FR9.26): a combatant nobody was
-            // shown must not appear in the tracker before it appears on the map.
-            visibility: tokenHidden(t, serializeScene(scene)) ? 'gm' : 'public',
+            visibility,
             // `initDice` rides in the copilot JSONB (no column of its own); a
             // missing value would default to 1 die and lose the augmentation.
             copilot: body ? body.copilot : { initDice: derived ? derived.dice : 1 },
@@ -1252,7 +1357,7 @@ export class ScenesService {
       )[0]!;
       combatantIds.push(row.id);
     }
-    return { encounterId, createdEncounter, combatantIds };
+    return { encounterId, createdEncounter, combatantIds, shown };
   }
 
   async activeSceneModifiers(campaignId: string): Promise<Modifier[]> {

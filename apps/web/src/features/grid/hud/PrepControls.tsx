@@ -1,18 +1,28 @@
 /**
  * Prep's map-wide settings, on the mode row (docs/UX_MAP_BUILDER.md §3.1).
  *
- * Three things a GM sets for the whole scene rather than for a square: the
+ * Four things a GM sets for the whole scene rather than for a square: the
  * environment (light, visibility, glare, wind — the modifier they compose to),
- * whose eyes the GM is looking through, and whether players see only their
- * own sightline — and one lens of the GM's own, the light map. They were panel tabs — Env and LOS — each a page for one or
- * two controls; up here they are one click away from any tool, and the panel
- * is left for the thing that is picked.
+ * whose eyes the GM is looking through, whether the scene's fog is on, and
+ * whether each player's map is dimmed outside their own runner's sightline —
+ * and one lens of the GM's own, the light map. They were panel tabs — Env,
+ * Fog and LOS — each a page for one or two controls; up here they are one
+ * click away from any tool, and the panel is left for the thing that is
+ * picked.
+ *
+ * The fog and the dimming sit side by side and are worded apart on purpose.
+ * Only the fog HIDES: while it is on, the players and the TV see nothing but
+ * the revealed areas. The dimming only darkens — the map under it stays
+ * readable — and a GM who flipped it expecting it to hide the map watched the
+ * table go on seeing everything.
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import type { Scene, Token } from '@safehouse/contracts';
+import { fogOn, type Scene, type Token } from '@safehouse/contracts';
 import { environment } from '@safehouse/rules';
 import { usePatchScene } from '../api.js';
+import type { GridCommands } from '../commands.js';
 import EnvTab from '../gm/EnvTab.js';
+import { fogSwitchTitle } from '../gm/FogTab.js';
 import { useGridStore } from '../store.js';
 import { cameraLensId } from '../useShroud.js';
 
@@ -150,7 +160,41 @@ function SeeAsMenu({ scene, tokens }: { scene: Scene; tokens: readonly Token[] }
   );
 }
 
-/** Whether each player sees only what their own runner can. Saved on the scene, so their devices hear it. */
+/**
+ * The scene's fog switch (`FogState.enabled`): on, the players and the TV see
+ * only the revealed areas; off, they see the whole map, and every region and
+ * reveal is kept for when it goes on again. What it shows is `fogOn` of the
+ * GM's copy, so a scene whose switch was never flipped reads as it behaves.
+ * The Fog tab has the same switch with its two meanings spelt out
+ * (`FogSwitch`); here they are the tooltip.
+ */
+function FogToggle({ scene, commands }: { scene: Scene; commands: GridCommands }) {
+  const on = fogOn(scene.fog);
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      data-testid="prep-fog"
+      title={fogSwitchTitle(on)}
+      onClick={() => (on ? commands.fogDisable(scene.id) : commands.fogEnable(scene.id))}
+      className={'btn min-h-9 gap-1 px-2 py-1 text-xs ' + (on ? 'border-cyan text-cyan' : 'text-dim')}
+    >
+      <span className="mono-label">Fog</span>
+      <span>{on ? 'on' : 'off'}</span>
+    </button>
+  );
+}
+
+/**
+ * Whether each player's map is dimmed outside what their own runner can see.
+ * Saved on the scene, so their devices hear it.
+ *
+ * It DARKENS; it does not hide. The scrim it lays is a partial one, the map
+ * under it stays readable, and a player whose runner has no token on the
+ * scene gets no scrim at all. It used to read "Players: own sight", and a GM
+ * who turned it on to keep a map from the table saw the table go on reading
+ * the whole map. Hiding is the fog's job, and the tooltip says so.
+ */
 function PlayerSightToggle({ scene }: { scene: Scene }) {
   const patch = usePatchScene();
   const on = scene.vision?.playersSeeOwnSight ?? false;
@@ -160,12 +204,16 @@ function PlayerSightToggle({ scene }: { scene: Scene }) {
       aria-pressed={on}
       data-testid="prep-player-sight"
       disabled={patch.isPending}
-      title={on ? 'Players see only their own sightline — click to show them the whole map' : 'Players see the whole map — click to limit each to their own sightline'}
+      title={
+        on
+          ? "Each player's map is dimmed outside their own runner's sightline — darkens only; use Fog to hide. Click to stop dimming."
+          : "Dim each player's map outside their own runner's sightline — darkens only; use Fog to hide."
+      }
       onClick={() => patch.mutate({ sceneId: scene.id, patch: { vision: { playersSeeOwnSight: !on } } })}
       className={'btn min-h-9 gap-1 px-2 py-1 text-xs ' + (on ? 'border-cyan text-cyan' : 'text-dim')}
     >
-      <span className="mono-label">Players</span>
-      <span>{on ? 'own sight' : 'whole map'}</span>
+      <span className="mono-label">Dim outside own sight</span>
+      <span>{on ? 'on' : 'off'}</span>
     </button>
   );
 }
@@ -193,11 +241,20 @@ function LightMapToggle() {
   );
 }
 
-export default function PrepControls({ scene, tokens }: { scene: Scene; tokens: readonly Token[] }) {
+export default function PrepControls({
+  scene,
+  tokens,
+  commands,
+}: {
+  scene: Scene;
+  tokens: readonly Token[];
+  commands: GridCommands;
+}) {
   return (
     <div className="flex items-center gap-1.5" role="group" aria-label="Scene settings">
       <EnvironmentMenu scene={scene} />
       <SeeAsMenu scene={scene} tokens={tokens} />
+      <FogToggle scene={scene} commands={commands} />
       <PlayerSightToggle scene={scene} />
       <LightMapToggle />
     </div>

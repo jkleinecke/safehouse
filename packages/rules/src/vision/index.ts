@@ -12,3 +12,4 @@ export * from './visible.js';
 export * from './cone.js';
 export * from './modes.js';
 export * from './light.js';
+export * from './fog.js';

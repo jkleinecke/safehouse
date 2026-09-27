@@ -51,7 +51,8 @@ const TOOL_DEFS: Record<GridTool, Omit<ToolDef, 'id'>> = {
   door: { label: 'Doorway', glyph: '⌷' },
   zone: { label: 'Zone', glyph: '▱' },
   pin: { label: 'Pin', glyph: '⚑' },
-  fogdef: { label: 'Fog', glyph: '⬡' },
+  // A fog region is an area the GM can reveal, not an area of fog (PrepPlacing).
+  fogdef: { label: 'Reveal area', glyph: '⬡' },
   camera: { label: 'Camera', glyph: '◉' },
   light: { label: 'Light', glyph: '✹' },
   note: { label: 'Note', glyph: '🗒' },
@@ -143,7 +144,7 @@ export default function Toolbar(props: ToolbarProps) {
   */
   const build = props.isGm && props.mode === 'build';
   // Prep has its own placing row (PrepPlacing): what goes on the map, each
-  // with its caret — Token, Fog, Camera, Light, Note.
+  // with its caret — Token, Reveal area, Camera, Light, Note.
   const prep = props.isGm && props.mode === 'prep' && props.placing !== undefined;
   /*
     Select, and in Build mode Erase, lead the row apart from everything else:

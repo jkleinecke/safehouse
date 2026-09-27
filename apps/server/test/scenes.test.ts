@@ -9,7 +9,10 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { characters, combatants, scenes as scenesTable } from '@safehouse/db';
 import { eq } from 'drizzle-orm';
-import { activeSceneModifiers, computeScatter } from '../src/services/scenes.js';
+import { ScenesService, activeSceneModifiers, computeScatter } from '../src/services/scenes.js';
+// The fog a player is sent, shared with the web's tests so the server's
+// output here is exactly the map's input there (see the file for why).
+import { FOG_WIRE_UNREVEALED } from '../../../packages/contracts/test/fog-fixtures.js';
 import {
   bootstrapCampaign,
   joinAs,
@@ -138,6 +141,8 @@ describe('hidden tokens and fog never reach a player payload (Principle 4)', () 
     });
     hiddenTokenId = (hidden.json() as { token: { id: string } }).token.id;
 
+    // A new scene starts with its fog off; the GM throws the switch first.
+    expect((await post(`/api/scenes/${sceneId}/fog`, boot.gmToken, { op: 'enable' })).statusCode).toBe(200);
     const define = async (name: string, x: number) =>
       post(`/api/scenes/${sceneId}/fog`, boot.gmToken, {
         op: 'define',
@@ -192,7 +197,7 @@ describe('hidden tokens and fog never reach a player payload (Principle 4)', () 
     expect(raw).not.toContain(GM_NOTE);
   });
 
-  it('hides the region again on op hide', async () => {
+  it('hides the region again on op hide, and the player is still told the scene is fogged', async () => {
     expect(
       (await post(`/api/scenes/${sceneId}/fog`, boot.gmToken, { op: 'hide', regionId: revealedRegionId }))
         .statusCode,
@@ -202,7 +207,13 @@ describe('hidden tokens and fog never reach a player payload (Principle 4)', () 
       url: `/api/scenes/${sceneId}`,
       headers: as(player.token),
     });
-    expect((res.json() as { scene: { fog: { regions: unknown[] } } }).scene.fog.regions).toHaveLength(0);
+    // This used to assert only that the list was empty, and that was the bug
+    // itself, written down as the expected answer: a fogged scene with
+    // nothing revealed reached the player as `regions: []` and nothing else,
+    // which the map read as a scene with no fog. The whole map was open on
+    // every phone and the TV. The copy must also say the scene IS fogged, and
+    // it must be exactly the copy the web's tests draw (`FOG_WIRE_UNREVEALED`).
+    expect((res.json() as { scene: { fog: unknown } }).scene.fog).toEqual(FOG_WIRE_UNREVEALED);
     await post(`/api/scenes/${sceneId}/fog`, boot.gmToken, { op: 'reveal', regionId: revealedRegionId });
   });
 
@@ -372,6 +383,328 @@ describe('hidden tokens and fog never reach a player payload (Principle 4)', () 
     expect(staticRow.tokenId).toBe(visibleTokenId);
     expect(staticRow.initBase).toBe(9); // REA 5 + INT 4
     expect((staticRow.monitors as { physical: { max: number } }).physical.max).toBe(10);
+  });
+});
+
+/**
+ * The fog as it reaches everyone who is not the GM (FR9.13, Principle 4):
+ * a player's phone and the table's TV (a `display` device) alike, since the
+ * server treats them the same and both of them showed the whole map when the
+ * fog broke.
+ *
+ * Three things are pinned here:
+ *
+ *   - The copy says the scene is fogged. A scene fogged with nothing revealed
+ *     arrives as `FOG_WIRE_UNREVEALED`, the shared fixture the web's tests
+ *     draw, with `active: true`. Before, it arrived as a bare empty list and
+ *     read as an open map.
+ *   - The copy says nothing else. An unrevealed region's id, name and
+ *     outline are not in the raw body at all.
+ *   - A token standing in unrevealed fog is not on the wire either. Before,
+ *     only the client's cover kept the guards behind the fog off the screen,
+ *     and one look at the network tab showed every one of them. A runner
+ *     (a party token) is never withheld, wherever they stand.
+ *
+ * Its own campaign, so its fog starts from nothing and the scene the rest of
+ * this file relies on stays the active one.
+ */
+describe('a fogged scene reaches players and the TV covered, and tells them nothing more (FR9.13)', () => {
+  let fb: { campaignId: string; gmToken: string };
+  let viewers: { role: string; token: string }[];
+  let fogSceneId: string;
+  let runnerCharacterId: string;
+  let vaultId: string;
+  let guardId: string;
+  let runnerId: string;
+
+  const VAULT = 'the vault';
+  // Coordinates with more decimals than a timestamp's milliseconds have, so
+  // a search of the raw body for one can only ever find the thing itself.
+  const VAULT_POLY = [
+    { x: 19.1875, y: 19.1875 },
+    { x: 27.8125, y: 19.1875 },
+    { x: 27.8125, y: 27.8125 },
+    { x: 19.1875, y: 27.8125 },
+  ];
+  const GUARD = 'Guard-Kappa';
+  const GUARD_AT = { x: 23.4375, y: 22.5625 };
+  /** Inside the vault too: the runner has walked into the dark with the guard. */
+  const RUNNER_AT = { x: 24.5, y: 24.5 };
+
+  interface View {
+    raw: string;
+    fog: Record<string, unknown>;
+    tokenIds: string[];
+  }
+
+  async function view(token: string): Promise<View> {
+    const res = await t.app.inject({ method: 'GET', url: `/api/scenes/${fogSceneId}`, headers: as(token) });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { scene: { fog: Record<string, unknown> }; tokens: { id: string }[] };
+    return { raw: res.body, fog: body.scene.fog, tokenIds: body.tokens.map((x) => x.id).sort() };
+  }
+
+  async function fogOp(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const res = await post(`/api/scenes/${fogSceneId}/fog`, fb.gmToken, payload);
+    expect(res.statusCode, JSON.stringify(payload)).toBe(200);
+    return (res.json() as { fog: Record<string, unknown> }).fog;
+  }
+
+  /** Nothing of the vault the table has not been shown: not its id, its name, or a corner of it. */
+  function expectNoVault(raw: string, role: string): void {
+    expect(raw, role).not.toContain(vaultId);
+    expect(raw, role).not.toContain(VAULT);
+    for (const p of VAULT_POLY) {
+      expect(raw, role).not.toContain(String(p.x));
+      expect(raw, role).not.toContain(String(p.y));
+    }
+  }
+
+  /** Nothing of the guard: not his id, his name, or where he stands. */
+  function expectNoGuard(v: View, role: string): void {
+    expect(v.tokenIds, role).not.toContain(guardId);
+    expect(v.raw, role).not.toContain(guardId);
+    expect(v.raw, role).not.toContain(GUARD);
+    expect(v.raw, role).not.toContain(String(GUARD_AT.x));
+    expect(v.raw, role).not.toContain(String(GUARD_AT.y));
+  }
+
+  beforeAll(async () => {
+    // A second campaign of the same GM's (the first-run bootstrap is once per
+    // server), with its own GM token.
+    const second = await t.app.inject({
+      method: 'POST',
+      url: '/api/campaigns',
+      headers: gm(),
+      payload: { name: 'Fogged Table' },
+    });
+    expect(second.statusCode).toBe(201);
+    const created = second.json() as { campaignId: string; token: string };
+    fb = { campaignId: created.campaignId, gmToken: created.token };
+    const phone = await joinAs(t.app, fb.campaignId, fb.gmToken, 'player', 'Rook');
+    const tv = await joinAs(t.app, fb.campaignId, fb.gmToken, 'display', 'Table TV');
+    viewers = [
+      { role: 'player', token: phone.token },
+      { role: 'display', token: tv.token },
+    ];
+    const inserted = await t.db
+      .insert(characters)
+      .values({
+        campaignId: fb.campaignId,
+        ownerUserId: phone.user.id,
+        name: 'Rook',
+        sheet: { v: 1, identity: { alias: 'Rook' }, attributes: { bod: 3, rea: 4, int: 4, wil: 3 } },
+      })
+      .returning();
+    runnerCharacterId = inserted[0]!.id;
+    const made = await post(`/api/campaigns/${fb.campaignId}/scenes`, fb.gmToken, { name: 'Bank basement' });
+    fogSceneId = (made.json() as { scene: { id: string } }).scene.id;
+    expect((await post(`/api/scenes/${fogSceneId}/activate`, fb.gmToken, {})).statusCode).toBe(200);
+  }, 60_000);
+
+  it("starts a new scene with its fog off, so its first reveal area leaves the table's map open", async () => {
+    // Before the switch, drawing a scene's first reveal area turned its fog
+    // on by itself, and the table's map went black under a GM who was only
+    // laying out windows. A new scene's fog is now the GM's switch to throw.
+    const fog = await fogOp({ op: 'define', region: { name: VAULT, polygon: VAULT_POLY } });
+    expect(fog['enabled']).toBe(false);
+    vaultId = (fog['regions'] as { id: string }[])[0]!.id;
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      expect(v.fog, role).toEqual({ ...FOG_WIRE_UNREVEALED, active: false });
+      expectNoVault(v.raw, role);
+    }
+    await fogOp({ op: 'remove', regionId: vaultId });
+
+    // From here on the block plays a scene made before the switch existed
+    // (no `enabled` stored), which keeps the rule it was made under: fogged
+    // once a region exists. Every existing scene is one of those.
+    await t.db
+      .update(scenesTable)
+      .set({ fog: { regions: [], revealed: [], revealedShapes: [] } })
+      .where(eq(scenesTable.id, fogSceneId));
+  });
+
+  it('sends a player and the TV the covered copy of a scene fogged with nothing revealed', async () => {
+    const fog = await fogOp({ op: 'define', region: { name: VAULT, polygon: VAULT_POLY } });
+    vaultId = (fog['regions'] as { id: string }[])[0]!.id;
+
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      expect(v.fog, role).toEqual(FOG_WIRE_UNREVEALED);
+      expectNoVault(v.raw, role);
+    }
+  });
+
+  it("gives the GM the region itself, and no `active`: the GM's copy says it with the region", async () => {
+    const v = await view(fb.gmToken);
+    expect(v.fog['regions']).toEqual([{ id: vaultId, name: VAULT, polygon: VAULT_POLY }]);
+    expect(v.fog['revealed']).toEqual([]);
+    expect(v.fog).not.toHaveProperty('active');
+  });
+
+  it('withholds a guard standing in the unrevealed fog, and never the runner standing beside him', async () => {
+    const guard = await post(`/api/scenes/${fogSceneId}/tokens`, fb.gmToken, {
+      source: 'npc_template',
+      name: GUARD,
+      ...GUARD_AT,
+    });
+    expect(guard.statusCode).toBe(201);
+    guardId = (guard.json() as { token: { id: string } }).token.id;
+    const runner = await post(`/api/scenes/${fogSceneId}/tokens`, fb.gmToken, {
+      source: 'character',
+      sourceId: runnerCharacterId,
+      ...RUNNER_AT,
+    });
+    expect(runner.statusCode).toBe(201);
+    runnerId = (runner.json() as { token: { id: string } }).token.id;
+
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      // The fog hides what the runners have not found, never the runners.
+      expect(v.tokenIds, role).toEqual([runnerId]);
+      expectNoGuard(v, role);
+    }
+    expect((await view(fb.gmToken)).tokenIds).toEqual([guardId, runnerId].sort());
+  });
+
+  it('sends the guard once his room is revealed, and takes him back when it is hidden again', async () => {
+    await fogOp({ op: 'reveal', regionId: vaultId });
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      expect(v.tokenIds, role).toEqual([guardId, runnerId].sort());
+      expect(v.fog, role).toEqual({
+        ...FOG_WIRE_UNREVEALED,
+        regions: [{ id: vaultId, name: VAULT, polygon: VAULT_POLY }],
+        revealed: [vaultId],
+      });
+    }
+
+    await fogOp({ op: 'hide', regionId: vaultId });
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      expect(v.tokenIds, role).toEqual([runnerId]);
+      expect(v.fog, role).toEqual(FOG_WIRE_UNREVEALED);
+      expectNoGuard(v, role);
+      expectNoVault(v.raw, role);
+    }
+  });
+
+  it('opens the scene when its last region is removed: `active` false, and nothing is under fog', async () => {
+    // A scene whose switch was never flipped keeps the old rule: fogged while
+    // there is something to reveal, open once there is not.
+    await fogOp({ op: 'remove', regionId: vaultId });
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      expect(v.fog, role).toEqual({ ...FOG_WIRE_UNREVEALED, active: false });
+      // With the fog off the whole map is the table's, the guard included.
+      expect(v.tokenIds, role).toEqual([guardId, runnerId].sort());
+    }
+  });
+
+  it('fogs a scene with no regions at all once the GM switches the fog on: `active` true', async () => {
+    const fog = await fogOp({ op: 'enable' });
+    expect(fog['enabled']).toBe(true);
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      expect(v.fog, role).toEqual(FOG_WIRE_UNREVEALED);
+      // The switch itself stays off the wire: `active` is its whole answer.
+      expect(v.fog, role).not.toHaveProperty('enabled');
+      // Covered everywhere, so the guard is withheld again and the runner is not.
+      expect(v.tokenIds, role).toEqual([runnerId]);
+      expectNoGuard(v, role);
+    }
+    const gmView = await view(fb.gmToken);
+    expect(gmView.fog['enabled']).toBe(true);
+    expect(gmView.fog).not.toHaveProperty('active');
+  });
+
+  it('switching the fog off opens the map and keeps every region and reveal for when it goes back on', async () => {
+    const fog = await fogOp({ op: 'define', region: { name: VAULT, polygon: VAULT_POLY } });
+    vaultId = (fog['regions'] as { id: string }[])[0]!.id;
+    await fogOp({ op: 'reveal', regionId: vaultId });
+    const revealedCopy = {
+      regions: [{ id: vaultId, name: VAULT, polygon: VAULT_POLY }],
+      revealed: [vaultId],
+      revealedShapes: [],
+    };
+
+    await fogOp({ op: 'disable' });
+    for (const { role, token } of viewers) {
+      expect((await view(token)).fog, role).toEqual({ ...revealedCopy, active: false });
+    }
+    const gmView = await view(fb.gmToken);
+    expect(gmView.fog['enabled']).toBe(false);
+    expect(gmView.fog['regions']).toEqual(revealedCopy.regions);
+    expect(gmView.fog['revealed']).toEqual([vaultId]);
+
+    await fogOp({ op: 'enable' });
+    for (const { role, token } of viewers) {
+      expect((await view(token)).fog, role).toEqual({ ...revealedCopy, active: true });
+    }
+  });
+
+  it('never lets a scene write that did not touch the fog put back an older copy of it', async () => {
+    // The race, played in order. The scene PATCH and a player trying a door
+    // both read the scene BEFORE their transaction opens, and the write
+    // re-derives every field it is not handed from that row. So a `hide`
+    // that committed in between was written straight back open: no
+    // `fog.updated` said so, and the next re-read gave the table the room
+    // and the guard standing in it.
+    const [stale] = await t.db.select().from(scenesTable).where(eq(scenesTable.id, fogSceneId));
+    expect((await view(viewers[0]!.token)).tokenIds).toContain(guardId); // the vault is open
+
+    await fogOp({ op: 'hide', regionId: vaultId });
+    await new ScenesService(t.db).updateScene(stale!, { name: 'Bank basement' });
+
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      expect(v.fog, role).toEqual(FOG_WIRE_UNREVEALED);
+      expect(v.tokenIds, role).toEqual([runnerId]);
+      expectNoGuard(v, role);
+    }
+  });
+
+  it('stages a guard standing in the fog as a GM-only combatant, and counts only the runner in public', async () => {
+    // The vault is hidden again (the case above), so the guard is under the
+    // fog and the runner beside him is not.
+    const res = await post(`/api/scenes/${fogSceneId}/stage-encounter`, fb.gmToken, { name: 'Vault job' });
+    expect(res.statusCode).toBe(201);
+    const staged = res.json() as { encounterId: string; combatantIds: string[] };
+    expect(staged.combatantIds).toHaveLength(2);
+
+    const rows = await t.db.select().from(combatants).where(eq(combatants.encounterId, staged.encounterId));
+    const byName = Object.fromEntries(rows.map((r) => [r.name, r.visibility]));
+    // Before, only `hidden` decided this, and the guard the map was
+    // withholding went onto the public roster, and the TV's ribbon, by name.
+    expect(byName).toEqual({ [GUARD]: 'gm', Rook: 'public' });
+
+    for (const { role, token } of viewers) {
+      const roster = await t.app.inject({
+        method: 'GET',
+        url: `/api/encounters/${staged.encounterId}`,
+        headers: as(token),
+      });
+      expect(roster.statusCode, role).toBe(200);
+      const names = (roster.json() as { combatants: { name: string }[] }).combatants.map((c) => c.name);
+      expect(names, role).toEqual(['Rook']);
+      expect(roster.body, role).not.toContain(GUARD);
+      expect(roster.body, role).not.toContain(guardId);
+
+      // The public word that the fight was staged counts what the table may
+      // see. The whole count, less the roster a player is sent, was a
+      // head-count of the guards in the dark.
+      const log = await t.app.inject({
+        method: 'GET',
+        url: `/api/campaigns/${fb.campaignId}/log?types=encounter.updated`,
+        headers: as(token),
+      });
+      expect(log.statusCode, role).toBe(200);
+      const events = (log.json() as { events: { payload: Record<string, unknown> }[] }).events;
+      const word = events.find((e) => e.payload['encounterId'] === staged.encounterId);
+      expect(word?.payload['staged'], role).toBe(1);
+      expect(log.body, role).not.toContain(GUARD);
+    }
   });
 });
 

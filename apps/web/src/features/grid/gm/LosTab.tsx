@@ -8,9 +8,12 @@
  *    defaults to off and to nobody, because a GM permanently limited to one
  *    token's view cannot run the rest of the map. Their scrim is deliberately
  *    lighter than a player's — it informs, it does not restrict.
- *  - **"Players see their own sightline"** changes the feel of a scene, so it
- *    is the GM's call per session: illuminating for a careful infiltration,
- *    unwanted noise in a brawl in one room.
+ *  - **"Dim outside own sight"** changes the feel of a scene, so it is the
+ *    GM's call per session: illuminating for a careful infiltration, unwanted
+ *    noise in a brawl in one room. It DARKENS and never hides: the map under
+ *    the scrim stays readable. It used to be worded "players see their own
+ *    sightline", and a GM who turned it on to keep a map from the table saw
+ *    the table go on reading all of it. Hiding is the fog's job.
  *
  * The cover row is the other half of the promise. The map is good at geometry
  * and bad at everything else — it does not know the target is prone, that the
@@ -21,12 +24,15 @@
 import type { Scene, Token } from '@safehouse/contracts';
 import { coverCall, lineOfSight, sightModelFor, type CoverLevel } from '@safehouse/rules';
 import { usePatchScene } from '../api.js';
+import type { GridCommands } from '../commands.js';
 import { useGridStore } from '../store.js';
 import { cameraLensId } from '../useShroud.js';
+import { FogSwitch } from './FogTab.js';
 
 export interface LosTabProps {
   scene: Scene;
   tokens: readonly Token[];
+  commands: GridCommands;
 }
 
 const COVER_CHOICES: readonly { value: CoverLevel | 'auto'; label: string }[] = [
@@ -41,7 +47,7 @@ function cellOf(token: Token): { col: number; row: number } {
   return { col: Math.floor(token.x), row: Math.floor(token.y) };
 }
 
-export default function LosTab({ scene, tokens }: LosTabProps) {
+export default function LosTab({ scene, tokens, commands }: LosTabProps) {
   const losTokenId = useGridStore((s) => s.losTokenId);
   const setLosTokenId = useGridStore((s) => s.setLosTokenId);
   // The players' switch is a fact about the SCENE, saved and broadcast, so
@@ -71,6 +77,12 @@ export default function LosTab({ scene, tokens }: LosTabProps) {
 
   return (
     <div className="flex flex-col gap-3 p-3" data-testid="los-tab">
+      {/*
+        The fog switch, here as well as on Prep's mode row: Play shows no Fog
+        tab, and a GM mid-session must be able to fog the table or open it
+        without leaving the fight (2026-09-27).
+      */}
+      <FogSwitch scene={scene} commands={commands} />
       <div>
         <div className="mono-label text-dim">Show me what this token sees</div>
         <select
@@ -109,17 +121,20 @@ export default function LosTab({ scene, tokens }: LosTabProps) {
           data-testid="los-for-players"
           disabled={patchScene.isPending}
           onClick={() => setLosForPlayers(!losForPlayers)}
+          title="Darkens only; use Fog to hide"
           className={
             'mono-label w-full rounded border px-2 py-1 ' +
             (losForPlayers ? 'border-cyan text-cyan' : 'border-edge text-dim')
           }
         >
-          {losForPlayers ? 'players see their own sightline' : 'players see the whole map'}
+          {losForPlayers ? 'dim outside own sight: on' : 'dim outside own sight: off'}
         </button>
         <p className="mt-1 text-xs text-faint">
           Each player device darkens what their own character cannot see and draws no token
           outside it — walls, closed doors, columns and full-height props all cut the sightline.
-          The floor plan itself is still sent; this tells them what they can act on.
+          It only darkens: the floor plan is still sent and still readable under it, and a player
+          with no token of their own on the scene is not dimmed at all. To hide ground from the
+          table, use Fog.
         </p>
         {patchScene.isError && (
           <p className="mono-label mt-1 text-danger">that did not save — try again</p>

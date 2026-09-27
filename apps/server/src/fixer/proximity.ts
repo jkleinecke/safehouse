@@ -18,6 +18,10 @@
 import { eq } from 'drizzle-orm';
 import type { Point, Visibility } from '@safehouse/contracts';
 import { FogStateSchema, GridSchema } from '@safehouse/contracts';
+// The inside test is shared with the server's fog secrecy (`tokenConcealed`),
+// which asks the same question of the same polygons: one ray caster, so the
+// nudge and the withholding can never disagree about where a region ends.
+import { pointInPolygon } from '@safehouse/rules';
 import { scenes, tokens, type Db } from '@safehouse/db';
 import { httpError } from '../services/auth.js';
 import { activeSceneRow } from './state-core.js';
@@ -58,18 +62,6 @@ function distanceToSegment(p: Point, a: Point, b: Point): number {
   let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSq;
   t = Math.max(0, Math.min(1, t));
   return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
-}
-
-/** Ray casting; points exactly on an edge count as inside (distance 0 anyway). */
-export function pointInPolygon(p: Point, polygon: Point[]): boolean {
-  let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const a = polygon[i]!;
-    const b = polygon[j]!;
-    const straddles = a.y > p.y !== b.y > p.y;
-    if (straddles && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
-  }
-  return inside;
 }
 
 /** Distance in GRID UNITS from a point to a polygon; 0 when inside it. */

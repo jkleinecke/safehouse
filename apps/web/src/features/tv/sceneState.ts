@@ -258,6 +258,9 @@ export function mergeSceneEvents(
         }
         // Whether the scene is fogged at all: what keeps a scene with
         // nothing revealed covered rather than open (`FogState.active`).
+        // It is all the GM's switch (`enable`, `disable`) carries, so those
+        // two fall through the ops above to here: off opens the whole map
+        // with every reveal kept, on covers it again with the same holes.
         noteFogActive(draft, p['active']);
         break;
       }

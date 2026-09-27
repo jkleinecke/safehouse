@@ -5,7 +5,8 @@
  * reveal that arrives as a NEW token rather than a position update (FR9.7).
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { characters, eventsSince } from '@safehouse/db';
+import { characters, eventsSince, scenes as scenesTable } from '@safehouse/db';
+import { eq } from 'drizzle-orm';
 import { PerKeyThrottle } from '../src/services/scenes.js';
 import {
   bootstrapCampaign,
@@ -233,21 +234,66 @@ describe('hidden tokens exist only on GM sockets (FR9.7, Principle 4)', () => {
   });
 });
 
+/**
+ * The first frame in `ws.frames` from index `mark` on that matches `pred`,
+ * waiting for it if it has not come yet. `next` alone searches the whole
+ * history, and in a file where every block sends the same kinds of frame the
+ * one it finds may be an earlier block's.
+ */
+function nextAfter(ws: WsTestClient, mark: number, pred: (f: Frame) => boolean): Promise<Frame> {
+  return ws.next((f) => ws.frames.indexOf(f) >= mark && pred(f));
+}
+
+/** Every frame the player's phone and the TV were sent from their marks on, as one string to search. */
+function tableSince(marks: { player: number; display: number }): string {
+  return JSON.stringify([...playerWs.frames.slice(marks.player), ...displayWs.frames.slice(marks.display)]);
+}
+
+const isFog = (op: string) => (f: Frame) =>
+  f.type === 'fog.updated' && (f.payload as { op?: string }).op === op;
+
 describe('fog over the wire (FR9.13/9.14)', () => {
-  it('keeps a defined-but-unrevealed region GM-only, then reveals it to all', async () => {
+  it('fogs the open scene with its first define: the table hears that one bit, and nothing of the region', async () => {
+    // The scene has had no region until now, so this define is what turns
+    // its fog on. The GM's own define event is the GM's. Before, it was the
+    // only one, so no player device and no TV was ever told the scene was
+    // now fogged; they went on drawing the whole map until someone reloaded.
+    // Now the table is sent a public word too, and it is ONE bit: no id, no
+    // name, no outline of a region nobody has revealed.
+    //
+    // A NEW scene starts with its fog switched off, so for this to be the
+    // define that fogs it the scene plays one made before the switch existed
+    // (no `enabled` stored): those keep the old rule, on once a region exists.
+    await t.db
+      .update(scenesTable)
+      .set({ fog: { regions: [], revealed: [], revealedShapes: [] } })
+      .where(eq(scenesTable.id, sceneId));
+    const marks = { player: playerWs.frames.length, display: displayWs.frames.length };
     gmWs.send({
       cmd: 'fog.reveal',
       sceneId,
       op: 'define',
       region: { id: 'east-wing', name: 'east wing', polygon: [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 0, y: 5 }] },
     });
-    const defined = await gmWs.next(
-      (f) => f.type === 'fog.updated' && (f.payload as { op?: string }).op === 'define',
-    );
-    expect(defined.visibility).toBe('gm');
-    await settle();
-    expect(playerWs.frames.some((f) => JSON.stringify(f).includes('east wing'))).toBe(false);
+    // The GM's own event, scoped to the GM.
+    await gmWs.next((f) => isFog('define')(f) && f.visibility === 'gm');
 
+    for (const [ws, mark] of [
+      [playerWs, marks.player],
+      [displayWs, marks.display],
+    ] as const) {
+      const word = await nextAfter(ws, mark, isFog('define'));
+      expect(word.visibility).toBe('public');
+      expect(word.payload).toEqual({ sceneId, op: 'define', active: true });
+    }
+    await settle();
+    const table = tableSince(marks);
+    expect(table).not.toContain('east wing');
+    expect(table).not.toContain('east-wing');
+    expect(table).not.toContain('polygon');
+  });
+
+  it('reveals the region to all', async () => {
     gmWs.send({ cmd: 'fog.reveal', sceneId, op: 'reveal', regionId: 'east-wing', announce: true });
     const revealed = await playerWs.next(
       (f) => f.type === 'fog.updated' && (f.payload as { op?: string }).op === 'reveal',
@@ -256,6 +302,48 @@ describe('fog over the wire (FR9.13/9.14)', () => {
     expect((revealed.payload as { region: { name: string } }).region.name).toBe('east wing');
     await playerWs.next((f) => f.type === 'log.posted');
     expect(await persistedTypes()).toContain('fog.updated');
+  });
+
+  it('keeps the table covered through a reset: a hide with no region still says `active: true`', async () => {
+    // The GM's reset takes back every reveal and leaves the fog whole. A
+    // device folding events (the TV) must hear that the scene is still
+    // fogged, or the last reveal taken back reads as the fog going away.
+    const marks = { player: playerWs.frames.length, display: displayWs.frames.length };
+    gmWs.send({ cmd: 'fog.reveal', sceneId, op: 'hide' });
+    for (const [ws, mark] of [
+      [playerWs, marks.player],
+      [displayWs, marks.display],
+    ] as const) {
+      const reset = await nextAfter(ws, mark, isFog('hide'));
+      expect(reset.visibility).toBe('public');
+      expect(reset.payload).toEqual({ sceneId, op: 'hide', active: true });
+    }
+  });
+
+  it("sends the GM's fog switch to the table as that bit alone: off opens the map, on covers it", async () => {
+    let marks = { player: playerWs.frames.length, display: displayWs.frames.length };
+    gmWs.send({ cmd: 'fog.reveal', sceneId, op: 'disable' });
+    for (const [ws, mark] of [
+      [playerWs, marks.player],
+      [displayWs, marks.display],
+    ] as const) {
+      const off = await nextAfter(ws, mark, isFog('disable'));
+      expect(off.visibility).toBe('public');
+      expect(off.payload).toEqual({ sceneId, op: 'disable', active: false });
+    }
+
+    // Back on, so the rest of this file plays on a fogged scene as before.
+    marks = { player: playerWs.frames.length, display: displayWs.frames.length };
+    gmWs.send({ cmd: 'fog.reveal', sceneId, op: 'enable' });
+    for (const [ws, mark] of [
+      [playerWs, marks.player],
+      [displayWs, marks.display],
+    ] as const) {
+      const on = await nextAfter(ws, mark, isFog('enable'));
+      expect(on.payload).toEqual({ sceneId, op: 'enable', active: true });
+    }
+    await settle();
+    expect(tableSince(marks)).not.toContain('east wing');
   });
 
   it('refuses fog commands from a player socket', async () => {
@@ -325,6 +413,150 @@ describe('fog proximity prompts ride the token.move commit (FR12.8)', () => {
     );
     await settle();
     expect(gmWs.frames.filter((f) => f.type === 'fixer.suggestion')).toHaveLength(before);
+  });
+});
+
+/**
+ * Tokens standing in fog nobody has revealed exist only on GM sockets
+ * (FR9.13, Principle 4), exactly as hidden tokens do (FR9.7).
+ *
+ * Before, the fog was only ever a cover the client drew. Every guard behind
+ * it was on every player's socket and the TV's: where he was placed, every
+ * frame of the GM dragging him, and where he was dropped. Now the server
+ * withholds him until the ground he stands on is revealed, sends him then as
+ * a NEW token arriving (`token.added`, as a hidden token's reveal does), and
+ * takes him back with `token.removed` when the ground is hidden again. A
+ * runner (a party token) is never withheld: the fog hides what the runners
+ * have not found, never the runners themselves.
+ *
+ * The scene's fog is on here: the blocks above defined regions on it and left
+ * its switch on.
+ */
+describe('tokens under the fog exist only on GM sockets (FR9.13, Principle 4)', () => {
+  const VAULT_ID = 'vault-7';
+  const VAULT_POLY = [
+    { x: 60, y: 60 },
+    { x: 70, y: 60 },
+    { x: 70, y: 70 },
+    { x: 60, y: 70 },
+  ];
+  const GUARD = 'Guard-Lambda';
+  // Coordinates with more decimals than a timestamp's milliseconds have, so a
+  // search of the frames for one can only ever find the guard himself.
+  const GUARD_AT = { x: 63.4375, y: 64.5625 };
+  const DRAGGED_TO = { x: 65.3125, y: 66.6875 };
+  const MOVED_TO = { x: 66.1875, y: 62.8125 };
+  /** Under the fog too, but outside the vault. */
+  const OUT_IN_THE_DARK = { x: 75.4375, y: 76.5625 };
+  let guardId: string;
+
+  const tableMarks = () => ({ player: playerWs.frames.length, display: displayWs.frames.length });
+  const hasGuard = (f: Frame) => JSON.stringify(f).includes(guardId);
+
+  it('never sends the table a guard placed in fog nobody has revealed', async () => {
+    const gmMark = gmWs.frames.length;
+    gmWs.send({ cmd: 'fog.reveal', sceneId, op: 'define', region: { id: VAULT_ID, name: 'the vault', polygon: VAULT_POLY } });
+    await nextAfter(gmWs, gmMark, (f) => isFog('define')(f) && f.visibility === 'gm');
+
+    const marks = tableMarks();
+    const res = await post(`/api/scenes/${sceneId}/tokens`, boot.gmToken, {
+      source: 'npc_template',
+      name: GUARD,
+      ...GUARD_AT,
+    });
+    expect(res.statusCode).toBe(201);
+    guardId = (res.json() as { token: { id: string } }).token.id;
+
+    const added = await gmWs.next((f) => f.type === 'token.added' && hasGuard(f));
+    expect(added.visibility).toBe('gm');
+    await settle();
+    const table = tableSince(marks);
+    expect(table).not.toContain(guardId);
+    expect(table).not.toContain(GUARD);
+    expect(table).not.toContain(String(GUARD_AT.x));
+    expect(table).not.toContain(String(GUARD_AT.y));
+  });
+
+  it('keeps his drag and his move off the table while he stays in the fog', async () => {
+    const marks = tableMarks();
+    const gmMark = gmWs.frames.length;
+    // A drag frame is ephemeral and carries no `visibility` of its own on
+    // the wire; that it reached the GM and nothing reached the table is the
+    // whole of it.
+    gmWs.send({ cmd: 'token.drag', tokenId: guardId, ...DRAGGED_TO });
+    await nextAfter(gmWs, gmMark, (f) => f.type === 'token.dragging' && hasGuard(f));
+
+    gmWs.send({ cmd: 'token.move', tokenId: guardId, ...MOVED_TO });
+    const moved = await nextAfter(gmWs, gmMark, (f) => f.type === 'token.moved' && hasGuard(f));
+    expect(moved.visibility).toBe('gm');
+    await settle();
+
+    const table = tableSince(marks);
+    expect(table).not.toContain(guardId);
+    for (const n of [DRAGGED_TO.x, DRAGGED_TO.y, MOVED_TO.x, MOVED_TO.y]) expect(table).not.toContain(String(n));
+  });
+
+  it('sends him as a NEW token once his room is revealed, and takes him away when it is hidden', async () => {
+    let marks = tableMarks();
+    gmWs.send({ cmd: 'fog.reveal', sceneId, op: 'reveal', regionId: VAULT_ID });
+    for (const [ws, mark] of [
+      [playerWs, marks.player],
+      [displayWs, marks.display],
+    ] as const) {
+      const arrival = await nextAfter(ws, mark, (f) => f.type === 'token.added' && hasGuard(f));
+      expect(arrival.visibility).toBe('public');
+      // Where he stands NOW: the move the table was never shown is folded in.
+      expect((arrival.payload as { token: unknown }).token).toMatchObject({ id: guardId, name: GUARD, ...MOVED_TO });
+      // After the reveal itself, so a device folding in order has the hole
+      // in its fog before the guard standing in it arrives.
+      const revealAt = ws.frames.findIndex((f, i) => i >= mark && isFog('reveal')(f));
+      expect(revealAt).toBeGreaterThanOrEqual(mark);
+      expect(revealAt).toBeLessThan(ws.frames.indexOf(arrival));
+    }
+
+    // Visible now, but dragged back into the dark: the drag must not draw
+    // his path through the fog on the table's screens.
+    marks = tableMarks();
+    const gmMark = gmWs.frames.length;
+    gmWs.send({ cmd: 'token.drag', tokenId: guardId, ...OUT_IN_THE_DARK });
+    await nextAfter(gmWs, gmMark, (f) => f.type === 'token.dragging' && hasGuard(f));
+    await settle();
+    expect(tableSince(marks)).not.toContain('token.dragging');
+    expect(tableSince(marks)).not.toContain(String(OUT_IN_THE_DARK.x));
+
+    marks = tableMarks();
+    gmWs.send({ cmd: 'fog.reveal', sceneId, op: 'hide', regionId: VAULT_ID });
+    for (const [ws, mark] of [
+      [playerWs, marks.player],
+      [displayWs, marks.display],
+    ] as const) {
+      const gone = await nextAfter(ws, mark, (f) => f.type === 'token.removed' && hasGuard(f));
+      expect(gone.visibility).toBe('public');
+      expect(gone.payload).toEqual({ tokenId: guardId, sceneId });
+    }
+    await settle();
+    // Gone, and nothing else of him: not a GM-side update of where he is.
+    const after = [...playerWs.frames.slice(marks.player), ...displayWs.frames.slice(marks.display)];
+    expect(after.filter(hasGuard).map((f) => f.type)).toEqual(['token.removed', 'token.removed']);
+  });
+
+  it('never withholds a runner, wherever they walk', async () => {
+    // The vault is fogged again, and the runner walks into it.
+    const marks = tableMarks();
+    playerWs.send({ cmd: 'token.move', tokenId: ownTokenId, x: 61.5, y: 68.5 });
+    const moved = await nextAfter(
+      displayWs,
+      marks.display,
+      (f) => f.type === 'token.moved' && (f.payload as { tokenId?: string }).tokenId === ownTokenId,
+    );
+    expect(moved.visibility).toBe('public');
+    expect(moved.payload).toMatchObject({ x: 61.5, y: 68.5 });
+    expect(tableSince(marks)).not.toContain('token.removed');
+
+    const res = await t.app.inject({ method: 'GET', url: `/api/scenes/${sceneId}`, headers: headers(display.token) });
+    const ids = (res.json() as { tokens: { id: string }[] }).tokens.map((x) => x.id);
+    expect(ids).toContain(ownTokenId);
+    expect(ids).not.toContain(guardId);
   });
 });
 

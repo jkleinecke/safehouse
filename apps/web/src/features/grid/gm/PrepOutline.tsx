@@ -68,7 +68,7 @@ export default function PrepOutline({
     <div data-testid="prep-outline">
       {nothing && (
         <div className="p-3">
-          <Empty>nothing placed on this floor yet — pick Token, Fog, Camera, Light or Note on the toolbar</Empty>
+          <Empty>nothing placed on this floor yet — pick Token, Reveal area, Camera, Light or Note on the toolbar</Empty>
         </div>
       )}
       {here.length > 0 && (

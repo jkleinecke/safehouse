@@ -97,7 +97,6 @@ export {
   emitFogProximity,
   fogProximityPrompts,
   fogProximityState,
-  pointInPolygon,
   resetProximityMemory,
   type ProximityPrompt,
   type ProximityState,

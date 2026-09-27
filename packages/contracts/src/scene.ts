@@ -358,6 +358,22 @@ export const FogRegionSchema = z.object({
 });
 export type FogRegion = z.infer<typeof FogRegionSchema>;
 
+/**
+ * What the GM can do to a scene's fog (FR9.13/9.14), over REST and over the
+ * socket alike.
+ *
+ * - `define` draws a named region (a REVEAL WINDOW: ground the GM may later
+ *   open to the table), `remove` takes one off the scene.
+ * - `reveal` opens a named region or paints a freeform shape open; `hide`
+ *   closes one region again, or (with no region named) every reveal at once.
+ * - `enable` and `disable` are the scene's fog switch (`FogState.enabled`).
+ *   Turning fog off keeps every region and every reveal, so a GM can prepare
+ *   a scene's fog while the table still sees the whole map, and turning it
+ *   back on picks up exactly where it was left.
+ */
+export const FogOpSchema = z.enum(['reveal', 'hide', 'define', 'remove', 'enable', 'disable']);
+export type FogOp = z.infer<typeof FogOpSchema>;
+
 /** Server-authoritative fog state per scene (FR9.13). */
 export const FogStateSchema = z.object({
   regions: z.array(FogRegionSchema).default([]),
@@ -366,17 +382,54 @@ export const FogStateSchema = z.object({
   /** Freeform revealed polygons from brush/polygon painting. */
   revealedShapes: z.array(z.array(PointSchema)).default([]),
   /**
-   * Whether the scene is fogged at all: true when the GM has defined any
-   * region, revealed or not. Set on a non-GM viewer's copy only
-   * (`sceneForViewer`), which carries only the REVEALED regions — so a scene
+   * The GM's fog switch for this scene, and the one fog field that is STORED
+   * as a decision rather than derived: true fogs the scene (the whole map is
+   * covered except what is revealed), false leaves it open (the table sees
+   * the whole map, and any regions and reveals are kept for later).
+   *
+   * Optional, because every scene saved before the switch existed has no
+   * word on it, and those scenes must behave exactly as they always have:
+   * absent means "fogged once there is anything to reveal", the old rule
+   * (`fogOn`). The switch is set only when the GM flips it (the `enable` and
+   * `disable` ops); nothing else writes it.
+   */
+  enabled: z.boolean().optional(),
+  /**
+   * Whether the scene is fogged at all, as `fogOn` answers it for the stored
+   * state. Set on a non-GM viewer's copy only (`sceneForViewer`), which
+   * carries only the REVEALED regions and never the switch — so a scene
    * fogged with nothing revealed yet, or reset, would otherwise arrive as
    * `regions: []` and read as a scene with no fog, the whole map open. Never
-   * stored: the GM's copy says it with `regions` itself. Absent reads as
-   * "not said", and the regions decide as before.
+   * stored: the GM's copy says it with `enabled` and `regions` themselves.
+   * Absent reads as "not said", and the rest of the state decides (`fogOn`).
    */
   active: z.boolean().optional(),
 });
 export type FogState = z.infer<typeof FogStateSchema>;
+
+/**
+ * Whether a scene's fog is ON: is the map covered, apart from what has been
+ * revealed? The one answer every part of the app asks for — the server when
+ * it decides what a player may be sent, the map when it decides whether to
+ * draw the cover, the TV when it folds fog events — so it lives here, beside
+ * the state it reads, and nobody re-derives it with a rule of their own.
+ *
+ * In order:
+ * - `active`, when it is said. It is on a non-GM copy (the server's own
+ *   answer to this question, worked out from state that copy does not carry)
+ *   and on the TV's folded copy (the latest fog event's word). Either way it
+ *   is the answer, in BOTH directions: a copy that says `active: false` is an
+ *   open scene even if it still carries revealed regions, which is exactly
+ *   what a scene the GM has switched off looks like on a player's wire.
+ * - `enabled`, the GM's switch, when it has ever been flipped.
+ * - Otherwise the rule every scene had before the switch existed: fogged as
+ *   soon as there is a region or a revealed shape, open until then.
+ */
+export function fogOn(fog: Pick<FogState, 'regions' | 'revealedShapes'> & Partial<Pick<FogState, 'enabled' | 'active'>>): boolean {
+  if (fog.active !== undefined) return fog.active;
+  if (fog.enabled !== undefined) return fog.enabled;
+  return fog.regions.length > 0 || fog.revealedShapes.length > 0;
+}
 
 export const SceneStateSchema = z.enum(['draft', 'active', 'archived']);
 export type SceneState = z.infer<typeof SceneStateSchema>;

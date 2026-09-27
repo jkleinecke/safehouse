@@ -1156,8 +1156,8 @@ export default function GridPage() {
               scene && store.mode !== 'build' ? (
                 <>
                   <TokenLayersMenu scene={scene} />
-                  {/* Prep's scene-wide settings: the environment, whose eyes, what players see. */}
-                  {store.mode === 'prep' && <PrepControls scene={scene} tokens={tokens} />}
+                  {/* Prep's scene-wide settings: the environment, whose eyes, the fog, the players' dimming. */}
+                  {store.mode === 'prep' && <PrepControls scene={scene} tokens={tokens} commands={commands} />}
                 </>
               ) : undefined
             }

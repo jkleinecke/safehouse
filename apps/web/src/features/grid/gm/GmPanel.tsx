@@ -179,7 +179,7 @@ export default function GmPanel(props: GmPanelProps) {
       */}
       {!build && showTab && (
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {tab === 'los' && <LosTab scene={props.scene} tokens={props.tokens} />}
+        {tab === 'los' && <LosTab scene={props.scene} tokens={props.tokens} commands={props.commands} />}
         {tab === 'tokens' && (
           <TokensTab
             campaignId={props.campaignId}

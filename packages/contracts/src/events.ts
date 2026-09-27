@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { VisibilitySchema, PointSchema } from './common.js';
 import { RollRequestSchema } from './roll.js';
-import { FogRegionSchema } from './scene.js';
+import { FogOpSchema, FogRegionSchema } from './scene.js';
 
 /** Persisted event types (DESIGN.md §11 catalog) — the replayable campaign log. */
 export const WS_EVENT_TYPES = [
@@ -134,11 +134,15 @@ export const TokenDragCommandSchema = z.object({
 });
 export type TokenDragCommand = z.infer<typeof TokenDragCommandSchema>;
 
-/** Fog region ops: reveal/hide a named region, or define a new one (FR9.13/9.14). */
+/**
+ * Fog ops (FR9.13/9.14): reveal/hide a named region, define or remove one, or
+ * switch the scene's fog on or off (`FogOpSchema`). The command keeps its old
+ * name, `fog.reveal`, because that is what every client already sends.
+ */
 export const FogRevealCommandSchema = z.object({
   cmd: z.literal('fog.reveal'),
   sceneId: z.string(),
-  op: z.enum(['reveal', 'hide', 'define', 'remove']).default('reveal'),
+  op: FogOpSchema.default('reveal'),
   /** For reveal/hide of a named region. */
   regionId: z.string().optional(),
   /** For op 'define': the new named region. */

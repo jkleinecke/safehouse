@@ -3,16 +3,23 @@
  * one control per kind of thing, each a split button — press the face to
  * pick the tool up, press the caret to say which one.
  *
- *   Token ▾   which runner, NPC or prop, and how big — then click the map
- *   Fog ▾     a rectangle (two clicks) or a polygon (click round, back on the first)
- *   Camera    click to mount one
- *   Light     click to put a lamp down on a square
- *   Note      click to drop one
+ *   Token ▾         which runner, NPC or prop, and how big — then click the map
+ *   Reveal area ▾   a rectangle (two clicks) or a polygon (click round, back on the first)
+ *   Camera          click to mount one
+ *   Light           click to put a lamp down on a square
+ *   Note            click to drop one
  *
  * The Tokens tab's placement form (pick, size, "place at centre") and the Fog
  * tab's drafting section (click, name, save polygon / save rect / clear) were
  * the same questions asked in the panel, a long way from the map they were
  * about; here the answer is where the click lands.
+ *
+ * The fog tool is called "Reveal area" because that is what it draws: a fog
+ * region is a window the GM can later open to the table, not a patch of fog.
+ * Labelled "Fog: rectangle", it read as the way to fog part of a map, and a
+ * GM who drew one over the ground they wanted hidden had drawn the one place
+ * that could be revealed. Whether the scene is fogged at all is the Fog
+ * switch on the mode row (`PrepControls`).
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useCharacters, useNpcTemplates } from '../api.js';
@@ -251,7 +258,12 @@ export default function PrepPlacing({ campaignId }: { campaignId: string }) {
         {(close) => <TokenMenu campaignId={campaignId} close={close} />}
       </Split>
       <SizeMenu />
-      <Split tool="fogdef" glyph="⬡" label={fogShape === 'rect' ? 'Fog: rectangle' : 'Fog: polygon'} menuLabel="Fog shape">
+      <Split
+        tool="fogdef"
+        glyph="⬡"
+        label={fogShape === 'rect' ? 'Reveal area: rectangle' : 'Reveal area: polygon'}
+        menuLabel="Reveal area shape"
+      >
         {(close) => (
           <>
             <Item

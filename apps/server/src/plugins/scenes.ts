@@ -8,10 +8,12 @@
  * WS (§11): `token.drag` → ephemeral `token.dragging` (throttled per token),
  * `token.move` → persisted `token.moved`, `fog.reveal` → persisted `fog.updated`.
  *
- * Principle 4 — hidden tokens and unrevealed fog geometry are filtered in
- * src/services/scenes.ts at the query layer, and their events carry `gm`
+ * Principle 4 — hidden tokens, tokens standing in unrevealed fog, and
+ * unrevealed fog geometry are filtered in src/services/scenes.ts at the query
+ * layer (`tokenConcealed`, `sceneForViewer`), and their events carry `gm`
  * visibility so the hub never serializes them onto player/display sockets.
- * Revealing a hidden token emits `token.added` (a NEW entity arriving, FR9.7).
+ * Revealing a hidden token, or the fog it stands in, emits `token.added` (a
+ * NEW entity arriving, FR9.7); hiding either emits `token.removed`.
  */
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -30,6 +32,7 @@ import {
 } from '@safehouse/rules';
 import {
   DisplaySetCommandSchema,
+  FogOpSchema,
   FogRegionSchema,
   GridSchema,
   PointSchema,
@@ -45,6 +48,8 @@ import {
   TokenLightSchema,
   TokenLookSchema,
   VisibilitySchema,
+  fogOn,
+  type Scene,
   type Visibility,
   TILE_LAYERS,
 } from '@safehouse/contracts';
@@ -64,12 +69,11 @@ import {
   ScenesService,
   computeScatter,
   normalizeGrid,
-  hiddenByLayer,
-  normalizeFog,
   sceneForViewer,
   serializeScene,
   serializeToken,
-  tokenHidden,
+  tokenConcealed,
+  type ConcealableToken,
   type SceneRow,
   type TokenRow,
 } from '../services/scenes.js';
@@ -247,8 +251,9 @@ const SceneLevelsBody = z.object({
     .default([]),
 });
 
+/** A fog op (`FogOpSchema`): the REST body, and the socket's `fog.reveal` command less its `sceneId`. */
 const FogOpBody = z.object({
-  op: z.enum(['reveal', 'hide', 'define', 'remove']).default('reveal'),
+  op: FogOpSchema.default('reveal'),
   regionId: z.string().optional(),
   region: FogRegionSchema.partial({ id: true }).optional(),
   shape: z.array(PointSchema).min(3).optional(),
@@ -284,12 +289,14 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
   const dragThrottle = new PerKeyThrottle(DRAG_INTERVAL_MS);
 
   /**
-   * Visibility scope for a token's events: hidden ⇒ GM sockets only (FR9.7).
-   * Hidden by its own flag, or by the layer it is on (FR9.26) — the scene
-   * says which, so every emit reads it from the row it has in hand.
+   * Visibility scope for a token's events: concealed ⇒ GM sockets only
+   * (FR9.7, Principle 4). Hidden by its own flag, by the layer it is on
+   * (FR9.26), or standing in fog nobody has revealed (FR9.13): the scene says
+   * which, so every emit reads it from the row it has in hand
+   * (`tokenConcealed`).
    */
-  const tokenVis = (token: { id: string; hidden: boolean }, scene: SceneRow): Visibility =>
-    tokenHidden(token, serializeScene(scene)) ? 'gm' : 'public';
+  const tokenVis = (token: ConcealableToken, scene: SceneRow): Visibility =>
+    tokenConcealed(token, serializeScene(scene)) ? 'gm' : 'public';
 
   /** Load a scene, check campaign binding, and report whether the caller is GM. */
   async function openScene(
@@ -405,16 +412,12 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       // A layer shown or hidden is tokens arriving on or leaving the table
       // (FR9.26): the same events a reveal or a hide of one token emits, so a
       // player screen learns about each of them the only way it ever does.
+      // Whether each token is on a player's wire is the whole answer
+      // (`tokenConcealed`), not the layer alone: a guard whose layer is shown
+      // while he stands in unrevealed fog is still not the table's to see,
+      // and one hidden on his own account never was.
       if (body.tokenLayers !== undefined) {
-        const before = hiddenByLayer(serializeScene(scene));
-        const after = hiddenByLayer(written.scene);
-        for (const row of await svc.withDb(tx.db).tokensOf(scene.id)) {
-          if (row.hidden) continue; // hidden on its own account: never on a player's wire either way
-          const was = before.has(row.id);
-          const now = after.has(row.id);
-          if (was && !now) await tx.emit({ type: 'token.added', payload: { token: serializeToken(row) } });
-          if (!was && now) await tx.emit({ type: 'token.removed', payload: { tokenId: row.id, sceneId: scene.id } });
-        }
+        await emitConcealmentChanges(tx, scene.id, serializeScene(scene), written.scene);
       }
       return written.scene;
     });
@@ -556,11 +559,14 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     const { scene } = await openScene(req, id, { gmOnly: true });
     const body = parseBody(TokenCreateBody, req.body);
     const token = await app.hub.atomic(scene.campaignId, async (tx) => {
-      const created = await svc.withDb(tx.db).createToken(scene, body);
+      const txSvc = svc.withDb(tx.db);
+      const created = await txSvc.createToken(scene, body);
       await tx.emit({
         type: 'token.added',
         payload: { token: created },
-        visibility: tokenVis(created, scene),
+        // Judged against the fog as it stands now, inside the transaction,
+        // so a guard placed in a room the GM hid a moment ago stays the GM's.
+        visibility: tokenVis(created, await txSvc.sceneRow(scene.id)),
       });
       return created;
     });
@@ -634,9 +640,17 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
   });
 
   /**
-   * Emit the right event(s) for a token mutation. Reveal (hidden → visible)
-   * surfaces as `token.added` for players: a NEW entity arriving, never a
-   * position that was quietly on their wire all along (FR9.7).
+   * Emit the right event(s) for a token mutation. Reveal (concealed → on the
+   * table) surfaces as `token.added` for players: a NEW entity arriving, never
+   * a position that was quietly on their wire all along (FR9.7).
+   *
+   * "Concealed" is the whole answer (`tokenConcealed`): hidden by its flag or
+   * its layer, or standing in fog nobody has revealed. So a guard the GM walks
+   * out of the fog into a revealed room arrives exactly as an unhidden one
+   * does, and one walked back into the fog leaves exactly as a hidden one
+   * does — a public `token.removed`, then the GM's own copy of where he went.
+   * A token concealed both before and after (flipping `hidden` on one that
+   * stands in fog, moving a guard around inside it) is a GM-only edit.
    *
    * Takes the caller's transaction, so a token whose row moved is a token the
    * table was told about — and a hide that rolls back never leaks the
@@ -651,18 +665,19 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     kind: { positional: boolean; nonPositional: boolean },
   ): Promise<void> {
     const dto = serializeToken(after);
-    // A token on a hidden layer stays off the players' wire whatever its own
-    // flag does: flipping `hidden` on one is a GM-only edit until the layer shows.
-    const layerHidden = hiddenByLayer(serializeScene(scene)).has(after.id);
-    if (layerHidden) {
-      await tx.emit({ type: 'token.updated', payload: { token: dto }, visibility: 'gm' });
-      return;
-    }
-    if (before.hidden && !after.hidden) {
+    // The scene as it stands inside this transaction, not the row the caller
+    // read before opening it. A fog op that committed in between (the GM
+    // hiding the room this guard is being dropped into) must decide who hears
+    // the move: judged against the older fog, the drop went out as a public
+    // `token.moved`, a position in a room the table had just lost.
+    const current = serializeScene(await svc.withDb(tx.db).sceneRow(scene.id));
+    const was = tokenConcealed(before, current);
+    const now = tokenConcealed(after, current);
+    if (was && !now) {
       await tx.emit({ type: 'token.added', payload: { token: dto } });
       return;
     }
-    if (!before.hidden && after.hidden) {
+    if (!was && now) {
       await tx.emit({
         type: 'token.removed',
         payload: { tokenId: after.id, sceneId: scene.id },
@@ -674,7 +689,7 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       });
       return;
     }
-    const visibility = tokenVis(after, scene);
+    const visibility: Visibility = now ? 'gm' : 'public';
     if (kind.positional) {
       await tx.emit({
         type: 'token.moved',
@@ -688,6 +703,37 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         payload: { token: dto },
         visibility,
       });
+    }
+  }
+
+  /**
+   * Tokens arriving on the table and leaving it because the SCENE changed
+   * around them — a layer shown or hidden, a fog region revealed or hidden,
+   * the fog switched on or off — rather than because the token itself did.
+   *
+   * Every token on the scene is asked `tokenConcealed` against the scene as
+   * it was and as it is now. One that comes out of concealment is a public
+   * `token.added` (a NEW entity arriving, FR9.7, carrying where it stands);
+   * one that goes into it is a public `token.removed`. Tokens whose answer
+   * did not change say nothing, so a reveal costs one event per guard it
+   * actually uncovers. Players' maps and the TV already fold both events, so
+   * neither needs to know WHY a token came or went — only the server knows
+   * that, and it is the server's secret.
+   *
+   * Runs inside the caller's transaction, after the scene write, so the
+   * tokens are read through the same handle and the events commit with it.
+   */
+  async function emitConcealmentChanges(
+    tx: EventTx,
+    sceneId: string,
+    before: Pick<Scene, 'tokenLayers' | 'fog'>,
+    after: Pick<Scene, 'tokenLayers' | 'fog'>,
+  ): Promise<void> {
+    for (const row of await svc.withDb(tx.db).tokensOf(sceneId)) {
+      const was = tokenConcealed(row, before);
+      const now = tokenConcealed(row, after);
+      if (was && !now) await tx.emit({ type: 'token.added', payload: { token: serializeToken(row) } });
+      if (!was && now) await tx.emit({ type: 'token.removed', payload: { tokenId: row.id, sceneId } });
     }
   }
 
@@ -915,12 +961,19 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
   /**
    * Fog events keep the payload player-safe: a *reveal* may carry the region
    * polygon (players now see it), `define`/unrevealed geometry stays GM-only,
-   * and `hide` carries an id with no geometry at all. Every public one says
-   * whether the scene is fogged at all (`active`, as `sceneForViewer` does);
-   * a `define` that fogs an open scene or redraws a revealed region also
-   * tells the table, with nothing of an unrevealed region in it.
+   * and `hide` and `remove` carry an id with no geometry at all. Every public
+   * one says whether the scene is fogged at all (`active`, as `sceneForViewer`
+   * does); a `define` that fogs an open scene or redraws a revealed region
+   * also tells the table, with nothing of an unrevealed region in it. The
+   * switch (`enable`, `disable`) is public and says only that: `{op, active}`.
    *
-   * The `scenes.fog` write and its event commit together (`Hub.atomic`). Fog
+   * Then the tokens. A fog op moves the edge of what the table may see, so
+   * every token whose answer to `tokenConcealed` changed with it arrives
+   * (`token.added`) or leaves (`token.removed`), exactly as a layer shown or
+   * hidden does (`emitConcealmentChanges`). A guard in a room is sent to the
+   * players when the room is revealed, and not a moment before.
+   *
+   * The `scenes.fog` write and its events commit together (`Hub.atomic`). Fog
    * is the sharpest case of the half-commit in the whole app: a reveal that
    * stored without emitting leaves players still fogged out of a room the
    * server now considers open, and a `hide` that stored without emitting is
@@ -932,38 +985,60 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     body: z.output<typeof FogOpBody>,
   ): Promise<{ fog: unknown }> {
     return app.hub.atomic(scene.campaignId, async (tx) => {
-      const wasFogged = normalizeFog(scene.fog).regions.length > 0;
-      const { fog, region } = await svc.withDb(tx.db).applyFogOp(scene, {
+      // Re-read through the transaction, as the tile routes do, rather than
+      // applying the op to the row the caller read before it opened. Two fog
+      // ops in flight — the GM hiding one room and revealing the next in
+      // quick succession — each merged into the fog as it stood before
+      // either, so the second wrote the first's hidden room back open: no
+      // event said so, and the players' next re-read had the room and its
+      // guards again.
+      const fresh = await svc.withDb(tx.db).sceneRow(scene.id);
+      // The scene as `applyFogOp` reads it, so the token diff below compares
+      // against the very state the op was applied to.
+      const before = serializeScene(fresh);
+      const wasOn = fogOn(before.fog);
+      const { fog, region } = await svc.withDb(tx.db).applyFogOp(fresh, {
         op: body.op,
         ...(body.regionId ? { regionId: body.regionId } : {}),
         ...(body.region ? { region: { ...body.region, id: body.region.id ?? undefined } } : {}),
         ...(body.shape ? { shape: body.shape } : {}),
       });
       const isDefine = body.op === 'define';
+      const isSwitch = body.op === 'enable' || body.op === 'disable';
       // Whether the scene is fogged at all, as a player's copy says it
-      // (`sceneForViewer`): a device folding the events (the TV) keeps it
-      // true through a reset or the last reveal taken back.
-      const active = fog.regions.length > 0;
+      // (`sceneForViewer`, `fogOn`): a device folding the events (the TV)
+      // keeps it true through a reset or the last reveal taken back, and
+      // turns it over when the GM flips the switch.
+      const active = fogOn(fog);
       await tx.emit({
         type: 'fog.updated',
-        payload: {
-          sceneId: scene.id,
-          op: body.op,
-          ...(body.regionId ? { regionId: body.regionId } : {}),
-          ...(!isDefine && region ? { region } : {}),
-          ...(!isDefine && body.shape ? { shape: body.shape } : {}),
-          ...(isDefine ? {} : { active }),
-        },
+        payload: isSwitch
+          ? // The switch is one bit and says nothing else: no region, no id,
+            // whatever else the body happened to carry.
+            { sceneId: scene.id, op: body.op, active }
+          : {
+              sceneId: scene.id,
+              op: body.op,
+              ...(body.regionId ? { regionId: body.regionId } : {}),
+              // A region's shape and name go public only on its REVEAL, when
+              // they become the players' to see. A `remove` used to carry the
+              // region it took away, revealed or not, and that put a room the
+              // table had never seen — its name, its outline — on every
+              // player's socket at the moment it stopped mattering to the GM.
+              ...(body.op === 'reveal' && region ? { region } : {}),
+              ...(!isDefine && body.shape ? { shape: body.shape } : {}),
+              ...(isDefine ? {} : { active }),
+            },
         visibility: isDefine ? 'gm' : 'public',
       });
       // A `define` is the GM's, but two of them change what the table sees:
-      // the first region fogs a scene that was open, and a revealed region
-      // redrawn moves ground the players see. The table hears that much, and
-      // no more — the region itself only when it is a revealed one, whose
-      // shape is already theirs — so the players' Grids fetch the scene again
-      // and the TV folds it in.
+      // one that turns the fog on (the first region on a scene whose switch
+      // was never flipped), and a revealed region redrawn, which moves ground
+      // the players see. The table hears that much, and no more — the region
+      // itself only when it is a revealed one, whose shape is already theirs —
+      // so the players' Grids fetch the scene again and the TV folds it in.
       const revealedRegion = isDefine && region && fog.revealed.includes(region.id) ? region : undefined;
-      if (isDefine && (!wasFogged || revealedRegion)) {
+      if (isDefine && (wasOn !== active || revealedRegion)) {
         await tx.emit({
           type: 'fog.updated',
           payload: {
@@ -975,6 +1050,9 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
           visibility: 'public',
         });
       }
+      // After the fog event, so a device folding events in order has the new
+      // fog in hand when the tokens it uncovered arrive.
+      await emitConcealmentChanges(tx, scene.id, before, { ...before, fog });
       if (body.announce && body.op === 'reveal' && region) {
         await tx.emit({
           type: 'log.posted',
@@ -1110,7 +1188,12 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         payload: {
           encounterId: out.encounterId,
           sceneId: scene.id,
-          staged: out.combatantIds.length,
+          // A public frame, so the count is of the combatants the table may
+          // see (`shown`). It used to be every one staged, and the difference
+          // between that and the roster a player is sent was a head-count of
+          // the guards hidden, or standing in the fog, that the GM is holding
+          // back. The GM has the whole list in the response.
+          staged: out.shown,
           created: out.createdEncounter,
         },
       });
@@ -1207,10 +1290,19 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     if (scene.campaignId !== ctx.campaignId) return;
     if (!(await svc.canControlToken(ctx.auth, token))) return;
     if (!dragThrottle.allow(token.id)) return;
+    // A drag frame is the table's only when the token is on the table where
+    // it stands AND where the frame puts it. The first keeps a guard the
+    // players have not been sent from surfacing as a frame for an id they do
+    // not know; the second keeps the GM dragging a visible guard INTO the fog
+    // from drawing his path through it on every player's socket. The drop
+    // (`token.move`) then settles which side of the edge he ended up on.
+    const current = serializeScene(scene);
+    const concealed =
+      tokenConcealed(token, current) || tokenConcealed({ ...token, x: parsed.data.x, y: parsed.data.y }, current);
     app.hub.emitEphemeral(ctx.campaignId, {
       type: 'token.dragging',
       payload: { tokenId: token.id, sceneId: scene.id, x: parsed.data.x, y: parsed.data.y, by: ctx.auth.userId },
-      visibility: tokenVis(token, scene),
+      visibility: concealed ? 'gm' : 'public',
     });
   });
 

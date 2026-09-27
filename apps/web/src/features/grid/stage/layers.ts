@@ -10,7 +10,7 @@
  * pooled Text. Pins, cameras and lights themselves stand up off the floor on
  * the 3D map, and are built there (`stage3d/markers.ts`).
  */
-import type { Camera as SecurityCamera, Point, Scene, SceneLight } from '@safehouse/contracts';
+import { fogOn, type Camera as SecurityCamera, type Point, type Scene, type SceneLight } from '@safehouse/contracts';
 import type { CameraCone, GeometrySelection } from '../types.js';
 import { TILE_HEIGHTS } from '@safehouse/rules';
 import {
@@ -104,6 +104,10 @@ function cutSwept(g: Ink, m: SceneMetrics, poly: readonly Point[]): void {
  * Fog of war (FR9.13/9.14). Players get an OPAQUE cover with revealed areas
  * cut out — the payload is already server-filtered, we render what we get.
  * The GM gets the same shape as a 40% tint plus named-region outlines+labels.
+ *
+ * All of it only while the scene's fog is ON (`fogOn`), the one answer the
+ * server, the TV and this map share. With the fog off the GM still sees the
+ * outlines and names of the regions, and nothing else.
  */
 export function drawFog(
   g: Ink,
@@ -114,38 +118,55 @@ export function drawFog(
 ): void {
   g.clear();
   const fog = scene.fog;
+  const revealed = new Set(fog.revealed);
 
-  // NO REGIONS MEANS NO FOG. A scene the GM has not fogged is a scene the
-  // table can see, the same way an uploaded map always could be. The cover
-  // used to go down regardless and be cut only where a region was revealed —
-  // so a freshly built scene, pushed live with nothing defined yet, arrived on
-  // every phone and the TV as a solid black screen, while the GM saw a 40%
-  // tint they could easily read straight through. Fog is something a GM adds
-  // to a map, not something a map starts under.
+  // FOG THAT IS OFF DRAWS NO COVER. A scene the GM has not fogged is a scene
+  // the table can see, the same way an uploaded map always could be. The
+  // cover used to go down regardless and be cut only where a region was
+  // revealed — so a freshly built scene, pushed live with nothing defined yet,
+  // arrived on every phone and the TV as a solid black screen, while the GM
+  // saw a 40% tint they could easily read straight through. Fog is something
+  // a GM adds to a map, not something a map starts under.
   //
-  // A player's copy carries only the REVEALED regions, so a scene the GM has
-  // fogged with nothing revealed yet (or has just reset) arrives with no
-  // regions at all; its `active` flag is what says it is fogged, and then the
-  // cover goes down whole.
-  if (fog.regions.length === 0 && fog.revealedShapes.length === 0 && fog.active !== true) {
+  // Whether it is on is `fogOn`'s answer, not a rule of this function's own:
+  // - On a player's or the TV's copy it is `active`, which the server sets
+  //   from state that copy does not carry. The copy holds only the REVEALED
+  //   regions, so a scene fogged with nothing revealed yet (or just reset)
+  //   arrives with no regions at all and `active: true`, and the cover goes
+  //   down whole. A scene the GM has switched off arrives with `active: false`
+  //   even while it still carries revealed regions, and nothing goes down.
+  // - On the GM's copy it is the GM's switch (`enabled`), or, on a scene
+  //   whose switch was never flipped, the old rule: fogged once a region or a
+  //   revealed shape exists. So the GM's tint comes and goes with the switch,
+  //   and the GM's screen and the table's always agree on whether there is
+  //   fog at all.
+  const on = fogOn(fog);
+
+  // With the fog off, the GM keeps the outlines and names of the regions
+  // (below) and loses only the tint. The switch exists so a GM can lay out
+  // the regions of a scene the table is already looking at, and regions that
+  // vanished from the GM's own map the moment they were drawn could not be
+  // laid out at all. Nobody else has anything to draw.
+  if (!on && !(isGm && fog.regions.length > 0)) {
     labels.sweep();
     return;
   }
 
-  const { width, height } = sceneWorldSize(m);
-  const pad = m.cell * 2; // cover a margin so pan never peeks past the edge
-  g.rect(-pad, -pad, width + pad * 2, height + pad * 2).fill({
-    color: C.ground,
-    alpha: isGm ? 0.4 : 1,
-  });
+  if (on) {
+    const { width, height } = sceneWorldSize(m);
+    const pad = m.cell * 2; // cover a margin so pan never peeks past the edge
+    g.rect(-pad, -pad, width + pad * 2, height + pad * 2).fill({
+      color: C.ground,
+      alpha: isGm ? 0.4 : 1,
+    });
 
-  const revealed = new Set(fog.revealed);
-  for (const region of fog.regions) {
-    if (!revealed.has(region.id)) continue;
-    cutSwept(g, m, region.polygon);
-  }
-  for (const shape of fog.revealedShapes) {
-    if (shape.length >= 3) cutSwept(g, m, shape);
+    for (const region of fog.regions) {
+      if (!revealed.has(region.id)) continue;
+      cutSwept(g, m, region.polygon);
+    }
+    for (const shape of fog.revealedShapes) {
+      if (shape.length >= 3) cutSwept(g, m, shape);
+    }
   }
 
   // GM extras: outlines + name labels for every named region (FR9.14).
