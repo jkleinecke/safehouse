@@ -969,9 +969,21 @@ class Stage3D implements StageApi, PointerHost {
     if (this.destroyed || quality === this.rt.options.quality) return;
     // Crossing the Low line makes a new WebGL context, which a browser at its
     // context limit refuses.
-    if (!this.attempt(() => this.rt.update({ quality }))) return;
-    // The fog is rasterised more coarsely at Low (`masks.ts`).
-    if (this.cover.setDetail(fogDetailFor(quality))) this.update(this.sceneState);
+    // The runtime switches a frame or two later, behind its own notice, and
+    // tells the stage when it has (`qualityApplied`).
+    this.attempt(() => this.rt.update({ quality }));
+  }
+
+  /**
+   * The runtime's quality switch has taken hold (`onQualityApplied`): a new
+   * renderer or lighting tier means new materials, which the fog cover and
+   * the figures' vision looks dress on the next update — so run one now; and
+   * the fog is rasterised more coarsely at Low (`masks.ts`).
+   */
+  qualityApplied(quality: StageQuality): void {
+    if (this.destroyed) return;
+    this.cover.setDetail(fogDetailFor(quality));
+    this.update(this.sceneState);
   }
 
   update(next: StageSceneState): void {
@@ -1454,11 +1466,18 @@ export async function createStage(opts: StageOptions, hooks: Stage3DHooks): Prom
     const fogged = (token: Token): boolean => cover.coveredAt(token, 'fog') >= HIDDEN_AT;
     // The quality this device starts at for this role (the TV's is Low),
     // resolved by the loader.
+    // The stage is made after the runtime; the quality callbacks reach it late.
+    let stage: Stage3D | null = null;
     rt = createRuntime3D(root, runtimeOptions(opts.state, CATALOGUE_DEFS, hooks.quality, fogged), {
       orbit: false,
       onContextLost: () => hooks.onLost('context lost'),
+      onQualityApplied: (q) => stage?.qualityApplied(q),
+      // Crossing the Low line makes a new WebGL context, which a browser at
+      // its limit refuses: hand over to Classic, as for a lost context.
+      onQualityFailed: () => hooks.onLost('quality switch failed'),
     });
-    return new Stage3D(opts, rt, root, hooks, cover);
+    stage = new Stage3D(opts, rt, root, hooks, cover);
+    return stage;
   } catch (err) {
     try {
       rt?.dispose();

@@ -277,6 +277,9 @@ export function createLabView(host: HTMLElement, initial: LabViewOptions): LabVi
         for (let i = 0; i < BENCH_ORDER.length; i += 1) {
           const q = BENCH_ORDER[i]!;
           rt.update({ quality: q });
+          // The switch runs a frame or two later behind its notice: measure the new tier, not the old.
+          await rt.ready();
+          if (disposed) break;
           const r = await runPass(q, (fraction) => onProgress?.({ quality: q, index: i, of: BENCH_ORDER.length, fraction }));
           if (r === null || disposed) break;
           results.push(r);

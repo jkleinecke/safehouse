@@ -177,6 +177,20 @@ export interface Runtime3DSetup {
    * brought back to the front), it redraws its shadows and carries on.
    */
   onContextLost?: () => void;
+  /**
+   * Called when a quality switch has taken hold — after the renderer or the
+   * lighting changed tier, before its shaders are compiled. A switch runs a
+   * frame or two after `update` asked for it (so its notice is on screen
+   * first): an owner that dresses the runtime's materials itself (the map's
+   * fog cover, its figures' vision looks) does that again here.
+   */
+  onQualityApplied?: (quality: LabQuality) => void;
+  /**
+   * Called if a quality switch fails — crossing the Low line makes a new WebGL
+   * context, which a browser at its limit refuses. Without it the failure is
+   * logged and the runtime stays at the quality it had.
+   */
+  onQualityFailed?: (error: unknown) => void;
 }
 
 /** Light counts as the lighting reports them. */
@@ -277,6 +291,13 @@ export interface Runtime3D {
    * there is nothing to do; never rejects.
    */
   precompile(object: Object3D): Promise<void>;
+  /**
+   * Resolves once no quality switch is pending or under way: the new tier is
+   * in place, its shaders compiled and a frame drawn with it. At once when
+   * nothing is switching. Never rejects. (The lab's benchmark waits on it so
+   * it measures the tier it asked for.)
+   */
+  ready(): Promise<void>;
   /**
    * Let the orbit controls drive the camera, or stop them (a benchmark flying
    * the camera itself). Holds across renderer swaps.
@@ -720,6 +741,75 @@ function tokenLightKey(list: readonly Token[]): string {
  * canvas fills it) and draw the first frame. Throws if WebGL or a builder
  * fails, so the owner can say so or fall back.
  */
+const QUALITY_NAMES: Readonly<Record<LabQuality, string>> = { low: 'Low', medium: 'Medium', high: 'High' };
+
+/**
+ * The notice over the view while a quality switch runs: a veil, a spinner
+ * and a line saying what is happening. Plain DOM in the host, so it shows
+ * whatever the canvas is doing (a canvas being swapped out included).
+ */
+function busyNotice(host: HTMLElement): { show(text: string): void; hide(): void; dispose(): void } {
+  const STYLE_ID = 'lab3d-busy-style';
+  if (typeof document !== 'undefined' && !document.getElementById(STYLE_ID)) {
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = '@keyframes lab3d-spin { to { transform: rotate(360deg); } }';
+    document.head.appendChild(style);
+  }
+  // The notice is laid over the host, so the host must be a positioning box.
+  if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+  const veil = document.createElement('div');
+  veil.setAttribute('role', 'status');
+  veil.setAttribute('aria-live', 'polite');
+  Object.assign(veil.style, {
+    position: 'absolute',
+    inset: '0',
+    display: 'none',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'rgba(6, 10, 18, 0.45)',
+    zIndex: '20',
+    pointerEvents: 'auto',
+  } satisfies Partial<CSSStyleDeclaration>);
+  const card = document.createElement('div');
+  Object.assign(card.style, {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    padding: '10px 14px',
+    borderRadius: '8px',
+    border: '1px solid rgba(120, 160, 190, 0.35)',
+    background: 'rgba(12, 18, 28, 0.92)',
+    color: '#d7e3ee',
+    font: '500 13px Inter, system-ui, sans-serif',
+  } satisfies Partial<CSSStyleDeclaration>);
+  const spinner = document.createElement('div');
+  Object.assign(spinner.style, {
+    width: '16px',
+    height: '16px',
+    borderRadius: '50%',
+    border: '2px solid rgba(34, 216, 240, 0.25)',
+    borderTopColor: '#22d8f0',
+    animation: 'lab3d-spin 0.8s linear infinite',
+  } satisfies Partial<CSSStyleDeclaration>);
+  const label = document.createElement('span');
+  card.append(spinner, label);
+  veil.append(card);
+  host.append(veil);
+  return {
+    show(text) {
+      label.textContent = text;
+      veil.style.display = 'flex';
+    },
+    hide() {
+      veil.style.display = 'none';
+    },
+    dispose() {
+      veil.remove();
+    },
+  };
+}
+
 export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, setup: Runtime3DSetup = {}): Runtime3D {
   let opts: Runtime3DOptions = { ...initial };
   let disposed = false;
@@ -1332,6 +1422,99 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
     lastFrame = 0;
   }
 
+  // --- the quality switch, shown while it happens ----------------------------
+  //
+  // Switching tier is heavy and all on the main thread: a new renderer (across
+  // the Low line), the lighting re-tiered with its real-time lamps and shadow
+  // maps, and — the longest part — every material's shaders compiled again
+  // for the new light count. Done inside `update` it froze the page with
+  // nothing on screen (2026-09-26: switching to High "definitely frozen for a
+  // bit"). So `update` only books the switch: a notice goes up, the browser
+  // is given a frame to paint it, the switch runs, the shaders are compiled
+  // ahead (in parallel where the browser offers it), and the notice comes
+  // down after the first frame drawn at the new tier.
+
+  const busy = busyNotice(host);
+  /** The tier asked for and not yet in place; the latest ask wins. */
+  let pendingQuality: LabQuality | null = null;
+  let switching = false;
+  const readyWaiters: Array<() => void> = [];
+
+  function scheduleQuality(q: LabQuality): void {
+    pendingQuality = q;
+    if (!switching && q === opts.quality) {
+      pendingQuality = null;
+      return;
+    }
+    busy.show(`Switching to ${QUALITY_NAMES[q]} quality…`);
+    if (switching) return;
+    switching = true;
+    void runSwitches();
+  }
+
+  async function runSwitches(): Promise<void> {
+    // Let the notice paint before the main thread is taken.
+    await afterPaint();
+    while (!disposed && pendingQuality !== null) {
+      const q = pendingQuality;
+      pendingQuality = null;
+      if (q === opts.quality) continue;
+      try {
+        applyQuality(q);
+        setup.onQualityApplied?.(q);
+      } catch (err) {
+        console.error('[lab3d] the quality switch failed', err);
+        setup.onQualityFailed?.(err);
+        break;
+      }
+      if (disposed) break;
+      busy.show(`Preparing ${QUALITY_NAMES[q]} lighting…`);
+      await afterPaint();
+      if (disposed) break;
+      try {
+        await renderer.compileAsync(scene3, camera);
+      } catch {
+        // Nothing lost: the first frame compiles whatever is left.
+      }
+      await frameDrawn();
+    }
+    switching = false;
+    busy.hide();
+    for (const done of readyWaiters.splice(0)) done();
+  }
+
+  /** Put tier `q` in place: a new renderer across the Low line, the lighting re-tiered otherwise. */
+  function applyQuality(q: LabQuality): void {
+    opts = { ...opts, quality: q };
+    if ((q === 'low') !== rendererLow) swapRenderer(q);
+    else {
+      lighting?.setQuality(q);
+      applySize();
+    }
+    requestRender();
+  }
+
+  /** Two animation frames: the first paints what was just shown, the work runs after it. */
+  function afterPaint(): Promise<void> {
+    return new Promise((resolve) => {
+      if (disposed) return resolve();
+      requestAnimationFrame(() => setTimeout(resolve, 0));
+    });
+  }
+
+  /** The next frame this runtime draws (at once if it can draw none). */
+  function frameDrawn(): Promise<void> {
+    return new Promise((resolve) => {
+      if (disposed || contextLost) return resolve();
+      const hook: AfterFrameHook = () => {
+        afterHooks.delete(hook);
+        resolve();
+      };
+      afterHooks.add(hook);
+      requestRender();
+    });
+  }
+
   // --- camera --------------------------------------------------------------
 
   function applyProjection(): void {
@@ -1499,6 +1682,9 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
   requestRender();
 
   function teardown(): void {
+    busy.dispose();
+    pendingQuality = null;
+    for (const done of readyWaiters.splice(0)) done();
     if (raf !== 0) cancelAnimationFrame(raf);
     raf = 0;
     if (pickTimer !== null) clearTimeout(pickTimer);
@@ -1528,8 +1714,12 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
       if (disposed) return;
       const started = performance.now();
       const prev = opts;
-      const next: Runtime3DOptions = { ...opts, ...partial };
+      // The quality is not taken here: it goes through the switch above,
+      // which shows its notice first (`scheduleQuality`).
+      const wantQuality = partial.quality;
+      const next: Runtime3DOptions = { ...opts, ...partial, quality: opts.quality };
       opts = next;
+      if (wantQuality !== undefined && (wantQuality !== opts.quality || pendingQuality !== null)) scheduleQuality(wantQuality);
 
       // What changed, by what it costs (the header lists it).
       const change = next.scene === prev.scene ? SAME_SCENE : sceneChange(prev.scene, next.scene);
@@ -1729,6 +1919,11 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
     doorOfHit(hit) {
       if (disposed || world === null) return null;
       return world.doorOfHit(opts.floor, hit);
+    },
+
+    ready() {
+      if (disposed || (!switching && pendingQuality === null)) return Promise.resolve();
+      return new Promise((resolve) => readyWaiters.push(resolve));
     },
 
     precompile(object) {
