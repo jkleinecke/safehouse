@@ -7,7 +7,9 @@
  *
  *   - The FOG is the players' opaque cover with every revealed region cut out
  *     (`drawFog` with `isGm` false), for every role but the GM: the players'
- *     phones and laptops and the TV (`display`) alike. The GM gets no fog
+ *     phones and laptops and the TV (`display`) alike. Ground revealed AS
+ *     EXPLORED (P6) is not cut clean: it carries `EXPLORED_ALPHA`, short of
+ *     total, so the map is drawn there dimmed, as remembered, not discarded. The GM gets no fog
  *     mask: the GM's fog is the see-through tint `drawFog` draws for the GM,
  *     which the stage lays on the floor as a `FloorInk`, and the GM sees the
  *     map through it.
@@ -557,8 +559,10 @@ export class CoverMasks {
   /**
    * How covered grid point `at` is, 0 clear … 1 hidden, from the same bytes
    * and by the same sum the shader uses: the fog, and — for `full`, the
-   * default — the shroud's darkening. A player's plates and labels hide at
-   * 0.5 and over.
+   * default — the shroud's darkening. The fog alone reads 0 on live ground,
+   * `EXPLORED_ALPHA` on ground shown as remembered, and 1 under the whole
+   * cover; a player's plates hide from the first threshold the stage reads
+   * it at (not live), and labels only from the second (hidden).
    */
   coveredAt(at: Point, mode: CoverMode = 'full'): number {
     let k = 0;

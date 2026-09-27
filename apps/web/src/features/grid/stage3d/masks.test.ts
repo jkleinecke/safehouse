@@ -137,4 +137,27 @@ describe('CoverMasks on the copy the server sends', () => {
       masks.dispose();
     }
   });
+
+  it('rebuilds the cover when a region changes fashion, live to seen-before and back (P6)', () => {
+    // A region dropped from live to remembered keeps its outline and its
+    // place in the copy's regions; only which list names it changes. The
+    // mask must still be drawn again (`fogKey`), or the room stays open on
+    // the phones and the TV with its guards already taken off them.
+    const vault = { id: 'r1', name: 'the vault', polygon: [{ x: 2, y: 2 }, { x: 6, y: 2 }, { x: 6, y: 6 }, { x: 2, y: 6 }] };
+    const live = { ...FOG_WIRE_UNREVEALED, regions: [vault], revealed: [vault.id] };
+    const remembered = { ...FOG_WIRE_UNREVEALED, regions: [vault], exploredRegionIds: [vault.id] };
+    const masks = new CoverMasks('low');
+    try {
+      expect(masks.update(state('player', live), m).fog).toBe(true);
+      expect(masks.update(state('player', live), m).fog).toBe(false);
+      expect(masks.update(state('player', remembered), m).fog).toBe(true);
+      expect(masks.update(state('player', live), m).fog).toBe(true);
+      // A painted shape changing fashion moves the key the same way.
+      const shape = vault.polygon;
+      expect(masks.update(state('player', { ...FOG_WIRE_UNREVEALED, revealedShapes: [shape] }), m).fog).toBe(true);
+      expect(masks.update(state('player', { ...FOG_WIRE_UNREVEALED, exploredShapes: [shape] }), m).fog).toBe(true);
+    } finally {
+      masks.dispose();
+    }
+  });
 });

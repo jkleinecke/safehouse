@@ -14,7 +14,7 @@
  * (`cellSignatures` and `changedCells`, in `lab3d/world3d.ts`), and rebuilds
  * only the chunks a stroke touched.
  */
-import { fogOn } from '@safehouse/contracts';
+import { sceneFogOn } from '@safehouse/contracts';
 import { metricsKey, type SceneMetrics } from '../geometry.js';
 import type { GeometrySelection, StageSceneState } from '../types.js';
 
@@ -81,17 +81,22 @@ function polygonsHash(polygons: ReadonlyArray<ReadonlyArray<{ x: number; y: numb
 }
 
 /**
- * The fog: its regions (where each lies, to the point), what is revealed,
- * whether the scene is fogged at all (`fogOn`: a player's or the TV's copy
- * says it with `active`, the GM's with the switch, `enabled`), and whether it
- * is drawn for the GM.
+ * The fog: its regions (where each lies, to the point), what is revealed and
+ * in which fashion (live, or as explored: P6), whether the scene is fogged
+ * at all (`sceneFogOn`: a player's or the TV's copy says it with `active`,
+ * the GM's with the switch, `enabled`, or the scene's sightlines), and
+ * whether it is drawn for the GM.
  */
 export function fogKey(state: StageSceneState): string {
   const fog = state.scene.fog;
   let shapes = fogShapeHashes.get(fog);
   if (shapes === undefined) {
     // Once per fog object: a token move hands the same fog over again.
-    shapes = `${polygonsHash(fog.regions.map((r) => r.polygon))}:${polygonsHash(fog.revealedShapes)}`;
+    shapes = [
+      polygonsHash(fog.regions.map((r) => r.polygon)),
+      polygonsHash(fog.revealedShapes),
+      polygonsHash(fog.exploredShapes ?? []),
+    ].join(':');
     fogShapeHashes.set(fog, shapes);
   }
   return [
@@ -99,9 +104,15 @@ export function fogKey(state: StageSceneState): string {
     fog.regions.map((r) => `${r.id}:${r.name}:${r.polygon.length}`).join(','),
     fog.revealed.join(','),
     fog.revealedShapes.length,
+    // The explored fashion: a region dropped from live to remembered keeps
+    // its outline and its place in the list, and changes only which list
+    // names it, so the list itself is in the key, and the explored shapes'
+    // count beside it.
+    (fog.exploredRegionIds ?? []).join(','),
+    (fog.exploredShapes ?? []).length,
     // The switch, as `drawFog` reads it: flipping it on or off changes
     // nothing else about the fog, and must still redraw it.
-    fogOn(fog) ? 'on' : 'off',
+    sceneFogOn(state.scene) ? 'on' : 'off',
     shapes,
   ].join('|');
 }

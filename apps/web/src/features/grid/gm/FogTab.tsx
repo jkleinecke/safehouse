@@ -69,6 +69,92 @@ export function fogSwitchTitle(on: boolean): string {
   return `Fog is ${on ? 'on' : 'off'} — ${FOG_OFF_MEANS}; ${FOG_ON_MEANS}. Click to turn it ${on ? 'off' : 'on'}.`;
 }
 
+/**
+ * Where a named region stands with the table (P6): revealed LIVE (the table
+ * sees it, and everyone in it), revealed as EXPLORED (seen before: shown
+ * dimmed, as remembered, with nobody in it), or HIDDEN. Read off the GM's
+ * copy, where a region is in one reveal list or neither; should both ever
+ * name it, live wins, as it does on the server.
+ */
+export type RegionFashion = 'live' | 'explored' | 'hidden';
+
+export function regionFashion(fog: Scene['fog'], regionId: string): RegionFashion {
+  if (fog.revealed.includes(regionId)) return 'live';
+  if ((fog.exploredRegionIds ?? []).includes(regionId)) return 'explored';
+  return 'hidden';
+}
+
+/** The text colour a region's name takes in each fashion: the map's outline colours (green live, amber seen before). */
+export const FASHION_TONE: Record<RegionFashion, string> = {
+  live: 'text-ok',
+  explored: 'text-warn',
+  hidden: 'text-ink',
+};
+
+/** A region's fashion as the GM reads it in a list. */
+export const FASHION_WORD: Record<RegionFashion, string> = {
+  live: 'live',
+  explored: 'seen before',
+  hidden: 'hidden',
+};
+
+/**
+ * The GM's three choices for one region, side by side (P6; the GM,
+ * 2026-09-27): Reveal live, Reveal as seen-before, Hide. The one the region
+ * is already in is shown pressed and does nothing; each of the others moves
+ * it there, so a room the party has left can be dropped from live to seen
+ * before with one tap, and its guards leave the table's screens as it goes.
+ * Nothing is optimistic: the buttons ask, and the map redraws when
+ * `fog.updated` comes back.
+ *
+ * `compact` is for a list row (Prep's outline), where there is room for a
+ * word each; the full wording is then each button's title and label.
+ */
+export function RegionRevealButtons({
+  scene,
+  regionId,
+  commands,
+  announce,
+  compact = false,
+}: {
+  scene: Scene;
+  regionId: string;
+  commands: GridCommands;
+  announce: boolean;
+  compact?: boolean;
+}) {
+  const now = regionFashion(scene.fog, regionId);
+  const choice = (to: RegionFashion, label: string, short: string, title: string, run: () => void) => (
+    <button
+      type="button"
+      aria-pressed={now === to}
+      aria-label={label}
+      title={title}
+      data-testid={`fog-${to}-${regionId}`}
+      onClick={() => {
+        if (now !== to) run();
+      }}
+      className={
+        'btn px-2 py-0.5 text-xs ' +
+        (now === to ? (to === 'hidden' ? 'border-cyan text-cyan' : `border-current ${FASHION_TONE[to]}`) : 'text-dim hover:text-ink')
+      }
+    >
+      {compact ? short : label}
+    </button>
+  );
+  return (
+    <span className={'flex shrink-0 gap-1' + (compact ? '' : ' flex-wrap')} role="group" aria-label="Reveal">
+      {choice('live', 'Reveal live', 'live', 'Players and the TV see it, and everyone in it', () =>
+        commands.fogReveal(scene.id, regionId, announce, 'live'),
+      )}
+      {choice('explored', 'Reveal as seen-before', 'seen', 'Players and the TV see it dimmed, as remembered, with nobody in it', () =>
+        commands.fogReveal(scene.id, regionId, announce, 'explored'),
+      )}
+      {choice('hidden', 'Hide', 'hide', 'Fog it again: the table sees nothing of it', () => commands.fogHide(scene.id, regionId))}
+    </span>
+  );
+}
+
 export default function FogTab({ scene, commands }: { scene: Scene; commands: GridCommands }) {
   const tool = useGridStore((s) => s.tool);
   const setTool = useGridStore((s) => s.setTool);
@@ -77,7 +163,6 @@ export default function FogTab({ scene, commands }: { scene: Scene; commands: Gr
   const [name, setName] = useState('');
   const [announce, setAnnounce] = useState(true);
 
-  const revealed = new Set(scene.fog.revealed);
   const points = fogDraft?.points ?? [];
 
   const save = (polygon: { x: number; y: number }[]) => {
@@ -105,33 +190,16 @@ export default function FogTab({ scene, commands }: { scene: Scene; commands: Gr
               : 'no regions yet — a region is an area you can reveal to the table once the fog is on'}
           </Empty>
         )}
-        <ul className="space-y-1">
+        <ul className="space-y-2">
           {scene.fog.regions.map((r) => {
-            const open = revealed.has(r.id);
+            const fashion = regionFashion(scene.fog, r.id);
             return (
-              <li key={r.id} className="flex items-center gap-2">
-                <span
-                  className={'min-w-0 flex-1 truncate text-xs ' + (open ? 'text-ok' : 'text-ink')}
-                >
-                  {r.name}
-                </span>
-                {open ? (
-                  <button
-                    type="button"
-                    className="btn py-1"
-                    onClick={() => commands.fogHide(scene.id, r.id)}
-                  >
-                    hide
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn btn-accent py-1"
-                    onClick={() => commands.fogReveal(scene.id, r.id, announce)}
-                  >
-                    reveal
-                  </button>
-                )}
+              <li key={r.id} className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className={'min-w-0 flex-1 truncate text-xs ' + FASHION_TONE[fashion]}>{r.name}</span>
+                  <span className={'mono-label ' + FASHION_TONE[fashion]}>{FASHION_WORD[fashion]}</span>
+                </div>
+                <RegionRevealButtons scene={scene} regionId={r.id} commands={commands} announce={announce} />
               </li>
             );
           })}
@@ -187,8 +255,9 @@ export default function FogTab({ scene, commands }: { scene: Scene; commands: Gr
         </div>
         <Empty>
           two clicks make a rectangle, three or more a polygon; while the fog is on, players see
-          what is not revealed as solid and you see a 40% tint; you see the region outlines either
-          way
+          what is not revealed as solid and you see a 40% tint, and what is revealed as seen
+          before they see dimmed with nobody in it and you see a lighter tint in an amber outline;
+          you see the region outlines either way
         </Empty>
       </PanelSection>
     </>

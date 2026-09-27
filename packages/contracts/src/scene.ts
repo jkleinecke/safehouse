@@ -390,8 +390,11 @@ export type FogRegion = z.infer<typeof FogRegionSchema>;
  *
  * - `define` draws a named region (a REVEAL WINDOW: ground the GM may later
  *   open to the table), `remove` takes one off the scene.
- * - `reveal` opens a named region or paints a freeform shape open; `hide`
- *   closes one region again, or (with no region named) every reveal at once.
+ * - `reveal` opens a named region or paints a freeform shape open, in one of
+ *   the two fashions `FogRevealAsSchema` names (live, the default, or as
+ *   explored); `hide` closes one region again, whichever way it was
+ *   revealed, or (with no region named) every reveal of both fashions at
+ *   once.
  * - `enable` and `disable` are the scene's fog switch (`FogState.enabled`).
  *   Turning fog off keeps every region and every reveal, so a GM can prepare
  *   a scene's fog while the table still sees the whole map, and turning it
@@ -399,6 +402,26 @@ export type FogRegion = z.infer<typeof FogRegionSchema>;
  */
 export const FogOpSchema = z.enum(['reveal', 'hide', 'define', 'remove', 'enable', 'disable']);
 export type FogOp = z.infer<typeof FogOpSchema>;
+
+/**
+ * The two fashions a GM reveals ground in (P6; the GM, 2026-09-27), the
+ * `as` of a `reveal`:
+ *
+ * - `live`: the table sees the map there in full, and everyone standing on
+ *   it, moving. The only fashion there was before explored reveals, so a
+ *   reveal that does not say is live.
+ * - `explored`: the table sees the map there DIMMED, as remembered, with its
+ *   doors and public pins, but nobody on it: no token, no token's light, no
+ *   move. "You have been here before": the ground the runners walked through
+ *   last session, or the floor plan the fixer sold them.
+ *
+ * A region is in one fashion at a time. Revealing it in the other moves it
+ * across (`revealed` and `exploredRegionIds` on `FogState`), so a room the
+ * party has left can be dropped from live to remembered with one tap, and
+ * the guards in it leave the table's screens as it goes.
+ */
+export const FogRevealAsSchema = z.enum(['live', 'explored']);
+export type FogRevealAs = z.infer<typeof FogRevealAsSchema>;
 
 /**
  * A set of squares on one floor, as a base64 bitset: square (col, row) is bit
@@ -535,12 +558,16 @@ export type FogState = z.infer<typeof FogStateSchema>;
  *   what a scene the GM has switched off looks like on a player's wire.
  * - `enabled`, the GM's switch, when it has ever been flipped.
  * - Otherwise the rule every scene had before the switch existed: fogged as
- *   soon as there is a region or a revealed shape, open until then.
+ *   soon as there is a region or a revealed shape, open until then. A shape
+ *   revealed as explored counts as much as one revealed live: it is a
+ *   reveal, and a reveal only means anything on a fogged scene.
  */
-export function fogOn(fog: Pick<FogState, 'regions' | 'revealedShapes'> & Partial<Pick<FogState, 'enabled' | 'active'>>): boolean {
+export function fogOn(
+  fog: Pick<FogState, 'regions' | 'revealedShapes'> & Partial<Pick<FogState, 'enabled' | 'active' | 'exploredShapes'>>,
+): boolean {
   if (fog.active !== undefined) return fog.active;
   if (fog.enabled !== undefined) return fog.enabled;
-  return fog.regions.length > 0 || fog.revealedShapes.length > 0;
+  return fog.regions.length > 0 || fog.revealedShapes.length > 0 || (fog.exploredShapes?.length ?? 0) > 0;
 }
 
 /**

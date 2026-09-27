@@ -33,6 +33,7 @@ import {
 import {
   DisplaySetCommandSchema,
   FogOpSchema,
+  FogRevealAsSchema,
   FogRegionSchema,
   GridSchema,
   PointSchema,
@@ -266,6 +267,8 @@ const FogOpBody = z.object({
   regionId: z.string().optional(),
   region: FogRegionSchema.partial({ id: true }).optional(),
   shape: z.array(PointSchema).min(3).optional(),
+  /** For `reveal`: live (the default, as every reveal was before) or as explored (`FogRevealAsSchema`). */
+  as: FogRevealAsSchema.optional(),
   announce: z.boolean().optional(),
 });
 
@@ -300,9 +303,9 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
   /**
    * Visibility scope for a token's events: concealed ⇒ GM sockets only
    * (FR9.7, Principle 4). Hidden by its own flag, by the layer it is on
-   * (FR9.26), or standing in fog nobody has revealed (FR9.13): the scene says
-   * which, so every emit reads it from the row it has in hand
-   * (`tokenConcealed`).
+   * (FR9.26), or standing on fogged ground that is not LIVE (FR9.13, P6:
+   * unrevealed, or revealed only as explored): the scene says which, so
+   * every emit reads it from the row it has in hand (`tokenConcealed`).
    */
   const tokenVis = (token: ConcealableToken, scene: SceneRow): Visibility =>
     tokenConcealed(token, serializeScene(scene)) ? 'gm' : 'public';
@@ -660,10 +663,12 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
    * a position that was quietly on their wire all along (FR9.7).
    *
    * "Concealed" is the whole answer (`tokenConcealed`): hidden by its flag or
-   * its layer, or standing in fog nobody has revealed. So a guard the GM walks
-   * out of the fog into a revealed room arrives exactly as an unhidden one
-   * does, and one walked back into the fog leaves exactly as a hidden one
-   * does — a public `token.removed`, then the GM's own copy of where he went.
+   * its layer, or standing on fogged ground that is not LIVE (unrevealed, or
+   * revealed only as explored). So a guard the GM walks out of the fog into
+   * a room revealed live arrives exactly as an unhidden one does, and one
+   * walked back into the fog, or into a remembered room, leaves exactly as a
+   * hidden one does — a public `token.removed`, then the GM's own copy of
+   * where he went.
    * A token concealed both before and after (flipping `hidden` on one that
    * stands in fog, moving a guard around inside it) is a GM-only edit.
    *
@@ -981,12 +986,16 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
    * does); a `define` that fogs an open scene or redraws a revealed region
    * also tells the table, with nothing of an unrevealed region in it. The
    * switch (`enable`, `disable`) is public and says only that: `{op, active}`.
+   * A reveal also says its fashion (`as`: live, or explored), so the TV
+   * files the ground it opens as live or as remembered.
    *
    * Then the tokens. A fog op moves the edge of what the table may see, so
    * every token whose answer to `tokenConcealed` changed with it arrives
    * (`token.added`) or leaves (`token.removed`), exactly as a layer shown or
    * hidden does (`emitConcealmentChanges`). A guard in a room is sent to the
-   * players when the room is revealed, and not a moment before.
+   * players when the room is revealed LIVE, and not a moment before: a room
+   * revealed as explored shows them the room, dimmed, and nobody in it, and
+   * a room dropped from live to explored takes its guards off their screens.
    *
    * The `scenes.fog` write and its events commit together (`Hub.atomic`). Fog
    * is the sharpest case of the half-commit in the whole app: a reveal that
@@ -1017,9 +1026,14 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         ...(body.regionId ? { regionId: body.regionId } : {}),
         ...(body.region ? { region: { ...body.region, id: body.region.id ?? undefined } } : {}),
         ...(body.shape ? { shape: body.shape } : {}),
+        ...(body.as ? { as: body.as } : {}),
       });
       const isDefine = body.op === 'define';
       const isSwitch = body.op === 'enable' || body.op === 'disable';
+      // A reveal says its fashion, always: a device folding the events (the
+      // TV) files the region or shape under live or remembered by it, and
+      // moves a region from one to the other when the GM changes her mind.
+      const fashion = body.op === 'reveal' ? { as: body.as ?? 'live' } : {};
       // Whether the scene is fogged at all, as a player's copy says it
       // (`sceneForViewer`, `sceneFogOn`): a device folding the events (the
       // TV) keeps it true through a reset or the last reveal taken back, and
@@ -1043,6 +1057,7 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
               // player's socket at the moment it stopped mattering to the GM.
               ...(body.op === 'reveal' && region ? { region } : {}),
               ...(!isDefine && body.shape ? { shape: body.shape } : {}),
+              ...fashion,
               ...(isDefine ? {} : { active }),
             },
         visibility: isDefine ? 'gm' : 'public',
@@ -1050,10 +1065,14 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       // A `define` is the GM's, but two of them change what the table sees:
       // one that turns the fog on (the first region on a scene whose switch
       // was never flipped), and a revealed region redrawn, which moves ground
-      // the players see. The table hears that much, and no more — the region
-      // itself only when it is a revealed one, whose shape is already theirs —
-      // so the players' Grids fetch the scene again and the TV folds it in.
-      const revealedRegion = isDefine && region && fog.revealed.includes(region.id) ? region : undefined;
+      // the players see — live, or dimmed as explored. The table hears that
+      // much, and no more — the region itself only when it is a revealed
+      // one, whose shape is already theirs — so the players' Grids fetch the
+      // scene again and the TV folds it in.
+      const revealedRegion =
+        isDefine && region && (fog.revealed.includes(region.id) || (fog.exploredRegionIds ?? []).includes(region.id))
+          ? region
+          : undefined;
       if (isDefine && (wasOn !== active || revealedRegion)) {
         await tx.emit({
           type: 'fog.updated',

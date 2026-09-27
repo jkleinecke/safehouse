@@ -206,8 +206,31 @@ const COVER: Record<Exclude<keyof typeof ORDER, 'fx' | 'markers' | 'paintedSel' 
   ruler: 'none',
 };
 
-/** A covered figure's plate or label hides from a player from this much cover up (`CoverMasks.coveredAt`). */
-const HIDDEN_AT = 0.5;
+/**
+ * The fog's two thresholds, read off the players' fog mask
+ * (`CoverMasks.coveredAt` in 'fog' mode). The mask is 0 on LIVE ground, the
+ * explored opacity (`EXPLORED_ALPHA`, 0.62) on ground shown dimmed as
+ * remembered, and 1 on ground the table cannot see (P6); between them only
+ * the soft rim of an edge, about a px wide.
+ *
+ * NOT LIVE, from this much cover up: nobody stands there as far as the table
+ * knows. A player's pointer does not take a figure there, no plate hangs
+ * over one, and a token there lights nothing with the light it carries. The
+ * server withholds every token but the runners from such ground anyway;
+ * this is the second guard, and the rule for the runners it does send
+ * (another player's runner in a remembered room is drawn dimmed, and is not
+ * picked or named). Low enough that remembered ground is well past it.
+ */
+const NOT_LIVE_AT = 0.3;
+
+/**
+ * HIDDEN, from this much cover up: the map itself is not shown there. Map
+ * labels (a pin's name, which stays on remembered ground with its pin) hide,
+ * and the pointer's ray passes through what stands there, which is not
+ * drawn. High enough that remembered ground, drawn dimmed, is well short of
+ * it; ground under the whole fog is at 1.
+ */
+const HIDDEN_AT = 0.9;
 
 /** How finely a stage at `quality` rasterises the players' fog (`masks.ts` `FOG_DETAIL`). */
 function fogDetailFor(quality: StageQuality): FogDetail {
@@ -258,7 +281,9 @@ function isHidden(token: Token, state: StageSceneState): boolean {
  * and say where the guard with the flashlight stands and which way he
  * faces, which the 2D map (whose light-map wash was the GM's alone) never
  * did — except the viewer's own runner, fog or not. `fogged` says whether
- * the fog covers a token (`CoverMasks.coveredAt`).
+ * the fog covers a token (`CoverMasks.coveredAt`): whether its ground is not
+ * LIVE (`NOT_LIVE_AT`), so ground shown dimmed as remembered (P6) lights
+ * nothing with the lamps of whoever stands on it either.
  */
 function lightTokens(state: StageSceneState, fogged: (token: Token) => boolean): readonly Token[] {
   const below = state.belowTokens ?? [];
@@ -753,9 +778,11 @@ class Stage3D implements StageApi, PointerHost {
    * of other floors: only the floor in view's are drawn, as on the 2D map.
    *
    * And a player's pointer never lands on a token the fog covers
-   * (`CoverMasks.coveredAt`) — it is not drawn, and selecting it would say
-   * who stands there — unless it is one they may move: their own runner
-   * still comes when called, fog or not, as on the 2D map.
+   * (`CoverMasks.coveredAt`), on ground that is not LIVE (`NOT_LIVE_AT`:
+   * hidden, or shown only dimmed as remembered) — it is not drawn, or drawn
+   * only as a shade, and selecting it would say who stands there — unless
+   * it is one they may move: their own runner still comes when called, fog
+   * or not, as on the 2D map.
    */
   state(): StageSceneState {
     const s = this.sceneState;
@@ -770,7 +797,7 @@ class Stage3D implements StageApi, PointerHost {
       const tokens =
         s.role === 'gm'
           ? s.tokens
-          : s.tokens.filter((t) => s.draggableIds.has(t.id) || this.cover.coveredAt(t, 'fog') < HIDDEN_AT);
+          : s.tokens.filter((t) => s.draggableIds.has(t.id) || this.cover.coveredAt(t, 'fog') < NOT_LIVE_AT);
       this.pointerState = scene === s.scene && tokens === s.tokens ? s : { ...s, tokens, scene };
     }
     return this.pointerState;
@@ -854,7 +881,11 @@ class Stage3D implements StageApi, PointerHost {
     return this.standing(screen)?.cell ?? null;
   }
 
-  /** Whether a player's fog hides what stands at world point (x, z): nothing is drawn there. */
+  /**
+   * Whether a player's fog hides what stands at world point (x, z): nothing
+   * is drawn there. Remembered ground is drawn, dimmed, so a wall or a door
+   * standing on it is hit like one on live ground (`HIDDEN_AT`).
+   */
   private readonly fogHides = (x: number, z: number): boolean => this.cover.coveredAt({ x, y: z }, 'fog') >= HIDDEN_AT;
 
   /**
@@ -1430,18 +1461,22 @@ class Stage3D implements StageApi, PointerHost {
     this.markers.layout(moved);
   }
 
-  /** Where a player's plate for a token hangs, or null — no plate — while the fog covers its figure's square. */
+  /** Where a player's plate for a token hangs, or null — no plate — while its figure's square is not live (`NOT_LIVE_AT`). */
   private readonly plateAt = (tokenId: string): Vector3 | null => {
     const head = this.figures.positionOf(tokenId);
     if (head === null) return null;
-    return this.cover.coveredAt({ x: head.x, y: head.z }, 'fog') >= HIDDEN_AT ? null : head;
+    return this.cover.coveredAt({ x: head.x, y: head.z }, 'fog') >= NOT_LIVE_AT ? null : head;
   };
 
-  /** Whether a player's label anchored at grid point `at` is under the fog (`DomLabels.setCover`). */
+  /**
+   * Whether a player's label anchored at grid point `at` is under the fog
+   * (`DomLabels.setCover`): only where the map itself is hidden. A pin on
+   * remembered ground is drawn there, dimmed, and keeps its name.
+   */
   private readonly labelCovered = (at: Point): boolean => this.cover.coveredAt(at, 'fog') >= HIDDEN_AT;
 
-  /** Whether the fog covers where `token` stands, for a player: its light then lights nothing (`lightTokens`). */
-  private readonly fogged = (token: Token): boolean => this.cover.coveredAt(token, 'fog') >= HIDDEN_AT;
+  /** Whether `token` stands on ground that is not live, for a player: its light then lights nothing (`lightTokens`). */
+  private readonly fogged = (token: Token): boolean => this.cover.coveredAt(token, 'fog') >= NOT_LIVE_AT;
 
   /**
    * Whether the view differs from the one the floor labels were last laid
@@ -1525,7 +1560,7 @@ export async function createStage(opts: StageOptions, hooks: Stage3DHooks): Prom
   const cover = new CoverMasks(fogDetailFor(hooks.quality));
   try {
     cover.update(opts.state, topDownMetrics(opts.state.scene));
-    const fogged = (token: Token): boolean => cover.coveredAt(token, 'fog') >= HIDDEN_AT;
+    const fogged = (token: Token): boolean => cover.coveredAt(token, 'fog') >= NOT_LIVE_AT;
     // The quality this device starts at for this role (the TV's is Low),
     // resolved by the loader.
     // The stage is made after the runtime; the quality callbacks reach it late.

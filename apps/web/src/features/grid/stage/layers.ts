@@ -10,7 +10,7 @@
  * pooled Text. Pins, cameras and lights themselves stand up off the floor on
  * the 3D map, and are built there (`stage3d/markers.ts`).
  */
-import { fogOn, type Camera as SecurityCamera, type Point, type Scene, type SceneLight } from '@safehouse/contracts';
+import { sceneFogOn, type Camera as SecurityCamera, type Point, type Scene, type SceneLight } from '@safehouse/contracts';
 import type { CameraCone, GeometrySelection } from '../types.js';
 import { TILE_HEIGHTS } from '@safehouse/rules';
 import {
@@ -22,6 +22,7 @@ import {
   worldFromGrid,
   type SceneMetrics,
 } from '../geometry.js';
+import { SHROUD_ALPHA } from '../plan/shroud.js';
 import { C, parseColor } from './colors.js';
 import type { Ink, InkLabel, LabelSink } from './ink.js';
 import { NOTE_PAD_PX, noteFrame } from './notes.js';
@@ -101,13 +102,73 @@ function cutSwept(g: Ink, m: SceneMetrics, poly: readonly Point[]): void {
 }
 
 /**
- * Fog of war (FR9.13/9.14). Players get an OPAQUE cover with revealed areas
- * cut out — the payload is already server-filtered, we render what we get.
- * The GM gets the same shape as a 40% tint plus named-region outlines+labels.
+ * How covered ground revealed AS EXPLORED is for the table (P6): the map is
+ * drawn there dimmed, as remembered, by the same amount the sightline
+ * shroud darkens a square a runner cannot see (`SHROUD_ALPHA`). It is the
+ * value the players' fog mask carries there (`stage3d/masks.ts`), and it is
+ * short of total, so the cover's shader mixes the map toward the ground
+ * colour by this much rather than discarding it (`stage3d/cover.ts`: only a
+ * cover at `COVER_TOTAL` discards). The stage reads it back to know what is
+ * not live (token plates, carried lights) from what is hidden outright
+ * (labels, the ray's pass through the map).
+ */
+export const EXPLORED_ALPHA = SHROUD_ALPHA;
+
+/** The GM's tint over ground the table cannot see at all. */
+export const GM_FOG_ALPHA = 0.4;
+
+/** The GM's lighter tint over ground the table is shown dimmed, as explored. */
+export const GM_EXPLORED_ALPHA = 0.2;
+
+/**
+ * The GM's outline of a region in each of the fog's states, the same colour
+ * as its name: cyan while the table cannot see it, amber while it is shown
+ * the ground as remembered (explored), green while it sees it live.
+ */
+const REGION_OUTLINE = {
+  hidden: { color: C.cyan, alpha: 0.8 },
+  explored: { color: C.warn, alpha: 0.8 },
+  live: { color: C.ok, alpha: 0.5 },
+} as const;
+
+/**
+ * The opacity of the first of the fog's two fills when it has explored
+ * ground to show (`drawFog`): what makes the two, laid one over the other
+ * where the ground is hidden, come to exactly `total`. Two paints of
+ * opacity a and b together cover 1 − (1 − a)(1 − b), so the first is
+ * 1 − (1 − total) / (1 − explored). For the players (total 1) that is 1
+ * itself; for the GM it keeps hidden ground at `GM_FOG_ALPHA` whether or
+ * not anything is explored.
+ */
+function coverUnder(total: number, explored: number): number {
+  return explored >= 1 ? total : 1 - (1 - total) / (1 - explored);
+}
+
+/**
+ * Fog of war (FR9.13/9.14), in the three states the table sees the map in
+ * (P6): LIVE ground in full, EXPLORED ground dimmed as remembered, and
+ * everything else hidden. The payload is already server-filtered; this
+ * draws what it gets.
  *
- * All of it only while the scene's fog is ON (`fogOn`), the one answer the
- * server, the TV and this map share. With the fog off the GM still sees the
- * outlines and names of the regions, and nothing else.
+ * - Players (and the TV): an OPAQUE cover with every revealed area cut out,
+ *   live or explored. When there is explored ground, a second cover goes
+ *   over it at `EXPLORED_ALPHA` with only the LIVE areas cut out: over the
+ *   hidden ground it changes nothing (it is already total), over the
+ *   explored ground it is the dimming, and the live ground stays clear. The
+ *   second cover is the whole map rather than each explored area, so two
+ *   explored areas that overlap are dimmed once, not twice (twice would
+ *   come close to hiding them), and a live area overlapping an explored one
+ *   is live there.
+ * - The GM: the same shape as a tint, `GM_FOG_ALPHA` over hidden ground and
+ *   the lighter `GM_EXPLORED_ALPHA` over explored ground, with every named
+ *   region outlined and named in its state's colour: cyan hidden, amber
+ *   explored, green live. Explored shapes are outlined in amber too; live
+ *   shapes are simply clear.
+ *
+ * All of it only while the scene is fogged (`sceneFogOn`: its fog switch or
+ * its sightlines), the one answer the server, the TV and this map share.
+ * With the fog off the GM still sees the outlines and names of the regions,
+ * and nothing else.
  */
 export function drawFog(
   g: Ink,
@@ -119,6 +180,9 @@ export function drawFog(
   g.clear();
   const fog = scene.fog;
   const revealed = new Set(fog.revealed);
+  // A region is meant to be in one reveal list or neither; should both ever
+  // name it, live wins, as it does on the server (`fogCells`).
+  const explored = new Set((fog.exploredRegionIds ?? []).filter((id) => !revealed.has(id)));
 
   // FOG THAT IS OFF DRAWS NO COVER. A scene the GM has not fogged is a scene
   // the table can see, the same way an uploaded map always could be. The
@@ -128,7 +192,7 @@ export function drawFog(
   // saw a 40% tint they could easily read straight through. Fog is something
   // a GM adds to a map, not something a map starts under.
   //
-  // Whether it is on is `fogOn`'s answer, not a rule of this function's own:
+  // Whether it is on is `sceneFogOn`'s answer, not a rule of this function's own:
   // - On a player's or the TV's copy it is `active`, which the server sets
   //   from state that copy does not carry. The copy holds only the REVEALED
   //   regions, so a scene fogged with nothing revealed yet (or just reset)
@@ -137,10 +201,11 @@ export function drawFog(
   //   even while it still carries revealed regions, and nothing goes down.
   // - On the GM's copy it is the GM's switch (`enabled`), or, on a scene
   //   whose switch was never flipped, the old rule: fogged once a region or a
-  //   revealed shape exists. So the GM's tint comes and goes with the switch,
-  //   and the GM's screen and the table's always agree on whether there is
-  //   fog at all.
-  const on = fogOn(fog);
+  //   revealed shape exists; or the scene's sightlines, which fog it whatever
+  //   the switch says. So the GM's tint comes and goes with the switch, and
+  //   the GM's screen and the table's always agree on whether there is fog
+  //   at all.
+  const on = sceneFogOn(scene);
 
   // With the fog off, the GM keeps the outlines and names of the regions
   // (below) and loses only the tint. The switch exists so a GM can lay out
@@ -152,34 +217,55 @@ export function drawFog(
     return;
   }
 
+  // The ground each fashion opens: named regions first, in the order the GM
+  // drew them, then the painted shapes.
+  const liveAreas: Point[][] = [];
+  const exploredAreas: Point[][] = [];
+  for (const region of fog.regions) {
+    if (revealed.has(region.id)) liveAreas.push(region.polygon);
+    else if (explored.has(region.id)) exploredAreas.push(region.polygon);
+  }
+  for (const shape of fog.revealedShapes) if (shape.length >= 3) liveAreas.push(shape);
+  const exploredShapes = (fog.exploredShapes ?? []).filter((shape) => shape.length >= 3);
+  exploredAreas.push(...exploredShapes);
+
   if (on) {
     const { width, height } = sceneWorldSize(m);
     const pad = m.cell * 2; // cover a margin so pan never peeks past the edge
-    g.rect(-pad, -pad, width + pad * 2, height + pad * 2).fill({
-      color: C.ground,
-      alpha: isGm ? 0.4 : 1,
-    });
+    const cover = (alpha: number): void => {
+      g.rect(-pad, -pad, width + pad * 2, height + pad * 2).fill({ color: C.ground, alpha });
+    };
+    const total = isGm ? GM_FOG_ALPHA : 1;
+    const dim = isGm ? GM_EXPLORED_ALPHA : EXPLORED_ALPHA;
 
-    for (const region of fog.regions) {
-      if (!revealed.has(region.id)) continue;
-      cutSwept(g, m, region.polygon);
-    }
-    for (const shape of fog.revealedShapes) {
-      if (shape.length >= 3) cutSwept(g, m, shape);
+    // The cover, with every revealed area cut out of it: live and explored.
+    cover(exploredAreas.length > 0 ? coverUnder(total, dim) : total);
+    for (const area of liveAreas) cutSwept(g, m, area);
+    for (const area of exploredAreas) cutSwept(g, m, area);
+
+    // The explored ground dimmed: a second cover at the explored opacity
+    // with only the live areas cut out (see above for why the whole map).
+    // Swept like every cut, so a remembered room keeps its walls dimmed and
+    // a live room inside it keeps them clear.
+    if (exploredAreas.length > 0) {
+      cover(dim);
+      for (const area of liveAreas) cutSwept(g, m, area);
     }
   }
 
-  // GM extras: outlines + name labels for every named region (FR9.14).
+  // GM extras: outlines + name labels for every named region (FR9.14), in
+  // the colour of its state, and an outline round each explored shape (a
+  // live one is simply clear, as it always was).
   if (isGm) {
     for (const region of fog.regions) {
-      const isOpen = revealed.has(region.id);
-      g.poly(flatPoly(m, region.polygon)).stroke({
-        width: 1.5,
-        color: isOpen ? C.ok : C.cyan,
-        alpha: isOpen ? 0.5 : 0.8,
-      });
+      const state = revealed.has(region.id) ? 'live' : explored.has(region.id) ? 'explored' : 'hidden';
+      const { color, alpha } = REGION_OUTLINE[state];
+      g.poly(flatPoly(m, region.polygon)).stroke({ width: 1.5, color, alpha });
       const at = worldFromGrid(m, polygonCenter(region.polygon));
-      labels.put(region.id, tag(region.name, at.x, at.y, 0.5, isOpen ? C.ok : C.cyan));
+      labels.put(region.id, tag(region.name, at.x, at.y, 0.5, color));
+    }
+    for (const shape of exploredShapes) {
+      g.poly(flatPoly(m, shape)).stroke({ width: 1, ...REGION_OUTLINE.explored });
     }
   }
   labels.sweep();

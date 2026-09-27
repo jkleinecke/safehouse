@@ -558,6 +558,83 @@ describe('tokens under the fog exist only on GM sockets (FR9.13, Principle 4)', 
     expect(ids).toContain(ownTokenId);
     expect(ids).not.toContain(guardId);
   });
+
+  it('shows the table his room as seen-before and never him, his drag or his move; revealed live, he arrives (P6)', async () => {
+    // The GM's second reveal fashion (the GM, 2026-09-27): EXPLORED shows the
+    // table the ground dimmed, as remembered, with nobody on it. So revealing
+    // the vault that way must put its outline on the table's sockets and
+    // nothing of the guard standing in it: no arrival, no drag frame, no move.
+    /** Where the GM drags and drops him inside the remembered vault, in decimals nothing else has. */
+    const PACING = { x: 67.3125, y: 61.6875 };
+    const PACED_TO = { x: 68.4375, y: 63.5625 };
+    const tables = (m: { player: number; display: number }) =>
+      [
+        [playerWs, m.player],
+        [displayWs, m.display],
+      ] as const;
+
+    let marks = tableMarks();
+    gmWs.send({ cmd: 'fog.reveal', sceneId, op: 'reveal', regionId: VAULT_ID, as: 'explored' });
+    for (const [ws, mark] of tables(marks)) {
+      const word = await nextAfter(ws, mark, isFog('reveal'));
+      expect(word.visibility).toBe('public');
+      expect(word.payload).toMatchObject({ sceneId, op: 'reveal', regionId: VAULT_ID, as: 'explored', active: true });
+      expect((word.payload as { region: { name: string } }).region.name).toBe('the vault');
+    }
+
+    const gmMark = gmWs.frames.length;
+    gmWs.send({ cmd: 'token.drag', tokenId: guardId, ...PACING });
+    await nextAfter(gmWs, gmMark, (f) => f.type === 'token.dragging' && hasGuard(f));
+    gmWs.send({ cmd: 'token.move', tokenId: guardId, ...PACED_TO });
+    const moved = await nextAfter(gmWs, gmMark, (f) => f.type === 'token.moved' && hasGuard(f));
+    expect(moved.visibility).toBe('gm');
+    await settle();
+    const table = tableSince(marks);
+    expect(table).not.toContain(guardId);
+    expect(table).not.toContain(GUARD);
+    expect(table).not.toContain('token.dragging');
+    for (const n of [PACING.x, PACING.y, PACED_TO.x, PACED_TO.y]) expect(table).not.toContain(String(n));
+
+    // A fresh read says the same: the vault remembered, the guard not there.
+    for (const who of [player, display]) {
+      const res = await t.app.inject({ method: 'GET', url: `/api/scenes/${sceneId}`, headers: headers(who.token) });
+      const body = res.json() as { scene: { fog: { revealed: string[]; exploredRegionIds?: string[] } }; tokens: { id: string }[] };
+      expect(body.scene.fog.exploredRegionIds).toEqual([VAULT_ID]);
+      expect(body.scene.fog.revealed).not.toContain(VAULT_ID);
+      expect(body.tokens.map((x) => x.id)).not.toContain(guardId);
+      expect(res.body).not.toContain(guardId);
+    }
+
+    // Revealed live: he arrives as a NEW token, where the GM left him, after
+    // the reveal that says it is live now.
+    marks = tableMarks();
+    gmWs.send({ cmd: 'fog.reveal', sceneId, op: 'reveal', regionId: VAULT_ID, as: 'live' });
+    for (const [ws, mark] of tables(marks)) {
+      const arrival = await nextAfter(ws, mark, (f) => f.type === 'token.added' && hasGuard(f));
+      expect(arrival.visibility).toBe('public');
+      expect((arrival.payload as { token: unknown }).token).toMatchObject({ id: guardId, name: GUARD, ...PACED_TO });
+      const word = ws.frames.find((f, i) => i >= mark && isFog('reveal')(f));
+      expect(word?.payload).toMatchObject({ regionId: VAULT_ID, as: 'live' });
+      expect(ws.frames.indexOf(word!)).toBeLessThan(ws.frames.indexOf(arrival));
+    }
+
+    // Dropped back to seen-before: he leaves the table again, and nothing else of him goes with it.
+    marks = tableMarks();
+    gmWs.send({ cmd: 'fog.reveal', sceneId, op: 'reveal', regionId: VAULT_ID, as: 'explored' });
+    for (const [ws, mark] of tables(marks)) {
+      const gone = await nextAfter(ws, mark, (f) => f.type === 'token.removed' && hasGuard(f));
+      expect(gone.visibility).toBe('public');
+      expect(gone.payload).toEqual({ tokenId: guardId, sceneId });
+    }
+    await settle();
+    const after = [...playerWs.frames.slice(marks.player), ...displayWs.frames.slice(marks.display)];
+    expect(after.filter(hasGuard).map((f) => f.type)).toEqual(['token.removed', 'token.removed']);
+
+    // The vault back under the fog, as the blocks after this one found it.
+    marks = tableMarks();
+    gmWs.send({ cmd: 'fog.reveal', sceneId, op: 'hide', regionId: VAULT_ID });
+    for (const [ws, mark] of tables(marks)) await nextAfter(ws, mark, isFog('hide'));
+  });
 });
 
 /**

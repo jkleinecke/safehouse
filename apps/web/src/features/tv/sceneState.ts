@@ -18,7 +18,7 @@
  * device — the server filtered both before serializing. The `visibility` check
  * in the fold is defence in depth, not the boundary.
  */
-import type { FogRegion, Point, Scene, Token, WsEvent } from '@safehouse/contracts';
+import type { FogRegion, FogRevealAs, Point, Scene, Token, WsEvent } from '@safehouse/contracts';
 import { rec } from '../table/views.js';
 
 const str = (v: unknown): string | undefined =>
@@ -105,8 +105,16 @@ function asToken(v: unknown): Token | null {
 interface Draft {
   tokens: Token[];
   fogRegions: FogRegion[];
+  /** Regions revealed LIVE. */
   revealed: string[];
   revealedShapes: Point[][];
+  /**
+   * Regions and shapes revealed AS EXPLORED (P6): shown dimmed, as
+   * remembered, with nobody on them. A region is in this list or in
+   * `revealed`, never both: a reveal in one fashion takes it out of the other.
+   */
+  exploredRegionIds: string[];
+  exploredShapes: Point[][];
   /** Whether the scene is fogged at all (`FogState.active`): kept as the snapshot said it until an event says otherwise. */
   fogActive: boolean | undefined;
   environment: Scene['environment'];
@@ -129,12 +137,23 @@ function reshapeRegion(draft: Draft, region: FogRegion | null): void {
   draft.changed = true;
 }
 
-/** The GM's reset: nothing is revealed any more, the scene still fogged (the server's `hide` with no region). */
+/**
+ * The GM's reset: nothing is revealed any more, in either fashion, the scene
+ * still fogged (the server's `hide` with no region).
+ */
 function hideAll(draft: Draft): void {
-  if (draft.revealed.length + draft.fogRegions.length + draft.revealedShapes.length === 0) return;
+  const held =
+    draft.revealed.length +
+    draft.fogRegions.length +
+    draft.revealedShapes.length +
+    draft.exploredRegionIds.length +
+    draft.exploredShapes.length;
+  if (held === 0) return;
   draft.revealed = [];
   draft.fogRegions = [];
   draft.revealedShapes = [];
+  draft.exploredRegionIds = [];
+  draft.exploredShapes = [];
   draft.changed = true;
 }
 
@@ -145,36 +164,61 @@ function upsertToken(draft: Draft, token: Token): void {
   draft.changed = true;
 }
 
-function revealRegion(draft: Draft, region: FogRegion | null, regionId: string | undefined): void {
+/**
+ * The fashion a reveal event says it is (`as`, P6): `explored` shows the
+ * ground dimmed with nobody on it, anything else (and an event from before
+ * explored reveals, which says nothing) is live.
+ */
+function fashionOf(v: unknown): FogRevealAs {
+  return v === 'explored' ? 'explored' : 'live';
+}
+
+/**
+ * A region revealed, in `as`'s fashion: its outline held, and its id filed
+ * under that fashion and taken out of the other, so a region the GM drops
+ * from live to remembered (or back) is never both.
+ */
+function revealRegion(draft: Draft, region: FogRegion | null, regionId: string | undefined, as: FogRevealAs): void {
   const id = region?.id ?? regionId;
   if (!id) return;
   if (region && !draft.fogRegions.some((r) => r.id === region.id)) {
     draft.fogRegions.push(region);
     draft.changed = true;
   }
-  if (!draft.revealed.includes(id)) {
-    draft.revealed.push(id);
+  const into = as === 'explored' ? 'exploredRegionIds' : 'revealed';
+  const outOf = as === 'explored' ? 'revealed' : 'exploredRegionIds';
+  if (!draft[into].includes(id)) {
+    draft[into].push(id);
+    draft.changed = true;
+  }
+  if (draft[outOf].includes(id)) {
+    draft[outOf] = draft[outOf].filter((r) => r !== id);
     draft.changed = true;
   }
 }
 
 function hideRegion(draft: Draft, regionId: string | undefined): void {
   if (!regionId) return;
-  const before = draft.revealed.length + draft.fogRegions.length;
+  const count = (): number => draft.revealed.length + draft.exploredRegionIds.length + draft.fogRegions.length;
+  const before = count();
+  // Whichever fashion it was revealed in: hidden is out of both.
   draft.revealed = draft.revealed.filter((r) => r !== regionId);
+  draft.exploredRegionIds = draft.exploredRegionIds.filter((r) => r !== regionId);
   // A player view only ever holds revealed regions, so hiding drops the
   // geometry too — the shape itself is GM knowledge again.
   draft.fogRegions = draft.fogRegions.filter((r) => r.id !== regionId);
-  if (draft.revealed.length + draft.fogRegions.length !== before) draft.changed = true;
+  if (count() !== before) draft.changed = true;
 }
 
-function addShape(draft: Draft, shape: Point[] | null, seen: Set<string>): void {
+/** A painted reveal, into the list of its fashion, once however often it replays. */
+function addShape(draft: Draft, shape: Point[] | null, seen: Set<string>, as: FogRevealAs): void {
   if (!shape) return;
-  const key = shapeKey(shape);
+  const key = `${as}|${shapeKey(shape)}`;
   if (seen.has(key)) return;
   seen.add(key);
-  draft.revealedShapes.push(shape);
-  if (draft.revealedShapes.length > REVEALED_SHAPE_CAP) draft.revealedShapes.shift();
+  const list = as === 'explored' ? draft.exploredShapes : draft.revealedShapes;
+  list.push(shape);
+  if (list.length > REVEALED_SHAPE_CAP) list.shift();
   draft.changed = true;
 }
 
@@ -195,11 +239,16 @@ export function mergeSceneEvents(
     fogRegions: base.scene.fog.regions.slice(),
     revealed: base.scene.fog.revealed.slice(),
     revealedShapes: base.scene.fog.revealedShapes.slice(),
+    exploredRegionIds: (base.scene.fog.exploredRegionIds ?? []).slice(),
+    exploredShapes: (base.scene.fog.exploredShapes ?? []).slice(),
     fogActive: base.scene.fog.active,
     environment: base.scene.environment,
     changed: false,
   };
-  const seenShapes = new Set(draft.revealedShapes.map(shapeKey));
+  const seenShapes = new Set([
+    ...draft.revealedShapes.map((s) => `live|${shapeKey(s)}`),
+    ...draft.exploredShapes.map((s) => `explored|${shapeKey(s)}`),
+  ]);
 
   for (const event of events) {
     if (event.id <= base.asOfEventId) continue;
@@ -242,8 +291,10 @@ export function mergeSceneEvents(
       case 'fog.updated': {
         const op = str(p['op']) ?? 'reveal';
         if (op === 'reveal') {
-          revealRegion(draft, asRegion(p['region']), str(p['regionId']));
-          addShape(draft, asPolygon(p['shape']), seenShapes);
+          // In the fashion it says (`as`): live, or seen before (P6).
+          const as = fashionOf(p['as']);
+          revealRegion(draft, asRegion(p['region']), str(p['regionId']), as);
+          addShape(draft, asPolygon(p['shape']), seenShapes, as);
         } else if (op === 'hide' && str(p['regionId']) === undefined) {
           // The GM's reset: every reveal taken back, the fog left whole.
           hideAll(draft);
@@ -278,6 +329,7 @@ export function mergeSceneEvents(
   }
 
   if (!draft.changed) return base;
+  const sight = base.scene.fog.sight;
   return {
     asOfEventId: base.asOfEventId,
     tokens: draft.tokens,
@@ -288,6 +340,15 @@ export function mergeSceneEvents(
         regions: draft.fogRegions,
         revealed: draft.revealed,
         revealedShapes: draft.revealedShapes,
+        // The explored fashion, said only when there is some, as the server
+        // says it: a scene with none folds to exactly the copy a fresh read
+        // of it gives.
+        ...(draft.exploredRegionIds.length > 0 ? { exploredRegionIds: draft.exploredRegionIds } : {}),
+        ...(draft.exploredShapes.length > 0 ? { exploredShapes: draft.exploredShapes } : {}),
+        // The party's pooled sight and memory, as the read gave it. Nothing
+        // folded here changes it yet, but a fold that rebuilt the fog without
+        // it would drop every square the party has seen at the first event.
+        ...(sight === undefined ? {} : { sight }),
         ...(draft.fogActive === undefined ? {} : { active: draft.fogActive }),
       },
     },

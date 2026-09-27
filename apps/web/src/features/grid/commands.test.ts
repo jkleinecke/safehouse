@@ -172,7 +172,10 @@ describe('GridCommands', () => {
       ['fog.reveal', 'hide'],
       ['fog.reveal', 'define'],
     ]);
-    expect(s.sent[0]).toMatchObject({ regionId: 'r1', announce: true });
+    expect(s.sent[0]).toMatchObject({ regionId: 'r1', announce: true, as: 'live' });
+    // The second fashion (P6): seen before, dimmed with nobody in it.
+    c.fogReveal('sc1', 'r1', false, 'explored');
+    expect(s.sent[3]).toMatchObject({ cmd: 'fog.reveal', op: 'reveal', regionId: 'r1', as: 'explored' });
   });
 
   it('is a no-op while the socket is missing', () => {

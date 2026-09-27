@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { SceneSchema, TokenSchema, FogStateSchema, GridSchema, sceneFogOn, sightlinesOn } from '../src/index.js';
+import {
+  SceneSchema,
+  TokenSchema,
+  FogRevealAsSchema,
+  FogRevealCommandSchema,
+  FogStateSchema,
+  GridSchema,
+  fogOn,
+  sceneFogOn,
+  sightlinesOn,
+} from '../src/index.js';
 
 const scene = {
   id: 'scn_1',
@@ -159,6 +169,27 @@ describe('SceneSchema', () => {
     // A player's copy carries the server's answer, and it is final both ways.
     expect(sceneFogOn({ fog: { ...open, active: false }, vision: { sight: 'on' } })).toBe(false);
     expect(sceneFogOn({ fog: { ...open, active: true } })).toBe(true);
+  });
+
+  it('reveals in two fashions, live unless said, and counts a shape revealed as explored as a reveal on an old scene', () => {
+    const reveal = { cmd: 'fog.reveal', sceneId: 'scn_1', op: 'reveal', regionId: 'reg_1' };
+    expect(FogRevealAsSchema.options).toEqual(['live', 'explored']);
+    // Absent is live, as every reveal was before explored reveals.
+    expect(FogRevealCommandSchema.parse(reveal).as).toBeUndefined();
+    expect(FogRevealCommandSchema.parse({ ...reveal, as: 'explored' }).as).toBe('explored');
+    expect(FogRevealCommandSchema.safeParse({ ...reveal, as: 'remembered' }).success).toBe(false);
+
+    // A scene whose switch was never flipped is fogged once anything is
+    // revealed, in either fashion.
+    const unsaid = { regions: [], revealed: [], revealedShapes: [] };
+    const tri = [
+      { x: 0, y: 0 },
+      { x: 2, y: 0 },
+      { x: 0, y: 2 },
+    ];
+    expect(fogOn(unsaid)).toBe(false);
+    expect(fogOn({ ...unsaid, exploredShapes: [tri] })).toBe(true);
+    expect(fogOn({ ...unsaid, exploredShapes: [tri], enabled: false })).toBe(false);
   });
 });
 

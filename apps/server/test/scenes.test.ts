@@ -469,6 +469,31 @@ describe('a fogged scene reaches players and the TV covered, and tells them noth
     expect(v.raw, role).not.toContain(String(GUARD_AT.y));
   }
 
+  /** The events the table's phone can read back, newest first, with their (ever-growing) ids. */
+  async function tableEvents(): Promise<{ id: number; type: string; payload: Record<string, unknown> }[]> {
+    const log = await t.app.inject({
+      method: 'GET',
+      url: `/api/campaigns/${fb.campaignId}/log?limit=500`,
+      headers: as(viewers[0]!.token),
+    });
+    expect(log.statusCode).toBe(200);
+    const events = (log.json() as { events: { id: unknown; type: string; payload: Record<string, unknown> }[] }).events;
+    return events.map((e) => ({ id: Number(e.id), type: e.type, payload: e.payload }));
+  }
+
+  /** The newest event id the table can see: a mark to read "what arrived since" from. */
+  async function mark(): Promise<number> {
+    return Math.max(0, ...(await tableEvents()).map((e) => e.id));
+  }
+
+  /** The payloads of the public events of one type that arrived after `since`, oldest first. */
+  async function tableEventsSince(since: number, type: string): Promise<Record<string, unknown>[]> {
+    return (await tableEvents())
+      .filter((e) => e.id > since && e.type === type)
+      .reverse()
+      .map((e) => e.payload);
+  }
+
   beforeAll(async () => {
     // A second campaign of the same GM's (the first-run bootstrap is once per
     // server), with its own GM token.
@@ -708,28 +733,6 @@ describe('a fogged scene reaches players and the TV covered, and tells them noth
   });
 
   it('fogs the scene while its sightlines are on, whatever the fog switch says, and sends the guard away and back (P6)', async () => {
-    /** The events the table's phone can read back, newest first, with their (ever-growing) ids. */
-    async function tableEvents(): Promise<{ id: number; type: string; payload: Record<string, unknown> }[]> {
-      const log = await t.app.inject({
-        method: 'GET',
-        url: `/api/campaigns/${fb.campaignId}/log?limit=500`,
-        headers: as(viewers[0]!.token),
-      });
-      expect(log.statusCode).toBe(200);
-      const events = (log.json() as { events: { id: unknown; type: string; payload: Record<string, unknown> }[] }).events;
-      return events.map((e) => ({ id: Number(e.id), type: e.type, payload: e.payload }));
-    }
-    /** The newest event id the table can see: a mark to read "what arrived since" from. */
-    async function mark(): Promise<number> {
-      return Math.max(0, ...(await tableEvents()).map((e) => e.id));
-    }
-    /** The payloads of the public events of one type that arrived after `since`, oldest first. */
-    async function tableEventsSince(since: number, type: string): Promise<Record<string, unknown>[]> {
-      return (await tableEvents())
-        .filter((e) => e.id > since && e.type === type)
-        .reverse()
-        .map((e) => e.payload);
-    }
     /** PATCH the scene's vision settings, and hand back what the GM's copy then says. */
     async function patchVision(vision: Record<string, unknown>): Promise<Record<string, unknown>> {
       const res = await t.app.inject({
@@ -780,6 +783,92 @@ describe('a fogged scene reaches players and the TV covered, and tells them noth
     }
     const added = await tableEventsSince(beforeOff, 'token.added');
     expect(added.map((p) => (p['token'] as { id: string }).id)).toEqual([guardId]);
+  });
+
+  it('shows the table a vault revealed as seen-before, dimmed and empty of the guard, and sends him once it is revealed live (P6)', async () => {
+    // The GM's two reveal fashions (the GM, 2026-09-27). LIVE: the table sees
+    // the ground and everyone on it, moving. EXPLORED ("seen before"): the
+    // table sees the ground dimmed, as remembered, and NOBODY on it. A guard
+    // in a remembered room is withheld exactly as one in the dark is, from
+    // the payloads and from every move, until his room goes live.
+    const vaultRegion = { id: vaultId, name: VAULT, polygon: VAULT_POLY };
+    /** Where the GM walks the guard while the table only remembers the vault: inside it, in decimals nothing else has. */
+    const PACED_TO = { x: 25.6875, y: 20.3125 };
+
+    // The fog back on (the case above left its switch off). The vault is
+    // hidden, so the guard leaves the table as the fog goes down.
+    await fogOp({ op: 'enable' });
+    const beforeExplored = await mark();
+    const fog = await fogOp({ op: 'reveal', regionId: vaultId, as: 'explored' });
+    // The GM's copy files the vault under explored, and only there.
+    expect(fog['revealed']).toEqual([]);
+    expect(fog['exploredRegionIds']).toEqual([vaultId]);
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      // The vault's outline, said to be remembered: the map is drawn there,
+      // dimmed. The runner is on the table wherever he stands; the guard is not.
+      expect(v.fog, role).toEqual({ ...FOG_WIRE_UNREVEALED, regions: [vaultRegion], exploredRegionIds: [vaultId] });
+      expect(v.tokenIds, role).toEqual([runnerId]);
+      expectNoGuard(v, role);
+    }
+    // The table heard the reveal and its fashion, and no guard arriving with it.
+    expect(await tableEventsSince(beforeExplored, 'fog.updated')).toEqual([
+      { sceneId: fogSceneId, op: 'reveal', regionId: vaultId, region: vaultRegion, as: 'explored', active: true },
+    ]);
+    expect(await tableEventsSince(beforeExplored, 'token.added')).toEqual([]);
+
+    // The GM walks him across the remembered room: the move is the GM's alone.
+    const paced = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/tokens/${guardId}`,
+      headers: as(fb.gmToken),
+      payload: PACED_TO,
+    });
+    expect(paced.statusCode).toBe(200);
+    expect(await tableEventsSince(beforeExplored, 'token.moved')).toEqual([]);
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      expect(v.tokenIds, role).toEqual([runnerId]);
+      expect(v.raw, role).not.toContain(String(PACED_TO.x));
+      expect(v.raw, role).not.toContain(String(PACED_TO.y));
+    }
+
+    // Revealed live: he arrives, a NEW token where he now stands, and the
+    // vault moves from the remembered list to the live one.
+    const beforeLive = await mark();
+    const live = await fogOp({ op: 'reveal', regionId: vaultId });
+    expect(live['revealed']).toEqual([vaultId]);
+    expect(live).not.toHaveProperty('exploredRegionIds');
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      expect(v.fog, role).toEqual({ ...FOG_WIRE_UNREVEALED, regions: [vaultRegion], revealed: [vaultId] });
+      expect(v.tokenIds, role).toEqual([guardId, runnerId].sort());
+    }
+    expect((await tableEventsSince(beforeLive, 'fog.updated')).map((p) => p['as'])).toEqual(['live']);
+    const arrived = await tableEventsSince(beforeLive, 'token.added');
+    expect(arrived.map((p) => p['token'])).toMatchObject([{ id: guardId, ...PACED_TO }]);
+
+    // Dropped back to seen-before (the party has left the vault): he leaves the table again.
+    const beforeBack = await mark();
+    await fogOp({ op: 'reveal', regionId: vaultId, as: 'explored' });
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      expect(v.fog, role).toEqual({ ...FOG_WIRE_UNREVEALED, regions: [vaultRegion], exploredRegionIds: [vaultId] });
+      expectNoGuard(v, role);
+    }
+    expect(await tableEventsSince(beforeBack, 'token.removed')).toEqual([{ tokenId: guardId, sceneId: fogSceneId }]);
+
+    // Hide takes it out of both lists: nothing of the vault on the table,
+    // and the GM's copy back to the three lists every scene has.
+    const hidden = await fogOp({ op: 'hide', regionId: vaultId });
+    expect(hidden['revealed']).toEqual([]);
+    expect(hidden).not.toHaveProperty('exploredRegionIds');
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      expect(v.fog, role).toEqual(FOG_WIRE_UNREVEALED);
+      expectNoVault(v.raw, role);
+      expectNoGuard(v, role);
+    }
   });
 });
 

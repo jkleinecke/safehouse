@@ -12,6 +12,7 @@ import type { Scene, Token } from '@safehouse/contracts';
 import type { GridCommands } from '../commands.js';
 import { useGridStore } from '../store.js';
 import { hiddenLayerTokenIds, layersOf } from '../tokenLayers.js';
+import { FASHION_TONE, FASHION_WORD, RegionRevealButtons, regionFashion } from './FogTab.js';
 import { Empty, PanelSection } from './ui.js';
 
 function Line({
@@ -54,7 +55,6 @@ export default function PrepOutline({
   const selectToken = useGridStore((s) => s.selectToken);
   const here = tokens.filter((t) => (t.level ?? 0) === level);
   const layerHidden = hiddenLayerTokenIds(layersOf(scene));
-  const revealed = new Set(scene.fog.revealed);
   const cameras = (scene.geometry.cameras ?? []).filter((c) => (c.level ?? 0) === level);
   const lights = (scene.geometry.lights ?? []).filter((l) => (l.level ?? 0) === level);
   const notes = scene.geometry.gmNotes ?? [];
@@ -93,13 +93,15 @@ export default function PrepOutline({
         <PanelSection title="Fog" hint={`${scene.fog.regions.length}`}>
           <ul>
             {scene.fog.regions.map((r) => {
-              const open = revealed.has(r.id);
+              // Live, seen before (shown dimmed with nobody in it), or
+              // hidden (P6): the tag says which, and the three buttons move it.
+              const fashion = regionFashion(scene.fog, r.id);
               return (
                 <Line
                   key={r.id}
                   name={r.name}
-                  tag={open ? 'revealed' : undefined}
-                  tagTone="text-ok"
+                  tag={fashion === 'hidden' ? undefined : FASHION_WORD[fashion]}
+                  tagTone={FASHION_TONE[fashion]}
                   onClick={() => {
                     selectToken(null);
                     select({ kind: 'fog', id: r.id });
@@ -107,14 +109,7 @@ export default function PrepOutline({
                     onCenter(c.x, c.y);
                   }}
                 >
-                  <button
-                    type="button"
-                    className={'btn px-2 py-0.5 text-xs ' + (open ? '' : 'btn-accent')}
-                    title={open ? 'Fog it again' : 'Reveal to the table'}
-                    onClick={() => (open ? commands.fogHide(scene.id, r.id) : commands.fogReveal(scene.id, r.id, true))}
-                  >
-                    {open ? 'hide' : 'reveal'}
-                  </button>
+                  <RegionRevealButtons scene={scene} regionId={r.id} commands={commands} announce compact />
                 </Line>
               );
             })}

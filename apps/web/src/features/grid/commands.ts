@@ -3,7 +3,7 @@
  * DESIGN.md §11). Everything here is fire-and-forget: the server is
  * authoritative and the truth comes back as an event.
  */
-import type { FogRegion, Point, WsCommandInput } from '@safehouse/contracts';
+import type { FogRegion, FogRevealAs, Point, WsCommandInput } from '@safehouse/contracts';
 import type { LiveSocket } from '../../live/socket.js';
 
 /** ~12 Hz interim drag relay (NFR "Latency — Grid"). */
@@ -175,10 +175,17 @@ export class GridCommands {
     return post(this.socket, { cmd: 'display.set', ...patch });
   }
 
-  fogReveal(sceneId: string, regionId: string, announce = false): void {
-    post(this.socket, { cmd: 'fog.reveal', sceneId, op: 'reveal', regionId, announce });
+  /**
+   * Reveal a region to the table, in one of the two fashions
+   * (`FogRevealAsSchema`): `live` (the default) opens it, and everyone in it
+   * with it; `explored` shows it dimmed, as remembered, with nobody in it.
+   * A region revealed one way and then the other moves across.
+   */
+  fogReveal(sceneId: string, regionId: string, announce = false, as: FogRevealAs = 'live'): void {
+    post(this.socket, { cmd: 'fog.reveal', sceneId, op: 'reveal', regionId, announce, as });
   }
 
+  /** Fog a region again, whichever fashion it was revealed in. */
   fogHide(sceneId: string, regionId: string): void {
     post(this.socket, { cmd: 'fog.reveal', sceneId, op: 'hide', regionId });
   }
@@ -187,7 +194,11 @@ export class GridCommands {
     post(this.socket, { cmd: 'fog.reveal', sceneId, op: 'define', region });
   }
 
-  /** Take a fog region off the scene — the ground it covered is no longer fogged. */
+  /**
+   * Take a fog region off the scene, and every reveal of it. A region is a
+   * window the fog is opened through, so with the fog on the ground it
+   * revealed goes back under the fog (unless another reveal covers it).
+   */
   fogRemove(sceneId: string, regionId: string): void {
     post(this.socket, { cmd: 'fog.reveal', sceneId, op: 'remove', regionId });
   }

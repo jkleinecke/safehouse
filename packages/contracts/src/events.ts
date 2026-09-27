@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { VisibilitySchema, PointSchema } from './common.js';
 import { RollRequestSchema } from './roll.js';
-import { FogOpSchema, FogRegionSchema } from './scene.js';
+import { FogOpSchema, FogRegionSchema, FogRevealAsSchema } from './scene.js';
 
 /** Persisted event types (DESIGN.md §11 catalog) — the replayable campaign log. */
 export const WS_EVENT_TYPES = [
@@ -149,6 +149,12 @@ export const FogRevealCommandSchema = z.object({
   region: FogRegionSchema.optional(),
   /** For freeform brush/polygon reveals. */
   shape: z.array(PointSchema).optional(),
+  /**
+   * For op 'reveal': the fashion (`FogRevealAsSchema`). `live` opens the
+   * ground, `explored` shows it dimmed with nobody on it. Absent is live, as
+   * every reveal was before explored reveals existed.
+   */
+  as: FogRevealAsSchema.optional(),
   /** Announce the reveal in the session log (FR9.14). */
   announce: z.boolean().optional(),
 });

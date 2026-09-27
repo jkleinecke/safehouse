@@ -25,7 +25,9 @@
  * colour space, so the cover colour comes out exactly as the background —
  * two one-channel textures are read there:
  *   - the FOG mask: 1 under the players' opaque cover, 0 where a region is
- *     revealed — `drawFog`'s own shape, rasterised;
+ *     revealed live, and `EXPLORED_ALPHA` where it is revealed as explored
+ *     (P6), which this mixes toward the cover colour like the shroud's
+ *     scrim and never discards — `drawFog`'s own shape, rasterised;
  *   - the SHROUD mask: 1 on each square the viewer can see, 0 elsewhere, one
  *     texel a square, filtered so its edge is soft.
  * The cover is max(fog × fog amount, (1 − seen) × shroud amount). Where it is

@@ -31,6 +31,7 @@ import {
   FogStateSchema,
   sceneFogOn,
   type FogOp,
+  type FogRevealAs,
   SheetV1Schema,
   TokenAuraSchema,
   TokenLightSchema,
@@ -53,7 +54,7 @@ import {
   SceneLevelSchema,
   type SceneLevel,
 } from '@safehouse/contracts';
-import { deriveCharacter, environment, fogRevealedAt, generateNpc } from '@safehouse/rules';
+import { deriveCharacter, environment, generateNpc, tokenLive } from '@safehouse/rules';
 import {
   attachments,
   characters,
@@ -384,27 +385,44 @@ export function tokenHidden(token: { id: string; hidden: boolean }, scene: Pick<
   return token.hidden || hiddenByLayer(scene).has(token.id);
 }
 
-/** What `tokenConcealed` needs to know about a token: a row and a DTO both fit. */
+/**
+ * What `tokenConcealed` needs to know about a token: a row and a DTO both
+ * fit. `level` and `size` say which squares it stands on (absent: the
+ * ground, one square), because only a LIVE square shows the table who
+ * stands there and the fog's states are per square and per floor.
+ */
 export interface ConcealableToken {
   id: string;
   hidden: boolean;
   source: string;
   x: number;
   y: number;
+  level?: number | undefined;
+  size?: number | undefined;
 }
 
 /**
- * Standing under the fog, as far as the table is concerned: the scene is
+ * Out of the table's sight, as far as the fog is concerned: the scene is
  * fogged (`sceneFogOn`: its fog switch, or its sightlines when `vision` is
- * given and says they are on), and the point the token stands on is in no
- * revealed region and no revealed shape (`fogRevealedAt`).
+ * given and says they are on), and no square the token stands on is LIVE
+ * (`tokenLive` in @safehouse/rules).
  *
- * The point is the token's own `x`/`y`, which the map keeps at the centre of
- * the square (or squares) it stands on. That is the same point a player's
- * map samples its cover at, so a token withheld here is one that map would
- * have drawn under solid fog anyway, and the other way round. Fog has no
- * floors: a region covers the same ground on every storey, so a token's
- * level does not enter into it.
+ * A square is live where the GM revealed the ground live (a region in
+ * `revealed`, a shape in `revealedShapes`) or, with sightlines on, where the
+ * party's pooled sight says a runner sees it right now. Ground the GM
+ * revealed AS EXPLORED is not live: the table is shown the map there dimmed,
+ * as remembered, and nobody standing on it (the GM, 2026-09-27). So a guard
+ * in a remembered room is withheld exactly as one in the dark is: absent
+ * from the table's payloads, his moves and drags on GM sockets only, and he
+ * arrives as `token.added` only when his room goes live.
+ *
+ * The squares are the ones the token covers: `size` across, centred on its
+ * `x`/`y`, which the map keeps at the middle of the square (or squares) it
+ * stands on, on its own floor. For a one-square token, which is almost
+ * every token, that is the one square its centre is in, and a GM's reveal
+ * is tested at that square's centre: the answer a point test at the token's
+ * centre always gave. A bigger one (a van, a dragon) is on the table when
+ * any part of it is, as it would be at a real table.
  *
  * Party tokens (`source: 'character'`) are NEVER fogged. A runner is always
  * on their own player's screen and on the TV, wherever they walk: the fog
@@ -412,26 +430,28 @@ export interface ConcealableToken {
  */
 export function tokenFogged(token: ConcealableToken, fog: FogState, vision?: Partial<Scene['vision']>): boolean {
   if (token.source === 'character') return false;
-  // The same answer a player's copy carries as `active` (`sceneForViewer`),
-  // so a scene the table is told is fogged never still sends it the guards.
-  // Without sightlines on, which is every scene saved before them, this is
-  // the fog switch alone (`fogOn`), exactly as it was.
-  if (!sceneFogOn({ fog, vision })) return false;
-  return !fogRevealedAt(fog, { x: token.x, y: token.y });
+  // `tokenLive` asks `sceneFogOn` first, the same answer a player's copy
+  // carries as `active` (`sceneForViewer`): on an open scene every square is
+  // live and nobody is fogged, and a scene the table is told is fogged never
+  // still sends it the guards. Without sightlines on, which is every scene
+  // saved before them, that is the fog switch alone (`fogOn`), as it was.
+  return !tokenLive(fog, { x: token.x, y: token.y, level: token.level, size: token.size }, { vision });
 }
 
 /**
  * Withheld from players, the TV and observers (Principle 4): hidden by its
- * own flag or its layer (`tokenHidden`), or standing under the fog
- * (`tokenFogged`).
+ * own flag or its layer (`tokenHidden`), or out of the table's sight under
+ * the fog (`tokenFogged`): anywhere that is not LIVE, which takes in ground
+ * revealed only as explored.
  *
  * This is the ONE question every path that puts a token on a non-GM wire
  * asks: the composed scene, the visibility of each token event and drag
  * frame, and the diffs that turn a change in the answer into the token
  * arriving (`token.added`) or leaving (`token.removed`). So what counts as
- * concealed can be redefined here, once, and every path follows. The next
- * vision phase does exactly that, when "revealed" grows to mean "in a live
- * area" (`tokenLive` in @safehouse/rules, with `vision` handed on).
+ * concealed is decided here, once, and every path follows: when it grew
+ * from "not in a revealed area" to "not in a LIVE area" (P6), a region
+ * revealed as explored, or dropped from live to explored, withheld its
+ * guards through every one of those paths with no change to any of them.
  *
  * Before this, fog was only ever a cover the client drew. Every guard behind
  * it was on every player's wire, positions, moves and drags included, and
@@ -754,6 +774,21 @@ export interface FogOpInput {
   regionId?: string;
   region?: { id?: string; name: string; polygon: Point[] };
   shape?: Point[];
+  /** For `reveal`: live (the default) or as explored (`FogRevealAsSchema`). */
+  as?: FogRevealAs;
+}
+
+/**
+ * The fog's two optional explored-reveal lists written back: a list with
+ * something in it is set, an empty one is taken off, so a scene that has
+ * never had an explored reveal (or has none left) stores and sends exactly
+ * the three lists every scene had before them.
+ */
+function setExplored(fog: FogState, ids: string[], shapes: Point[][]): void {
+  if (ids.length > 0) fog.exploredRegionIds = ids;
+  else delete fog.exploredRegionIds;
+  if (shapes.length > 0) fog.exploredShapes = shapes;
+  else delete fog.exploredShapes;
 }
 
 /** What a staged NPC token brings to the tracker when its archetype can be rolled. */
@@ -967,8 +1002,9 @@ export class ScenesService {
     const tokenRows = await this.db.select().from(tokens).where(eq(tokens.sceneId, row.id));
     const drawingRows = await this.db.select().from(drawings).where(eq(drawings.sceneId, row.id));
     const now = Date.now();
-    // Hidden by flag or by layer (FR9.7 / FR9.26), or standing in fog nobody
-    // has revealed (FR9.13): any of those, and it is not on a player's wire.
+    // Hidden by flag or by layer (FR9.7 / FR9.26), or standing on fogged
+    // ground that is not LIVE (FR9.13, P6: unrevealed, or revealed only as
+    // explored): any of those, and it is not on a player's wire.
     const dto = serializeScene(row);
     const visibleTokens = tokenRows.filter((t) => gm || !tokenConcealed(t, dto)).map(serializeToken);
     const liveDrawings = drawingRows
@@ -1136,6 +1172,8 @@ export class ScenesService {
 
   async applyFogOp(scene: SceneRow, op: FogOpInput): Promise<{ fog: FogState; region?: FogRegion }> {
     const fog = normalizeFog(scene.fog);
+    let exploredIds = fog.exploredRegionIds ?? [];
+    let exploredShapes = fog.exploredShapes ?? [];
     let region: FogRegion | undefined;
     if (op.op === 'define') {
       if (!op.region) throw httpError(400, 'bad_request', "op 'define' requires a region");
@@ -1145,19 +1183,42 @@ export class ScenesService {
       if (!op.regionId && !op.shape) {
         throw httpError(400, 'bad_request', "op 'reveal' needs a regionId or a shape");
       }
+      // The two fashions (`FogRevealAsSchema`). A region is in ONE of the
+      // reveal lists at a time: revealing it in the other fashion moves it
+      // across, so a room the party has left drops from live to remembered
+      // (and its guards leave the table) with one tap, and a remembered room
+      // they walk back into opens again the same way. A shape is painted
+      // into the list of its fashion; shapes are strokes, not places, and a
+      // live stroke over an explored one is simply live there (`fogCells`:
+      // live beats explored).
+      const explored = op.as === 'explored';
       if (op.regionId) {
-        region = fog.regions.find((r) => r.id === op.regionId);
+        const id = op.regionId;
+        region = fog.regions.find((r) => r.id === id);
         if (!region) throw httpError(404, 'region_not_found', 'unknown fog region');
-        if (!fog.revealed.includes(op.regionId)) fog.revealed = [...fog.revealed, op.regionId];
+        if (explored) {
+          fog.revealed = fog.revealed.filter((r) => r !== id);
+          if (!exploredIds.includes(id)) exploredIds = [...exploredIds, id];
+        } else {
+          if (!fog.revealed.includes(id)) fog.revealed = [...fog.revealed, id];
+          exploredIds = exploredIds.filter((r) => r !== id);
+        }
       }
-      if (op.shape) fog.revealedShapes = [...fog.revealedShapes, op.shape];
+      if (op.shape) {
+        if (explored) exploredShapes = [...exploredShapes, op.shape];
+        else fog.revealedShapes = [...fog.revealedShapes, op.shape];
+      }
     } else if (op.op === 'remove') {
-      // The region goes, and with it any reveal of it: the ground it covered
-      // is simply not fogged any more.
+      // The region goes, and with every reveal of it, in either fashion. What
+      // that does to the ground it covered depends on the switch: a region is
+      // a window the fog is opened through, so with the fog on its ground
+      // goes back under the fog (unless another reveal covers it), and with
+      // the fog off nothing changes for the table at all.
       if (!op.regionId) throw httpError(400, 'bad_request', "op 'remove' needs a regionId");
       region = fog.regions.find((r) => r.id === op.regionId);
       fog.regions = fog.regions.filter((r) => r.id !== op.regionId);
       fog.revealed = fog.revealed.filter((id) => id !== op.regionId);
+      exploredIds = exploredIds.filter((id) => id !== op.regionId);
     } else if (op.op === 'enable' || op.op === 'disable') {
       // The scene's fog switch (`FogState.enabled`). Only the switch moves:
       // every region and every reveal stays exactly as it was. So a GM can
@@ -1167,14 +1228,22 @@ export class ScenesService {
       // regions at all can be fogged, which before the switch it could not.
       fog.enabled = op.op === 'enable';
     } else {
-      // hide: one named region, or (no regionId) reset everything
+      // hide: one named region, whichever fashion it was revealed in, or (no
+      // regionId) the GM's reset: every reveal of both fashions, regions and
+      // shapes, taken back at once. The party's own memory of the map
+      // (`sight`) is not the GM's reveal and is left alone; forgetting it is
+      // a separate act.
       if (op.regionId) {
         fog.revealed = fog.revealed.filter((id) => id !== op.regionId);
+        exploredIds = exploredIds.filter((id) => id !== op.regionId);
       } else {
         fog.revealed = [];
         fog.revealedShapes = [];
+        exploredIds = [];
+        exploredShapes = [];
       }
     }
+    setExplored(fog, exploredIds, exploredShapes);
     await this.db.update(scenes).set({ fog }).where(eq(scenes.id, scene.id));
     return region ? { fog, region } : { fog };
   }

@@ -189,6 +189,78 @@ describe('mergeSceneEvents', () => {
     expect(merged?.tokens.map((t) => t.id)).toEqual(['wisp', 'nine']);
   });
 
+  it('keeps the fashion of a reveal: seen-before apart from live, moved across, and hidden out of both (P6)', () => {
+    // The GM's two reveal fashions (the GM, 2026-09-27). The TV folds each
+    // reveal into the list its `as` names, so its fog comes out as exactly
+    // the copy a fresh read would give: remembered ground drawn dimmed, live
+    // ground open.
+    const region = { id: 'r2', name: 'the lab', polygon: square(5) };
+    const remembered = mergeSceneEvents(snapshot(), [
+      evt('fog.updated', { sceneId: 's1', op: 'reveal', regionId: 'r2', region, as: 'explored', active: true }),
+      evt('fog.updated', { sceneId: 's1', op: 'reveal', shape: square(9), as: 'explored', active: true }),
+    ]);
+    expect(remembered?.scene.fog).toEqual({
+      regions: [region],
+      revealed: [],
+      revealedShapes: [],
+      exploredRegionIds: ['r2'],
+      exploredShapes: [square(9)],
+      active: true,
+    });
+
+    // Revealed live: the lab moves across, and is never in both lists. An
+    // event from before explored reveals, which says no `as`, is live.
+    const live = mergeSceneEvents(remembered, [evt('fog.updated', { sceneId: 's1', op: 'reveal', regionId: 'r2', active: true })]);
+    expect(live?.scene.fog.revealed).toEqual(['r2']);
+    expect(live?.scene.fog).not.toHaveProperty('exploredRegionIds');
+    expect(live?.scene.fog.exploredShapes).toEqual([square(9)]);
+
+    // Dropped back to seen before, then hidden: out of both.
+    const back = mergeSceneEvents(live, [
+      evt('fog.updated', { sceneId: 's1', op: 'reveal', regionId: 'r2', region, as: 'explored', active: true }),
+    ]);
+    expect(back?.scene.fog.revealed).toEqual([]);
+    expect(back?.scene.fog.exploredRegionIds).toEqual(['r2']);
+    const hidden = mergeSceneEvents(back, [evt('fog.updated', { sceneId: 's1', op: 'hide', regionId: 'r2', active: true })]);
+    expect(hidden?.scene.fog).toEqual({ regions: [], revealed: [], revealedShapes: [], exploredShapes: [square(9)], active: true });
+
+    // The GM's reset takes back every reveal of both fashions.
+    const reset = mergeSceneEvents(hidden, [evt('fog.updated', { sceneId: 's1', op: 'hide', active: true })]);
+    expect(reset?.scene.fog).toEqual(FOG_WIRE_UNREVEALED);
+  });
+
+  it('files the same painted shape once per fashion, however often it replays', () => {
+    const shape = square(9);
+    const both = mergeSceneEvents(snapshot(), [
+      evt('fog.updated', { sceneId: 's1', op: 'reveal', shape, as: 'explored' }),
+      evt('fog.updated', { sceneId: 's1', op: 'reveal', shape, as: 'explored' }),
+      evt('fog.updated', { sceneId: 's1', op: 'reveal', shape, as: 'live' }),
+    ]);
+    expect(both?.scene.fog.exploredShapes).toEqual([shape]);
+    expect(both?.scene.fog.revealedShapes).toEqual([shape]);
+  });
+
+  it("carries the read's explored reveals and the party's sight through events that do not touch them", () => {
+    // A fold that rebuilt the fog from the three old lists alone dropped
+    // the remembered ground, and every square the party had seen, at the
+    // first token that moved.
+    const region = { id: 'r2', name: 'the lab', polygon: square(5) };
+    const sight = { cols: 30, rows: 20, levels: { '0': { live: 'AQ==', explored: 'Aw==' } } };
+    const fog: Scene['fog'] = {
+      regions: [region],
+      revealed: [],
+      revealedShapes: [],
+      exploredRegionIds: ['r2'],
+      exploredShapes: [square(9)],
+      sight,
+      active: true,
+    };
+    const base = snapshot({ scene: scene({ fog }) });
+    const moved = mergeSceneEvents(base, [evt('token.moved', { tokenId: 'wisp', sceneId: 's1', x: 12, y: 5 })]);
+    expect(moved).not.toBe(base);
+    expect(moved?.scene.fog).toEqual(fog);
+  });
+
   it('skips events the snapshot already reflects', () => {
     const base = snapshot({ asOfEventId: 1_000 });
     const stale = { ...evt('token.moved', { tokenId: 'wisp', x: 99, y: 99 }), id: 900 };

@@ -120,4 +120,31 @@ describe('the fog sightlines added, on the wire and in the store (P6)', () => {
     expect(sceneForViewer(dim, false).fog.active).toBe(false);
     expect(tokenConcealed(guard, dim)).toBe(false);
   });
+
+  it('withholds a guard on ground revealed only as explored, and shows him on ground revealed live', () => {
+    // Explored is the map remembered, with nobody on it: the table is sent
+    // the vault's outline, and never the guard standing in it.
+    const remembered = sceneWith({ regions: [vault], revealed: [], revealedShapes: [], exploredRegionIds: [vault.id], enabled: true });
+    expect(sceneForViewer(remembered, false).fog.regions.map((r) => r.id)).toEqual([vault.id]);
+    expect(tokenConcealed(guard, remembered)).toBe(true);
+    expect(tokenConcealed(runner, remembered)).toBe(false);
+    // A shape painted as explored over him is the same.
+    const painted = sceneWith({ regions: [], revealed: [], revealedShapes: [], exploredShapes: [box(0, 6, 4, 10)], enabled: true });
+    expect(tokenConcealed(guard, painted)).toBe(true);
+
+    // Live, by region or by shape: he is on the table.
+    const live = sceneWith({ regions: [vault], revealed: [vault.id], revealedShapes: [], enabled: true });
+    expect(tokenConcealed(guard, live)).toBe(false);
+    const liveShape = sceneWith({ regions: [], revealed: [], revealedShapes: [box(0, 6, 4, 10)], exploredShapes: [box(0, 6, 4, 10)], enabled: true });
+    expect(tokenConcealed(guard, liveShape)).toBe(false); // live beats explored
+
+    // A two-square van is on the table when any square of it is live: its
+    // left half in the vault, its right half in the dark.
+    const van = { id: 'tok_van', hidden: false, source: 'prop', x: 4, y: 8, size: 2 };
+    expect(tokenConcealed(van, live)).toBe(false);
+    expect(tokenConcealed(van, remembered)).toBe(true);
+    // And on its own floor: fog has no floors for the GM's reveals, so a
+    // guard upstairs over the vault is as open as one on the ground.
+    expect(tokenConcealed({ ...guard, level: 1 }, live)).toBe(false);
+  });
 });
