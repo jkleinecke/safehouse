@@ -19,6 +19,12 @@
  * its drawings — goes to the GM alone until it goes live, when every device
  * reads it whole (P6 secrecy sweep, 2026-09-27).
  *
+ * Walls (the GM's rule, 2026-09-27): a player's runner never passes a wall
+ * or a closed door. A move a player makes, over the socket or by PATCH, is
+ * stored only when the rules can walk it from where the token stands
+ * (`canWalk`, rules movement/walk.ts), and a drag frame that could not be
+ * walked is never relayed. The GM is never asked. See `playerMayWalk`.
+ *
  * Sightlines (P6): every committed write that can move the party's sight (a
  * runner's move, a door, a light, paint, a scene PATCH, a fog op, the scene
  * going live) runs the sight pass (`recomputeSight`, services/sight.ts) in
@@ -33,6 +39,7 @@ import '@fastify/multipart';
 import { z } from 'zod';
 import {
   TILESETS,
+  canWalk,
   layerOf,
   migrateTileLayer,
   parseCellKey,
@@ -387,6 +394,35 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
    */
   const lockedScene = (tx: EventTx, sceneId: string): Promise<SceneRow> =>
     svc.withDb(tx.db).sceneRow(sceneId, { lock: true });
+
+  /**
+   * THE GM'S RULE (2026-09-27): "Only the GM should be able to move the
+   * tokens through walls. During Play, the players should not be able to
+   * move their tokens through walls at all."
+   *
+   * So a move a PLAYER makes — a drop over the socket, a PATCH of `x`/`y`,
+   * a drag frame on its way to the table — must be one a runner could walk
+   * from where the token stands to where it is going, on the floor it is on:
+   * round the walls, through open doors, as far as it likes, but never
+   * through a wall or a shut door (`canWalk`: painted walls, windows and
+   * doors, arcs, traced walls and doors; furniture never stops anyone). Only
+   * the mover's role decides: the GM is never asked, and a player is always
+   * asked, whether or not the scene has sightlines or fog on.
+   *
+   * A player cannot change floors at all: `level` is not one of the keys a
+   * player may PATCH, and `token.move` carries no floor. Taking the stairs
+   * is the GM's, from the GM's screen (`useStairs`), and stays so; a player
+   * move is judged on the floor the token already stands on.
+   *
+   * `here` is the scene as the caller read it: locked, inside the move's own
+   * transaction, for a move that is stored, so a door shut a moment ago is
+   * shut to it; as read for the frame, for a drag frame that is only relayed.
+   */
+  function playerMayWalk(here: Scene, token: TokenRow, to: { x: number; y: number }): boolean {
+    return canWalk(here, token.level, { x: token.x, y: token.y }, to, { size: token.size });
+  }
+  /** What a player is told when a wall is in the way. */
+  const BLOCKED = { code: 'blocked', message: "Your runner can't go through walls" } as const;
 
   /** Load a scene, check campaign binding, and report whether the caller is GM. */
   async function openScene(
@@ -765,6 +801,13 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     const sightKeys = ['x', 'y', 'level', 'hidden', 'light', 'rotation'] as const;
     const movesSight = sightKeys.some((k) => body[k] !== undefined);
     const after = await app.hub.atomic(scene.campaignId, async (tx) => {
+      // A player's move must be one their runner could walk (`playerMayWalk`),
+      // judged against the scene as it stands inside this transaction.
+      if (auth.role !== 'gm' && (body.x !== undefined || body.y !== undefined)) {
+        const here = serializeScene(await lockedScene(tx, scene.id));
+        const to = { x: body.x ?? before.x, y: body.y ?? before.y };
+        if (!playerMayWalk(here, before, to)) throw httpError(403, BLOCKED.code, BLOCKED.message);
+      }
       const written = await svc.withDb(tx.db).patchToken(id, body);
       await emitTokenChange(tx, scene, before, written, { positional, nonPositional });
       // After the token's own event, so a guard the move walks into sight
@@ -1412,6 +1455,13 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     // (`token.move`) then settles which side of the edge he ended up on.
     // And on a staged scene no frame is the table's at all (`sceneOnTable`).
     const current = serializeScene(scene);
+    // A player's frame the runner could not walk to from where the token
+    // stands (`playerMayWalk`) is not relayed: every other screen would draw
+    // the runner through the wall on its way to a drop the server refuses.
+    // The client's own drag stops at the wall (`walkToward`), so this only
+    // ever drops frames from a client that does not; the drag's start is
+    // where the token is stored, because nothing is stored until the drop.
+    if (ctx.auth.role !== 'gm' && !playerMayWalk(current, token, parsed.data)) return;
     const concealed =
       !sceneOnTable(current) ||
       tokenConcealed(token, current) ||
@@ -1437,7 +1487,14 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     // for where a token IS (FR9.5), so a stored move nobody was told about
     // leaves every other screen — including the TV — drawing it in the old
     // square until someone reloads.
-    await app.hub.atomic(ctx.campaignId, async (tx) => {
+    const moved = await app.hub.atomic(ctx.campaignId, async (tx) => {
+      // A player's drop must be one their runner could walk (`playerMayWalk`),
+      // judged against the scene as it stands inside this transaction: a door
+      // shut while the drag was in the air is shut to the drop.
+      if (ctx.auth.role !== 'gm') {
+        const here = serializeScene(await lockedScene(tx, scene.id));
+        if (!playerMayWalk(here, token, parsed.data)) return false;
+      }
       const after = await svc.withDb(tx.db).patchToken(token.id, {
         x: parsed.data.x,
         y: parsed.data.y,
@@ -1451,7 +1508,24 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       // did it; a guard walked with a flashlight moves the light he casts.
       // A guard with no light moves nobody's sight (`affectsSight`).
       if (affectsSight(token) || affectsSight(after)) await recomputeSight(tx, scene.id);
+      return true;
     });
+    if (!moved) {
+      // Refused: the token stays where it is, and the player is told why.
+      ctx.reply({ type: 'error', payload: { ...BLOCKED }, ephemeral: true });
+      // The drag's frames put a ghost of the runner on every other screen,
+      // and only a `token.moved` takes it away. No move is coming, so one
+      // last frame sends the ghost home to the square the token never left,
+      // told to whoever the frames went to.
+      const current = serializeScene(scene);
+      const concealed = !sceneOnTable(current) || tokenConcealed(token, current);
+      app.hub.emitEphemeral(ctx.campaignId, {
+        type: 'token.dragging',
+        payload: { tokenId: token.id, sceneId: scene.id, x: token.x, y: token.y, by: ctx.auth.userId },
+        visibility: concealed ? 'gm' : 'public',
+      });
+      return;
+    }
     // "They're at the lab door, reveal?" (FR12.8). On the COMMIT only, never on
     // drag frames — a nudge per interim position would be a strobe. GM-only and
     // ephemeral inside `emitFogProximity`, and wrapped because a suggestion
