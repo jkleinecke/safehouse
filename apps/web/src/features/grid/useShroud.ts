@@ -72,13 +72,46 @@ export function viewpointTokenId(inputs: ShroudInputs): string | null {
 }
 
 /**
+ * Everything about a scene that can move a sightline, as one string: the
+ * memo key `useShroud` rebuilds on. Exported so the key itself is testable,
+ * because a key that leaves something out fails silently: the shroud simply
+ * goes stale until the viewer next moves.
+ *
+ * That is what happened with painted doors. The key used to name only the
+ * ground floor's `structure`, `object` and `arcs` layers, so opening a
+ * painted door (its state lives in `tiles.doors`, not in the structure
+ * layer) left a player's shroud, and the GM's lens, showing it shut until
+ * somebody took a step. The same went for the `ground` layer, the legacy
+ * `cells` a scene painted before layers is still read through, and the
+ * `tilesetId` every tile id is resolved against. So the key now takes the
+ * WHOLE tile record, as `useLightMap` does for the same reason.
+ */
+export function sightInputsKey(scene: Scene | null | undefined): string {
+  if (!scene) return '';
+  return JSON.stringify([
+    // The ground floor: every layer, its doors, its walls at any angle and
+    // the tileset they are all read from.
+    scene.tiles ?? null,
+    // Upper floors carry their own tiles, doors and walls at any angle.
+    scene.levels ?? [],
+    // Traced walls, and traced doors open or shut.
+    scene.geometry.walls ?? [],
+    scene.geometry.doors ?? [],
+    scene.grid.cols,
+    scene.grid.rows,
+    // Metres a square: furniture covers as many squares as it is big.
+    scene.grid.unitM,
+  ]);
+}
+
+/**
  * The shroud for this viewer, or null to draw none.
  *
- * Memoised on the things that can actually move a sightline — the tile layers,
- * the drawn geometry, and the viewpoint's own position. Token positions of
- * OTHER tokens are deliberately not in the key: a body does not block sight in
- * this model, and rebuilding the set every time anybody shuffles a step would
- * cost a full recompute per drag frame.
+ * Memoised on the things that can actually move a sightline — the tiles and
+ * their doors, the drawn geometry (`sightInputsKey`), and the viewpoint's own
+ * position. Token positions of OTHER tokens are deliberately not in the key: a
+ * body does not block sight in this model, and rebuilding the set every time
+ * anybody shuffles a step would cost a full recompute per drag frame.
  */
 export function useShroud(inputs: ShroudInputs): ShroudState | null {
   const { scene, tokens, isGm } = inputs;
@@ -127,19 +160,9 @@ export function useShroud(inputs: ShroudInputs): ShroudState | null {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     scene?.id,
-    // The three things that change a sightline. Stringified because these are
+    // Everything that changes a sightline, stringified because these are
     // fresh objects on every fetch and identity would defeat the memo.
-    JSON.stringify(scene?.tiles?.structure ?? {}),
-    JSON.stringify(scene?.tiles?.object ?? {}),
-    // Upper floors and walls at any angle are sightlines too.
-    JSON.stringify(scene?.tiles?.arcs ?? []),
-    JSON.stringify(scene?.levels ?? []),
-    JSON.stringify(scene?.geometry.walls ?? []),
-    JSON.stringify(scene?.geometry.doors ?? []),
-    scene?.grid.cols,
-    scene?.grid.rows,
-    // Metres a square: furniture covers as many squares as it is big.
-    scene?.grid.unitM,
+    sightInputsKey(scene),
     vx,
     vy,
     viewer?.level ?? 0,

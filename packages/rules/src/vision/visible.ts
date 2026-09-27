@@ -36,6 +36,17 @@ export interface VisibilityOptions {
   /** Stay inside the grid; cells outside it are not worth testing. */
   cols?: number;
   rows?: number;
+  /**
+   * Which cells are worth a ray at all. A cell this turns down is left out
+   * without one being cast, which is the whole point: a ray is the expensive
+   * part, and the party's sight (`sight.ts`) already knows that a square in
+   * total darkness cannot be seen whatever lies between, so in a dark
+   * building only the lit squares cost anything. Absent, every cell in range
+   * is tried, which is what every caller before sightlines wanted.
+   *
+   * The viewer's own cell is included whatever this says, as always.
+   */
+  where?: ((col: number, row: number) => boolean) | undefined;
 }
 
 export interface VisibleCell {
@@ -87,6 +98,7 @@ export function visibleFrom(
       // Chebyshev radius would give — a token does not see 24 cells diagonally
       // and 24 orthogonally by the same reach.
       if (Math.hypot(col - from.col, row - from.row) > range) continue;
+      if (opts.where !== undefined && !opts.where(col, row)) continue;
       const los = lineOfSight(from, { col, row }, model);
       if (!los.clear) continue;
       out.set(visibleKey(col, row), { col, row, cover: los.cover });

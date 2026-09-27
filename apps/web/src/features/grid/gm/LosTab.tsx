@@ -22,7 +22,7 @@
  * flagged in the roll's provenance rather than quietly folded into the maths.
  */
 import type { Scene, Token } from '@safehouse/contracts';
-import { coverCall, lineOfSight, sightModelFor, type CoverLevel } from '@safehouse/rules';
+import { coverCall, lineOfSightBetween, type CoverLevel } from '@safehouse/rules';
 import { usePatchScene } from '../api.js';
 import type { GridCommands } from '../commands.js';
 import { useGridStore } from '../store.js';
@@ -41,11 +41,6 @@ const COVER_CHOICES: readonly { value: CoverLevel | 'auto'; label: string }[] = 
   { value: 'partial', label: 'Partial' },
   { value: 'full', label: 'Full — no shot' },
 ];
-
-/** The square a token stands in. Positions are cell centres (x.5). */
-function cellOf(token: Token): { col: number; row: number } {
-  return { col: Math.floor(token.x), row: Math.floor(token.y) };
-}
 
 export default function LosTab({ scene, tokens, commands }: LosTabProps) {
   const losTokenId = useGridStore((s) => s.losTokenId);
@@ -67,13 +62,16 @@ export default function LosTab({ scene, tokens, commands }: LosTabProps) {
   // The ruling for the pair the GM currently has in hand: the viewpoint they
   // picked, shooting at the token they selected. Both are needed — a cover
   // number with no target is a number about nothing.
-  const ruling =
-    viewer && target && viewer.id !== target.id
-      ? (() => {
-          const los = lineOfSight(cellOf(viewer), cellOf(target), sightModelFor(scene));
-          return { los, call: coverCall(los.cover, coverOverride ?? undefined) };
-        })()
-      : null;
+  //
+  // Read on the floor the pair stands on (`lineOfSightBetween`). It used to
+  // be read against the ground floor's walls whatever floor they were on, so
+  // two runners on a catwalk were ruled behind the warehouse walls beneath
+  // them. A pair on two different floors gets no reading at all: the map
+  // reads one floor at a time, so that shot is the GM's call.
+  const pair = viewer && target && viewer.id !== target.id ? { viewer, target } : null;
+  const los = pair === null ? null : lineOfSightBetween(scene, pair.viewer, pair.target);
+  const ruling = los === null ? null : { los, call: coverCall(los.cover, coverOverride ?? undefined) };
+  const floorsApart = pair !== null && los === null;
 
   return (
     <div className="flex flex-col gap-3 p-3" data-testid="los-tab">
@@ -144,9 +142,16 @@ export default function LosTab({ scene, tokens, commands }: LosTabProps) {
       <div className="border-t border-edge pt-2">
         <div className="mono-label text-dim">Cover</div>
         {ruling === null ? (
-          <p className="mt-1 text-xs text-faint" data-testid="cover-idle">
-            Pick a viewpoint above and select a target token to get a cover reading.
-          </p>
+          floorsApart ? (
+            <p className="mt-1 text-xs text-faint" data-testid="cover-floors">
+              {viewer?.name} and {target?.name} are on different floors. The map reads one floor at a
+              time, so cover for this shot is your call.
+            </p>
+          ) : (
+            <p className="mt-1 text-xs text-faint" data-testid="cover-idle">
+              Pick a viewpoint above and select a target token to get a cover reading.
+            </p>
+          )
         ) : (
           <>
             <p className="mt-1 text-xs text-dim" data-testid="cover-reading">

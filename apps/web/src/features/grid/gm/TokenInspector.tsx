@@ -8,7 +8,7 @@
  * lets the GM overrule the map.
  */
 import type { Scene, Token, TokenLight, TokenPose } from '@safehouse/contracts';
-import { coverCall, lineOfSight, sightModelFor, type CoverLevel } from '@safehouse/rules';
+import { coverCall, lineOfSightBetween, type CoverLevel } from '@safehouse/rules';
 import { useDeleteToken, usePatchScene, usePatchToken } from '../api.js';
 import { useGridStore } from '../store.js';
 import { assignToken, layerOfToken, layersOf, type TokenLayers } from '../tokenLayers.js';
@@ -47,8 +47,6 @@ function sameLight(a: TokenLight | null | undefined, b: TokenLight | null): bool
   return a.radiusM === b.radiusM && a.rows === b.rows && a.color === b.color && a.fov === b.fov;
 }
 
-const cellOf = (t: Token) => ({ col: Math.floor(t.x), row: Math.floor(t.y) });
-
 export default function TokenInspector({
   scene,
   tokens,
@@ -71,12 +69,10 @@ export default function TokenInspector({
   const saveLayers = (next: TokenLayers) => patchScene.mutate({ sceneId: scene.id, patch: { tokenLayers: [...next] } });
 
   const viewer = tokens.find((t) => t.id === lens && t.id !== token.id) ?? null;
-  const ruling = viewer
-    ? (() => {
-        const los = lineOfSight(cellOf(viewer), cellOf(token), sightModelFor(scene, token.level ?? 0));
-        return { los, call: coverCall(los.cover, coverOverride ?? undefined) };
-      })()
-    : null;
+  // Read on the floor both stand on (`lineOfSightBetween`); a lens on
+  // another floor gets no reading, since the map reads one floor at a time.
+  const los = viewer ? lineOfSightBetween(scene, viewer, token) : null;
+  const ruling = los === null ? null : { los, call: coverCall(los.cover, coverOverride ?? undefined) };
 
   return (
     <section data-testid="token-inspector" className="bg-raised/40">
@@ -196,6 +192,13 @@ export default function TokenInspector({
           </Row>
         )}
       </PanelSection>
+      {viewer && ruling === null && (
+        <PanelSection title="Cover" hint={`from ${viewer.name}`}>
+          <p className="text-xs text-faint" data-testid="cover-floors">
+            On different floors: the map reads one floor at a time, so cover is your call.
+          </p>
+        </PanelSection>
+      )}
       {ruling && viewer && (
         <PanelSection title="Cover" hint={`from ${viewer.name}`}>
           <p className="text-xs text-dim" data-testid="cover-reading">

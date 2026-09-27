@@ -6,8 +6,14 @@
  * and a GM silently locked into a token's view cannot run the map.
  */
 import { describe, expect, it } from 'vitest';
-import type { Token } from '@safehouse/contracts';
-import { cameraLensId, viewpointCameraId, viewpointTokenId, type ShroudInputs } from './useShroud.js';
+import type { Scene, Token } from '@safehouse/contracts';
+import {
+  cameraLensId,
+  sightInputsKey,
+  viewpointCameraId,
+  viewpointTokenId,
+  type ShroudInputs,
+} from './useShroud.js';
 
 const token = (id: string, over: Partial<Token> = {}): Token =>
   ({
@@ -110,5 +116,57 @@ describe('the camera lens (FR9.23)', () => {
     // A player's scene never carries cameras; a lens id from them means nothing.
     expect(viewpointCameraId(base({ isGm: false, losTokenId: cameraLensId('cam_1') }))).toBeNull();
     expect(viewpointCameraId(base({ isGm: true, losTokenId: 'tok_1' }))).toBeNull();
+  });
+});
+
+describe('sightInputsKey: what rebuilds the shroud', () => {
+  // A ground floor with a wall and a painted door in it.
+  const scene = (over: Partial<Scene> = {}): Scene =>
+    ({
+      id: 's1',
+      grid: { cols: 10, rows: 10, unitM: 1 },
+      geometry: { walls: [], doors: [], zones: [], pins: [] },
+      levels: [],
+      fog: { regions: [], revealed: [], revealedShapes: [] },
+      tiles: {
+        tilesetId: 'docklands',
+        cells: {},
+        ground: {},
+        structure: { '5,3': 'wall', '5,4': 'door' },
+        object: {},
+      },
+      ...over,
+    }) as Scene;
+  const tiles = scene().tiles!;
+
+  it('changes when a painted door opens, which used to leave the shroud showing it shut', () => {
+    const shut = sightInputsKey(scene());
+    const open = sightInputsKey(scene({ tiles: { ...tiles, doors: { '5,4': { open: true, locked: false } } } }));
+    expect(open).not.toBe(shut);
+  });
+
+  it('changes with the ground layer, the legacy cells and the tileset', () => {
+    const before = sightInputsKey(scene());
+    expect(sightInputsKey(scene({ tiles: { ...tiles, ground: { '1,1': 'floor' } } }))).not.toBe(before);
+    expect(sightInputsKey(scene({ tiles: { ...tiles, cells: { '2,2': 'wall' } } }))).not.toBe(before);
+    expect(sightInputsKey(scene({ tiles: { ...tiles, tilesetId: 'corp' } }))).not.toBe(before);
+  });
+
+  it('still changes with traced doors and upper floors, and not with the fog or a pin', () => {
+    const before = sightInputsKey(scene());
+    const door = { id: 'd1', a: { x: 1, y: 1 }, b: { x: 1, y: 2 }, open: false, locked: false };
+    const shut = sightInputsKey(scene({ geometry: { walls: [], doors: [door], zones: [], pins: [] } }));
+    const open = sightInputsKey(scene({ geometry: { walls: [], doors: [{ ...door, open: true }], zones: [], pins: [] } }));
+    expect(shut).not.toBe(before);
+    expect(open).not.toBe(shut);
+    expect(sightInputsKey(scene({ levels: [{ id: 'l1', name: 'Roof' }] }))).not.toBe(before);
+    // Neither blocks a look: the shroud is not rebuilt for them.
+    expect(sightInputsKey(scene({ fog: { regions: [], revealed: ['r1'], revealedShapes: [] } }))).toBe(before);
+    expect(
+      sightInputsKey(
+        scene({ geometry: { walls: [], doors: [], zones: [], pins: [{ id: 'p', at: { x: 1, y: 1 }, visibility: 'public' }] } }),
+      ),
+    ).toBe(before);
+    expect(sightInputsKey(null)).toBe('');
   });
 });
