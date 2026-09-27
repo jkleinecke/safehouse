@@ -13,3 +13,4 @@ export * from './cone.js';
 export * from './modes.js';
 export * from './light.js';
 export * from './fog.js';
+export * from './fogState.js';

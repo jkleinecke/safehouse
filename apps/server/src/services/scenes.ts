@@ -29,7 +29,7 @@ import {
   GenTemplateSchema,
   type CombatantMonitors,
   FogStateSchema,
-  fogOn,
+  sceneFogOn,
   type FogOp,
   SheetV1Schema,
   TokenAuraSchema,
@@ -135,14 +135,36 @@ export function normalizeGeometry(raw: unknown): SceneGeometry {
   return parsed.success ? parsed.data : SceneGeometrySchema.parse({});
 }
 
+/**
+ * The parts of a stored fog added for sightlines (P6), each checked on its
+ * own before the whole is parsed (`normalizeFog`).
+ */
+const FOG_SIGHT_PARTS = ['exploredRegionIds', 'exploredShapes', 'sight'] as const;
+
+/**
+ * A stored fog, made safe to read — all-or-nothing, like the grid, with one
+ * exception for the same reason the geometry has one. The parts sightlines
+ * added (the GM's explored reveals and the party's sight and memory) are
+ * checked one by one first, and a part that does not fit is dropped: a sight
+ * record written by some other build must cost the party's memory of the
+ * map, never the GM's regions and reveals (an empty fog is what the next
+ * write would then save). Those parts are in the schema, so the parse below
+ * keeps every one that fits; a zod parse strips any key it does not know,
+ * and before they were in it, a sight record would have vanished at the
+ * first read.
+ */
 export function normalizeFog(raw: unknown): FogState {
-  const parsed = FogStateSchema.safeParse(isRecord(raw) ? raw : {});
+  const merged: Record<string, unknown> = isRecord(raw) ? { ...raw } : {};
+  for (const key of FOG_SIGHT_PARTS) {
+    if (merged[key] !== undefined && !FogStateSchema.shape[key].safeParse(merged[key]).success) delete merged[key];
+  }
+  const parsed = FogStateSchema.safeParse(merged);
   const fog = parsed.success ? parsed.data : FogStateSchema.parse({});
   // `active` is said on a player's copy (`sceneForViewer`), worked out from
-  // the rest by `fogOn`; it is never stored, so a stale one can never outlive
-  // the state it was worked out from. `enabled` is the opposite case and is
-  // KEPT: it is the GM's switch, a decision nothing else can re-derive, and
-  // the schema parse above carries it through untouched.
+  // the rest by `sceneFogOn`; it is never stored, so a stale one can never
+  // outlive the state it was worked out from. `enabled` is the opposite case
+  // and is KEPT: it is the GM's switch, a decision nothing else can
+  // re-derive, and the schema parse above carries it through untouched.
   delete fog.active;
   return fog;
 }
@@ -239,7 +261,8 @@ export function serializeScene(row: SceneRow): Scene {
  * GM notes (the scene's text and the boxes on the map, FR9.25), the GM's
  * annotations (zones, non-public pins, cameras, the note on a wall, which
  * doors are locked, the token layers), and every unrevealed fog region —
- * players get only revealed fog geometry (FR9.13).
+ * players get only revealed fog geometry (FR9.13), revealed live or as
+ * explored (P6), each with its fashion said.
  *
  * Walls and doors themselves are NOT stripped (FR9.16). They are the map's
  * sight geometry, and every player device computes its own shroud from the
@@ -272,6 +295,13 @@ function tilesForPlayers(tiles: NonNullable<Scene['tiles']>): NonNullable<Scene[
 export function sceneForViewer(scene: Scene, gm: boolean): Scene {
   if (gm) return scene;
   const revealed = new Set(scene.fog.revealed);
+  // Regions the GM revealed AS EXPLORED (P6) are the table's too: it is
+  // shown that ground dimmed, as remembered, so it needs the outline. They
+  // reach the table with their fashion said, in `exploredRegionIds`, so a
+  // device draws them remembered and never open; a region in neither list is
+  // not the table's to know about and is not sent at all.
+  const explored = new Set(scene.fog.exploredRegionIds ?? []);
+  const exploredRegionIds = scene.fog.regions.filter((r) => explored.has(r.id)).map((r) => r.id);
   const filtered: Scene = {
     ...scene,
     // Cameras are omitted entirely (FR9.23): a camera a player can see on the
@@ -296,21 +326,35 @@ export function sceneForViewer(scene: Scene, gm: boolean): Scene {
     ...(scene.tiles ? { tiles: tilesForPlayers(scene.tiles) } : {}),
     levels: scene.levels.map((l) => (l.tiles ? { ...l, tiles: tilesForPlayers(l.tiles) } : l)),
     fog: {
-      regions: scene.fog.regions.filter((r) => revealed.has(r.id)),
+      regions: scene.fog.regions.filter((r) => revealed.has(r.id) || explored.has(r.id)),
       revealed: scene.fog.revealed,
       revealedShapes: scene.fog.revealedShapes,
+      // The GM's explored-fashion reveals (P6), and the party's sight and
+      // memory. Each is said only when there is something to say, so a scene
+      // with none of them (every scene before sightlines) reaches the table
+      // exactly as it always did. The sight is sent whole: it is the party's
+      // own pooled eyes, the same copy for every phone and the TV (the GM,
+      // 2026-09-27), and nothing in it is the GM's.
+      ...(exploredRegionIds.length > 0 ? { exploredRegionIds } : {}),
+      ...(scene.fog.exploredShapes && scene.fog.exploredShapes.length > 0
+        ? { exploredShapes: scene.fog.exploredShapes }
+        : {}),
+      ...(scene.fog.sight ? { sight: scene.fog.sight } : {}),
       // Whether the scene is fogged at all. The regions above are only the
-      // revealed ones, so a scene fogged with nothing revealed yet — or just
-      // reset — would otherwise read as one with no fog, and every player
-      // device and the TV would draw the whole map open (FR9.13). A count of
-      // one bit: nothing of an unrevealed region's shape, name or number.
+      // revealed ones (live or as explored), so a scene fogged with nothing
+      // revealed yet — or just reset — would otherwise read as one with no
+      // fog, and every player device and the TV would draw the whole map
+      // open (FR9.13). A count of one bit: nothing of an unrevealed region's
+      // shape, name or number.
       //
-      // `fogOn` is the same rule the map and the TV apply, worked out here
-      // from the whole stored state: the GM's switch (`enabled`), or, for a
-      // scene whose switch was never flipped, whether there is anything to
-      // reveal. The switch itself stays off the wire. This bit is its answer,
-      // and `fogOn` reads this bit first on the copy it arrives in.
-      active: fogOn(scene.fog),
+      // `sceneFogOn` is the same rule the map and the TV apply, worked out
+      // here from the whole stored scene: the GM's switch (`enabled`), or,
+      // for a scene whose switch was never flipped, whether there is anything
+      // to reveal (`fogOn`); or the scene's sightlines, which hide everything
+      // the party does not see whatever the switch says. The switch itself
+      // stays off the wire. This bit is the answer, and `fogOn` and
+      // `sceneFogOn` both read this bit first on the copy it arrives in.
+      active: sceneFogOn(scene),
     },
   };
   delete (filtered as { notes?: string }).notes;
@@ -350,9 +394,10 @@ export interface ConcealableToken {
 }
 
 /**
- * Standing under the fog, as far as the table is concerned: the scene's fog
- * is on (`fogOn`), and the point the token stands on is in no revealed region
- * and no revealed shape (`fogRevealedAt`).
+ * Standing under the fog, as far as the table is concerned: the scene is
+ * fogged (`sceneFogOn`: its fog switch, or its sightlines when `vision` is
+ * given and says they are on), and the point the token stands on is in no
+ * revealed region and no revealed shape (`fogRevealedAt`).
  *
  * The point is the token's own `x`/`y`, which the map keeps at the centre of
  * the square (or squares) it stands on. That is the same point a player's
@@ -365,9 +410,13 @@ export interface ConcealableToken {
  * on their own player's screen and on the TV, wherever they walk: the fog
  * hides what the runners have not found, never the runners themselves.
  */
-export function tokenFogged(token: ConcealableToken, fog: FogState): boolean {
+export function tokenFogged(token: ConcealableToken, fog: FogState, vision?: Partial<Scene['vision']>): boolean {
   if (token.source === 'character') return false;
-  if (!fogOn(fog)) return false;
+  // The same answer a player's copy carries as `active` (`sceneForViewer`),
+  // so a scene the table is told is fogged never still sends it the guards.
+  // Without sightlines on, which is every scene saved before them, this is
+  // the fog switch alone (`fogOn`), exactly as it was.
+  if (!sceneFogOn({ fog, vision })) return false;
   return !fogRevealedAt(fog, { x: token.x, y: token.y });
 }
 
@@ -382,14 +431,17 @@ export function tokenFogged(token: ConcealableToken, fog: FogState): boolean {
  * arriving (`token.added`) or leaving (`token.removed`). So what counts as
  * concealed can be redefined here, once, and every path follows. The next
  * vision phase does exactly that, when "revealed" grows to mean "in a live
- * area".
+ * area" (`tokenLive` in @safehouse/rules, with `vision` handed on).
  *
  * Before this, fog was only ever a cover the client drew. Every guard behind
  * it was on every player's wire, positions, moves and drags included, and
  * one look at the network tab was a look behind the fog.
  */
-export function tokenConcealed(token: ConcealableToken, scene: Pick<Scene, 'tokenLayers' | 'fog'>): boolean {
-  return tokenHidden(token, scene) || tokenFogged(token, scene.fog);
+export function tokenConcealed(
+  token: ConcealableToken,
+  scene: Pick<Scene, 'tokenLayers' | 'fog'> & Partial<Pick<Scene, 'vision'>>,
+): boolean {
+  return tokenHidden(token, scene) || tokenFogged(token, scene.fog, scene.vision);
 }
 
 /**

@@ -48,7 +48,7 @@ import {
   TokenLightSchema,
   TokenLookSchema,
   VisibilitySchema,
-  fogOn,
+  sceneFogOn,
   type Scene,
   type Visibility,
   TILE_LAYERS,
@@ -105,7 +105,16 @@ const ScenePatchBody = z.object({
   grid: GridSchema.partial().optional(),
   environment: SceneEnvironmentSchema.partial().optional(),
   geometry: SceneGeometrySchema.optional(),
-  vision: SceneVisionSchema.partial().optional(),
+  /**
+   * Only the settings the GM changed, each WITHOUT its default. zod fills a
+   * missing key's default even under `.partial()`, and the service merges the
+   * patch over what is stored, so a patch saying only `sight` would also have
+   * said `playersSeeOwnSight: false`: switching sightlines on would have
+   * switched the dimming off.
+   */
+  vision: z
+    .object({ playersSeeOwnSight: z.boolean().optional(), sight: SceneVisionSchema.shape.sight })
+    .optional(),
   /** Token layers (FR9.26): the whole list, GM only. */
   tokenLayers: SceneLayerSchema.array().optional(),
   mapAttachmentIds: z.array(z.string()).optional(),
@@ -416,7 +425,13 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       // (`tokenConcealed`), not the layer alone: a guard whose layer is shown
       // while he stands in unrevealed fog is still not the table's to see,
       // and one hidden on his own account never was.
-      if (body.tokenLayers !== undefined) {
+      //
+      // The scene's vision can move the same edge: sightlines switched on fog
+      // a scene whatever its fog switch says (`sceneFogOn`), so the guards
+      // outside what the party sees leave the table with it, and come back
+      // when they go off. The dimming switch (`playersSeeOwnSight`) changes
+      // nobody's answer, so flipping it sends nothing.
+      if (body.tokenLayers !== undefined || body.vision !== undefined) {
         await emitConcealmentChanges(tx, scene.id, serializeScene(scene), written.scene);
       }
       return written.scene;
@@ -996,7 +1011,7 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       // The scene as `applyFogOp` reads it, so the token diff below compares
       // against the very state the op was applied to.
       const before = serializeScene(fresh);
-      const wasOn = fogOn(before.fog);
+      const wasOn = sceneFogOn(before);
       const { fog, region } = await svc.withDb(tx.db).applyFogOp(fresh, {
         op: body.op,
         ...(body.regionId ? { regionId: body.regionId } : {}),
@@ -1006,10 +1021,11 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       const isDefine = body.op === 'define';
       const isSwitch = body.op === 'enable' || body.op === 'disable';
       // Whether the scene is fogged at all, as a player's copy says it
-      // (`sceneForViewer`, `fogOn`): a device folding the events (the TV)
-      // keeps it true through a reset or the last reveal taken back, and
-      // turns it over when the GM flips the switch.
-      const active = fogOn(fog);
+      // (`sceneForViewer`, `sceneFogOn`): a device folding the events (the
+      // TV) keeps it true through a reset or the last reveal taken back, and
+      // turns it over when the GM flips the switch. A scene with sightlines
+      // on stays fogged whatever the switch says, and says so.
+      const active = sceneFogOn({ fog, vision: before.vision });
       await tx.emit({
         type: 'fog.updated',
         payload: isSwitch

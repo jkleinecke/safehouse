@@ -706,6 +706,81 @@ describe('a fogged scene reaches players and the TV covered, and tells them noth
       expect(log.body, role).not.toContain(GUARD);
     }
   });
+
+  it('fogs the scene while its sightlines are on, whatever the fog switch says, and sends the guard away and back (P6)', async () => {
+    /** The events the table's phone can read back, newest first, with their (ever-growing) ids. */
+    async function tableEvents(): Promise<{ id: number; type: string; payload: Record<string, unknown> }[]> {
+      const log = await t.app.inject({
+        method: 'GET',
+        url: `/api/campaigns/${fb.campaignId}/log?limit=500`,
+        headers: as(viewers[0]!.token),
+      });
+      expect(log.statusCode).toBe(200);
+      const events = (log.json() as { events: { id: unknown; type: string; payload: Record<string, unknown> }[] }).events;
+      return events.map((e) => ({ id: Number(e.id), type: e.type, payload: e.payload }));
+    }
+    /** The newest event id the table can see: a mark to read "what arrived since" from. */
+    async function mark(): Promise<number> {
+      return Math.max(0, ...(await tableEvents()).map((e) => e.id));
+    }
+    /** The payloads of the public events of one type that arrived after `since`, oldest first. */
+    async function tableEventsSince(since: number, type: string): Promise<Record<string, unknown>[]> {
+      return (await tableEvents())
+        .filter((e) => e.id > since && e.type === type)
+        .reverse()
+        .map((e) => e.payload);
+    }
+    /** PATCH the scene's vision settings, and hand back what the GM's copy then says. */
+    async function patchVision(vision: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const res = await t.app.inject({
+        method: 'PATCH',
+        url: `/api/scenes/${fogSceneId}`,
+        headers: as(fb.gmToken),
+        payload: { vision },
+      });
+      expect(res.statusCode).toBe(200);
+      return (res.json() as { scene: { vision: Record<string, unknown> } }).scene.vision;
+    }
+
+    // The fog switch off: the table sees the whole map, the guard included.
+    await fogOp({ op: 'disable' });
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      expect(v.fog['active'], role).toBe(false);
+      expect(v.tokenIds, role).toEqual([guardId, runnerId].sort());
+    }
+
+    // The dimming switch is not sightlines: flipping it sends nobody anywhere.
+    const beforeDim = await mark();
+    expect(await patchVision({ playersSeeOwnSight: true })).toEqual({ playersSeeOwnSight: true });
+    expect(await tableEventsSince(beforeDim, 'token.added')).toEqual([]);
+    expect(await tableEventsSince(beforeDim, 'token.removed')).toEqual([]);
+
+    // Sightlines on: everything the party does not see is hidden, and the
+    // party sees nothing yet (no sight pass has run), so the guard leaves the
+    // table as a public token.removed and the runner stays. A patch that
+    // says only `sight` leaves the dimming switch as it was.
+    const beforeOn = await mark();
+    expect(await patchVision({ sight: 'on' })).toEqual({ playersSeeOwnSight: true, sight: 'on' });
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      expect(v.fog['active'], role).toBe(true);
+      expect(v.tokenIds, role).toEqual([runnerId]);
+      expectNoGuard(v, role);
+    }
+    expect(await tableEventsSince(beforeOn, 'token.removed')).toEqual([{ tokenId: guardId, sceneId: fogSceneId }]);
+
+    // Off again: the fog switch is still off, so the map is open and he is back.
+    const beforeOff = await mark();
+    expect(await patchVision({ sight: 'off' })).toEqual({ playersSeeOwnSight: true, sight: 'off' });
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      expect(v.fog['active'], role).toBe(false);
+      expect(v.tokenIds, role).toEqual([guardId, runnerId].sort());
+    }
+    const added = await tableEventsSince(beforeOff, 'token.added');
+    expect(added.map((p) => (p['token'] as { id: string }).id)).toEqual([guardId]);
+  });
 });
 
 describe('map uploads and /files/:id visibility (FR9.2, §13)', () => {

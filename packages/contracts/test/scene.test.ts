@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SceneSchema, TokenSchema, FogStateSchema, GridSchema } from '../src/index.js';
+import { SceneSchema, TokenSchema, FogStateSchema, GridSchema, sceneFogOn, sightlinesOn } from '../src/index.js';
 
 const scene = {
   id: 'scn_1',
@@ -117,6 +117,48 @@ describe('SceneSchema', () => {
   it('FogStateSchema round-trips independently', () => {
     const fog = FogStateSchema.parse(scene.fog);
     expect(FogStateSchema.parse(fog)).toEqual(fog);
+  });
+
+  it('keeps the explored reveals and the party sight (P6), and adds nothing to a fog without them', () => {
+    const withSight = {
+      ...scene.fog,
+      exploredRegionIds: ['east-wing'],
+      exploredShapes: [[{ x: 0, y: 0 }, { x: 2, y: 0 }, { x: 1, y: 2 }]],
+      sight: { cols: 40, rows: 30, levels: { '0': { live: 'AQI=', explored: 'AwI=' }, '2': { explored: '' } } },
+    };
+    const fog = FogStateSchema.parse(withSight);
+    expect(fog.exploredRegionIds).toEqual(['east-wing']);
+    expect(fog.exploredShapes).toEqual(withSight.exploredShapes);
+    // A floor that says only one of its sets reads the other as empty.
+    expect(fog.sight).toEqual({
+      cols: 40,
+      rows: 30,
+      levels: { '0': { live: 'AQI=', explored: 'AwI=' }, '2': { live: '', explored: '' } },
+    });
+    expect(FogStateSchema.parse(fog)).toEqual(fog);
+    // An old fog grows no new keys: every scene before sightlines reads as it did.
+    expect(Object.keys(FogStateSchema.parse(scene.fog)).sort()).toEqual(['regions', 'revealed', 'revealedShapes']);
+    // A bitset that is not base64, or a floor that is not a floor number, is refused.
+    const bad = (sight: unknown) => FogStateSchema.safeParse({ ...scene.fog, sight }).success;
+    expect(bad({ cols: 4, rows: 4, levels: { '0': { live: 'not base64!' } } })).toBe(false);
+    expect(bad({ cols: 4, rows: 4, levels: { ground: { live: '' } } })).toBe(false);
+    expect(bad({ cols: 0, rows: 4, levels: {} })).toBe(false);
+  });
+
+  it('sightlines are off unless said on, and fog a scene whatever its switch says', () => {
+    expect(SceneSchema.parse(scene).vision.sight).toBeUndefined();
+    expect(sightlinesOn(SceneSchema.parse(scene).vision)).toBe(false);
+    expect(SceneSchema.parse({ ...scene, vision: { sight: 'on' } }).vision).toEqual({ playersSeeOwnSight: false, sight: 'on' });
+    expect(SceneSchema.safeParse({ ...scene, vision: { sight: 'assist' } }).success).toBe(false);
+
+    const open = { regions: [], revealedShapes: [], enabled: false };
+    expect(sceneFogOn({ fog: open })).toBe(false);
+    expect(sceneFogOn({ fog: open, vision: { sight: 'off' } })).toBe(false);
+    expect(sceneFogOn({ fog: open, vision: { sight: 'on' } })).toBe(true);
+    expect(sceneFogOn({ fog: { ...open, enabled: true } })).toBe(true);
+    // A player's copy carries the server's answer, and it is final both ways.
+    expect(sceneFogOn({ fog: { ...open, active: false }, vision: { sight: 'on' } })).toBe(false);
+    expect(sceneFogOn({ fog: { ...open, active: true } })).toBe(true);
   });
 });
 

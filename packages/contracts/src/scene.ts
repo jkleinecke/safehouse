@@ -57,11 +57,37 @@ export type SceneEnvironment = z.infer<typeof SceneEnvironmentSchema>;
  * infiltration, unwanted noise in a brawl in one room. Lives on the scene —
  * not in the GM's browser — so every player device hears it the moment it
  * flips, and still has it after a reload.
+ *
+ * `sight`: SIGHTLINES, the scene's dynamic lighting (P6, Roll20's). With it
+ * `'on'`, the table sees what the party's runners see, and no more: every
+ * runner's eyes are pooled, walls and closed doors stop them, darkness stops
+ * them unless their vision modes see through it (strict SR5), and what they
+ * see is LIVE on every phone and the TV at once. What they have seen and no
+ * longer see stays as EXPLORED memory, the map drawn dimmed with nobody on
+ * it. Everything else is hidden, whether or not the GM's fog switch is on
+ * (`sceneFogOn`). The server works the sight out and keeps it in the fog
+ * (`FogState.sight`); nothing is computed on a phone.
+ *
+ * There is no per-phone version of this and no confirm step (the GM,
+ * 2026-09-27): sight is pooled, and it unmasks the map automatically. The
+ * older `playersSeeOwnSight` switch above is a separate thing and stays as it
+ * is: it only dims a player's screen outside their own runner's sightline.
+ *
+ * Optional rather than defaulted, and absent reads as `'off'`: every scene
+ * saved before sightlines existed, and every fixture that spells a scene's
+ * vision as `{ playersSeeOwnSight }`, is then already a scene without them,
+ * and still parses to exactly what it did (`sightlinesOn`).
  */
 export const SceneVisionSchema = z.object({
   playersSeeOwnSight: z.boolean().default(false),
+  sight: z.enum(['off', 'on']).optional(),
 });
 export type SceneVision = z.infer<typeof SceneVisionSchema>;
+
+/** Whether a scene's sightlines are on (`SceneVision.sight`); absent is off. */
+export function sightlinesOn(vision: Partial<Pick<SceneVision, 'sight'>> | undefined): boolean {
+  return vision?.sight === 'on';
+}
 
 export const WallSchema = z.object({
   id: z.string(),
@@ -374,13 +400,98 @@ export type FogRegion = z.infer<typeof FogRegionSchema>;
 export const FogOpSchema = z.enum(['reveal', 'hide', 'define', 'remove', 'enable', 'disable']);
 export type FogOp = z.infer<typeof FogOpSchema>;
 
-/** Server-authoritative fog state per scene (FR9.13). */
+/**
+ * A set of squares on one floor, as a base64 bitset: square (col, row) is bit
+ * `row * cols + col`, counting from the least significant bit of the first
+ * byte, with the grid's `cols` and `rows` said beside it (`FogSightSchema`).
+ * Trailing zero bytes may be left off, so a floor nobody has seen is `''`.
+ * The rules package reads and writes these (`encodeCellBits`,
+ * `decodeCellBits` in @safehouse/rules).
+ *
+ * A bitset rather than a list of `"col,row"` keys because this crosses the
+ * wire after every committed move: a 60x40 map is 300 bytes as bits, and a
+ * phone decodes it without parsing a thing.
+ */
+export const CellBitsSchema = z.string().regex(/^[A-Za-z0-9+/]*={0,2}$/);
+
+/**
+ * What the party's eyes have done to one floor (sightlines, P6).
+ *
+ * - `live`: the squares some runner on this floor can see RIGHT NOW. A cache
+ *   the server's sight pass rewrites after every committed change (a move, a
+ *   door, a light), stored so a plain read can decide which tokens a player
+ *   may be sent without working sight out again. Only that pass writes it,
+ *   and only while the scene's sightlines are on; it is emptied when they go
+ *   off.
+ * - `explored`: every square the party has EVER seen here, the table's
+ *   memory of the floor. The sight pass ORs `live` into it and never takes a
+ *   square out; only the GM forgets.
+ */
+export const FogSightLevelSchema = z.object({
+  live: CellBitsSchema.default(''),
+  explored: CellBitsSchema.default(''),
+});
+export type FogSightLevel = z.infer<typeof FogSightLevelSchema>;
+
+/**
+ * The party's sight and memory, per floor (`FogSightLevelSchema`), keyed by
+ * the floor's index as a decimal string (`"0"` is the ground, as
+ * `Token.level` counts). `cols` and `rows` are the grid the bitsets were
+ * written for, so a scene resized since is read square by square and never
+ * shifted: a bit past the edge of the grid is simply not there.
+ */
+export const FogSightSchema = z.object({
+  cols: z.number().int().positive(),
+  rows: z.number().int().positive(),
+  levels: z.record(z.string().regex(/^(0|[1-9][0-9]*)$/), FogSightLevelSchema).default({}),
+});
+export type FogSight = z.infer<typeof FogSightSchema>;
+
+/**
+ * Server-authoritative fog state per scene (FR9.13).
+ *
+ * Every square of every floor is in one of THREE states (`cellState` in
+ * @safehouse/rules works it out; P6):
+ * - LIVE: the table sees the map there, and everyone standing on it, moving.
+ *   The fog is off, or the GM revealed the ground live (`revealed`,
+ *   `revealedShapes`), or a runner can see it (`sight` live).
+ * - EXPLORED: the map is shown dimmed, as remembered, with nobody on it. The
+ *   GM revealed it as explored (`exploredRegionIds`, `exploredShapes`), or
+ *   the party has seen it before (`sight` explored).
+ * - HIDDEN: everything else, while the fog is on.
+ *
+ * The GM's reveals (both fashions) cover the same ground on every floor, as
+ * the regions always have; only the party's sight is per floor, because a
+ * runner on the ground floor has not seen the roof.
+ */
 export const FogStateSchema = z.object({
   regions: z.array(FogRegionSchema).default([]),
-  /** Ids of revealed named regions. */
+  /** Ids of named regions revealed LIVE. */
   revealed: z.array(z.string()).default([]),
-  /** Freeform revealed polygons from brush/polygon painting. */
+  /** Freeform polygons revealed LIVE, from brush/polygon painting. */
   revealedShapes: z.array(z.array(PointSchema)).default([]),
+  /**
+   * Ids of named regions the GM revealed AS EXPLORED: ground the table is
+   * shown as remembered (the map dimmed, its doors and public pins) with
+   * nobody on it, no token, no token's light and no moves. The other fashion
+   * of reveal is `revealed`, which opens a region live. A region is meant to
+   * be in one list or neither; should both ever name it, live wins.
+   *
+   * Optional, like `enabled`: every scene saved before explored reveals
+   * existed has none, and every fixture spells a fog as the three lists
+   * above. Read it as `exploredRegionIds ?? []`.
+   */
+  exploredRegionIds: z.array(z.string()).optional(),
+  /** Freeform polygons revealed AS EXPLORED, as `revealedShapes` are live. Read it as `exploredShapes ?? []`. */
+  exploredShapes: z.array(z.array(PointSchema)).optional(),
+  /**
+   * The party's sight and memory, per floor (`FogSightSchema`): written by
+   * the server's sight pass on a scene with sightlines on (`SceneVision.sight`)
+   * and read by everyone, the same pooled copy on every phone and the TV.
+   * Absent on a scene whose party has never looked, which is every scene
+   * without sightlines.
+   */
+  sight: FogSightSchema.optional(),
   /**
    * The GM's fog switch for this scene, and the one fog field that is STORED
    * as a decision rather than derived: true fogs the scene (the whole map is
@@ -395,8 +506,9 @@ export const FogStateSchema = z.object({
    */
   enabled: z.boolean().optional(),
   /**
-   * Whether the scene is fogged at all, as `fogOn` answers it for the stored
-   * state. Set on a non-GM viewer's copy only (`sceneForViewer`), which
+   * Whether the scene is fogged at all, as `sceneFogOn` answers it for the
+   * stored scene: the fog switch (`fogOn`), or the scene's sightlines. Set
+   * on a non-GM viewer's copy only (`sceneForViewer`), which
    * carries only the REVEALED regions and never the switch — so a scene
    * fogged with nothing revealed yet, or reset, would otherwise arrive as
    * `regions: []` and read as a scene with no fog, the whole map open. Never
@@ -429,6 +541,25 @@ export function fogOn(fog: Pick<FogState, 'regions' | 'revealedShapes'> & Partia
   if (fog.active !== undefined) return fog.active;
   if (fog.enabled !== undefined) return fog.enabled;
   return fog.regions.length > 0 || fog.revealedShapes.length > 0;
+}
+
+/**
+ * Whether a SCENE is fogged: its fog switch (`fogOn`), or its sightlines
+ * (`sightlinesOn`), because sightlines on means everything the party cannot
+ * see and has not seen is hidden, whatever the switch says (the GM,
+ * 2026-09-27). This is the answer the server puts on a non-GM copy as
+ * `active`, so on a copy that carries `active` it is `active`, in both
+ * directions, exactly as `fogOn` reads it.
+ *
+ * On a scene without sightlines, which is every scene saved before them,
+ * this is `fogOn` and nothing else.
+ */
+export function sceneFogOn(scene: {
+  fog: Parameters<typeof fogOn>[0];
+  vision?: Partial<Pick<SceneVision, 'sight'>> | undefined;
+}): boolean {
+  if (scene.fog.active !== undefined) return scene.fog.active;
+  return sightlinesOn(scene.vision) || fogOn(scene.fog);
 }
 
 export const SceneStateSchema = z.enum(['draft', 'active', 'archived']);
