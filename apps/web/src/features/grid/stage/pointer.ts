@@ -3,13 +3,15 @@
  * token drag with grid snap, ruler drag, ping double-tap, pointer trail, and
  * the single-click tools (AoE, fog vertex, focus, door toggle).
  *
- * All handling lives on the DOM canvas — pixi's interaction tree is never
- * engaged, so there are no hit-area rebuilds and no per-frame event allocs.
+ * All handling lives on the DOM — the renderer's own event handling is never
+ * engaged (pixi's interaction tree on the 2D map was not either), so there
+ * are no hit-area rebuilds and no per-frame event allocs.
  *
  * Renderer-neutral: the screen is reached only through the host's
  * `ViewCamera` (pick, project, pxPerUnit, pan, zoom), and everything handed
- * back to the host is in grid units, so the same controller drives the 2D
- * and the 3D map.
+ * back to the host is in grid units, so the same controller drove the 2D map
+ * and drives the 3D one — and, in the tests, a host with the flat `Camera`
+ * (`camera.ts`).
  */
 import type { Point, Token } from '@safehouse/contracts';
 import { bulgeThrough } from '@safehouse/rules';
@@ -67,7 +69,7 @@ type Mode =
   | 'arc'
   | 'bend';
 
-/** React-facing ruler updates are rate-limited; the pixi line is not. */
+/** React-facing ruler updates are rate-limited; the line on the map is not. */
 const RULER_REPORT_MS = 50;
 
 
@@ -97,7 +99,7 @@ export interface PointerHost {
    * Where a painted object will land while it is being dragged or pasted
    * (Build) — and, for a renderer that stands the ghost up, what the drag or
    * paste will paint there (`fill`), so each square's ghost is as tall as
-   * what is on its way to it. The 2D map draws the squares alone.
+   * what is on its way to it. The 2D map drew the squares alone.
    */
   drawPaintedGhost?(cells: readonly string[] | null, fill?: readonly GhostFill[]): void;
   /**
@@ -105,7 +107,8 @@ export interface PointerHost {
    * renderer can tell from what it drew — the 3D map raycasts its figures, so
    * a press on a runner's head takes the runner however tall it stands and
    * from whatever angle. Asked before the disc test (`hitToken`), which stays
-   * the fallback. Absent on the 2D map, where the disc IS what is drawn.
+   * the fallback. Absent on a flat host (the 2D map was one), where the disc
+   * IS what is drawn.
    */
   pickToken?(screen: Point): string | null;
   /**
@@ -117,7 +120,8 @@ export interface PointerHost {
    * the squares behind its own, and the floor point under a press on it is
    * rarely its cell. Asked
    * before the cell test (`hitTileDoor`), which stays the fallback (an open
-   * door has no leaf; its doorway is its cell). Absent on the 2D map.
+   * door has no leaf; its doorway is its cell). Absent on a flat host (the
+   * 2D map was one).
    */
   pickTileDoor?(screen: Point): string | null;
   /**
@@ -134,8 +138,8 @@ export interface PointerHost {
    * far a drag has come), which stays the floor point — and asked whether
    * anything stands in front of that floor point at all: what lies on the
    * floor behind a wall (a note, a traced line's foot) is hidden there, and
-   * not what the press is on. Absent on the 2D map, where the square under
-   * the pointer IS what is drawn there.
+   * not what the press is on. Absent on a flat host (the 2D map was one),
+   * where the square under the pointer IS what is drawn there.
    */
   pickCell?(screen: Point): Cell | null;
   /**
@@ -146,14 +150,15 @@ export interface PointerHost {
    * where the line test (`hitDoor`, `hitWall`) measures from the line on the
    * floor at its foot — and a press on a painted wall in front of one does
    * not. Asked before the line test, which stays the fallback where nothing
-   * stands. Absent on the 2D map, where the line IS what is drawn.
+   * stands. Absent on a flat host (the 2D map was one), where the line IS
+   * what is drawn.
    */
   pickTraced?(screen: Point): { kind: 'wall' | 'door'; id: string } | null;
   /**
    * Whether the GM's light markers are drawn over the tokens: the 3D map
    * hangs each at its lamp's height, over everything, so a press on one is
-   * the light's before it is the token's under it. Absent (the 2D map) they
-   * lie under the tokens, and a token standing on a lamp takes the press.
+   * the light's before it is the token's under it. Absent (a flat host, as
+   * the 2D map was) they lie under the tokens, and a token standing on a lamp takes the press.
    */
   readonly lightsOverTokens?: boolean;
 }
@@ -456,7 +461,7 @@ export class PointerController {
    * the floor point under it (`PointerHost.pickCell`): a painted wall, a
    * prop, a door's leaf, a traced wall. What lies on the floor behind it — a
    * note, a traced line's foot — is hidden there, and is not what the press
-   * is on. Never on the 2D map, where nothing stands.
+   * is on. Never on a flat host (the 2D map was one), where nothing stands.
    */
   private standsInFront(screen: Point): boolean {
     return (this.host.pickCell?.(screen) ?? null) !== null;
@@ -572,7 +577,7 @@ export class PointerController {
 
     // Middle/right button always pans, whatever tool is selected. The view
     // never turns: the GM wants a fixed angle that pans and zooms
-    // (2026-09-26), on the 3D map as on the 2D one.
+    // (2026-09-26), on the 3D map as on the 2D one before it.
     if (e.button === 1 || e.button === 2) {
       this.mode = 'pan';
       return;
@@ -797,7 +802,7 @@ export class PointerController {
     }
 
     // A light's marker: the GM's own lamps, on this floor. Under the tokens,
-    // as the 2D map draws it — a lamp sits on a square's centre, which is
+    // as the 2D map drew it — a lamp sits on a square's centre, which is
     // where a guard stands, and a click on the guard is a click on the guard.
     if (!lightsFirst && this.selectLight(grid, state, m)) return;
 

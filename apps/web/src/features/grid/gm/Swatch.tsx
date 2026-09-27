@@ -1,4 +1,7 @@
-/** A palette swatch: the tile as the map draws it, or its two colours until then (`swatches.ts`). */
+/**
+ * A palette swatch: the tile as the 2D map drew it (its painter lives on in
+ * `art/tileArt.ts`), or its two colours until then (`swatches.ts`).
+ */
 import type { TileSetLike } from '../types.js';
 import { fallbackSwatch, useSwatch, type SwatchTile } from './swatches.js';
 

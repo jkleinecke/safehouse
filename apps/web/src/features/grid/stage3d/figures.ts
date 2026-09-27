@@ -6,8 +6,8 @@
  * leaves, and REBUILT only when what it looks like changes: its look (the
  * inputs `lookFor` reads — id, source, name, `token.look`), its size, the pose
  * it is drawn in (its own, or down when a condition monitor fills —
- * `downedBy`, the same rule the 2D badge and figure use), and whether the GM
- * sees it ghosted. A move, a selection, a turn at acting: none of those touch
+ * `downedBy`, the same rule the plates use), and whether the GM sees it
+ * ghosted. A move, a selection, a turn at acting: none of those touch
  * geometry.
  *
  * Around each figure, flat on its floor and unlit, so they read the same in a
@@ -21,18 +21,17 @@
  *     ring breathing here would keep the whole lit scene drawing at the
  *     display's rate for as long as an encounter runs;
  *   - its aura, when it has one: `aura.radiusM` across the floor in its
- *     colour, a faint fill and a firmer edge, as the 2D map draws it.
+ *     colour, a faint fill and a firmer edge, as the 2D map drew it.
  * A ghosted figure (the GM's view of a hidden token) is drawn see-through, in
  * one pair of materials shared by every figure of its kind (below): ghosting
  * costs nothing a frame.
  *
  * Where a wall or tall furniture stands between the camera and a figure on
  * the floor in view, the figure shows through it as a faint silhouette, as
- * the 2D map's see-through copy did (`tokenView.ts` `ghost`, masked to what
- * stands in front by `occlusion.ts`): one more draw of its body, which shows
- * only where something is in front of it (`xrayMaterial`). A figure down from
- * physical damage lies in a small dark-red pool, as the 2D figure bleeds; one
- * down from stun lies on the bare floor.
+ * the retired 2D map's see-through copy did: one more draw of its body, which
+ * shows only where something is in front of it (`xrayMaterial`). A figure
+ * down from physical damage lies in a small dark-red pool, as the 2D figure
+ * bled; one down from stun lies on the bare floor.
  *
  * Each figure is lit as the floor it stands on (`FigureLightProbe`). Low draws
  * the world unlit, every lamp's light baked into its vertices, while a figure
@@ -50,10 +49,10 @@
  *
  * In the top view (`setTopView`) each figure on the floor in view wears its
  * token's portrait as a disc lying on its head (`portraits.ts`), as the 2D
- * plan draws its tokens as discs.
+ * plan drew its tokens as discs.
  *
- * Motion is the 2D figure's (`tokenView.ts` `tick`): a figure glides to where
- * it should be — its token's square, or a drag ghost the stage points it at
+ * Motion is the retired 2D figure's: a figure glides to where it should be
+ * — its token's square, or a drag ghost the stage points it at
  * (`setTarget`) — at a walking pace of at least `WALK_SQUARES_PER_S`, quicker
  * over a long move so a dash across the map does not lag behind; it turns to
  * face the way it goes and keeps that facing when it stops. There is no walk
@@ -66,16 +65,16 @@
  *   - the floor in view's own, which everything above is about;
  *   - the ones seen down through its open squares (the stage's
  *     `belowTokens`), stood on their own floors below, inside the shade the
- *     runtime lays over those floors, as the 2D map's `BelowFloors` draws
- *     them. They are looked at, never worked: no rings, no plate
- *     (`positionOf` gives none), no drag or drag ghost, and the pointer never
- *     takes them (`pick`) — the GM works on them from their own floor. A
+ *     runtime lays over those floors, as the 2D map drew them. They are
+ *     looked at, never worked: no rings, no plate (`positionOf` gives
+ *     none), no drag or drag ghost, and the pointer never takes them
+ *     (`pick`) — the GM works on them from their own floor. A
  *     token that crosses between the two (the view goes up a floor, a runner
  *     drops through a hatch) keeps its figure: only its part changes.
  *
  * The two kinds wear different covers (`cover.ts`), after the 2D map's layers:
  * the floor in view's figures lie over its sightline shroud and under its
- * fog, as its tokens do; the 2D map draws the floors below under its shroud,
+ * fog, as its tokens did; the 2D map drew the floors below under its shroud,
  * so a figure seen below is darkened outside the viewer's sightline too.
  * Each kind has its own set of materials (the pool's `inView` and `seenBelow`
  * looks), and a figure crossing between the two is built again in the other.
@@ -109,7 +108,7 @@ import {
 import type { Point, Token, TokenAura } from '@safehouse/contracts';
 import type { TokenBars } from '../types.js';
 import { C, parseColor } from '../stage/colors.js';
-import type { FigurePose } from '../stage/figure.js';
+import type { FigurePose } from '../plan/figure.js';
 import { downedBy, tokenPose, WALK_SQUARES_PER_S } from '../stage/tokenState.js';
 import { bloodPool, buildFigure, disposeFigure, type FigureCtx } from '../../lab3d/figure3d.js';
 import type { LabMaterials } from '../../lab3d/geometry3d.js';
@@ -167,7 +166,7 @@ const TURN_PER_MS = 0.014;
 const FACED = 1e-3;
 /** A frame gap longer than this (a tab left in the background) is taken as this, in ms. */
 const MAX_STEP_MS = 250;
-/** Facing when a token has never been turned: toward the iso camera, as the 2D figure starts. */
+/** Facing when a token has never been turned: toward the iso camera, as the 2D figure started. */
 const TOWARD_VIEWER = Math.PI / 4;
 
 /**
@@ -306,7 +305,7 @@ interface Shade {
  *     is drawn yet, and the figure drawn after it covers any of it the
  *     figure itself shows;
  *   - glass: nothing — glass writes no depth, and the figure is seen through
- *     it anyway, as the 2D map skips glazing.
+ *     it anyway, as the 2D map skipped glazing.
  * The fog's cover (`cover.ts`) hides it where it hides the figure, so it
  * never says where a fogged figure stands. Its layers add up (a limb over
  * the body shows a little stronger): the figure's faces are drawn from both
@@ -381,7 +380,7 @@ function facingOf(rotation: number): number {
   return (rotation * Math.PI) / 180;
 }
 
-/** What `lookFor` reads from a token: the same inputs, the same look (as the 2D figure keys it). */
+/** What `lookFor` reads from a token: the same inputs, the same look (as the 2D figure keyed it). */
 function lookKey(token: Token): string {
   return `${token.id}|${token.source}|${token.name}|${JSON.stringify(token.look ?? null)}`;
 }
@@ -712,7 +711,7 @@ export class FigurePool {
    * stand-ins compile through, and whatever stands under their roots now —
    * body, ghost, silhouette, shadow, blood, rings, aura and portrait. The
    * figures seen below are left with the floor's colours, as the 2D map
-   * draws them inside its floors below, under the floor's filter; given a
+   * drew them inside its floors below, under the floor's filter; given a
    * set of their own, as the stage gives them, their materials are theirs
    * alone (`seenBelow`), so marking these never reaches them. Uniform flags
    * only: the stage runs it after every update, as figures come and change.
@@ -1085,7 +1084,7 @@ export class FigurePool {
     f.blob.visible = !s.ghosted;
 
     // The blood a body lying down would lie in, under it as the 2D figure
-    // pools it; `apply` shows it for physical damage only. A prop never bleeds.
+    // pooled it; `apply` shows it for physical damage only. A prop never bleeds.
     const pool = f.pose === 'down' && body ? bloodPool(s.token, this.ctx) : null;
     f.poolFits = pool !== null;
     if (pool) {

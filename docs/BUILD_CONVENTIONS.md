@@ -9,7 +9,7 @@ and leave a `// INTEGRATION:` comment for the integration pass.
 
 ```
 apps/server      @safehouse/server    Fastify + ws API, serves web build in prod
-apps/web         @safehouse/web       React SPA (Vite), PixiJS Grid, TV kiosk
+apps/web         @safehouse/web       React SPA (Vite), three.js Grid, TV kiosk
 packages/contracts @safehouse/contracts  Zod schemas + inferred types (the boundary language)
 packages/rules   @safehouse/rules     Pure SR5 engine (no I/O, no DOM, no db)
 packages/db      @safehouse/db        Drizzle schema, migrations, db client, FTS helpers
@@ -62,7 +62,7 @@ scripts/         playthrough + utilities (run via tsx)
 - rules: (runtime none) + workspace contracts
 - db: `drizzle-orm`, `@electric-sql/pglite`, `pg`, `@types/pg`, `drizzle-kit` (dev)
 - server: `fastify`, `@fastify/websocket`, `@fastify/static`, `@fastify/multipart`, `@fastify/cookie`, `pino`, `zod`, `qrcode`, `unpdf` (PDF text extraction), workspace deps
-- web: `react`, `react-dom`, `react-router-dom`, `@tanstack/react-query`, `zustand`, `pixi.js`, `qrcode.react`, `tailwindcss` + `@tailwindcss/vite`, `vite`, `@vitejs/plugin-react` (dev), workspace contracts + rules
+- web: `react`, `react-dom`, `react-router-dom`, `@tanstack/react-query`, `zustand`, `three` (replaced `pixi.js` on 2026-09-27) + `@types/three` (dev), `qrcode.react`, `tailwindcss` + `@tailwindcss/vite`, `vite`, `@vitejs/plugin-react` (dev), workspace contracts + rules
 - Root dev deps already installed: typescript, tsx, vitest, @types/node
 
 **Do not run `pnpm install` while other agents may be running it** (parallel phases). If you add a dependency mid-parallel-phase, add it to your package.json, keep coding, and note it — the next solo phase installs.

@@ -248,7 +248,7 @@ export function composeStageState(input: StageComposeInput): StageSceneState | n
     draggableIds: draggableTokenIds(tokens, input.viewer),
     // The tokens seen below as well, by the same viewer rule: a runner whose
     // monitor is full lies down there as on their own floor (the 3D map's
-    // figures). The classic map looks bars up for this floor's tokens only.
+    // figures).
     bars: barsByToken(
       input.encounter,
       belowTokens.length === 0 ? tokens : [...tokens, ...belowTokens.map((b) => b.token)],

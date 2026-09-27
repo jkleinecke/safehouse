@@ -20,7 +20,7 @@ export const C = {
 /** Ruler pace-band colors (FR9.8): walk / run / beyond. */
 export const PACE_COLORS = { walk: C.ok, run: C.warn, sprint: C.danger } as const;
 
-/** Parse a CSS-ish hex color string to a pixi number; fallback on failure. */
+/** Parse a CSS-ish hex color string to a 0xRRGGBB number; fallback on failure. */
 export function parseColor(s: string | undefined | null, fallback: number): number {
   if (!s) return fallback;
   const hex = s.trim().replace(/^#/, '');

@@ -21,7 +21,7 @@
 import type { GridProjection } from '@safehouse/contracts';
 import Icon from '../../../components/Icon.js';
 import HudButton, { HudIcon } from './HudButton.js';
-import type { GridTool, StageQuality, StageRenderer } from '../types.js';
+import type { GridTool, StageQuality } from '../types.js';
 import {
   BUILD_TOOLS,
   MODE_TOOLS,
@@ -207,24 +207,17 @@ export interface ViewControlsProps {
   onZoom: (factor: number) => void;
   onFit: () => void;
   /**
-   * The renderer drawing this device's map, and the switch between the 3D
-   * map and the Classic one — a per-device choice, offered to every viewer
-   * of the Grid (the GM, players, observers) since P2; the TV has no
-   * controls and keeps its device's stored choice. Absent hides the switch.
-   */
-  renderer?: StageRenderer;
-  onRenderer?: (renderer: StageRenderer) => void;
-  /** Whether 3D can be picked here (WebGL2, and it has not failed this load). */
-  can3d?: boolean;
-  /**
-   * The 3D map's quality on this device, shown while the 3D map is drawing:
-   * Low by default on a phone or a tablet, Medium elsewhere, until picked.
+   * The 3D map's quality on this device — a per-device choice, offered to
+   * every viewer of the Grid (the GM, players, observers); the TV has no
+   * controls and is always Low. Low by default on a phone or a tablet,
+   * Medium elsewhere, until picked. Absent `onQuality` hides the switch (the
+   * page does while the map loads).
    */
   quality?: StageQuality;
   onQuality?: (quality: StageQuality) => void;
 }
 
-/** Snap, zoom, fit, the view, the renderer and the panel toggle: how the map is looked at, not what is done to it. */
+/** Snap, zoom, fit, the view, the quality and the panel toggle: how the map is looked at, not what is done to it. */
 export function ViewControls(props: ViewControlsProps) {
   return (
     <div
@@ -267,40 +260,24 @@ export function ViewControls(props: ViewControlsProps) {
         </>
       )}
       {/*
-        Which renderer draws THIS device's map, and on 3D how hard it works
-        the GPU. Both stick to the device, not the scene: the table and the
-        other screens keep their own.
+        How hard the 3D map works THIS device's GPU. It sticks to the device,
+        not the scene: the table and the other screens keep their own.
       */}
-      {props.onRenderer && (
+      {props.onQuality && (
         <>
           <span className="mx-0.5 h-5 w-px bg-edge" aria-hidden />
           <select
-            aria-label="Renderer"
-            data-testid="renderer-select"
-            title="Which renderer draws the map on this device"
-            value={props.renderer ?? 'classic'}
-            onChange={(e) => props.onRenderer?.(e.target.value as StageRenderer)}
+            aria-label="Quality"
+            data-testid="quality-select"
+            title="How hard the 3D map works this device (Low for phones and older GPUs)"
+            value={props.quality ?? 'medium'}
+            onChange={(e) => props.onQuality?.(e.target.value as StageQuality)}
             className="min-h-9 rounded border border-edge bg-deck px-1.5 py-1 text-[0.7rem] text-ink"
           >
-            <option value="3d" disabled={!props.can3d && props.renderer !== '3d'}>
-              3D
-            </option>
-            <option value="classic">Classic</option>
+            <option value="low">Low</option>
+            <option value="medium">Med</option>
+            <option value="high">High</option>
           </select>
-          {props.renderer === '3d' && props.onQuality && (
-            <select
-              aria-label="Quality"
-              data-testid="quality-select"
-              title="How hard the 3D map works this device (Low for phones and older GPUs)"
-              value={props.quality ?? 'medium'}
-              onChange={(e) => props.onQuality?.(e.target.value as StageQuality)}
-              className="min-h-9 rounded border border-edge bg-deck px-1.5 py-1 text-[0.7rem] text-ink"
-            >
-              <option value="low">Low</option>
-              <option value="medium">Med</option>
-              <option value="high">High</option>
-            </select>
-          )}
         </>
       )}
       {props.isGm && (

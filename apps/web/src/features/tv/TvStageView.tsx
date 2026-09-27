@@ -6,16 +6,19 @@
  * canvas's own pan/zoom/drag listeners can never fire (the 3D map does not
  * even attach them for a display). The map is never a control surface; the
  * one control on this screen is the plan/iso switch `TvPage` lays over it,
- * which reaches the stage as the scene's projection. There is no renderer or
- * quality switch here: the stage is the 3D map at Low, unless this device's
- * own storage has set it to Classic (`stageLoader.ts`).
+ * which reaches the stage as the scene's projection. There is no quality
+ * switch here: the stage is the 3D map at Low, always (`stageLoader.ts`).
  *
  * Six-hour discipline: exactly one stage instance, the handle is guarded
  * against post-teardown calls, and the props flowing in are memoised
  * upstream so an idle minute pushes zero updates. The 3D map draws on
- * demand, so a still table costs no frames at all; the classic map, where
- * the 3D one cannot run, keeps its pixi ticker as the only ticker on the
- * page.
+ * demand, so a still table costs no frames at all.
+ *
+ * When the map cannot start (no WebGL2 on this device) or stops while
+ * running (its GPU context lost, a change it could not draw), the screen
+ * says MAP RENDERER UNAVAILABLE. A lost context that the browser gives back
+ * takes the notice down again. Nothing retries by itself: the kiosk shows
+ * the notice until the TV page is reloaded (the GM's call, 2026-09-27).
  */
 import { useEffect, useRef, useState } from 'react';
 import type { Scene, Token } from '@safehouse/contracts';
@@ -34,19 +37,14 @@ export interface TvStageViewProps {
 
 /**
  * Map images and token art come from the authenticated file store. An <img> —
- * and either renderer's texture loader — cannot set an Authorization header,
- * so the device token rides as a query parameter, the same iframe-safe path
- * the book reader uses. A display token only ever unlocks player-visible
- * files.
- *
- * The classic stage wraps this so pixi is told which parser to use: the URL
- * has no file extension, and pixi picks its texture parser by extension.
+ * and the map's texture loader — cannot set an Authorization header, so the
+ * device token rides as a query parameter, the same iframe-safe path the
+ * book reader uses. A display token only ever unlocks player-visible files.
  */
 function fileUrlWithToken(attachmentId: string): string {
   const token = getToken();
   return `/files/${attachmentId}${token ? `?token=${encodeURIComponent(token)}` : ''}`;
 }
-
 export default function TvStageView({
   scene,
   tokens,
@@ -71,6 +69,14 @@ export default function TvStageView({
       host,
       input: latest.current,
       urlFor: fileUrlWithToken,
+      // The same notice as a map that could not start, up while the map is
+      // stopped and down again if a lost context comes back.
+      onStopped: () => {
+        if (!cancelled) setFailed(true);
+      },
+      onResumed: () => {
+        if (!cancelled) setFailed(false);
+      },
     })
       .then((handle) => {
         if (cancelled) {
@@ -113,8 +119,13 @@ export default function TvStageView({
   return (
     <div className="absolute inset-0 overflow-hidden">
       <div ref={hostRef} className="pointer-events-none absolute inset-0" aria-hidden="true" />
+      {/*
+        Over a stopped stage too, whose layer of plates and labels (z-index 1,
+        `stage3d/index.ts`) is still in the host: hence `z-5`, which keeps it
+        under `TvPage`'s own chrome all the same.
+      */}
       {failed && (
-        <div className="absolute inset-0 grid place-items-center">
+        <div className="absolute inset-0 z-5 grid place-items-center">
           <span className="font-label tv-breathe text-2xl tracking-[0.4em] text-warn">
             MAP RENDERER UNAVAILABLE
           </span>

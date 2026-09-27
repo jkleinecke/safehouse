@@ -133,7 +133,7 @@ export function mapImageId(raw: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Rendering maths — shared by the pixi map layer and the panel's thumbnail
+// Rendering maths — shared by the 3D map's image planes and the panel's thumbnail
 // ---------------------------------------------------------------------------
 
 /** CSS `filter` value for the DOM preview thumbnail. */
@@ -168,7 +168,7 @@ export function cropPixels(
 
 /**
  * A quarter turn swaps the axes, so a rotated sprite stretched over the scene
- * rect needs its LOCAL size transposed (pixi applies scale before rotation).
+ * rect needs its LOCAL size transposed (the scale is applied before the turn).
  */
 export function localSizeFor(
   rotateDeg: number,

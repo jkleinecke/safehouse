@@ -1,7 +1,8 @@
 /**
  * The 3D map's world: every painted floor of a scene, built as real geometry.
  *
- * It reads the scene exactly the way the 2D map does — `planTiles` decides
+ * It reads the scene through the shared tile plan (`grid/plan/tiles.ts`),
+ * exactly as the Build palette's 2D tile painter does — `planTiles` decides
  * what a cell is, which way a wall turns, where an opening's run ends and
  * how the ground splits under an angled wall — and only the DRAWING differs.
  * So a wall that turns a corner on the map turns the same corner here, a
@@ -24,11 +25,11 @@
  *
  * A painted floor changes a few squares at a time — a brush stroke, an
  * erase, an arc bent, a flight of stairs put in — and only the chunks those
- * squares' look reaches are built again (`BuiltWorld.applyTiles`): the 2D
- * map's own rules for what changed (`cellSignatures`, `changedCells`,
+ * squares' look reaches are built again (`BuiltWorld.applyTiles`): the
+ * plan's rules for what changed (`cellSignatures`, `changedCells`,
  * `expandCutRuns`), and this world's own for which squares' builds read
  * them (`reachOf`: a floor's edges, a wall's joins, water's banks, borrowed
- * ground — not the 2D map's every neighbour, whose shadows fall on them).
+ * ground — not every neighbour, as the old 2D map redrew for its shadows).
  * The floor is planned whole every time (`planTiles` is cheap), but only
  * the dirty chunks' squares are looked at and built, and their meshes are
  * swapped for the old ones in the floor's group.
@@ -41,7 +42,6 @@ import type { Scene, TileLayer } from '@safehouse/contracts';
 import { levelTiles, sceneLevels, WALL_THICKNESS, type TileCut } from '@safehouse/rules';
 import { metricsFor, type SceneMetrics } from '../grid/geometry.js';
 import { parseColor, shade } from '../grid/stage/colors.js';
-import type { CutRun } from '../grid/stage/cuts.js';
 import {
   cellSignatures,
   changedCells,
@@ -54,12 +54,13 @@ import {
   tileDrawInput,
   wallBoxes,
   wallDiagonals,
+  type CutRun,
   type GroundSplit,
   type TileCell,
   type TileDrawInput,
   type TilePlan,
   type WallJoins,
-} from '../grid/stage/tileLayer.js';
+} from '../grid/plan/tiles.js';
 import { tileDefKey, type TileDrawDef } from '../grid/types.js';
 import {
   disposeBuilt,
@@ -92,7 +93,7 @@ export interface WorldOptions {
  *     (two cells are a double door, each leaf opening on its own); every other
  *     door design (a roller, a hatch, a glass door) has one leaf across its
  *     whole run, which stands open while any cell of the run does — as the
- *     2D map draws them. The jambs and lintel are wall, and stay;
+ *     2D map drew them. The jambs and lintel are wall, and stay;
  *   - across a 45° run, the whole cell: an open diagonal door is a gap;
  *   - where an arc runs through a painted door or window, the whole opening
  *     in that square: open, it is the way through.
@@ -263,9 +264,9 @@ const DECAL_LIFT = 0.01;
 const WATER_DROP = 0.2;
 /** The bed under the water, in squares below the land. */
 const WATER_BED = 0.7;
-/** Glazing: the 2D map's glass tint, so both read as the same glass. */
+/** Glazing: the 2D map's glass tint, still the palette's (`grid/gm/art/cutArt.ts`), so both read as the same glass. */
 const GLASS = 0x9fd4e6;
-/** The 2D map's per-square grain, same hash, same amplitude: the same floor. */
+/** The 2D map's per-square grain (`grid/gm/art/tileArt.ts`), same hash, same amplitude: the same floor. */
 const GRAIN = 0.045;
 const FALLBACK_BASE = 0x3b3f45;
 const FALLBACK_ACCENT = 0x5a6068;
@@ -279,7 +280,7 @@ const WALL_HI = WALL_LO + WALL_THICKNESS;
 // Colour
 // ---------------------------------------------------------------------------
 
-/** FNV-1a, as the 2D map hashes a square, so the grain lands on the same squares. */
+/** FNV-1a, as the 2D tile painter hashes a square, so the grain lands on the same squares. */
 function hash32(s: string): number {
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i += 1) {
@@ -299,7 +300,7 @@ function mix(a: number, b: number, t: number): number {
   return (ch(16) << 16) | (ch(8) << 8) | ch(0);
 }
 
-/** The tones a tile draws with, derived from its own pair as the 2D map derives them. */
+/** The tones a tile draws with, derived from its own pair as the 2D tile painter derives them. */
 interface Tones {
   base: number;
   accent: number;
@@ -322,7 +323,7 @@ function glowOf(def: TileDrawDef, tones: Tones): number | null {
 // Walls: joins, heights and a frame to build along
 // ---------------------------------------------------------------------------
 
-/** The 8-neighbour joins of a wall cell — the same rule as the 2D map's own `joinsOf`. */
+/** The 8-neighbour joins of a wall cell — the same rule as the plan's own `joinsOf` (`grid/plan/tiles.ts`). */
 function joinsOf(walls: ReadonlySet<string>, col: number, row: number): WallJoins {
   return {
     n: walls.has(`${col},${row - 1}`),
@@ -440,10 +441,12 @@ function block(
 
 /**
  * What an opening is built as, per design. Fractions are of the wall's own
- * painted height (a full wall is one storey), as the 2D elevation's `v` is.
+ * painted height (a full wall is one storey), as the 2D elevation's `v` is
+ * (`grid/gm/art/cutArt.ts`).
  *
- * A record over `TileCut`, like the 2D map's switch, so a design added to the
- * catalogue without a build here is a compile error rather than a plain wall.
+ * A record over `TileCut`, like the 2D painter's switch, so a design added to
+ * the catalogue without a build here is a compile error rather than a plain
+ * wall.
  */
 type Design =
   | { type: 'door'; top: number; pad: number; leaf: 'solid' | 'glass' | 'none' }
@@ -481,7 +484,7 @@ const DESIGNS: Readonly<Record<TileCut, Design>> = {
 
 /** Designs that are a pane you see through, for a diagonal cell drawn as plain wall. */
 const GLASSY: ReadonlySet<TileCut> = new Set<TileCut>(['glass', 'wireglass', 'shopwindow', 'glassdoor', 'mesh']);
-/** Designs that can stand open (the 2D map's `DOOR_CUTS`). */
+/** Designs that can stand open (the 2D painter's `DOOR_CUTS`). */
 const DOOR_CUTS: ReadonlySet<TileCut> = new Set<TileCut>(['door', 'maglock', 'porthole', 'glassdoor', 'roller', 'shutter', 'hatch']);
 
 interface OpeningCtx {
@@ -792,7 +795,7 @@ function buildWallCell(ctx: LevelCtx, cell: TileCell): void {
   if (diagonalOnly(joins)) {
     // A diagonal door or window: its design runs along the grid, so across a
     // 45° run it is the wall in the opening's colours (glass if glazed), and
-    // an open door is a gap — as the 2D map draws it. So a door's whole cell
+    // an open door is a gap — as the 2D map drew it. So a door's whole cell
     // is its leaf.
     const into = cut !== null && DOOR_CUTS.has(cut) ? ctx.doorLeaf([`${col},${row}`]) : b;
     const glassy = cut !== null && GLASSY.has(cut);
@@ -888,7 +891,7 @@ function buildArcPiece(ctx: LevelCtx, cell: TileCell, seg: NonNullable<TileCell[
   if (glow !== null && cell.opening === undefined) block(b, f, 0, f.len, -h * 0.4, h * 0.4, y1, y1 + 0.03, glow, { kind: 'glow' });
 }
 
-/** A flight of stairs: four treads climbing across the square (reversed for a down-flight), as the 2D map draws them. */
+/** A flight of stairs: four treads climbing across the square (reversed for a down-flight), as the 2D map drew them. */
 function buildStair(ctx: LevelCtx, cell: TileCell): void {
   const { col, row, def } = cell;
   const b = ctx.chunk(col, row);
@@ -977,7 +980,7 @@ function parseCell(key: string): { col: number; row: number } | null {
   return m === null ? null : { col: Number(m[1]), row: Number(m[2]) };
 }
 
-/** The chunk a square is built into, as `"cx,cy"`: the 2D map's own key (`chunkKey`) at this world's size. */
+/** The chunk a square is built into, as `"cx,cy"`: the plan's key (`chunkKey`, `plan/tiles.ts`) at this world's size. */
 function chunkOf(col: number, row: number): string {
   return chunkKey(col, row, CHUNK);
 }
@@ -1106,8 +1109,8 @@ function emitLevel(level: number, plan: TilePlan, unitM: number, storey: number,
   // reads further.
   const waterCells: TileCell[] = [];
   const special = new Set<string>();
-  // Every square an angled wall crosses is split, whether or not the 2D
-  // map's sampling found ground on either side of it (`TilePlan.splits`).
+  // Every square an angled wall crosses is split, whether or not the plan's
+  // sampling found ground on either side of it (`TilePlan.splits`).
   for (const key of plan.splits.keys()) special.add(key);
   for (const cell of plan.cells) {
     if (cell.seg !== undefined || cell.layer !== 0) continue;
@@ -1335,7 +1338,7 @@ const F_UNDERLAID = 16;
 const F_STANDING = 32;
 
 /**
- * What a floor was built from: its tiles as the 2D map reads them, less the
+ * What a floor was built from: its tiles as the plan reads them, less the
  * doors' state; each square's signature (`cellSignatures`); the plan; the
  * doors standing open; and what `emitLevel` makes of each square as its
  * neighbours read it (`F_PLAIN` … `F_STANDING`).
@@ -1352,7 +1355,7 @@ function sourceOf(tiles: TileLayer, defs: Readonly<Record<string, TileDrawDef>>,
   // Without the doors' state: a door opening or shutting changes no chunk
   // (its leaf is left out of the draw or put back), so it must not read as a
   // change to its square. One input for the signatures and the plan, so the
-  // floor's water is resolved once (`tileLayer.ts` caches it per input).
+  // floor's water is resolved once (`plan/tiles.ts` caches it per input).
   const input: TileDrawInput = { ...tileDrawInput(tiles, defs as Record<string, TileDrawDef>), doors: undefined };
   const plan = planTiles(m, input);
   const openDoors = new Set<string>();
@@ -1444,8 +1447,8 @@ const BESIDE: ReadonlyArray<readonly [number, number]> = [
  * The changed squares, with every square whose build reads one of them —
  * the squares to build again, whose chunks are the dirty ones.
  *
- * The 2D map builds again all eight neighbours of a changed square (its
- * `dirtyChunks`): its shadows and ambient rings fall on them. Here a
+ * The old 2D map drew again all eight neighbours of a changed square: its
+ * shadows and ambient rings fell on them. Here a
  * square's build reads the squares round it in four ways only, and a change
  * reaches a neighbour only through one of them:
  *   - a floor's edges (`emitFloor`) are drawn by whether the four squares
@@ -1750,7 +1753,7 @@ export function buildWorld(
       const t0 = performance.now();
       const before = st.source;
       const after = tiles === undefined ? null : sourceOf(tiles, tileDefs, m);
-      // What changed, by the 2D map's rules, and the chunks of the squares
+      // What changed, by the plan's rules, and the chunks of the squares
       // whose builds read it (`reachOf`); a floor whose tileset changed, or
       // that gained or lost its tiles, is built again whole.
       let dirty: Set<string> | null = null;

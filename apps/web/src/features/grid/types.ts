@@ -1,6 +1,7 @@
 /**
- * Grid feature shared types (DESIGN.md M9 P2). Pure TS — no pixi imports here
- * so the main bundle stays lean; the stage subtree is loaded lazily.
+ * Grid feature shared types (DESIGN.md M9 P2). Pure TS — no three imports
+ * here so the main bundle stays lean; the 3D stage is loaded lazily
+ * (`stageLoader.ts`).
  */
 import type { Point, Role, Scene, Token } from '@safehouse/contracts';
 import type { PaintDelta } from './paintedObjects.js';
@@ -62,10 +63,10 @@ export type ViewProjection = 'scene' | 'topdown' | 'iso';
 /**
  * One tile as the canvas draws it (FR9.2).
  *
- * `pattern` is the rules union rather than a bare string on purpose:
- * `stage/tileLayer.ts` switches on it and asserts the default branch is
- * `never`, so a thirteenth pattern added to the catalogue fails the build
- * instead of quietly rendering every cell as flat base colour.
+ * `pattern` is the rules union rather than a bare string on purpose: the
+ * tile painter (`gm/art/tileArt.ts`) switches on it and asserts the default
+ * branch is `never`, so a thirteenth pattern added to the catalogue fails the
+ * build instead of quietly rendering every cell as flat base colour.
  */
 export interface TileDrawDef {
   pattern: TilePattern;
@@ -92,8 +93,9 @@ export interface TileDrawDef {
   connects?: 'up' | 'down';
   /**
    * The design of an opening in a wall — a roller door, wire-glass, a
-   * wheel-hatch — drawn on the slab's face (see `stage/cuts.ts`). Absent on a
-   * door or a see-through wall falls back to a plain leaf or plain glazing.
+   * wheel-hatch — drawn on the slab's face (`lab3d/world3d.ts`; the palette's
+   * picture of it, `gm/art/cutArt.ts`). Absent on a door or a see-through
+   * wall falls back to a plain leaf or plain glazing.
    */
   cut?: TileCut;
   /**
@@ -313,7 +315,7 @@ export interface TokenBars {
  *
  * Computed in React, not in the stage. The set depends on the scene, the
  * tokens and which character this device owns — a graph that lives in hooks —
- * so deriving it inside the pixi chunk would drag all of that in for nothing.
+ * so deriving it inside the map's chunk would drag all of that in for nothing.
  * The stage's job is to draw the answer.
  */
 export interface ShroudState {
@@ -334,7 +336,6 @@ export interface ShroudState {
   heights?: ReadonlyMap<string, number> | undefined;
 }
 
-/** Everything the pixi stage needs to (re)draw a frame of scene state. */
 /**
  * The one thing the GM has picked on the map — ringed on the canvas, open in
  * the panel's inspector (docs/UX_MAP_BUILDER.md §3.2). One at a time: the
@@ -350,6 +351,7 @@ export interface GeometrySelection {
   id: string;
 }
 
+/** Everything the map stage needs to (re)draw a frame of scene state. */
 export interface StageSceneState {
   scene: Scene;
   tokens: Token[];
@@ -527,9 +529,6 @@ export interface CameraCone {
   key: string;
 }
 
-/** The two renderers the map can be drawn with: the three.js map, or the classic PixiJS one. */
-export type StageRenderer = '3d' | 'classic';
-
 /**
  * How hard the 3D map works this device's GPU: Low draws unlit with baked
  * light and no shadow maps (phones, the TV); Medium and High add real-time
@@ -537,16 +536,27 @@ export type StageRenderer = '3d' | 'classic';
  */
 export type StageQuality = 'low' | 'medium' | 'high';
 
-/** Imperative API of the lazily-loaded map stage (either renderer). */
+/**
+ * Why a running map stopped drawing (`StageLoadContext.onStopped`). There is
+ * no second renderer to fall back on, so the page puts a panel over the map
+ * with a Reload map button instead:
+ *   - `context-lost`: the browser took the GPU context away (a driver reset,
+ *     a phone tab sent to the background). The map waits for it to come back
+ *     and says so (`onResumed`) when it does.
+ *   - `build-failed`: a change to the scene could not be drawn. The map
+ *     halts where it was and takes no more changes until it is reloaded.
+ *   - `quality-failed`: switching quality needs a new GPU context, and the
+ *     browser refused one. There is no canvas left until a reload.
+ */
+export type StageStop = 'context-lost' | 'build-failed' | 'quality-failed';
+
+/** Imperative API of the lazily-loaded map stage. */
 export interface StageApi {
   /**
-   * Which renderer is drawing the map at the moment; absent means classic.
-   * The page reads it for the renderer switch, so it shows what is actually
-   * drawing — a 3D map that could not start or lost its GPU is classic.
+   * Change the 3D map's quality (`StageQuality`) on the live stage; the next
+   * mount starts from the stored choice (`setQualityPreference`).
    */
-  readonly renderer?: StageRenderer;
-  /** The 3D map's quality (`StageQuality`); the classic map has none and leaves this out. */
-  setQuality?(quality: StageQuality): void;
+  setQuality(quality: StageQuality): void;
   update(state: StageSceneState): void;
   /**
    * Tile definitions for the painted floor (FR9.2), keyed by `tileDefKey` —

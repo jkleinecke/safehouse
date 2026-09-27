@@ -2,9 +2,10 @@
  * Static scene layers: 1m grid overlay, fog of war, GM geometry (walls,
  * zones, doors). Redrawn only when the scene object changes — never per frame.
  *
- * No pixi: each layer draws into an `Ink` and puts its text through a
- * `LabelSink` (`ink.ts`). The 2D stage hands over a Graphics and its pooled
- * Text; a 3D stage can hand over floor meshes and DOM labels.
+ * No renderer: each layer draws into an `Ink` and puts its text through a
+ * `LabelSink` (`ink.ts`). The 3D stage hands over floor meshes (`FloorInk`)
+ * and DOM labels; until P5 the 2D stage handed over a pixi Graphics and its
+ * pooled Text.
  */
 import type { Camera as SecurityCamera, Point, Scene, SceneLight } from '@safehouse/contracts';
 import type { CameraCone, GeometrySelection } from '../types.js';

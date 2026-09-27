@@ -12,11 +12,10 @@
  * other layer draws through.
  */
 import { describe, expect, it } from 'vitest';
-import type { Graphics } from 'pixi.js';
 import type { Scene } from '@safehouse/contracts';
 import { TILE_HEIGHTS } from '@safehouse/rules';
 import { heightRise, metricsFor, worldFromGrid } from '../geometry.js';
-import type { LabelSink } from './ink.js';
+import type { Ink, LabelSink } from './ink.js';
 import { drawFog } from './layers.js';
 
 const iso = metricsFor({
@@ -35,7 +34,7 @@ const flat = metricsFor({
 });
 
 /** Records the polygons that were CUT, which is the whole subject here. */
-function tracing(): { g: Graphics; cuts: number[][] } {
+function tracing(): { g: Ink; cuts: number[][] } {
   const cuts: number[][] = [];
   let last: number[] = [];
   const g: Record<string, unknown> = {
@@ -56,7 +55,7 @@ function tracing(): { g: Graphics; cuts: number[][] } {
       return g;
     },
   };
-  return { g: g as unknown as Graphics, cuts };
+  return { g: g as unknown as Ink, cuts };
 }
 
 const noLabels = (): LabelSink => ({ put: () => undefined, sweep: () => undefined });
@@ -197,7 +196,7 @@ describe('drawFog', () => {
 
 describe('drawFog with nothing defined', () => {
   /** Records the cover rectangle as well as the cuts. */
-  function tracingCover(): { g: Graphics; rects: number; cuts: number } {
+  function tracingCover(): { g: Ink; rects: number; cuts: number } {
     const out = { rects: 0, cuts: 0 };
     const g: Record<string, unknown> = {
       clear: () => g,
@@ -218,7 +217,7 @@ describe('drawFog with nothing defined', () => {
       },
     };
     return {
-      g: g as unknown as Graphics,
+      g: g as unknown as Ink,
       get rects() {
         return out.rects;
       },

@@ -9,12 +9,10 @@
  * nothing back, because a glow with no fixture is a floor tile pretending.
  */
 import { describe, expect, it } from 'vitest';
-import type { Graphics } from 'pixi.js';
 import { TILESETS, TILE_PROPS, type TileProp } from '@safehouse/rules';
 import { metricsFor } from '../geometry.js';
 import { tileDefKey, tileDefsFromSets } from '../types.js';
-import { designFootprint, drawProp, propFootprint, propPlacement } from './props.js';
-import { drawTiles, tileDrawInput } from './tileLayer.js';
+import { designFootprint, drawProp, propFootprint, propPlacement, type PropPen } from './props.js';
 
 const iso = metricsFor({ unitM: 1, cols: 12, rows: 12, offset: { x: 0, y: 0 }, projection: 'iso' as const });
 const plan = metricsFor({ unitM: 1, cols: 12, rows: 12, offset: { x: 0, y: 0 }, projection: 'topdown' as const });
@@ -24,7 +22,7 @@ interface Call {
   args: unknown[];
 }
 
-function counting(): { g: Graphics; calls: Call[] } {
+function counting(): { g: PropPen; calls: Call[] } {
   const calls: Call[] = [];
   const g: Record<string, unknown> = {};
   for (const op of ['clear', 'rect', 'fill', 'moveTo', 'lineTo', 'stroke', 'circle', 'ellipse', 'closePath']) {
@@ -33,7 +31,7 @@ function counting(): { g: Graphics; calls: Call[] } {
       return g;
     };
   }
-  return { g: g as unknown as Graphics, calls };
+  return { g: g as unknown as PropPen, calls };
 }
 
 const TONES = { base: 0x74644e, accent: 0x8b7760, light: 0x9c8a70, dark: 0x5f5240, ink: 0x463c2f };
@@ -141,20 +139,5 @@ describe('the catalogue draws through its designs', () => {
         expect(defs[tileDefKey(set.id, t.id)]?.prop, `${set.id}/${t.id}`).toBe(t.prop);
       }
     }
-  });
-
-  it('draws a designed prop in place of the plain solid, standing and flat', () => {
-    // A standing prop (a workstation) and a flat one (a pallet): both must
-    // produce a drawing, and the flat one must still get floor beneath it.
-    const g = counting();
-    drawTiles(
-      g.g,
-      iso,
-      tileDrawInput(
-        { tilesetId: 'docklands', cells: {}, ground: {}, structure: {}, object: { '2,2': 'workbench', '4,4': 'pallet' } },
-        defs,
-      ),
-    );
-    expect(g.calls.filter((c) => c.op === 'fill').length).toBeGreaterThan(12);
   });
 });

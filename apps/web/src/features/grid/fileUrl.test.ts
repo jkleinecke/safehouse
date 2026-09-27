@@ -1,6 +1,6 @@
 /**
  * `/files/:id` is an authenticated route, and every consumer of `fileUrl` is a
- * thing that cannot send a header: an `<img src>` on the Scenes list, pixi's
+ * thing that cannot send a header: an `<img src>` on the Scenes list, three's
  * texture loader on the Grid and the TV, an `<a href>` on a pin.
  *
  * Found by driving the real app as the GM: the demo campaign's floor plan sat

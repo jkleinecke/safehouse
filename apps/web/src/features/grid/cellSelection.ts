@@ -1,5 +1,5 @@
 /**
- * A multi-selection of painted squares — pure, no pixi, no React.
+ * A multi-selection of painted squares — pure, no three, no React.
  *
  * Clicking one wall selects that wall, whole (`paintedObjects.ts`). This is
  * the other kind of selection: a set of SQUARES, built by dragging a box or

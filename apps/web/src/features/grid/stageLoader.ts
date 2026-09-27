@@ -1,138 +1,71 @@
 /**
- * The one place that decides which renderer draws the map.
+ * The one place the map is mounted from.
  *
- * Two renderers can stand behind `StageApi`: the classic PixiJS stage
- * (`stage/index.ts`) and the three.js stage (`stage3d/index.ts`, P1 of the
- * move to 3D). The Grid (`useStage.ts`) and the
- * TV (`tvStage.ts`) both mount through `loadStage` and never import either
- * renderer themselves, so the choice, the capability check and the fallback
- * live here and nowhere else.
+ * One renderer stands behind `StageApi`: the three.js stage
+ * (`stage3d/index.ts`). The Grid (`useStage.ts`) and the TV (`tvStage.ts`)
+ * both mount through `loadStage` and never import it themselves, so the
+ * capability check and the quality a mount starts at live here and nowhere
+ * else.
  *
- * The choice, in order:
- *   1. Is there a 3D stage at all (`STAGE3D_BUILT`)? Yes, since P1.
- *   2. Does this role get 3D in this phase (`roleMay3d`)? Every role, since
- *      P2: the GM, the players, the observers and the TV.
- *   3. Has this device been set to Classic (`getRendererPreference`)? Only
- *      a device someone set to Classic draws it; one never set draws 3D.
- *   4. Can this browser run it (`supportsWebGL2`)? three.js needs WebGL2.
+ * three.js needs WebGL2, so `supportsWebGL2` is asked first. A browser
+ * without it gets a plain error the page shows over the map, before the
+ * three chunk is ever downloaded. There is no second renderer to fall back on
+ * any more: the classic PixiJS map is gone, and with it the per-device
+ * renderer switch.
  *
- * So since P3, which made Build and Prep on the 3D map as cheap as on the
- * classic one (a brush stroke or a door builds again only the chunks it
- * reaches), 3D is everyone's map by default wherever WebGL2 is: the GM's
- * laptop in every mode, the players' phones and the TV. Classic stays as the
- * per-device switch and the fallback.
- *
- * The 3D map's quality is this device's too (`getQualityPreference`): Low on
- * the TV, always; for anyone else what the device was set to, else Low on a
+ * The 3D map's quality is this device's (`getQualityPreference`): Low on the
+ * TV, always; for anyone else what the device was set to, else Low on a
  * phone or a tablet and Medium elsewhere. The loader hands it to the 3D
  * stage with the role it is for (`Stage3DHooks.quality`).
  *
- * And the fallback: a 3D stage that throws while starting, or that later
- * loses its GPU context or cannot build a change, is replaced by the classic
- * stage in the same host.
- * The page never learns it happened; it keeps the handle it was given.
+ * And the page is told when a running map stops: its GPU context was lost,
+ * a change could not be drawn, or a quality switch was refused a new context
+ * (`StageStop`, through `StageLoadContext.onStopped`). It is told again when
+ * a lost context comes back by itself (`onResumed`). What to do about a stop
+ * is the page's call: the Grid shows a panel with a Reload map button, the
+ * TV its "renderer unavailable" notice.
  *
- * Both renderers are reached only through dynamic `import()`, so pixi and
- * three each stay in their own lazy chunk (D9, `router.chunks.test.ts`).
+ * The stage is reached only through a dynamic `import()`, so three stays in
+ * its own lazy chunk (D9, `router.chunks.test.ts`).
  */
 import type { Role } from '@safehouse/contracts';
-import type { VisionMode } from '@safehouse/rules';
-import type {
-  MovementThresholds,
-  StageApi,
-  StageOptions,
-  StageQuality,
-  StageRenderer,
-  TileDrawDef,
-} from './types.js';
+import type { StageApi, StageOptions, StageQuality, StageStop } from './types.js';
 
-export type { StageQuality, StageRenderer } from './types.js';
+export type { StageQuality, StageStop } from './types.js';
 
-/** Who is mounting the map; the role gate reads it. */
+/** Who is mounting the map, and who to tell when it stops. */
 export interface StageLoadContext {
+  /** The role the map is drawn for; it picks the starting quality (`getQualityPreference`). */
   role: Role;
+  /**
+   * The running map stopped drawing (`StageStop`). Called once per stop; a
+   * lost context that comes back is reported through `onResumed`.
+   */
+  onStopped?(stop: StageStop): void;
+  /** A lost GPU context came back and the map is drawing again. */
+  onResumed?(): void;
 }
 
 /**
  * What the loader hands the 3D stage besides its options. The 3D stage's
- * `createStage(opts, hooks)` takes this (P1).
+ * `createStage(opts, hooks)` takes this.
  */
 export interface Stage3DHooks {
   /**
-   * How to tell the loader the 3D map cannot go on — its GPU context is gone
-   * for good, or its world could not be built from a later change — so it
-   * can put the classic stage in its place.
+   * How the stage tells the page it has stopped drawing: its GPU context is
+   * gone, a later change could not be built, or a quality switch was refused
+   * a new context (`StageStop`). The stage is not destroyed; the page decides
+   * whether to remount it.
    */
-  onLost(reason: string): void;
+  onStopped(stop: StageStop): void;
+  /** How the stage tells the page a lost GPU context came back and it is drawing again. */
+  onResumed(): void;
   /**
    * The quality the 3D map starts at: this device's for the role mounting it
    * (`getQualityPreference`). Afterwards the page changes it on the live
    * stage (`StageApi.setQuality`).
    */
   quality: StageQuality;
-}
-
-/**
- * Whether `./stage3d/index.ts` exists. P0 laid the seams with this false, so
- * every mount resolved to classic without touching WebGL; P1 landed the 3D
- * stage and set it true. Flip it back to take the 3D map out of every mount
- * at once without touching anything else.
- */
-const STAGE3D_BUILT: boolean = true;
-
-/**
- * Which roles are offered the 3D stage, each one decided here — a role added
- * to the contract does not compile until it is. The GM played on it first
- * (P1); P2 made the fog and the sightline shroud cover the 3D scene at every
- * height and from every angle, and moved the players' phones and laptops,
- * the observers and the TV (`display`) onto it too.
- */
-const OFFERED_3D: Readonly<Record<Role, boolean>> = {
-  gm: true,
-  player: true,
-  observer: true,
-  display: true,
-};
-
-/** The roles offered the 3D stage in this phase (`OFFERED_3D`): every role, since P2. */
-export const ROLES_3D: ReadonlySet<Role> = new Set<Role>(
-  (Object.keys(OFFERED_3D) as Role[]).filter((role) => OFFERED_3D[role]),
-);
-
-/** Whether `role` may be drawn with the 3D stage in this phase (see `ROLES_3D`). */
-export function roleMay3d(role: Role): boolean {
-  return ROLES_3D.has(role);
-}
-
-/** The per-device renderer choice, in localStorage. Absent means "no choice made here". */
-export const RENDERER_PREF_KEY = 'safehouse.renderer';
-
-/**
- * The renderer this device was set to, or null when it was never set (the
- * default then applies: 3D where the gates allow it). Storage that cannot be
- * read — a private window, blocked site data — reads as never set.
- */
-export function getRendererPreference(): StageRenderer | null {
-  try {
-    const v = window.localStorage.getItem(RENDERER_PREF_KEY);
-    return v === '3d' || v === 'classic' ? v : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Set this device's renderer (the 3D / Classic switch), or clear the
- * choice with null. It takes effect on the next mount. Storage that cannot be
- * written is ignored: the choice simply does not stick.
- */
-export function setRendererPreference(renderer: StageRenderer | null): void {
-  try {
-    if (renderer === null) window.localStorage.removeItem(RENDERER_PREF_KEY);
-    else window.localStorage.setItem(RENDERER_PREF_KEY, renderer);
-  } catch {
-    // Not stored; the default stands.
-  }
 }
 
 /** The per-device 3D quality, in localStorage. Absent means the device's default (`getQualityPreference`). */
@@ -204,170 +137,28 @@ export function supportsWebGL2(): boolean {
   return webgl2;
 }
 
-/**
- * Set when a 3D stage failed to start or lost its context: the rest of this
- * page load mounts classic straight away rather than failing the same way at
- * every scene switch. A reload tries 3D again.
- */
-let failed3d = false;
+function noop(): void {}
 
 /**
- * Whether the 3D map can be offered to `role` on this device in this page
- * load, whatever the device is set to: it exists, the role gets it in this
- * phase, the browser has WebGL2, and it has not already failed here. The
- * renderer switch offers 3D only when this is true.
- */
-export function offers3d(role: Role): boolean {
-  return STAGE3D_BUILT && !failed3d && roleMay3d(role) && supportsWebGL2();
-}
-
-/** Which renderer a mount for `role` gets, by the rules in this module's header. */
-export function chooseRenderer(role: Role): StageRenderer {
-  if (!STAGE3D_BUILT || failed3d) return 'classic';
-  if (!roleMay3d(role)) return 'classic';
-  if (getRendererPreference() === 'classic') return 'classic';
-  if (!supportsWebGL2()) return 'classic';
-  return '3d';
-}
-
-/**
- * Mount the map into `opts.host` with the renderer `chooseRenderer` picks
- * for `ctx.role`, falling back to classic if the 3D stage cannot start.
- * Rejects only when the classic stage cannot start either.
+ * Mount the map into `opts.host`. Rejects with a plain message the page can
+ * show when this browser has no WebGL2 (asked before the three chunk is
+ * fetched, so a browser that cannot draw it never downloads it) or when the
+ * 3D stage throws while starting. There is nothing else to fall back on.
+ *
+ * Once it is running, the stage reports a stop and a recovery through
+ * `ctx.onStopped` and `ctx.onResumed` (see `StageStop`); the page keeps the
+ * handle either way and remounts only when asked to.
  */
 export async function loadStage(opts: StageOptions, ctx: StageLoadContext): Promise<StageApi> {
-  if (chooseRenderer(ctx.role) === '3d') {
-    try {
-      return await load3d(opts, getQualityPreference(ctx.role));
-    } catch (err) {
-      failed3d = true;
-      console.warn('[stage] the 3D map could not start; drawing the classic map instead', err);
-    }
+  if (!supportsWebGL2()) {
+    throw new Error('This browser cannot draw the map: WebGL2 is turned off or not supported.');
   }
-  return createClassic(opts);
-}
-
-/** The classic PixiJS stage: the only reference to `stage/` outside it (D9). */
-async function createClassic(opts: StageOptions): Promise<StageApi> {
-  const { createStage } = await import('./stage/index.js');
-  return createStage(opts);
-}
-
-/** The 3D stage: the only reference to `stage3d/` outside it, so three stays in its own lazy chunk. */
-async function create3d(opts: StageOptions, hooks: Stage3DHooks): Promise<StageApi> {
+  // The only reference to `stage3d/` outside it, so three stays in its own
+  // lazy chunk (D9, `router.chunks.test.ts`).
   const { createStage } = await import('./stage3d/index.js');
-  return createStage(opts, hooks);
-}
-
-/**
- * The 3D stage behind a handle that can swap it for the classic stage.
- *
- * The page keeps this handle for the stage's whole life, so it remembers what
- * the page last told the stage — the frame state, the palette, the view mode,
- * the drag ghosts and the ruler bands — and, if the 3D stage reports its GPU
- * context lost, destroys it and starts the classic stage in the same host
- * with all of that replayed. One-off effects (a ping, a trail sample, a
- * camera move) are not replayed: the classic stage frames the scene itself.
- * `quality` is what the 3D stage starts at.
- */
-async function load3d(opts: StageOptions, quality: StageQuality): Promise<StageApi> {
-  let state = opts.state;
-  let defs: Record<string, TileDrawDef> | null = null;
-  let viewMode: VisionMode | null = null;
-  let drags: Parameters<StageApi['setDrags']>[0] | null = null;
-  let thresholds: MovementThresholds | null | undefined;
-  let current: StageApi | null = null;
-  let destroyed = false;
-  let lost = false;
-
-  const onLost = (reason: string): void => {
-    if (destroyed || lost) return;
-    lost = true;
-    failed3d = true;
-    console.warn(`[stage] the 3D map stopped (${reason}); switching to the classic map`);
-    const dead = current;
-    current = null;
-    try {
-      dead?.destroy();
-    } catch {
-      // A stage without a context may fail to tear down cleanly; it is gone either way.
-    }
-    void createClassic({ ...opts, state })
-      .then((classic) => {
-        if (destroyed) {
-          classic.destroy();
-          return;
-        }
-        // The page kept updating while the classic chunk loaded: the stage
-        // was made with the state as it stood then, so it gets the latest.
-        classic.update(state);
-        if (defs) classic.setTileDefs(defs);
-        if (viewMode) classic.setViewMode(viewMode);
-        if (drags) classic.setDrags(drags);
-        if (thresholds !== undefined) classic.setRulerThresholds(thresholds);
-        current = classic;
-      })
-      .catch((err: unknown) => {
-        console.error('[stage] the classic map could not start after the 3D map was lost', err);
-      });
-  };
-
-  const inner = await create3d(opts, { onLost, quality });
-  // A context lost while the stage was still starting has already sent the
-  // classic stage in; the 3D one it would have been is not wanted.
-  if (lost) inner.destroy();
-  else current = inner;
-
-  return {
-    get renderer(): StageRenderer {
-      return current !== null && current === inner ? '3d' : 'classic';
-    },
-    setQuality(q) {
-      current?.setQuality?.(q);
-    },
-    update(s) {
-      state = s;
-      current?.update(s);
-    },
-    setTileDefs(d) {
-      defs = d;
-      current?.setTileDefs(d);
-    },
-    setViewMode(m) {
-      viewMode = m;
-      current?.setViewMode(m);
-    },
-    setDrags(d) {
-      drags = d;
-      current?.setDrags(d);
-    },
-    flashPing(x, y) {
-      current?.flashPing(x, y);
-    },
-    trail(x, y) {
-      current?.trail(x, y);
-    },
-    setRulerThresholds(t) {
-      thresholds = t;
-      current?.setRulerThresholds(t);
-    },
-    clearRuler() {
-      current?.clearRuler();
-    },
-    centerOn(x, y) {
-      current?.centerOn(x, y);
-    },
-    zoomBy(factor) {
-      current?.zoomBy(factor);
-    },
-    fitScene() {
-      current?.fitScene();
-    },
-    destroy() {
-      if (destroyed) return;
-      destroyed = true;
-      current?.destroy();
-      current = null;
-    },
-  };
+  return createStage(opts, {
+    quality: getQualityPreference(ctx.role),
+    onStopped: ctx.onStopped ?? noop,
+    onResumed: ctx.onResumed ?? noop,
+  });
 }

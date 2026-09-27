@@ -1,11 +1,9 @@
 /**
  * The three.js map stage (the move to 3D: P1 for the GM, P2 for the table,
- * P3 for Build and Prep, and everyone's map by default since):
- * the `StageApi` the 2D Pixi stage (`../stage/index.ts`) implements, drawn by
- * the 3D runtime (`lab3d/runtime3d.ts`) and behaving the same from the page's
- * side. It is a lazy chunk, reached only through `stageLoader.ts`'s dynamic
- * import, so three never enters the initial bundle and pixi never enters
- * this one.
+ * P3 for Build and Prep, and the only map since P5 retired the 2D one):
+ * the page's `StageApi`, drawn by the 3D runtime (`lab3d/runtime3d.ts`). It
+ * is a lazy chunk, reached only through `stageLoader.ts`'s dynamic import,
+ * so three never enters the initial bundle.
  *
  * What stands where:
  *   - the runtime draws the world — painted floors, walls, doors, props and
@@ -15,16 +13,16 @@
  *     GM, only those the fog does not cover (`lightTokens`);
  *   - `Camera3D` is the view, and the pointer's `ViewCamera`: isometric or
  *     top-down as the scene's projection says, orthographic both;
- *   - the same `PointerController` as the 2D map turns the DOM's pointer
- *     events into the same callbacks, through that camera, with a raycast of
- *     the figures (`pickToken`) ahead of its disc test for tokens, and ONE
- *     raycast of everything standing on the floor in view — the world's
- *     walls, props, stairs and door leaves, and the GM's traced walls and
- *     doors (`standing`, `picking.ts`) — for the painted door a press opens
- *     (`pickTileDoor`), the traced one (`pickTraced`), and the square of the
- *     painted thing it picks (`pickCell`): so a press on a wall's upper half
- *     is the wall, not the square behind it, and never takes a door, a wall
- *     or a note standing or lying behind what it is on;
+ *   - the `PointerController` the 2D map had (`stage/pointer.ts`) turns the
+ *     DOM's pointer events into the page's callbacks, through that camera,
+ *     with a raycast of the figures (`pickToken`) ahead of its disc test for
+ *     tokens, and ONE raycast of everything standing on the floor in view —
+ *     the world's walls, props, stairs and door leaves, and the GM's traced
+ *     walls and doors (`standing`, `picking.ts`) — for the painted door a
+ *     press opens (`pickTileDoor`), the traced one (`pickTraced`), and the
+ *     square of the painted thing it picks (`pickCell`): so a press on a
+ *     wall's upper half is the wall, not the square behind it, and never
+ *     takes a door, a wall or a note standing or lying behind what it is on;
  *   - the Build selection stands up (`selection.ts`): a selected wall run,
  *     opening or prop, or a marquee's squares, as a box outline as tall as
  *     what it holds, its handles as discs over the canvas where the pointer's
@@ -42,10 +40,10 @@
  *   - the flat overlays — the grid, the GM's walls, doors and zones, the
  *     GM's fog regions, the light-map wash, the AoE, the fog draft, the
  *     ruler and every Build draft but the selection and its ghost — are
- *     the 2D map's own draw functions,
- *     handed a `FloorInk` that lays them on the floor in view, each redrawn
- *     only when its key (`../stage/keys.ts`) changes, as the 2D stage
- *     redraws its Graphics;
+ *     drawn by the draw functions the 2D map drew them with (`stage/layers.ts`,
+ *     `stage/fx.ts`, `stage/lightLayer.ts`), handed a `FloorInk` that lays
+ *     them on the floor in view, each redrawn only when its key
+ *     (`../stage/keys.ts`) changes, as the 2D stage redrew its Graphics;
  *   - `FloorMarks` fades the pings and the pointer trail on the floor;
  *   - `MapPlane` lays the scene's map images under the ground floor.
  *
@@ -55,11 +53,11 @@
  * is moving draws nothing: the acting runner's plate breathes on the
  * compositor, and its ring holds still.
  *
- * Every viewer draws on it since P2 (`stageLoader.ts` `ROLES_3D`): the GM,
+ * Every viewer draws on it, since it is the only map there is: the GM,
  * the players' phones and laptops through the same Grid page, and the TV
  * (`tvStage.ts`, role `display`), which gets no `PointerController` at all.
  * What is the GM's alone is drawn for the GM alone, gated on the role as the
- * 2D map gates it: the GM's walls, doors and zones (`drawGeometry`), the fog
+ * 2D map gated it: the GM's walls, doors and zones (`drawGeometry`), the fog
  * as a tint (`drawFog`), the light-map wash, and hidden tokens drawn
  * see-through (`syncTokens`).
  *
@@ -72,7 +70,7 @@
  * draws: the shadow maps (redrawn when it changes), the lights of the tokens
  * under it (not lit), and the storeys below the floor in view, which its lid
  * shuts off where the fog's discard would open a hole. What the 2D map
- * draws above its fog (the templates, the ruler, the drafts, pings and the
+ * drew above its fog (the templates, the ruler, the drafts, pings and the
  * trail) is drawn above it here too.
  *
  * The GM's markers (`markers.ts`, P3) are drawn where the pointer's hit
@@ -86,11 +84,11 @@
  * storey tall on every floor on show (`tracedWalls.ts`), taken by a press on
  * their faces (`pickTraced`) as well as on their lines.
  *
- * The vision modes (P4) are the 2D map's own colour matrices
+ * The vision modes (P4) are the colour matrices the 2D map used
  * (`stage/viewModes.ts`), applied by the cover's patch to every covered
  * material's final colour: the floor's matrix on the world, the map and the
  * floors below, the bodies' on the figures in view, none on the overlays and
- * markers — as the 2D map filters its layers — and the bodies' on the plates
+ * markers — as the 2D map filtered its layers — and the bodies' on the plates
  * too, by an SVG filter (`setViewMode`).
  */
 import { Group, Raycaster, Vector2, Vector3, type Mesh } from 'three';
@@ -107,6 +105,7 @@ import {
   type StageOptions,
   type StageQuality,
   type StageSceneState,
+  type StageStop,
   type TileDrawDef,
   type TileRectMode,
 } from '../types.js';
@@ -157,13 +156,13 @@ const CATALOGUE_DEFS: Record<string, TileDrawDef> = tileDefsFromSets(TILESETS);
  * washes, the grid and the GM's geometry lie under the figures' rings,
  * shadows and blood (1–2) and the top view's portrait discs (4); the fog
  * tint, the templates, the drafts and the ruler lie over them, as the 2D map
- * layers them over its tokens.
+ * layered them over its tokens.
  */
 const ORDER = {
   lightMap: -20,
   grid: -19,
   geometry: -18,
-  // The GM's markers' flat parts, over the geometry as the 2D map layers
+  // The GM's markers' flat parts, over the geometry as the 2D map layered
   // them; the standing marks (`markers.ts`) after the figures' rings, under
   // the fog tint — cameras at `markers`, lights and pins just after.
   cameraCones: -17,
@@ -183,11 +182,11 @@ const ORDER = {
 
 /**
  * Which of a viewer's masks hide each flat overlay (`cover.ts`), after the 2D
- * layer it sits in there: the light-map wash lies under the shroud and the
+ * layer it sat in there: the light-map wash lies under the shroud and the
  * fog; the grid, the doors, the cameras' cones, a light's reach and the GM's
  * notes over the shroud and under the fog; the GM's fog
  * tint (which is the fog), the templates, the drafts and the ruler over both,
- * as the 2D map's fx layer lies over its fog. Pings and the trail
+ * as the 2D map's fx layer lay over its fog. Pings and the trail
  * (`FloorMarks`) are over both as well, and so are the Build selection and
  * its ghost (`selection.ts`), which are no inks: their places in `ORDER` are
  * their draw order alone.
@@ -257,8 +256,8 @@ function isHidden(token: Token, state: StageSceneState): boolean {
  * players' fog covers carries its light nowhere for them — baked on Low, a
  * real lamp on Medium and High, it would light the revealed rooms round it
  * and say where the guard with the flashlight stands and which way he
- * faces, which the 2D map (whose light-map wash is the GM's alone) never
- * does — except the viewer's own runner, fog or not. `fogged` says whether
+ * faces, which the 2D map (whose light-map wash was the GM's alone) never
+ * did — except the viewer's own runner, fog or not. `fogged` says whether
  * the fog covers a token (`CoverMasks.coveredAt`).
  */
 function lightTokens(state: StageSceneState, fogged: (token: Token) => boolean): readonly Token[] {
@@ -363,7 +362,6 @@ function lineScope(lines: readonly TracedLine[], floor: number, storey: number):
 }
 
 class Stage3D implements StageApi, PointerHost {
-  readonly renderer = '3d' as const;
   readonly callbacks: StageOptions['callbacks'];
   /** The view, and the pointer's `ViewCamera`. */
   readonly camera: Camera3D;
@@ -389,7 +387,7 @@ class Stage3D implements StageApi, PointerHost {
   private readonly resizeObserver: ResizeObserver | null;
   private readonly unhook: Array<() => void> = [];
 
-  // The flat overlays, one ink each, as the 2D stage keeps one Graphics each.
+  // The flat overlays, one ink each, as the 2D stage kept one Graphics each.
   private readonly inks: FloorInk[] = [];
   private readonly lightMapInk: FloorInk;
   private readonly gridInk: FloorInk;
@@ -469,6 +467,24 @@ class Stage3D implements StageApi, PointerHost {
   private readonly ndc = new Vector2();
   private readonly scratch = new Vector3();
   private destroyed = false;
+  /**
+   * Set once the stage has stopped for good (`stop`): a change it could not
+   * build, or a quality switch the browser refused a new context for. The
+   * runtime may be half built after either, so a halted stage draws nothing
+   * more (`inert`): it takes no update, no overlay, no figure and no camera
+   * move from the page or the pointer — only `destroy` still works. The
+   * page's Reload map mounts a fresh stage from the current state.
+   */
+  private halted = false;
+
+  /**
+   * Whether the stage has left off drawing, torn down (`destroy`) or halted
+   * (`stop`): every entry point that would draw, or ask the runtime anything,
+   * returns at once.
+   */
+  private get inert(): boolean {
+    return this.destroyed || this.halted;
+  }
 
   /**
    * `cover` is this stage's cover (`cover.ts`, `masks.ts`: what this viewer
@@ -512,8 +528,8 @@ class Stage3D implements StageApi, PointerHost {
     rt.threeScene.add(this.cover.lid);
     this.cover.setFloor(this.level, this.level * rt.storey);
     // The figures' own sets: the floor in view's under the fog and over the
-    // shroud, as the 2D map draws its tokens; the ones seen below it under
-    // both, as the 2D map draws its floors below under its shroud.
+    // shroud, as the 2D map drew its tokens; the ones seen below it under
+    // both, as the 2D map drew its floors below under its shroud.
     this.materials = createLabMaterials('fog');
     this.belowMaterials = createLabMaterials('full');
     this.figures = new FigurePool(this.materials, { unitM: scene.grid.unitM, storey: rt.storey }, this.belowMaterials, {
@@ -523,13 +539,14 @@ class Stage3D implements StageApi, PointerHost {
         at: (level, x, z, out) => this.rt.bakedLightAt(level, x, z, out),
         version: () => this.rt.lightVersion,
       },
-      onChange: () => this.rt.requestRender(),
+      // A portrait that lands after the stage halted asks for no frame.
+      onChange: () => this.frame(),
     });
     this.figures.setLevel(this.level);
     rt.threeScene.add(this.figures.group);
     this.badges = new TokenBadges(overlay, (id) => this.opts.urlFor(id));
 
-    this.mapPlane = new MapPlane({ onChange: () => this.rt.requestRender() });
+    this.mapPlane = new MapPlane({ onChange: () => this.frame() });
     rt.threeScene.add(this.mapPlane.group);
 
     this.lightMapInk = this.ink('lightMap');
@@ -598,7 +615,7 @@ class Stage3D implements StageApi, PointerHost {
       typeof ResizeObserver === 'undefined'
         ? null
         : new ResizeObserver(() => {
-            if (this.destroyed) return;
+            if (this.inert) return;
             // The camera refits an untouched view itself (`Camera3D`); the
             // pointer only has to measure its element again.
             this.measure();
@@ -654,24 +671,69 @@ class Stage3D implements StageApi, PointerHost {
     this.height = Math.max(1, this.root.clientHeight);
   }
 
+  /** Ask the runtime for a frame, unless the stage has left off drawing (`inert`). */
+  private frame(): void {
+    if (!this.inert) this.rt.requestRender();
+  }
+
   /**
    * Make a change that goes through the runtime (`rt.update`, or a camera
    * switch, which is one). The runtime rebuilds its world from whatever the
    * GM painted, and a builder that cannot make sense of it throws; out of
    * here that throw would reach the page's effect and take the whole Grid
-   * down mid-session. Instead the map is handed to the classic stage, as a
-   * lost GPU context is (`hooks.onLost`, which destroys this stage). False
-   * when that happened: the caller draws nothing more.
+   * down mid-session. Instead the stage stops (`stop('build-failed')`) and
+   * the page puts its panel up. The runtime may be half built after a throw,
+   * so a halted stage takes no more runtime changes at all (`inert`). False
+   * when the stage has stopped: the caller draws nothing more.
    */
   private attempt(change: () => void): boolean {
+    if (this.halted) return false;
     try {
       change();
       return true;
     } catch (err) {
-      console.error('[stage3d] the 3D map could not take a change; the classic map takes over', err);
-      this.hooks.onLost('the 3D world could not be built');
+      console.error('[stage3d] the 3D map could not take a change; it has stopped', err);
+      this.stop('build-failed');
       return false;
     }
+  }
+
+  /**
+   * Stop for good and tell the page why (`Stage3DHooks.onStopped`). Once
+   * only: the first reason is the one the page shows. The stage stays
+   * mounted, halted and drawing nothing (`inert`), until the page destroys
+   * it. Its input and its frame hooks go now: a gesture already under way
+   * (a pan, held by pointer capture under the page's panel) moves the camera
+   * no further, a frame the runtime draws on its own (a resize) moves no
+   * figure and lays out no plate, and no held figure is sent home.
+   */
+  stop(reason: StageStop): void {
+    if (this.halted) return;
+    this.halted = true;
+    this.pointer?.destroy();
+    for (const off of this.unhook.splice(0)) off();
+    if (this.holdTimer !== null) clearTimeout(this.holdTimer);
+    this.holdTimer = null;
+    this.hooks.onStopped(reason);
+  }
+
+  /**
+   * The runtime lost its GPU context. That does not halt the stage: changes
+   * keep landing CPU-side while the runtime waits for the context to come
+   * back (`contextRestored`). A halted stage has already told the page why
+   * it stopped, and that stands.
+   */
+  contextLost(): void {
+    if (!this.halted) this.hooks.onStopped('context-lost');
+  }
+
+  /**
+   * The runtime has a working GPU context again, either the lost one given
+   * back or a new canvas from a quality switch. The page takes its panel
+   * down, unless the stage has halted since, which a restore does not undo.
+   */
+  contextRestored(): void {
+    if (!this.halted) this.hooks.onResumed();
   }
 
   // -- PointerHost -----------------------------------------------------------
@@ -721,7 +783,7 @@ class Stage3D implements StageApi, PointerHost {
    * does not catch a press meant for one standing behind it.
    */
   pickToken(screen: Point): string | null {
-    if (this.destroyed) return null;
+    if (this.inert) return null;
     const plate = this.badges.pick(screen);
     if (plate !== null) return plate;
     this.aim(screen);
@@ -740,7 +802,7 @@ class Stage3D implements StageApi, PointerHost {
    * tokens it hides (`state`).
    */
   private standing(screen: Point): StandingPick | null {
-    if (this.destroyed) return null;
+    if (this.inert) return null;
     const known = this.standingPick;
     if (known !== null && known.x === screen.x && known.y === screen.y) return known.pick;
     this.aim(screen);
@@ -815,14 +877,14 @@ class Stage3D implements StageApi, PointerHost {
 
   /**
    * The pointer drags a token: its figure is put at `grid` at once and held
-   * there, as the 2D map places its view with no lerp. Let go (null), the
+   * there, as the 2D map placed its view with no lerp. Let go (null), the
    * figure is held where it was dropped until its token moves (the move came
    * back), so it does not glide back and forth across the round trip — but
    * only for `DROP_HOLD_MS`: a drag given up with no move sent, or a move
    * that never comes back, sends it back to its token's square.
    */
   localDrag(tokenId: string | null, grid: Point | null): void {
-    if (this.destroyed) return;
+    if (this.inert) return;
     const was = this.localDragId;
     const wasAt = this.localDragAt;
     this.localDragId = tokenId;
@@ -840,15 +902,15 @@ class Stage3D implements StageApi, PointerHost {
   }
 
   echoPing(grid: Point): void {
-    if (!this.destroyed && this.marks.ping(grid)) this.rt.requestRender();
+    if (!this.inert && this.marks.ping(grid)) this.rt.requestRender();
   }
 
   echoTrail(grid: Point): void {
-    if (!this.destroyed && this.marks.trail(grid)) this.rt.requestRender();
+    if (!this.inert && this.marks.trail(grid)) this.rt.requestRender();
   }
 
   drawRuler(from: Point, to: Point, meters: number): void {
-    if (this.destroyed) return;
+    if (this.inert) return;
     drawRuler(this.rulerInk, this.m, from, to, meters, this.thresholds);
     this.rt.requestRender();
   }
@@ -858,7 +920,7 @@ class Stage3D implements StageApi, PointerHost {
   }
 
   drawSegment(kind: 'wall' | 'door', from: Point, to: Point): void {
-    if (this.destroyed) return;
+    if (this.inert) return;
     drawSegmentDraft(this.segmentInk, this.m, kind, from, to);
     this.rt.requestRender();
   }
@@ -868,7 +930,7 @@ class Stage3D implements StageApi, PointerHost {
   }
 
   drawArc(a: Point, b: Point, bulge: number): void {
-    if (this.destroyed) return;
+    if (this.inert) return;
     drawArcDraft(this.segmentInk, this.m, a, b, bulge);
     this.rt.requestRender();
   }
@@ -878,7 +940,7 @@ class Stage3D implements StageApi, PointerHost {
   }
 
   drawRect(mode: TileRectMode, from: Cell, to: Cell): void {
-    if (this.destroyed) return;
+    if (this.inert) return;
     drawRectDraft(this.rectInk, this.m, mode, from, to);
     this.rt.requestRender();
   }
@@ -890,10 +952,10 @@ class Stage3D implements StageApi, PointerHost {
   /**
    * Where a dragged or pasted object will land, as translucent boxes as tall
    * as what `fill` says will stand on each square (`boxTops`); flat, as the
-   * 2D map draws it, where nothing says.
+   * 2D map drew it, where nothing says.
    */
   drawPaintedGhost(cells: readonly string[] | null, fill?: readonly GhostFill[]): void {
-    if (this.destroyed) return;
+    if (this.inert) return;
     // A paste's ghost is drawn again on every move of the pointer, most of
     // them inside the same square: a frame only when it moved.
     const changed =
@@ -905,7 +967,7 @@ class Stage3D implements StageApi, PointerHost {
 
   /** Clear one overlay and show that it is gone. */
   private wipe(ink: FloorInk): void {
-    if (this.destroyed) return;
+    if (this.inert) return;
     ink.clear();
     this.rt.requestRender();
   }
@@ -918,7 +980,7 @@ class Stage3D implements StageApi, PointerHost {
    * the same palette arriving as a new object must not rebuild the world.
    */
   setTileDefs(defs: Record<string, TileDrawDef>): void {
-    if (this.destroyed) return;
+    if (this.inert) return;
     const signature = JSON.stringify(defs);
     if (signature === this.lastDefsSignature) return;
     this.lastDefsSignature = signature;
@@ -929,8 +991,8 @@ class Stage3D implements StageApi, PointerHost {
   }
 
   /**
-   * Restyle the map for a pair of eyes, with the 2D map's own colour
-   * matrices (`stage/viewModes.ts`), where the 2D map puts them: the floor's
+   * Restyle the map for a pair of eyes, with the colour matrices the 2D
+   * map used (`stage/viewModes.ts`), where the 2D map put them: the floor's
    * on the world, the map, the floors below and the figures seen down on
    * them; the bodies' on the figures in view and on their plates; nothing
    * on the overlays and the GM's markers (`cover.ts` `markPlain`), on what
@@ -942,7 +1004,7 @@ class Stage3D implements StageApi, PointerHost {
    * starts from plain eyes.
    */
   setViewMode(mode: VisionMode): void {
-    if (this.destroyed) return;
+    if (this.inert) return;
     this.markFigures();
     const look = viewModeLook(mode);
     setVision(this.cover, look);
@@ -953,7 +1015,7 @@ class Stage3D implements StageApi, PointerHost {
   /**
    * What draws the figures on the floor in view takes the bodies' colours
    * in a vision mode (`FigurePool.markInView`); the figures seen below keep
-   * the floor's, as the 2D map's floors below do. Uniform flags only; run
+   * the floor's, as the 2D map's floors below did. Uniform flags only; run
    * after every update, as figures come and change.
    */
   private markFigures(): void {
@@ -962,7 +1024,7 @@ class Stage3D implements StageApi, PointerHost {
 
   /** The GPU quality on this device, live: Low swaps the renderer, Medium ↔ High retiers the lighting. */
   setQuality(quality: StageQuality): void {
-    if (this.destroyed || quality === this.rt.options.quality) return;
+    if (this.inert || quality === this.rt.options.quality) return;
     // Crossing the Low line makes a new WebGL context, which a browser at its
     // context limit refuses.
     // The runtime switches a frame or two later, behind its own notice, and
@@ -977,15 +1039,18 @@ class Stage3D implements StageApi, PointerHost {
    * the fog is rasterised more coarsely at Low (`masks.ts`).
    */
   qualityApplied(quality: StageQuality): void {
-    if (this.destroyed) return;
+    if (this.inert) return;
     this.cover.setDetail(fogDetailFor(quality));
     this.update(this.sceneState);
   }
 
   update(next: StageSceneState): void {
     // A stage that has been torn down draws nothing: the page's update effect
-    // can fire once more with the old stage while the host is remounted.
-    if (this.destroyed) return;
+    // can fire once more with the old stage while the host is remounted. Nor
+    // does a halted one, not even the parts that leave the runtime alone (the
+    // cover, the figures, the plates, the traced walls): its runtime may be
+    // half built, and the Reload map's fresh stage starts from this state.
+    if (this.inert) return;
     // An edit is timed whole here (`[stage3d] edit`, below): the runtime's
     // part of it and everything the stage then draws again.
     const started = performance.now();
@@ -997,7 +1062,7 @@ class Stage3D implements StageApi, PointerHost {
     const isGm = next.role === 'gm';
 
     // -- the cover: the players' fog and the sightline shroud ----------------
-    // Rebuilt on the fog's and the shroud's keys, as the 2D map redraws them;
+    // Rebuilt on the fog's and the shroud's keys, as the 2D map redrew them;
     // first, because what follows reads it: the token lights a player is lit
     // with, the shadow maps, the pointer's tokens, the plates and labels.
     const covered = this.cover.update(next, m);
@@ -1091,7 +1156,7 @@ class Stage3D implements StageApi, PointerHost {
     }
 
     // -- what the cover hides over the canvas ---------------------------------
-    // A player's labels hide under the fog as the fog covers them in 2D; the
+    // A player's labels hide under the fog as the fog covered them in 2D; the
     // GM's hide nowhere.
     this.fogLabels.setCover(isGm ? null : this.labelCovered);
     if (covered.fog || covered.shroud) {
@@ -1198,11 +1263,11 @@ class Stage3D implements StageApi, PointerHost {
    * The tokens as figures and plates: the floor in view's own, and the ones
    * seen down through its open squares (`belowTokens`), each on its own floor
    * inside the shade the runtime lays over the floors below — drawn only, as
-   * the 2D map draws them: no plate, no ring, no drag, never picked.
+   * the 2D map drew them: no plate, no ring, no drag, never picked.
    *
    * Hidden tokens (by their flag or their layer) are the GM's alone, and the
    * GM sees them see-through. No other viewer is ever sent one — that is the
-   * server's line (Principle 4), and the 2D map relies on it; this stage
+   * server's line (Principle 4), and the 2D map relied on it; this stage
    * also does not draw one for them should it arrive anyway.
    */
   private syncTokens(next: StageSceneState): void {
@@ -1295,20 +1360,20 @@ class Stage3D implements StageApi, PointerHost {
   private scheduleHoldExpiry(): void {
     if (this.holdTimer !== null) clearTimeout(this.holdTimer);
     this.holdTimer = null;
-    if (this.holds.size === 0 || this.destroyed) return;
+    if (this.holds.size === 0 || this.inert) return;
     let due = Infinity;
     for (const hold of this.holds.values()) due = Math.min(due, hold.until);
     this.holdTimer = setTimeout(
       () => {
         this.holdTimer = null;
-        if (!this.destroyed) this.applyTargets();
+        if (!this.inert) this.applyTargets();
       },
       Math.max(0, due - Date.now()) + 1,
     );
   }
 
   setDrags(drags: Record<string, { x: number; y: number; ts?: number }>): void {
-    if (this.destroyed) return;
+    if (this.inert) return;
     this.drags = drags;
     this.applyTargets();
   }
@@ -1326,17 +1391,17 @@ class Stage3D implements StageApi, PointerHost {
   }
 
   centerOn(x: number, y: number): void {
-    if (this.destroyed) return;
+    if (this.inert) return;
     this.camera.centerOn(x, y);
   }
 
   zoomBy(factor: number): void {
-    if (this.destroyed) return;
+    if (this.inert) return;
     this.camera.zoomBy(factor);
   }
 
   fitScene(): void {
-    if (this.destroyed) return;
+    if (this.inert) return;
     this.camera.fit();
   }
 
@@ -1350,11 +1415,11 @@ class Stage3D implements StageApi, PointerHost {
    * only when it moved (a label drawn meanwhile is placed as it arrives).
    *
    * A player sees no plate over a figure the fog covers (`plateAt`), as the
-   * 2D fog covers its badges: the figure is not drawn, and its plate would
+   * 2D fog covered its badges: the figure is not drawn, and its plate would
    * say who stands there.
    */
   private layoutOverlay(): void {
-    if (this.destroyed) return;
+    if (this.inert) return;
     const at = this.sceneState.role === 'gm' ? (id: string) => this.figures.positionOf(id) : this.plateAt;
     this.badges.layout(this.projectWorld, at);
     // The handles sit where the pointer's hit test projects them: on the floor.
@@ -1443,10 +1508,11 @@ class Stage3D implements StageApi, PointerHost {
 }
 
 /**
- * Build and mount the 3D stage into `opts.host`. `hooks.onLost` is how the
- * loader hears the GPU context has gone for good, or a later change could not
- * be built, so it can put the classic map in its place. Rejects if WebGL or
- * the first build fails, which the loader answers with the classic map.
+ * Build and mount the 3D stage into `opts.host`. `hooks.onStopped` is how
+ * the page hears the map has stopped drawing (a lost GPU context, a later
+ * change that could not be built, a refused quality switch), and
+ * `hooks.onResumed` that a lost context came back. Rejects if WebGL or the
+ * first build fails; the loader passes that on and the page shows it.
  */
 export async function createStage(opts: StageOptions, hooks: Stage3DHooks): Promise<StageApi> {
   const doc = opts.host.ownerDocument;
@@ -1465,11 +1531,15 @@ export async function createStage(opts: StageOptions, hooks: Stage3DHooks): Prom
     // The stage is made after the runtime; the quality callbacks reach it late.
     let stage: Stage3D | null = null;
     rt = createRuntime3D(root, runtimeOptions(opts.state, CATALOGUE_DEFS, hooks.quality, fogged), {
-      onContextLost: () => hooks.onLost('context lost'),
+      // The runtime's context events arrive after this function has returned,
+      // so the stage is there to take them.
+      onContextLost: () => stage?.contextLost(),
+      onContextRestored: () => stage?.contextRestored(),
       onQualityApplied: (q) => stage?.qualityApplied(q),
       // Crossing the Low line makes a new WebGL context, which a browser at
-      // its limit refuses: hand over to Classic, as for a lost context.
-      onQualityFailed: () => hooks.onLost('quality switch failed'),
+      // its limit refuses, and the old one is already gone: there is no
+      // canvas left, so the stage stops until the page reloads it.
+      onQualityFailed: () => stage?.stop('quality-failed'),
     });
     stage = new Stage3D(opts, rt, root, hooks, cover);
     return stage;

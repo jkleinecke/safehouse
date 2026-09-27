@@ -1,13 +1,21 @@
 /**
- * Camera math for the scene canvas — pure, no pixi, no DOM (unit-tested).
+ * A flat pan/zoom camera over the plan or isometric world of `geometry.ts` —
+ * pure maths, no three, no DOM (unit-tested).
  *
- * Screen = world * scale + pan. The stage root Container mirrors {x,y,scale}
- * once per frame; nothing else touches transforms, so pan/zoom costs no
- * per-frame allocation and never invalidates the layer geometry.
+ * Screen = world * scale + pan. `Camera` is a `ViewCamera` (`viewCamera.ts`):
+ * `pick` and `project` are the grid ↔ world transform of `geometry.ts`
+ * composed with this screen ↔ world one, in plan view or isometric, as the
+ * metrics say.
  *
- * It is also the 2D stage's `ViewCamera` (`viewCamera.ts`): the pointer code
- * reaches the map through `pick` and `project`, which are the grid ↔ world
- * transform of `geometry.ts` composed with this screen ↔ world one.
+ * No renderer builds one. The map is drawn by the 3D stage, whose camera is
+ * `Camera3D` (`stage3d/camera3d.ts`). This one is the projector the pointer
+ * and hit tests run against (`hit.test.ts`, `pointer.test.ts`): at scale 1
+ * with no pan its screen px ARE world px, so a test can work out by hand
+ * where a token or a wall lands on screen. `camera.test.ts` pins its own
+ * maths.
+ *
+ * `wheelZoomFactor`, at the bottom, is live: `pointer.ts` turns every wheel
+ * notch and trackpad pinch into a zoom with it, whichever camera it drives.
  */
 import type { Point } from '@safehouse/contracts';
 import { CELL, gridFromWorld, heightRise, worldFromGrid, type SceneMetrics } from '../geometry.js';
@@ -28,7 +36,8 @@ export function clampScale(s: number): number {
 /**
  * What a camera made without a scene maps through: plan view, 64 px squares,
  * no offset — world px are grid units × 64. Only the pure pan/zoom maths
- * runs without a real scene; the stage always passes its own metrics.
+ * runs without a real scene; a test that picks or projects passes its own
+ * metrics.
  */
 const PLAN: SceneMetrics = {
   cell: CELL,
@@ -41,9 +50,9 @@ const PLAN: SceneMetrics = {
 };
 
 /**
- * A `Lift` as the 2D map draws it, in world px straight up the screen: its
- * own `px` when it has one, else its storeys at the 2D storey height
- * (`heightRise`, zero in plan view), else nothing.
+ * A `Lift` as this flat camera reads it, in world px straight up the screen:
+ * its own `px` when it has one, else its storeys at the flat projections'
+ * squat storey height (`heightRise`, zero in plan view), else nothing.
  */
 export function liftPx(m: SceneMetrics, lift: Lift | undefined): number {
   if (!lift) return 0;
@@ -54,13 +63,13 @@ export class Camera implements ViewCamera {
   x = 0;
   y = 0;
   scale = 1;
-  /** Set whenever x/y/scale changed since the last frame flush. */
+  /** Set whenever x/y/scale changed; whoever draws through the camera clears it. */
   dirty = true;
   /**
-   * True once the viewer has panned, zoomed or focused since the last `fit`.
-   * The stage re-fits on a resize only while this is false: a phone whose
-   * layout settles after mount gets the scene fitted to the real canvas, and
-   * a GM who has framed a room keeps their framing when a panel opens.
+   * True once the view has been panned, zoomed or focused since the last
+   * `fit`: a fit is the resting state, a viewer's framing is not. It is the
+   * rule the 3D camera keeps as `moved` (`stage3d/camera3d.ts`), re-fitting
+   * on a resize only while nobody has framed the scene.
    */
   touched = false;
 
@@ -71,12 +80,12 @@ export class Camera implements ViewCamera {
    */
   constructor(private readonly metricsOf: () => SceneMetrics = () => PLAN) {}
 
-  /** Screen px → grid units on the floor. The 2D map is one plane, so this never misses. */
+  /** Screen px → grid units on the floor. This camera's world is one plane, so this never misses. */
   pick(screen: Point): Point {
     return gridFromWorld(this.metricsOf(), this.toWorld(screen.x, screen.y));
   }
 
-  /** Grid units, raised by `lift` as the 2D map draws it (`liftPx`) → screen px. */
+  /** Grid units, raised by `lift` as this camera reads it (`liftPx`) → screen px. */
   project(grid: Point, lift?: Lift): Point {
     const m = this.metricsOf();
     const w = worldFromGrid(m, grid);

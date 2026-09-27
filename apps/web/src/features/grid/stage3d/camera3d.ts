@@ -21,7 +21,7 @@
  * world units, where x is grid x, z is grid y, y is up in squares, and the
  * floor in view lies at `y = floor * storey`.
  *
- * The view is remembered per scene for the tab, as the 2D map remembers its
+ * The view is remembered per scene for the tab, as the 2D map remembered its
  * own, so a reload lands where the GM was looking.
  */
 import { Spherical, Vector3 } from 'three';
@@ -67,7 +67,7 @@ const REACH = 0.5;
 /** How long the view must sit still before it is written to the tab's storage. */
 const SAVE_MS = 250;
 
-/** Where the GM left each scene's 3D view, for the tab (the 2D map keeps its own). */
+/** Where the GM left each scene's 3D view, for the tab (the 2D map kept its own). */
 const VIEW_KEY = (sceneId: string) => `safehouse.grid.camera3d.${sceneId}`;
 
 /** A scene's view as it is remembered: which camera, what it looks at, from which side, how close. */

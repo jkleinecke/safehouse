@@ -1,16 +1,18 @@
 /**
  * What a token's plate and figure say, read from the token and its bars —
- * pure, no pixi.
+ * pure, no three, no DOM.
  *
- * The 2D `TokenView` draws these as pixi Graphics and Text; a 3D token plate
- * draws the same answers its own way. Keeping the rules here is what keeps
- * the two renderers from disagreeing about when a runner is down, what colour
- * a bar turns, or how many pips a badge carries.
+ * The map's plates (`stage3d/badges.ts`), its top-down portraits
+ * (`stage3d/portraits.ts`) and its figure pool (`stage3d/figures.ts`) each
+ * draw these answers their own way. Keeping the rules here is what keeps them
+ * from disagreeing about when a runner is down, what colour a bar turns, or
+ * how many pips a badge carries. (Until P5 the 2D map's `TokenView` read them
+ * too.)
  */
 import type { Token } from '@safehouse/contracts';
 import type { TokenBars } from '../types.js';
 import { C } from './colors.js';
-import type { FigurePose } from './figure.js';
+import type { FigurePose } from '../plan/figure.js';
 
 /** The badge colour behind a token's initial, by where the token came from. */
 export const SOURCE_COLORS: Record<Token['source'], number> = {

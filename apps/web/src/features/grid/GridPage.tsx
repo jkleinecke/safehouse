@@ -3,7 +3,8 @@
  *
  * This file is the wiring: it resolves which scene is on screen, projects
  * server + live state into `StageSceneState`, and routes stage callbacks to WS
- * commands. All rendering lives in the lazily-imported `stage/` chunk.
+ * commands. All rendering lives in the lazily-imported three.js stage
+ * (`stage3d/`, through `stageLoader.ts`).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -107,14 +108,9 @@ import {
   type StageCallbacks,
   type StageQuality,
   type StageSceneState,
+  type StageStop,
 } from './types.js';
-import {
-  getQualityPreference,
-  offers3d,
-  roleMay3d,
-  setQualityPreference,
-  setRendererPreference,
-} from './stageLoader.js';
+import { getQualityPreference, setQualityPreference } from './stageLoader.js';
 import {
   useActiveSceneId,
   useFocusStream,
@@ -123,6 +119,17 @@ import {
   useRemoteDrags,
 } from './useGridLive.js';
 import { useStage } from './useStage.js';
+
+/**
+ * What the panel over a stopped map says happened (`StageStop`), in the
+ * table's words rather than the GPU's. The panel's one button reloads the
+ * map whatever the reason.
+ */
+const STOP_REASONS: Readonly<Record<StageStop, string>> = {
+  'context-lost': 'The graphics card was reset. Waiting for the browser to give it back.',
+  'build-failed': 'It could not show the last change.',
+  'quality-failed': 'The browser refused a new graphics context for that quality. Pick a lower one, then reload.',
+};
 
 function EmptyState({ title, body }: { title: string; body: string }) {
   return (
@@ -926,11 +933,12 @@ export default function GridPage() {
   );
 
   const urlFor = useCallback((id: string) => fileUrl(id), []);
-  // The renderer switch (3D / Classic) stores the device's choice and mounts
-  // a fresh stage, which `loadStage` draws with whatever it now picks.
+  // The Reload map button on the panel over a map that stopped, or could not
+  // start, bumps this: `useStage` tears the stage down and mounts a fresh one
+  // from the current state, at the quality this device is now set to.
   const [stageEpoch, setStageEpoch] = useState(0);
   const [quality, setQuality] = useState<StageQuality>(getQualityPreference);
-  const { hostRef, api, loading, error } = useStage({
+  const { hostRef, api, loading, error, stopped } = useStage({
     state: stageState,
     callbacks,
     urlFor,
@@ -1042,7 +1050,7 @@ export default function GridPage() {
    *
    * It used to be keyed `[tilesets, scene?.id]` and to call through `apiRef`,
    * which is assigned during render from a handle that arrives asynchronously
-   * (`useStage` dynamically imports the pixi chunk). On a cold load the last
+   * (`useStage` dynamically imports the map's chunk). On a cold load the last
    * run was the one where the scene id first appeared — the import had not
    * resolved, the ref was still null, and `setTileDefs` was a silent no-op,
    * after which neither dep ever changed again. The stage kept an empty
@@ -1186,9 +1194,34 @@ export default function GridPage() {
             <span className="mono-label animate-pulse text-cyan">loading canvas</span>
           </div>
         )}
-        {error && (
-          <div className="absolute inset-x-3 top-3 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
-            {error}
+        {/*
+          The map could not start (no WebGL2, or the first build threw), or it
+          stopped while running (`StageStop`). There is no other renderer to
+          fall back on, so it says what happened and offers a fresh stage.
+          It sits before the view controls, which stay on top of it and
+          usable: after a refused quality switch the viewer picks a lower one
+          first, then reloads. A lost context that comes back takes the panel
+          down by itself. `z-5`: over the stage's own layer of plates and
+          labels (z-index 1, `stage3d/index.ts`), which a stopped stage still
+          has in the host, and under the controls' z-10.
+        */}
+        {(error || stopped) && (
+          <div className="absolute inset-0 z-5 grid place-items-center bg-ground/80 p-6">
+            <div className="panel max-w-sm p-6 text-center" role="alert" data-testid="map-stopped">
+              <div className="mono-label text-danger">Map</div>
+              <h2 className="mt-2 text-base font-semibold">
+                {error ? 'The map could not start' : 'The map stopped'}
+              </h2>
+              <p className="mt-1 text-sm text-dim">{error ?? (stopped ? STOP_REASONS[stopped] : '')}</p>
+              <button
+                type="button"
+                data-testid="reload-map"
+                className="btn btn-accent mt-4 px-3 py-1.5"
+                onClick={() => setStageEpoch((n) => n + 1)}
+              >
+                Reload map
+              </button>
+            </div>
           </div>
         )}
 
@@ -1232,24 +1265,21 @@ export default function GridPage() {
                 onToggleGmPanel={store.toggleGmPanel}
                 onZoom={(f) => api?.zoomBy(f)}
                 onFit={() => api?.fitScene()}
-                // What is actually drawing: a 3D map that could not start,
-                // or lost its GPU, reads as Classic.
-                renderer={api ? (api.renderer ?? 'classic') : undefined}
-                can3d={offers3d(viewer.role)}
-                onRenderer={
-                  api && roleMay3d(viewer.role)
-                    ? (renderer) => {
-                        setRendererPreference(renderer);
-                        setStageEpoch((n) => n + 1);
+                quality={quality}
+                // Hidden while the map loads. Offered once it runs, and also
+                // while it could not start or has stopped, so a device that
+                // failed at a quality can go lower before it reloads (a
+                // halted stage ignores the live switch; the stored choice is
+                // what Reload map starts at).
+                onQuality={
+                  api || error || stopped
+                    ? (q) => {
+                        setQualityPreference(q);
+                        setQuality(q);
+                        api?.setQuality(q);
                       }
                     : undefined
                 }
-                quality={quality}
-                onQuality={(q) => {
-                  setQualityPreference(q);
-                  setQuality(q);
-                  api?.setQuality?.(q);
-                }}
               />
             </div>
             {/*

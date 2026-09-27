@@ -1,11 +1,13 @@
 /**
- * The camera the pointer code talks to — whichever renderer draws the map.
+ * The camera the pointer code talks to — the 3D map's, or the flat one the
+ * tests use.
  *
- * Pure types, no pixi, no three, no DOM. `PointerController` and the hit
- * tests (`hit.ts`) work through this and nothing else, so the same input
- * handling runs over the 2D Pixi stage (`camera.ts`, `Camera`) and the
- * three.js stage, whose cameras are orthographic only: isometric and
- * top-down.
+ * Pure types, no three, no DOM. `PointerController` and the hit tests
+ * (`hit.ts`) work through this and nothing else, so the same input handling
+ * runs over the three.js stage (`Camera3D`), whose cameras are orthographic
+ * only, isometric and top-down, and in the unit tests over the flat `Camera`
+ * (`camera.ts`). Until P5 it ran over the 2D Pixi stage as well, through
+ * that same `Camera`.
  *
  * Three spaces meet here:
  *   - SCREEN px: host-element pixels, origin at its top-left — what a
@@ -24,23 +26,23 @@ import type { Point } from '@safehouse/contracts';
 /**
  * How far above the floor a point stands, for `ViewCamera.project`.
  *
- * Two measures, because the two renderers draw height differently and the
- * 2D one has to stay exact:
+ * Two measures, because the two renderers drew height differently and the
+ * 2D one had to stay exact (the flat `Camera` still reads it that way):
  *   - `storeys` is the renderer-independent height: storeys above the floor
  *     in view, one storey being a full wall's height (a lamp's `height`
  *     field is in the same unit). The 3D camera lifts the point by exactly
  *     this.
- *   - `px` is the 2D stage's own measure: a rise straight up the screen in
+ *   - `px` was the 2D stage's own measure: a rise straight up the screen in
  *     2D world px (64 per square at 1:1 zoom), the number its drawing code
- *     uses — `tokenHitLift`, `pinHeadRise`. Zero draws the point on the
- *     floor even where `storeys` says it hangs higher, which is how the 2D
- *     map draws lamp markers and camera eyes.
+ *     used — `tokenHitLift`, `pinHeadRise`, which the hit tests still give.
+ *     Zero puts the point on the floor even where `storeys` says it hangs
+ *     higher, which is how the 2D map drew lamp markers and camera eyes.
  *
- * Each renderer reads the measure native to it and falls back to the other:
- * 2D takes `px`, else `heightRise(storeys)` (its squat storey, zero in plan
- * view); 3D takes `storeys`, else `px` as a rise straight up the screen of
- * `px / 64` of a square's screen width (a billboard's offset). No lift, or
- * an empty one, is the floor itself.
+ * Each camera reads the measure native to it and falls back to the other:
+ * the flat one takes `px`, else `heightRise(storeys)` (its squat storey,
+ * zero in plan view); 3D takes `storeys`, else `px` as a rise straight up the
+ * screen of `px / 64` of a square's screen width (a billboard's offset). No
+ * lift, or an empty one, is the floor itself.
  */
 export interface Lift {
   storeys?: number;
@@ -55,7 +57,7 @@ export interface Lift {
 export interface ViewCamera {
   /**
    * The grid point on the floor in view under screen point `screen` (host
-   * px), or null when the ray through it misses that floor. A 2D camera
+   * px), or null when the ray through it misses that floor. The flat camera
    * never misses; every caller still guards, so a 3D one may.
    */
   pick(screen: Point): Point | null;

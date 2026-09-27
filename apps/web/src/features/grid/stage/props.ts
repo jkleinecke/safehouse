@@ -27,11 +27,11 @@
  * the desktop, the trunk before the crown — which is the same painter's rule
  * the cell sort uses, applied inside one cell.
  */
-import type { Graphics } from 'pixi.js';
 import type { Point } from '@safehouse/contracts';
 import { PROP_SIZE_M, propCells, type TileProp } from '@safehouse/rules';
 import { groundRadius, worldFromGrid, type SceneMetrics } from '../geometry.js';
 import { C, FACE_FOOT, FACE_SHADE, shade } from './colors.js';
+import type { InkFill, InkStroke } from './ink.js';
 
 /** The tones the prop is drawn with — the same derived palette as any tile. */
 export interface PropTones {
@@ -45,7 +45,7 @@ export interface PropTones {
 /** A point in cell space: across, down, up. */
 type P3 = readonly [u: number, v: number, z: number];
 
-/** Glass: the cool tint every set's glazing shares (see `cuts.ts`). */
+/** Glass: the cool tint every set's glazing shares (see `gm/art/cutArt.ts`). */
 export const GLASS = 0x9fd4e6;
 /** Leaves, for the things that grow in pots and planters whatever set they are in. */
 export const FOLIAGE = 0x6f8657;
@@ -68,6 +68,43 @@ interface CylOpts {
 }
 
 /**
+ * The pen a kit draws with: the six calls the kit and its designs make on
+ * `g`, and nothing else. It is the kit's own rather than the overlays' `Ink`
+ * (`ink.ts`), because `Ink` has no `closePath` and the kit needs one (below),
+ * but it paints with the same `InkFill` and `InkStroke`. The contract is the
+ * one a pixi `Graphics` kept when the 2D map drew the props:
+ *
+ *   - a path is built with `moveTo`/`lineTo` and closed with `closePath`, or
+ *     an ellipse is added whole; each `moveTo` starts a new sub-path, so one
+ *     paint can cover many (`officeDashes`, `homeStrands`, `civicPolys`);
+ *   - `fill` and `stroke` paint everything built since the last paint, and a
+ *     stroke straight after a fill, with nothing built between, paints the
+ *     same shape again — the inked `disc` is an ellipse filled, then stroked;
+ *   - every method returns the pen, so calls chain.
+ *
+ * `closePath` matters beyond the drawing. The 3D kit (`lab3d/propKit3d.ts`)
+ * records these paths, and it tells a closed one-pixel ink loop — a
+ * silhouette hull, which only means anything from the 2D camera — from a real
+ * stroke by whether the path was closed. The Build palette's painter
+ * (`gm/art/tileArt.ts`) hands the kit its own `ArtPen` (`gm/art/canvasPen.ts`),
+ * which is this pen and a few calls more.
+ */
+export interface PropPen {
+  /** Start a new sub-path at (x, y). */
+  moveTo(x: number, y: number): this;
+  /** Extend the current sub-path with a straight line to (x, y). */
+  lineTo(x: number, y: number): this;
+  /** Close the current sub-path back to its first point. */
+  closePath(): this;
+  /** An axis-aligned ellipse about (x, y) — a floor circle in isometric. */
+  ellipse(x: number, y: number, rx: number, ry: number): this;
+  /** Fill what was built since the last paint. */
+  fill(style: InkFill): this;
+  /** Stroke what was built since the last paint. */
+  stroke(style: InkStroke): this;
+}
+
+/**
  * The drawing kit for one cell. `unit` is the screen height of one cell of
  * `z` — zero in plan, which is what switches every solid to its top face.
  */
@@ -77,7 +114,7 @@ export class PropKit {
   protected readonly place: PropPlacement;
 
   constructor(
-    readonly g: Graphics,
+    readonly g: PropPen,
     protected readonly m: SceneMetrics,
     protected readonly col: number,
     protected readonly row: number,
@@ -114,7 +151,7 @@ export class PropKit {
     return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
   }
 
-  private trace(pts: readonly P3[], close = true): Graphics {
+  private trace(pts: readonly P3[], close = true): PropPen {
     const a = this.at(pts[0]!);
     this.g.moveTo(a.x, a.y);
     for (let i = 1; i < pts.length; i += 1) {
@@ -8513,7 +8550,7 @@ export function propFootprint(
  * caller can hand it to the unlit pass the way every other tile does.
  */
 export function drawProp(
-  g: Graphics,
+  g: PropPen,
   m: SceneMetrics,
   prop: TileProp,
   col: number,

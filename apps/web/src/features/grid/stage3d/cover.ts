@@ -6,10 +6,10 @@
  *
  * ## Why a patch and not a sheet
  *
- * The 2D map hides with sheets laid over the screen: an opaque cover with the
- * revealed regions cut out (`drawFog`), and a scrim over every square outside
- * the sightline (`drawShroud`), each swept upward by a wall's height so the
- * walls standing on a hidden square go under it too. A sheet cannot do that
+ * The 2D map, retired in P5, hid with sheets laid over the screen: an opaque
+ * cover with the revealed regions cut out (`drawFog`), and a scrim over every
+ * square outside the sightline, each swept upward by a wall's height so the
+ * walls standing on a hidden square went under it too. A sheet cannot do that
  * in 3D: the camera turns, and a wall on a hidden square is then seen from
  * the side, over the sheet, at any height. So the cover is applied where a
  * thing IS rather than where it lands on screen: every fragment of every
@@ -69,8 +69,8 @@
  *
  * ## Who wears which masks
  *
- * The 2D map's layer order decides, so both renderers hide the same things
- * from the same people (`CoverMode`):
+ * The 2D map's layer order decided, so the 3D map hides the same things
+ * from the same people as it did (`CoverMode`):
  *   - `full`, under the shroud and the fog: the map images, the painted world
  *     and its lamps' glow, the floors below and their shade, the light-map
  *     wash;
@@ -78,7 +78,7 @@
  *     tokens with their rings, auras and shadows — and their plates, which
  *     `masks.ts` `coveredAt` hides from the same answer;
  *   - neither (`exemptFromCover`), over both: the templates, the ruler, the
- *     drafts, the pings and the pointer trail, which the 2D map draws in its
+ *     drafts, the pings and the pointer trail, which the 2D map drew in its
  *     fx layer above the fog.
  *
  * ## Uniforms
@@ -95,33 +95,32 @@
  *
  * ## Vision
  *
- * The 2D map restyles itself for a pair of eyes (thermal, low-light,
+ * The 2D map restyled itself for a pair of eyes (thermal, low-light,
  * ultrasound) with two colour-matrix filters: one on its floor containers
  * (the map images, the painted tiles, and the floors below with the tokens
  * seen on them), one on its tokens and their badges (`stage/viewModes.ts`
- * holds the matrices, as data both renderers read). Everything else it
- * draws — the light-map wash, the grid, the doors and zones, the cameras'
- * cones, the lights, pins and notes — lies in containers neither filter
- * reaches, in its own colours. Here the same step is part of the patch: just
+ * holds the matrices, as data). Everything else it drew — the light-map
+ * wash, the grid, the doors and zones, the cameras' cones, the lights, pins
+ * and notes — lay in containers neither filter reached, in its own colours. Here the same step is part of the patch: just
  * before the cover's mix, the fragment's final colour — after tone mapping
- * and the output colour space, so the same encoding the 2D filters see —
+ * and the output colour space, so the same encoding the 2D filters saw —
  * goes through a colour matrix, clamped to 0 … 1 as the 2D filter's target
- * keeps it. Which matrix is the material's own business, told by a uniform
+ * kept it. Which matrix is the material's own business, told by a uniform
  * of its own, so marking one compiles nothing:
  *   - the BODIES' on what draws the figures on the floor in view
  *     (`markBody`);
  *   - none on the overlays and the GM's markers (`markPlain`), which lie
- *     over the restyled floor in their own colours, as the 2D map's do: an
+ *     over the restyled floor in their own colours, as the 2D map's did: an
  *     open door stays green and a closed one red whatever the eyes;
  *   - the FLOOR's on every other covered material: the world, the map, the
  *     traced walls, the floors below and the figures seen down on them.
  * The cover colour mixed in after it, and the background, are left as they
- * are, as the 2D map's fog and shroud sheets lie unfiltered over its
+ * are, as the 2D map's fog and shroud sheets lay unfiltered over its
  * filtered layers; what is exempt from the cover (the templates, the ruler,
- * the pings) is not restyled either, as the 2D fx layer is not.
+ * the pings) is not restyled either, as the 2D fx layer was not.
  *
  * Premultiplied colour is unpremultiplied for the step and premultiplied
- * again, as Pixi's filter does. Added light (a halo) takes only the
+ * again, as Pixi's filter did. Added light (a halo) takes only the
  * matrix's linear part, with no offsets: the matrix is affine, so M(dst +
  * src) = M(dst) + A·src — adding A·src over a floor the matrix already
  * styled is the matrix applied to the sum, where adding M(src) would count
@@ -174,7 +173,7 @@ import type { ColorMatrix, ViewModeLook } from '../stage/viewModes.js';
 
 /**
  * Which masks hide a material: `full` the shroud and the fog (what the 2D map
- * draws under its shroud), `fog` the fog alone (what it draws over its shroud
+ * drew under its shroud), `fog` the fog alone (what it drew over its shroud
  * and under its fog). See the module note.
  */
 export type CoverMode = 'full' | 'fog';
@@ -398,7 +397,7 @@ export function markBody(material: Material): void {
 
 /**
  * `material` is never restyled by a vision mode: an overlay or a marker,
- * which the 2D map draws in its own colours over its restyled floor (see the
+ * which the 2D map drew in its own colours over its restyled floor (see the
  * module note). A uniform, read as `markBody`'s is; said once, where the
  * material is made.
  */
@@ -482,7 +481,7 @@ uniform float labVisionKind;
  * cover's mix, on a uniform branch: skipped for plain eyes and for a plain
  * material alike. Added light takes the matrix's linear part alone;
  * anything else the whole matrix, on straight colour, as Pixi's filter
- * applies it.
+ * applied it.
  */
 function visionMain(additive: boolean): string {
   const body = `labVisionKind > ${glf(VISION_BODY - 0.5)}`;
@@ -534,7 +533,7 @@ function fragmentMain(mode: CoverMode, additive: boolean): string {
 		labCover = max( labCover, labCoverShroud * labCoverIn( labCoverShroudRect, ${MARK} ) * ( 1.0 - labSeen ) );`
       : '';
   // Added light (a halo) is covered by adding less of it; anything else is
-  // taken toward the cover colour, as the 2D sheets blend over it.
+  // taken toward the cover colour, as the 2D sheets blended over it.
   const apply = additive
     ? /* glsl */ `
 		gl_FragColor.rgb *= 1.0 - labCover;`
@@ -732,7 +731,7 @@ export function createFogLidMaterial(): MeshBasicMaterial {
 }
 
 /**
- * Draw `material` over the cover, on purpose: what the 2D map draws above its
+ * Draw `material` over the cover, on purpose: what the 2D map drew above its
  * fog (the templates, the ruler, the drafts, pings and the trail). The scene
  * check (`coverScene`) leaves it alone.
  */

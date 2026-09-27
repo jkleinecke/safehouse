@@ -297,7 +297,7 @@ const KEY_SHARE = 0.35;
 /**
  * Toward the key light: high (55°) and from the south-south-west. The iso
  * camera sits south-east, so of the two wall faces it sees the south ones
- * catch the key and the east ones do not — the two-tone the 2D iso map paints.
+ * catch the key and the east ones do not — the two-tone the 2D iso map painted.
  */
 const KEY_DIR = new Vector3(-0.35, 1.2, 0.75).normalize();
 

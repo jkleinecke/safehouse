@@ -6,8 +6,8 @@
  *
  * ## What lies flat, and what stands
  *
- * Flat, in a `FloorInk` on the floor in view, drawn by the 2D map's own
- * functions (`stage/layers.ts`):
+ * Flat, in a `FloorInk` on the floor in view, drawn by the functions the 2D
+ * map drew them with (`stage/layers.ts`):
  *   - a switched-on camera's cone (`drawCameraCone`);
  *   - the selected light's reach (`drawLightReach`);
  *   - a GM note's paper (`drawNotes`), with its text lying on it (`DomLabels`,
@@ -39,7 +39,7 @@
  * screen px that `Camera3D.project` lifts a point by — which is what puts a
  * pin's head where `hitPin` looks for it, in either camera and at any zoom,
  * for the price of one number a frame. Drawn this way a mark keeps its shape
- * on the screen however the camera looks, as the 2D map's markers do.
+ * on the screen however the camera looks, as the 2D map's markers did.
  *
  * What lies in the world rather than across the screen — a camera's housing,
  * a beam's throw, the lines down to the floor — is made of vertices that are
@@ -51,13 +51,13 @@
  * The anchor is also where the cover reads its masks (`cover.ts`): a pin is
  * hidden by the square it stands on, not by whichever square its head hangs
  * over in isometric. The marks are drawn with no depth test, over the world,
- * as the 2D map draws its markers over the painted walls — so nothing the
+ * as the 2D map drew its markers over the painted walls — so nothing the
  * pointer can take is ever out of sight behind a wall — and under the fog, as
- * the 2D map layers them (`applyCover(…, 'fog')`: over the shroud).
+ * the 2D map layered them (`applyCover(…, 'fog')`: over the shroud).
  *
  * ## Who sees what
  *
- * What the 2D map shows: pins to everyone who is sent them (a player's scene
+ * What the 2D map showed: pins to everyone who is sent them (a player's scene
  * holds the public ones only); cameras, lights, notes and zone names to the
  * GM alone, whatever the state holds. A player's pin label hides under the
  * fog (`setCover`), as its pin does.
@@ -66,7 +66,7 @@
  *
  * Each kind is drawn again only when its key changes — the 2D map's own
  * (`stage/keys.ts`), with the metrics, the floor, the storey and the camera
- * kind — as the 2D stage redraws its Graphics.
+ * kind — as the 2D stage redrew its Graphics.
  */
 import {
   BufferGeometry,
@@ -291,7 +291,7 @@ function standMaterial(scale: { value: number }): MeshBasicMaterial {
     fog: false,
   });
   m.name = 'gm-marker';
-  // One pass in the order drawn, as the 2D map paints: a two-sided see-through
+  // One pass in the order drawn, as the 2D map painted: a two-sided see-through
   // material would otherwise draw every back-facing triangle first, and a
   // ring could land under the disc it rings.
   m.forceSinglePass = true;
@@ -307,9 +307,9 @@ function standMaterial(scale: { value: number }): MeshBasicMaterial {
   };
   // Before the cover, which keeps a key of the material's own.
   m.customProgramCacheKey = () => 'safehouse-gm-marker';
-  // Over the shroud and under the fog, as the 2D map layers its markers; and
+  // Over the shroud and under the fog, as the 2D map layered its markers; and
   // in their own colours whatever the eyes, which its vision filters never
-  // reach either.
+  // reached either.
   applyCover(m, 'fog');
   markPlain(m);
   return m;
@@ -352,7 +352,7 @@ function housing(b: StandBuilder, x: number, y: number, z: number, facing: numbe
   b.face([p(-1, -1, -1), p(1, -1, -1), p(1, 1, -1), p(-1, 1, -1)], [0, -1, 0], shade(color, 0.5), alpha);
 }
 
-/** The zones' names as the 2D map draws them (`drawPins`): each zone's name, colour and middle. */
+/** The zones' names as the 2D map drew them (`drawPins`): each zone's name, colour and middle. */
 function zoneKey(state: StageSceneState): string {
   const zones = state.scene.geometry.zones
     .map((z) => `${z.id}:${z.name}:${z.color ?? ''}:${z.polygon.map((p) => `${p.x},${p.y}`).join(';')}`)
@@ -385,7 +385,7 @@ interface LabelItem {
  * The names beside the standing markers: DOM tags over the canvas in the 2D
  * map's tag look (`labels.ts`), but hung from a point in the air — a pin's
  * head, a camera's eye, a lamp — and set off across the screen as the marks
- * are, growing and shrinking with the zoom as the 2D map's labels do.
+ * are, growing and shrinking with the zoom as the 2D map's labels did.
  */
 class StandingLabels {
   private readonly layer: HTMLDivElement;
@@ -498,7 +498,7 @@ export class GmMarkers {
   private readonly pins: Mesh;
   private readonly cameras: Mesh;
   private readonly lights: Mesh;
-  /** Under the plates and the fog's names: the 2D map draws its markers' labels under its tokens. */
+  /** Under the plates and the fog's names: the 2D map drew its markers' labels under its tokens. */
   private readonly holder: HTMLDivElement;
   private readonly pinLabels: StandingLabels;
   private readonly cameraLabels: StandingLabels;
@@ -519,7 +519,7 @@ export class GmMarkers {
   /**
    * `overlay` is the stage's DOM layer over the canvas; `renderOrder` is the
    * marks' place among the scene's see-through things: cameras at it, lights
-   * just after, pins after those, as the 2D map layers them.
+   * just after, pins after those, as the 2D map layered them.
    */
   constructor(
     overlay: HTMLElement,

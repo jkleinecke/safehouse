@@ -2,7 +2,7 @@
  * The scene's background map images (FR9.2) on the 3D map: each one a
  * textured plane lying on the ground floor, under the painted tiles.
  *
- * The same placement as the 2D map (`stage/mapLayer.ts`): the scene's
+ * The same placement the 2D map gave them until P5: the scene's
  * `mapAttachmentIds` carry no layout, so every image is stretched over the
  * calibrated scene rectangle — `cols × rows` squares starting at world px 0
  * in the top-down metrics, which is grid point −offset — and later images lie
@@ -10,7 +10,7 @@
  * ref (`../mapImage.ts`) are honoured the same way: a quarter turn about the
  * rectangle's centre with the image's local size transposed so it still fills
  * the rectangle, a crop as a window on the texture, and contrast and
- * brightness applied as the 2D map's colour matrix applies them (brightness,
+ * brightness applied as the 2D map's colour matrix applied them (brightness,
  * then contrast about mid-grey, on the sRGB values).
  *
  * The planes lie a hair below the ground floor's slab (world3d.ts builds its
@@ -19,7 +19,7 @@
  * 2D. They are unlit and not tone-mapped — the map is the map, as it was
  * drawn — do not write depth, and are hidden until their image has loaded.
  * A viewer's fog and shroud hide them square by square (`cover.ts`), as the
- * 2D map's cover lies over its image.
+ * 2D map's cover lay over its image.
  */
 import {
   BufferGeometry,
@@ -59,7 +59,7 @@ const PROGRAM_KEY = 'safehouse-map-plane';
 
 /**
  * The adjustment, after the texture is sampled. The texel arrives linear; the
- * 2D map's colour matrix works on sRGB values, so the maths goes back to sRGB
+ * 2D map's colour matrix worked on sRGB values, so the maths goes back to sRGB
  * for it and returns.
  */
 const TONE_GLSL = /* glsl */ `
@@ -121,7 +121,7 @@ export class MapPlane {
   update(scene: Scene, urlFor: (attachmentId: string) => string): void {
     if (this.disposed) return;
     // One plane per id, in first-listed order, with the last ref listed for
-    // it — as the 2D layer keys its sprites.
+    // it — as the 2D layer keyed its sprites.
     const refs = new Map<string, MapImageRef>();
     for (const raw of scene.mapAttachmentIds) {
       const ref = parseMapImageRef(raw);
@@ -181,7 +181,7 @@ export class MapPlane {
         shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>\n${TONE_GLSL}`);
     };
     material.customProgramCacheKey = () => PROGRAM_KEY;
-    // Under the shroud and the fog, as the 2D map's image lies under both:
+    // Under the shroud and the fog, as the 2D map's image lay under both:
     // the image is the whole map, unrevealed rooms included.
     applyCover(material, 'full');
 
@@ -197,7 +197,7 @@ export class MapPlane {
       undefined,
       () => {
         // A missing or offline attachment: the plane stays hidden, as the 2D
-        // map leaves its backdrop showing.
+        // map left its backdrop showing.
       },
     );
     texture.colorSpace = SRGBColorSpace;
@@ -234,7 +234,7 @@ export class MapPlane {
     // The rotated image fills the rectangle: its local size is the
     // rectangle's, transposed for a quarter turn, turned about the centre.
     // Grid y runs south, down the screen in the top view, as the 2D map's y
-    // does, so pixi's clockwise rotation is the same formula here.
+    // did, so pixi's clockwise rotation there is the same formula here.
     const local = localSizeFor(ref.rotateDeg, { width: w, height: h });
     const th = radians(ref.rotateDeg);
     const cos = Math.cos(th);
@@ -256,7 +256,7 @@ export class MapPlane {
     pos.needsUpdate = true;
     mesh.geometry.computeBoundingSphere();
 
-    // The crop, rounded to whole source pixels as the 2D map crops its frame.
+    // The crop, rounded to whole source pixels as the 2D map cropped its frame.
     if (size.width > 0 && size.height > 0) {
       const f = cropPixels(ref.crop, size.width, size.height);
       texture.repeat.set(f.width / size.width, f.height / size.height);

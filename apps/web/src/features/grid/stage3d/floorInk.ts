@@ -4,11 +4,11 @@
  * Everything that lies flat on the map — the grid, the GM's walls, doors and
  * zones, the fog tint and its outlines, the light-map wash, the ruler, the AoE
  * and every draft — is drawn by a function in `stage/layers.ts`,
- * `stage/lightLayer.ts` or `stage/fx.ts` that is handed an `Ink`. The 2D stage
- * hands it a pixi Graphics. This is the 3D stage's Ink: it records the same
- * calls and turns them into a couple of unlit meshes lying on the floor in
- * view, so the 3D map gets every one of those overlays without a second copy
- * of the drawing code and without pixi in its chunk.
+ * `stage/lightLayer.ts` or `stage/fx.ts` that is handed an `Ink`. Until P5
+ * the 2D stage handed it a pixi Graphics. This is the 3D stage's Ink: it
+ * records the same calls and turns them into a couple of unlit meshes lying
+ * on the floor in view, so the 3D map got every one of those overlays
+ * without a second copy of the drawing code.
  *
  * ## Coordinates
  *
@@ -33,7 +33,7 @@
  *     shape of the paint before it — the fog's cover rectangle with each
  *     revealed region punched out. Holes accumulate, one `cut` per region.
  *     A cut also reaches the paint chained with that one (fill, then stroke
- *     the same shape), and a stroke outlines its holes as well, as pixi does.
+ *     the same shape), and a stroke outlines its holes as well, as pixi's did.
  *
  * ## Batching and order
  *
@@ -58,13 +58,13 @@
  * ## Under the cover, or over it
  *
  * Each ink says which of the players' masks hide it (`cover`, `cover.ts`),
- * after the 2D layer its drawing sits in: the light-map wash lies under the
+ * after the 2D layer its drawing sat in: the light-map wash lies under the
  * shroud and the fog, the grid and the doors over the shroud and under the
  * fog, and the templates, the ruler and the drafts over both. There is one
  * shared pair of materials per answer.
  *
  * A vision mode never restyles an ink (`cover.ts` `markPlain`): the 2D map
- * draws every one of these overlays in a container its vision filters do
+ * drew every one of these overlays in a container its vision filters did
  * not reach, so a door keeps the colour that says whether it is open, and a
  * zone the GM's, over a floor turned thermal.
  *
@@ -119,7 +119,7 @@ export type InkOp =
 /**
  * Which of the viewer's masks hide an ink (`cover.ts`): `full` the shroud and
  * the fog, `fog` the fog alone, `none` neither (drawn over the cover, as the
- * 2D map's fx layer is drawn over its fog).
+ * 2D map's fx layer was drawn over its fog).
  */
 export type InkCover = CoverMode | 'none';
 
@@ -152,7 +152,7 @@ export interface FloorInkOptions {
    */
   renderOrder?: number;
   /**
-   * Which masks hide what this ink draws (`InkCover`), as the 2D map layers
+   * Which masks hide what this ink draws (`InkCover`), as the 2D map layered
    * the same drawing under or over its shroud and fog. Default `full`: hidden
    * by both, the safe answer for anything that is part of the map.
    */
@@ -182,7 +182,7 @@ function materials(cover: InkCover): { tris: MeshBasicMaterial; lines: LineBasic
   const known = shared.get(cover);
   if (known !== undefined) return known;
   // Unlit and untone-mapped, so the palette comes out as the 2D map's hex
-  // does; depth-tested so what stands in front hides it; not depth-writing,
+  // did; depth-tested so what stands in front hides it; not depth-writing,
   // so overlays never hide each other or what is drawn after them; and
   // pulled a hair toward the camera so the floor never shows through.
   const tris = new MeshBasicMaterial({
@@ -213,7 +213,7 @@ function materials(cover: InkCover): { tris: MeshBasicMaterial; lines: LineBasic
     if (cover === 'none') exemptFromCover(m);
     else {
       applyCover(m, cover);
-      // In its own colours whatever the eyes, as the 2D map's overlays are.
+      // In its own colours whatever the eyes, as the 2D map's overlays were.
       markPlain(m);
     }
   }
@@ -581,8 +581,8 @@ export abstract class RecordingInk implements Ink {
 }
 
 /**
- * An `Ink` that draws on the 3D floor. One per overlay layer, like the 2D
- * stage's one Graphics per layer: add `group` to the three.js scene, hand the
+ * An `Ink` that draws on the 3D floor. One per overlay layer, as the 2D
+ * stage kept one Graphics per layer: add `group` to the three.js scene, hand the
  * FloorInk to the layer's draw function whenever its key changes, and it
  * shows what was drawn from the next frame on.
  */

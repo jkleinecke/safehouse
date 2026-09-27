@@ -21,7 +21,7 @@ test.describe('the table display', () => {
     // The scene the GM activated, by name, in the kiosk header.
     await expect(page.getByText(world.sceneName)).toBeVisible();
 
-    // The map itself: the Pixi stage mounts a canvas into the kiosk.
+    // The map itself: the three.js stage mounts a canvas into the kiosk.
     await expect(page.locator('canvas').first()).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText('MAP RENDERER UNAVAILABLE')).toHaveCount(0);
 

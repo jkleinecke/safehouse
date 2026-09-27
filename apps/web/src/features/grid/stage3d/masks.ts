@@ -13,9 +13,10 @@
  *     map through it.
  *   - The SHROUD is drawn for whoever has one (`StageSceneState.shroud`, with
  *     at least one square in sight): a player's own runner's sightline, or the
- *     GM's "See as" lens. It darkens as the 2D scrim does — `SHROUD_ALPHA` for
- *     a player bound by it, the lighter `GM_SHROUD_ALPHA` when the state says
- *     it is the GM's lens (`ShroudState.gm`) — and so never hides outright.
+ *     GM's "See as" lens. It darkens by the 2D scrim's amounts, kept in
+ *     `plan/shroud.ts` — `SHROUD_ALPHA` for a player bound by it, the lighter
+ *     `GM_SHROUD_ALPHA` when the state says it is the GM's lens
+ *     (`ShroudState.gm`) — and so never hides outright.
  *
  * ## The two masks
  *
@@ -33,9 +34,9 @@
  *   - SHROUD: one byte a square, 255 where the viewer can see and 0 where
  *     not, filtered linearly on the GPU (and here) so its edge is soft.
  *
- * Each is rebuilt only when the 2D map would redraw it: the fog when its key
- * (`fogKey`) or the metrics change, the shroud when its key (`shroudKey`) or
- * the grid's size does.
+ * Each is rebuilt only when its key moves, as the 2D map redrew them: the fog
+ * when its key (`fogKey`) or the metrics change, the shroud when its key
+ * (`shroudKey`, `plan/shroud.ts`) or the grid's size does.
  *
  * ## The fog lid
  *
@@ -54,10 +55,10 @@
 import type { Point, Scene } from '@safehouse/contracts';
 import { Mesh, PlaneGeometry, type DataTexture, type Material } from 'three';
 import { metricsKey, type SceneMetrics } from '../geometry.js';
+import { GM_SHROUD_ALPHA, SHROUD_ALPHA } from '../plan/shroud.js';
 import type { LabelSink } from '../stage/ink.js';
 import { fogKey, shroudKey } from '../stage/keys.js';
 import { drawFog } from '../stage/layers.js';
-import { GM_SHROUD_ALPHA, SHROUD_ALPHA } from '../stage/shroudLayer.js';
 import type { ShroudState, StageSceneState } from '../types.js';
 import {
   COVER_MARGIN,
@@ -119,7 +120,7 @@ function trace(ctx: CanvasRenderingContext2D, s: InkShape, close: boolean): void
 /**
  * An `Ink` over a Canvas2D. The overlays' calls are recorded under pixi's
  * rules (`RecordingInk`) and painted in one go by `paint`: fills and strokes
- * as a Graphics paints them, and a fill that had holes cut from it painted
+ * as a pixi Graphics painted them, and a fill that had holes cut from it painted
  * through a layer of its own, so the holes punch that fill alone (not what
  * was painted before it) and two holes that overlap stay one hole.
  *
@@ -179,7 +180,7 @@ export class CanvasInk extends RecordingInk {
         continue;
       }
       ctx.beginPath();
-      // A stroke outlines the holes too, as pixi's does.
+      // A stroke outlines the holes too, as pixi's did.
       for (const s of shapes.concat(holes)) trace(ctx, s, s.closed);
       ctx.strokeStyle = style;
       ctx.lineWidth = op.hair ? 1 / this.k : op.width;

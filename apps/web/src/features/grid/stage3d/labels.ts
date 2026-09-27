@@ -3,10 +3,10 @@
  * flat overlays put their text through (`stage/ink.ts`), as `FloorInk` is the
  * Ink they draw with.
  *
- * A WebGL canvas holds no text, and the 2D stage's pooled pixi `Text` would
- * pull pixi into the 3D chunk, so each label is an absolutely positioned
- * element in a layer of its own over the canvas, pooled by key the same way
- * (`LabelPool`), and never in the way of a click (`pointer-events: none`).
+ * A WebGL canvas holds no text, so each label is an absolutely positioned
+ * element in a layer of its own over the canvas, pooled by key as the 2D
+ * stage pooled its pixi `Text` (`LabelPool`), and never in the way of a
+ * click (`pointer-events: none`).
  *
  * A label arrives in the TOP-DOWN world px the overlays draw with, and is
  * kept as the grid point that is (g = px / cell − offset, as `FloorInk` does).
@@ -14,12 +14,12 @@
  * any frame in which the view moved — and a label put between layouts is
  * placed at once with the last camera it was given. A label whose anchor the
  * viewer may not see (`setCover`: a player's fog) is hidden, as the fog
- * covers the 2D map's labels under it.
+ * covered the 2D map's labels under it.
  *
- * The two looks match the 2D map's (`stage/textLabels.ts`):
+ * The two looks are the ones the 2D map's labels had:
  *   - a `tag` (a zone's or fog region's name) is 12px Inter outlined in the
  *     ground colour, upright on the screen, and grows and shrinks with the
- *     zoom the way a world-space label on the 2D map does;
+ *     zoom the way a world-space label on the 2D map did;
  *   - a `note` is a GM note's dark 12px text on 15px lines, wrapped at the
  *     note's width, and lies ON the floor with the paper `FloorInk` draws
  *     under it — skewed with the floor in isometric, turned with it when the
@@ -85,7 +85,7 @@ function largestStretch(a: number, b: number, c: number, d: number): number {
 
 /**
  * A `LabelSink` of DOM elements over the 3D canvas. One per overlay layer,
- * like the 2D stage's one pool per layer; several can share a container.
+ * as the 2D stage kept one pool per layer; several can share a container.
  */
 export class DomLabels extends LabelPool<HTMLElement> {
   /** This sink's own layer in the container: full-size, click-through, hidden when `layout` says so. */
@@ -134,7 +134,7 @@ export class DomLabels extends LabelPool<HTMLElement> {
 
   /**
    * Hide every label whose anchor (a grid point) `covered` says the viewer may
-   * not see — under a player's fog, as the 2D map's labels under its fog are
+   * not see — under a player's fog, as the 2D map's labels under its fog were
    * — or none, with null. Takes effect at the next `layout`, which the caller
    * asks for when the answer may have changed.
    */

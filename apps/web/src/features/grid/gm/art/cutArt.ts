@@ -1,5 +1,7 @@
 /**
- * Doors and windows, drawn as doors and windows (FR9.2).
+ * Doors and windows, drawn as doors and windows (FR9.2) — in the Build
+ * palette's tile pictures (`tileArt.ts`). The 3D map builds its openings
+ * itself (`lab3d/world3d.ts`).
  *
  * A door used to be a wall slab in a different brown with a bar across it,
  * and the GM said so. Every cut tile in the catalogue now names a DESIGN —
@@ -16,7 +18,7 @@
  * is a wide roller door; two street doors are a double door; a run of shop
  * window is one window with a mullion per cell. The caller finds the run and
  * draws the design once, from the run's LAST cell — the nearest one — so no
- * slab of the run is painted over it afterwards, whichever chunk it lives in.
+ * slab of the run is painted over it afterwards (`cutRunFor`, `plan/tiles.ts`).
  *
  * ## Coordinates
  *
@@ -27,11 +29,12 @@
  * face is drawn as a polygon through the mapper rather than as an ellipse it
  * would not be.
  */
-import type { Graphics } from 'pixi.js';
 import type { Point } from '@safehouse/contracts';
 import type { TileCut } from '@safehouse/rules';
-import { worldFromGrid, type SceneMetrics } from '../geometry.js';
-import { C, parseColor, shade } from './colors.js';
+import { worldFromGrid, type SceneMetrics } from '../../geometry.js';
+import type { CutRun } from '../../plan/tiles.js';
+import { C, parseColor, shade } from '../../stage/colors.js';
+import type { ArtPen } from './canvasPen.js';
 
 /** The tones the wall is drawn with — the same derived palette as its slab. */
 export interface CutTones {
@@ -40,16 +43,6 @@ export interface CutTones {
   light: number;
   dark: number;
   ink: number;
-}
-
-/** The opening: where it is, which way it runs, how many cells it spans. */
-export interface CutRun {
-  /** Union of the run's slab rects, in grid units. */
-  rect: readonly [number, number, number, number];
-  /** Which way the wall runs. */
-  axis: 'x' | 'y';
-  /** Cells in the run. */
-  n: number;
 }
 
 /** Glass: a cool tint that reads as glazing on every set's palette. */
@@ -82,13 +75,13 @@ function topMap(m: SceneMetrics, run: CutRun): Map2 {
 
 class Face {
   constructor(
-    private readonly g: Graphics,
+    private readonly g: ArtPen,
     private readonly P: Map2,
     /** How many `u` units one `v` unit is on screen — keeps circles round. */
     private readonly aspect: number,
   ) {}
 
-  poly(pts: ReadonlyArray<readonly [number, number]>): Graphics {
+  poly(pts: ReadonlyArray<readonly [number, number]>): ArtPen {
     const first = this.P(pts[0]![0], pts[0]![1]);
     this.g.moveTo(first.x, first.y);
     for (let i = 1; i < pts.length; i += 1) {
@@ -98,7 +91,7 @@ class Face {
     return this.g.closePath();
   }
 
-  rect(u0: number, v0: number, u1: number, v1: number): Graphics {
+  rect(u0: number, v0: number, u1: number, v1: number): ArtPen {
     return this.poly([
       [u0, v0],
       [u1, v0],
@@ -126,7 +119,7 @@ class Face {
   }
 
   /** A circle of radius `r` in `v` units, centred at (u, v). */
-  circle(u: number, v: number, r: number, sides = 18): Graphics {
+  circle(u: number, v: number, r: number, sides = 18): ArtPen {
     const pts: Array<readonly [number, number]> = [];
     for (let i = 0; i < sides; i += 1) {
       const t = (i / sides) * Math.PI * 2;
@@ -198,7 +191,7 @@ function leaf(f: Face, u0: number, u1: number, v1: number, tones: CutTones, hing
  * is the architectural symbol on the slab's top instead of the elevation.
  */
 export function drawCut(
-  g: Graphics,
+  g: ArtPen,
   m: SceneMetrics,
   cut: TileCut,
   run: CutRun,
@@ -241,7 +234,7 @@ function openLeaf(f: Face, u0: number, u1: number, v1: number, tones: CutTones, 
 }
 
 function drawElevation(
-  g: Graphics,
+  g: ArtPen,
   m: SceneMetrics,
   cut: TileCut,
   run: CutRun,
@@ -498,7 +491,7 @@ function drawElevation(
 
 /** The plan-view symbol: what a floor plan draws for this opening. */
 function drawSymbol(
-  g: Graphics,
+  g: ArtPen,
   m: SceneMetrics,
   cut: TileCut,
   run: CutRun,

@@ -1,6 +1,6 @@
 /**
  * Pure projections from live/server state into what the stage draws
- * (no pixi, no DOM — unit-tested).
+ * (no three, no DOM — unit-tested).
  *
  * Principle 4 note: this never *hides* anything the server sent. Hidden tokens
  * and GM-only combatants are filtered server-side; these helpers only decide

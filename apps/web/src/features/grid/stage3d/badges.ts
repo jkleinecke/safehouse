@@ -2,8 +2,8 @@
  * The token plates of the 3D map: a small DOM plate hanging over each
  * figure's head (P1 of the move to 3D).
  *
- * What a plate says is what the 2D badge says (`tokenView.ts`), read through
- * the same rules (`tokenState.ts`), so the two renderers never disagree:
+ * What a plate says is what the 2D map's badge said, read through the same
+ * rules (`tokenState.ts`), which the figures and the portraits read too:
  *   - the portrait (`token.artRef`), round, or the name's initial on the
  *     colour of where the token came from (`SOURCE_COLORS`);
  *   - the name, under it;
@@ -26,18 +26,18 @@
  * stage asks `pick` whether it landed on a portrait.
  *
  * In the top view (`setTopView`) the portrait is the figure's own, a disc
- * lying on its head (`portraits.ts`), as the 2D plan draws a token. The plate
+ * lying on its head (`portraits.ts`), as the 2D plan drew a token. The plate
  * then gives its portrait up and is laid round that disc: centred on it, the
  * same size on screen, its bars just above and its name just below, as the
- * 2D plan lays a token's out. Its disc stays in place, unseen, for `pick`, and
+ * 2D plan laid a token's out. Its disc stays in place, unseen, for `pick`, and
  * its selection ring goes (the figure's ring on the floor shows round the
  * disc); the acting glow keeps breathing round it. In iso the plates stay as
  * they are.
  *
  * In a vision mode the plates take the bodies' colours (`setLook`), as the
- * 2D map's token filter restyles its badges with its tokens: in iso the
+ * 2D map's token filter restyled its badges with its tokens: in iso the
  * plate is where a token's portrait shows, and a portrait in full colour
- * over a figure ramped thermal amber would not be what the 2D map shows.
+ * over a figure ramped thermal amber would not be what the 2D map showed.
  */
 import { Vector3 } from 'three';
 import type { TokenBars } from '../types.js';
@@ -153,8 +153,8 @@ export class TokenBadges {
     // The vision filter's definition, in an SVG of no size beside the layer
     // rather than in it (the layer's filter never filters its own
     // definition), and not `display: none`, which some browsers take to
-    // switch the filter off. sRGB: Pixi's filter works on the canvas's
-    // encoded colour, not on linear light, which is SVG's default.
+    // switch the filter off. sRGB: the 2D map's Pixi filter worked on the
+    // canvas's encoded colour, not on linear light, which is SVG's default.
     lookSeq += 1;
     const id = `safehouse-plate-look-${lookSeq}`;
     const svg = document.createElementNS(SVG_NS, 'svg');
@@ -175,11 +175,11 @@ export class TokenBadges {
 
   /**
    * Restyle the plates for a pair of eyes: `matrix` is the bodies' colour
-   * matrix (`viewModes.ts`), which the 2D map's token filter lays over its
+   * matrix (`viewModes.ts`), which the 2D map's token filter laid over its
    * badges with the tokens. Here it is an SVG `feColorMatrix` on the whole
    * layer, which takes the same 20 numbers in the same layout — row-major
    * 4 × 5, on straight colour in 0 … 1, offsets in 0 … 1 — and clamps as
-   * Pixi's does. Null for eyes that see the plates as they are: no filter at
+   * Pixi's did. Null for eyes that see the plates as they are: no filter at
    * all, so outside a vision mode the layer costs nothing more.
    */
   setLook(matrix: ColorMatrix | null): void {
@@ -517,7 +517,7 @@ export class TokenBadges {
   /**
    * The portrait, or the initial while there is none, while it loads, or when
    * it will not load. A new `artRef` swaps the image; a removed one goes back
-   * to the initial (the 2D badge learned both the hard way — `tokenView.ts`).
+   * to the initial (the 2D map's badge learned both the hard way).
    */
   private portrait(p: Plate, artRef: string | null): void {
     const url = artRef ? this.urlFor(artRef) : null;

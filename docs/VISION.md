@@ -27,7 +27,7 @@ maths, and it already carries most of the weight:
 - `visibleFrom(cell, model, range)` — everything one pair of eyes can see.
 - `coneCells(eye, model)` — the same, trimmed to a facing and a field of
   view (the camera, and later any fixed sensor).
-- The **shroud** (`useShroud`, `stage/shroudLayer.ts`) darkens what the
+- The **shroud** (`useShroud`, `stage3d/masks.ts`) darkens what the
   viewer cannot see: a player's own runner, or a viewpoint the GM picks.
 - The **environment** (`env.ts`, the Env tab) composes the scene's light,
   visibility, glare and wind levels into the SR5 tier — `−1/−3/−6`, two at

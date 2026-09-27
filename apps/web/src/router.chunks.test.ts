@@ -11,9 +11,10 @@
  * that: `features/codex/` may be reached from outside itself ONLY through a
  * dynamic `import()`.
  *
- * The same reasoning is why the Grid's pixi subtree has `useStage.ts`'s
- * docblock and only one `import('./stage/index.js')` in the tree; this is that
- * rule written down as an assertion rather than a comment.
+ * The same reasoning is why the Grid's three.js map has `useStage.ts`'s
+ * docblock and only one `import('./stage3d/index.js')` in the tree, in
+ * `stageLoader.ts`; this is that rule written down as an assertion rather
+ * than a comment.
  *
  * The character builder (FR3.9, docs/CHARGEN.md §8.6 "lazy chunks") follows
  * the same rule with one allowance: the roster, the player home and the GM
@@ -104,26 +105,27 @@ describe('the codex feature is a lazy chunk (§15)', () => {
     }
   });
 
-  it('the pixi stage is never imported statically (§15)', () => {
+  it('the 3D stage is never imported statically (§15)', () => {
     // The pattern this file is copied from, asserted alongside it so the two
-    // never drift. The property §15 needs is that NOTHING pulls `stage/` into
-    // a static import graph — that is what would drag PixiJS into the initial
-    // chunk. The number of dynamic sites is not the property: the Grid loads
-    // it on demand and the TV stage does the same, deliberately sharing one
-    // renderer, and both stay lazy. Counting sites also miscounts prose,
-    // since the docblocks above those calls quote the specifier.
-    const stageDir = path.join(SRC, 'features', 'grid', 'stage');
+    // never drift. The property §15 needs is that NOTHING pulls `stage3d/`
+    // into a static import graph — that is what would drag three.js into the
+    // initial chunk. The number of dynamic sites is not the property: the
+    // Grid and the TV both mount through `stageLoader.ts`, which reaches the
+    // stage on demand, deliberately sharing one renderer, and both stay lazy.
+    // Counting sites also miscounts prose, since docblocks may quote the
+    // specifier.
+    const stageDir = path.join(SRC, 'features', 'grid', 'stage3d');
     const offenders: string[] = [];
     let dynamicHits = 0;
     for (const file of sourceFiles(SRC)) {
       if (file.startsWith(stageDir + path.sep)) continue;
       const src = fs.readFileSync(file, 'utf8');
       for (const m of src.matchAll(
-        /^\s*import\s+(?!type\b)[^;]*?from\s+['"][^'"]*stage\/index\.js['"]/gm,
+        /^\s*import\s+(?!type\b)[^;]*?from\s+['"][^'"]*stage3d\/index\.js['"]/gm,
       )) {
         offenders.push(`${rel(file)}: ${m[0].trim()}`);
       }
-      dynamicHits += [...src.matchAll(/import\(\s*['"][^'"]*stage\/index\.js['"]\s*\)/g)].length;
+      dynamicHits += [...src.matchAll(/import\(\s*['"][^'"]*stage3d\/index\.js['"]\s*\)/g)].length;
     }
     expect(offenders).toEqual([]);
     expect(dynamicHits).toBeGreaterThan(0);

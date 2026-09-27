@@ -2,11 +2,11 @@
  * Pings and the pointer trail on the 3D map: marks that fade on the floor in
  * view, frame by frame (P1 of the move to 3D).
  *
- * The 2D map draws them in its fx layer (`stage/fx.ts`); this draws the same
- * marks with the same timing and look — a ping's magenta ring grows and
- * fades, a trail dot's cyan disc shrinks and fades — without going through a
- * `FloorInk`, which would build and upload a new geometry every frame one is
- * fading, and a sweep of the Pointer tool keeps some fading the whole time.
+ * The 2D map drew them in its fx layer; this draws the same marks with the
+ * same timing and look — a ping's magenta ring grows and fades, a trail
+ * dot's cyan disc shrinks and fades — without going through a `FloorInk`,
+ * which would build and upload a new geometry every frame one is fading, and
+ * a sweep of the Pointer tool keeps some fading the whole time.
  *
  * Instead each kind has a fixed pool of meshes, made as they are first needed
  * and all sharing one unit geometry (a ring for pings, a disc for dots): a
@@ -16,8 +16,8 @@
  *
  * World units are the 3D world's: x = grid x, z = grid y, y up in squares.
  * Marks are handed over in grid units and lie just over the floor in view,
- * among the flat overlays (`FloorInk`'s lift). Like the 2D fx layer they lie
- * over the players' fog and shroud (`cover.ts`), never under them.
+ * among the flat overlays (`FloorInk`'s lift). As the 2D fx layer did, they
+ * lie over the players' fog and shroud (`cover.ts`), never under them.
  */
 import { CircleGeometry, Group, Mesh, MeshBasicMaterial, RingGeometry, type BufferGeometry } from 'three';
 import type { Point } from '@safehouse/contracts';
@@ -176,7 +176,7 @@ export class FloorMarks {
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -4,
     });
-    // Over the cover, on purpose: the 2D map draws pings and the trail in its
+    // Over the cover, on purpose: the 2D map drew pings and the trail in its
     // fx layer, above the fog, so a ping into an unrevealed room still shows
     // everyone where it was.
     exemptFromCover(material);

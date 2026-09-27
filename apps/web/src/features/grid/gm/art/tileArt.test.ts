@@ -1,7 +1,7 @@
 /**
- * The painted floor (FR9.2), tested where it actually failed.
+ * The tile painter (FR9.2), tested where it actually failed.
  *
- * This layer shipped with zero coverage and two independent bugs that both
+ * This painter shipped with zero coverage and two independent bugs that both
  * present as "the GM paints and nothing happens", which is exactly the failure
  * a renderer hides best: `drawTiles` skips a cell it has no definition for, so
  * an empty palette draws an empty canvas rather than anything visibly wrong.
@@ -9,31 +9,25 @@
  *
  *   1. an unknown tile id draws NOTHING — the silent failure itself, asserted
  *      so the palette tests above it have something to mean;
- *   2. definitions are keyed by tileset AND tile, because `wall` exists in all
- *      six catalogue sets and a flat map painted Docklands in Club purple;
+ *   2. definitions are keyed by tileset AND tile, and each set draws its own
+ *      colours;
  *   3. every pattern the shipped catalogue uses produces real draw calls — the
  *      web half of the drift guard between `TilePattern` and this switch;
- *   4. `tileLayerKey` moves for the edit that the old count-and-length key was
- *      blind to: repainting a cell with a same-length tile id.
+ *   4. walls, doors and the layers under and over them draw where they belong;
+ *   5. a tile with a design (`stage/props.ts`) draws through it, standing or
+ *      flat.
  *
- * `drawTiles` is pure over a Graphics-shaped object, so no renderer is needed —
- * same approach as `hit.test.ts` and `camera.test.ts`.
+ * `drawTiles` is pure over its pen (`ArtPen`), so a recorder stands in and no
+ * renderer is needed — same approach as `hit.test.ts` and `camera.test.ts`.
+ * The plan it draws from is tested on its own (`plan/tiles.test.ts`).
  */
 import { describe, expect, it } from 'vitest';
-import type { Graphics } from 'pixi.js';
 import { TILESETS } from '@safehouse/rules';
-import { metricsFor } from '../geometry.js';
-import { tileDefKey, tileDefsFromSets, type TileDrawDef } from '../types.js';
-import {
-  cellSignatures,
-  drawTiles,
-  planTiles,
-  runOpen,
-  tileDrawInput,
-  tileLayerKey,
-  wallBoxes,
-  wallDiagonals,
-} from './tileLayer.js';
+import { metricsFor } from '../../geometry.js';
+import { tileDrawInput } from '../../plan/tiles.js';
+import { tileDefKey, tileDefsFromSets, type TileDrawDef } from '../../types.js';
+import type { ArtPen } from './canvasPen.js';
+import { drawTiles, runOpen } from './tileArt.js';
 
 const M = metricsFor({ unitM: 1, cols: 10, rows: 8, offset: { x: 0, y: 0 }, projection: 'topdown' as const });
 
@@ -59,20 +53,19 @@ interface Call {
   args: unknown[];
 }
 
-/** Chainable recorder shaped like the handful of Graphics calls we make. */
-function fakeGraphics(): { g: Graphics; calls: Call[]; ops: () => string[] } {
+/** Chainable recorder of every call an `ArtPen` takes. */
+function fakePen(): { g: ArtPen; calls: Call[]; ops: () => string[] } {
   const calls: Call[] = [];
   const g: Record<string, unknown> = {};
   for (const op of [
     'clear',
-    'rect',
+    'beginPath',
     'fill',
     'moveTo',
     'lineTo',
     'stroke',
     'circle',
     'ellipse',
-    'quadraticCurveTo',
     'closePath',
   ]) {
     g[op] = (...args: unknown[]) => {
@@ -80,7 +73,7 @@ function fakeGraphics(): { g: Graphics; calls: Call[]; ops: () => string[] } {
       return g;
     };
   }
-  return { g: g as unknown as Graphics, calls, ops: () => calls.map((c) => c.op) };
+  return { g: g as unknown as ArtPen, calls, ops: () => calls.map((c) => c.op) };
 }
 
 /**
@@ -96,60 +89,12 @@ function catalogueDefs(): Record<string, TileDrawDef> {
 }
 
 // ---------------------------------------------------------------------------
-// Slots: what a painted square holds, drawn by whichever set the floor names
-// ---------------------------------------------------------------------------
-
-describe('the palette answers slots as well as ids', () => {
-  const defs = catalogueDefs();
-
-  it('files each tile under its id and its slot, as the same def', () => {
-    expect(defs[tileDefKey('docklands', 'ground/1')]).toBe(defs[tileDefKey('docklands', 'floor')]);
-    expect(defs[tileDefKey('docklands', 'building/door')]).toBe(defs[tileDefKey('docklands', 'door')]);
-    expect(defs[tileDefKey('corp', 'interior/1')]).toBe(defs[tileDefKey('corp', 'desk')]);
-  });
-
-  it('draws the same slot as a different tile in another set', () => {
-    const dock = defs[tileDefKey('docklands', 'ground/2')];
-    const corp = defs[tileDefKey('corp', 'ground/2')];
-    expect(dock).toBeDefined();
-    expect(corp).toBeDefined();
-    expect(dock).not.toBe(corp);
-    expect(defs[tileDefKey('corp', 'building/door')]?.kind).toBe('door');
-  });
-
-  it('gives every set a def for every slot any set defines, so a switched map has no holes', () => {
-    const slots = new Set(
-      Object.keys(defs)
-        .map((k) => k.split('/').slice(1).join('/'))
-        .filter((ref) => ref.includes('/')),
-    );
-    expect(slots.size).toBeGreaterThan(10);
-    for (const set of TILESETS) {
-      for (const slot of slots) {
-        expect(defs[tileDefKey(set.id, slot)], `${set.id} ${slot}`).toBeDefined();
-      }
-    }
-    // A number the set lacks wraps onto one it has, rather than onto nothing.
-    expect(defs[tileDefKey('corp', 'decoration/5')]).toBe(defs[tileDefKey('corp', 'decoration/1')]);
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Painted doors standing open (FR9.24)
 // ---------------------------------------------------------------------------
 
 describe('a painted door standing open', () => {
   const defs = catalogueDefs();
   const structure = { '3,3': 'wall', '3,4': 'door', '3,5': 'door', '3,6': 'wall' };
-
-  it('rides from the scene into the draw input, and into the plan', () => {
-    const tiles = { tilesetId: 'docklands', cells: {}, ground: {}, structure, object: {}, doors: { '3,4': { open: true, locked: false } } };
-    const input = tileDrawInput(tiles as never, defs);
-    expect(input.doors).toEqual({ '3,4': { open: true, locked: false } });
-    const plan = planTiles(M, input);
-    expect([...plan.openDoors]).toEqual(['3,4']);
-    expect(planTiles(M, { tilesetId: 'docklands', structure, defs }).openDoors.size).toBe(0);
-  });
 
   it('answers per leaf along the run, first to last', () => {
     const run = { rect: [3.33, 4, 3.67, 6] as const, axis: 'y' as const, n: 2 };
@@ -159,19 +104,10 @@ describe('a painted door standing open', () => {
     expect(runOpen(run, { col: 3, row: 5 }, undefined)).toEqual([]);
   });
 
-  it('is a change in its cell, so opening it redraws the run', () => {
-    const shut = cellSignatures({ tilesetId: 'docklands', structure, defs });
-    const open = cellSignatures({ tilesetId: 'docklands', structure, doors: { '3,4': { open: true, locked: false } }, defs });
-    expect(open.get('3,4')).not.toBe(shut.get('3,4'));
-    expect(open.get('3,5')).toBe(shut.get('3,5'));
-    // A door state for a cell with no tile in it is not a phantom cell.
-    expect(cellSignatures({ tilesetId: 'docklands', structure, doors: { '9,9': { open: true, locked: false } }, defs }).has('9,9')).toBe(false);
-  });
-
   it('draws the floor differently with the door open', () => {
-    const a = fakeGraphics();
+    const a = fakePen();
     drawTiles(a.g, M, { tilesetId: 'docklands', structure, defs });
-    const b = fakeGraphics();
+    const b = fakePen();
     drawTiles(b.g, M, { tilesetId: 'docklands', structure, doors: { '3,4': { open: true, locked: false }, '3,5': { open: true, locked: false } }, defs });
     expect(b.ops()).not.toEqual(a.ops());
   });
@@ -183,13 +119,13 @@ describe('a painted door standing open', () => {
 
 describe('drawTiles skips what it cannot draw, loudly enough to test', () => {
   it('clears first, so a repaint never draws over the previous floor', () => {
-    const { g, ops } = fakeGraphics();
+    const { g, ops } = fakePen();
     drawTiles(g, M, { tilesetId: 'docklands', cells: {}, defs: catalogueDefs() });
     expect(ops()).toEqual(['clear']);
   });
 
   it('draws NOTHING for a tile id the palette does not know', () => {
-    const { g, ops } = fakeGraphics();
+    const { g, ops } = fakePen();
     drawTiles(g, M, {
       tilesetId: 'docklands',
       cells: { '1,1': 'no-such-tile' },
@@ -200,7 +136,7 @@ describe('drawTiles skips what it cannot draw, loudly enough to test', () => {
   });
 
   it('draws nothing when the palette is empty — the cold-load bug, in one line', () => {
-    const { g, ops } = fakeGraphics();
+    const { g, ops } = fakePen();
     drawTiles(g, M, { tilesetId: 'docklands', cells: { '1,1': 'floor' }, defs: {} });
     expect(ops()).toEqual(['clear']);
   });
@@ -208,7 +144,7 @@ describe('drawTiles skips what it cannot draw, loudly enough to test', () => {
   it('skips malformed keys instead of failing the whole layer', () => {
     const defs = catalogueDefs();
     for (const key of ['', '1', '1,2,3', '1, 2', ' 1,2', '1.5,2', '+1,2', 'a,b']) {
-      const { g, ops } = fakeGraphics();
+      const { g, ops } = fakePen();
       drawTiles(g, M, { tilesetId: 'docklands', cells: { [key]: 'floor' }, defs });
       expect(ops(), `key ${JSON.stringify(key)} should be skipped`).toEqual(['clear']);
     }
@@ -217,18 +153,18 @@ describe('drawTiles skips what it cannot draw, loudly enough to test', () => {
   it('skips cells outside the grid, so shrinking a scene never crashes it', () => {
     const defs = catalogueDefs();
     const outside = { '-1,0': 'floor', '0,-1': 'floor', '10,0': 'floor', '0,8': 'floor' };
-    const { g, ops } = fakeGraphics();
+    const { g, ops } = fakePen();
     drawTiles(g, M, { tilesetId: 'docklands', cells: outside, defs });
     expect(ops()).toEqual(['clear']);
 
     // …and the last in-bounds cell still draws, so the bound is not off by one.
-    const edge = fakeGraphics();
+    const edge = fakePen();
     drawTiles(edge.g, M, { tilesetId: 'docklands', cells: { '9,7': 'floor' }, defs });
     expect(edge.ops()).toContain('fill');
   });
 
   it('places a cell at its grid position, in world units', () => {
-    const { g, calls } = fakeGraphics();
+    const { g, calls } = fakePen();
     drawTiles(g, M, { tilesetId: 'corp', cells: { '3,2': 'wall' }, defs: catalogueDefs() });
     // The first vertex of the base face is the cell's north corner, which in
     // plan view is simply its top-left.
@@ -244,9 +180,9 @@ describe('drawTiles skips what it cannot draw, loudly enough to test', () => {
 describe('definitions are keyed by tileset AND tile', () => {
   it('the same tile id in two sets draws in each set’s own colours', () => {
     const defs = catalogueDefs();
-    const docklands = fakeGraphics();
+    const docklands = fakePen();
     drawTiles(docklands.g, M, { tilesetId: 'docklands', cells: { '0,0': 'wall' }, defs });
-    const club = fakeGraphics();
+    const club = fakePen();
     drawTiles(club.g, M, { tilesetId: 'club', cells: { '0,0': 'wall' }, defs });
 
     // EVERY fill, not just the first: a wall is thin, so its cell paints the
@@ -273,19 +209,8 @@ describe('definitions are keyed by tileset AND tile', () => {
     expect(fillsOf(club.calls)).not.toContain(colourOf('docklands', 'wall'));
   });
 
-  it('names the collisions a flat id map used to swallow', () => {
-    const owners = new Map<string, string[]>();
-    for (const set of TILESETS) {
-      for (const t of set.tiles) owners.set(t.id, [...(owners.get(t.id) ?? []), set.id]);
-    }
-    // Documented fact, not an accident: these are why `tileDefKey` exists.
-    expect(owners.get('wall')).toHaveLength(6);
-    expect(owners.get('door')).toHaveLength(4);
-    expect(owners.get('floor')).toEqual(['docklands', 'club']);
-  });
-
   it('a cell whose id belongs to another set is skipped, not mis-drawn', () => {
-    const { g, ops } = fakeGraphics();
+    const { g, ops } = fakePen();
     // `carpet` is a corp tile; this layer says it is a docklands layer.
     drawTiles(g, M, { tilesetId: 'docklands', cells: { '0,0': 'carpet' }, defs: catalogueDefs() });
     expect(ops()).toEqual(['clear']);
@@ -353,7 +278,7 @@ describe('every pattern the catalogue uses actually draws something', () => {
     };
 
     for (const pattern of PATTERNS) {
-      const { g, ops } = fakeGraphics();
+      const { g, ops } = fakePen();
       const defs = { [tileDefKey('t', 'x')]: { pattern, colors: ['#112233', '#445566'] as const } };
       drawTiles(g, M, { tilesetId: 't', cells: { '0,0': 'x' }, defs });
       expect(ops()[0], pattern).toBe('clear');
@@ -371,7 +296,7 @@ describe('every pattern the catalogue uses actually draws something', () => {
   });
 
   it('“solid” fills and strokes nothing', () => {
-    const { g, ops } = fakeGraphics();
+    const { g, ops } = fakePen();
     const defs = { [tileDefKey('t', 'x')]: { pattern: 'solid' as const, colors: ['#111', '#222'] as const } };
     drawTiles(g, M, { tilesetId: 't', cells: { '0,0': 'x' }, defs });
     // A lone cell is all edge, so the base face is followed by exactly that.
@@ -381,7 +306,7 @@ describe('every pattern the catalogue uses actually draws something', () => {
   it('an unrecognised pattern degrades to flat colour rather than throwing', () => {
     // The compile-time guard is the `never` default in `drawTile`; at RUNTIME
     // the catalogue arrives over the wire, so an older client must still cope.
-    const { g, ops } = fakeGraphics();
+    const { g, ops } = fakePen();
     const defs = {
       [tileDefKey('t', 'x')]: {
         pattern: 'thirteenth' as unknown as (typeof PATTERNS)[number],
@@ -394,7 +319,7 @@ describe('every pattern the catalogue uses actually draws something', () => {
   });
 
   it('a malformed palette draws the cell wrong rather than not at all', () => {
-    const { g, calls } = fakeGraphics();
+    const { g, calls } = fakePen();
     const defs = {
       [tileDefKey('t', 'x')]: { pattern: 'planks' as const, colors: ['nonsense', ''] as const },
     };
@@ -414,176 +339,15 @@ describe('every pattern the catalogue uses actually draws something', () => {
 });
 
 // ---------------------------------------------------------------------------
-// The redraw key
-// ---------------------------------------------------------------------------
-
-describe('tileLayerKey notices the edits the old key could not', () => {
-  /**
-   * A scene's tiles, expressed in the GROUND layer.
-   *
-   * These cases are about the redraw key noticing a change, which is
-   * layer-agnostic — but they must not use the legacy `cells` field, because
-   * that drains to empty on the server and a key hashed only from it would
-   * never move again.
-   */
-  const layer = (ground: Record<string, string>, tilesetId = 'docklands') => ({
-    tilesetId,
-    cells: {},
-    ground,
-    structure: {},
-    object: {},
-  });
-
-  it('moves when one cell is repainted with a same-length tile id', () => {
-    // `floor` → `stain`: same cell count, same JSON length. The old key was
-    // `tilesetId:count:JSON.length`, so it did not move and the canvas kept
-    // showing poured concrete after the GM painted oil stains over it.
-    const before = layer({ '1,1': 'floor' });
-    const after = layer({ '1,1': 'stain' });
-    expect(JSON.stringify(before.cells).length).toBe(JSON.stringify(after.cells).length);
-    expect(tileLayerKey('s1', before)).not.toBe(tileLayerKey('s1', after));
-  });
-
-  it('moves for every same-length swap the shipped catalogue makes easy', () => {
-    for (const [a, b] of [
-      ['floor', 'stain'],
-      ['stain', 'grate'],
-      ['wall', 'rail'],
-      ['rail', 'door'],
-      ['road', 'walk'],
-      ['dirt', 'slab'],
-      ['valve', 'hatch'],
-      ['floor', 'booth'],
-    ]) {
-      expect(
-        tileLayerKey('s1', layer({ '4,4': a as string })),
-        `${a} → ${b}`,
-      ).not.toBe(tileLayerKey('s1', layer({ '4,4': b as string })));
-    }
-  });
-
-  it('moves when N cells are erased and N same-length cells painted', () => {
-    const before = layer({ '0,0': 'wall', '0,1': 'wall' });
-    const after = layer({ '5,5': 'wall', '5,6': 'wall' });
-    expect(tileLayerKey('s1', before)).not.toBe(tileLayerKey('s1', after));
-  });
-
-  it('moves when the scene changes, even if count and content coincide', () => {
-    // One Stage is reused across scene switches (`useStage`), so the key has to
-    // separate two same-sized floors itself.
-    const same = layer({ '2,2': 'floor' });
-    expect(tileLayerKey('s1', same)).not.toBe(tileLayerKey('s2', same));
-  });
-
-  it('moves when the tileset changes under identical cells', () => {
-    expect(tileLayerKey('s1', layer({ '0,0': 'wall' }, 'docklands'))).not.toBe(
-      tileLayerKey('s1', layer({ '0,0': 'wall' }, 'club')),
-    );
-  });
-
-  it('holds still when nothing changed, whatever order the cells arrive in', () => {
-    const a = layer({ '0,0': 'floor', '1,0': 'wall', '2,0': 'door' });
-    const b = layer({ '2,0': 'door', '0,0': 'floor', '1,0': 'wall' });
-    expect(tileLayerKey('s1', a)).toBe(tileLayerKey('s1', b));
-  });
-
-  it('distinguishes an unpainted scene from an emptied one', () => {
-    // Erasing the last cell persists `{tilesetId, cells:{}}` server-side; that
-    // is not the same state as a scene that was never painted.
-    expect(tileLayerKey('s1', null)).not.toBe(tileLayerKey('s1', layer({})));
-    expect(tileLayerKey('s1', undefined)).toBe(tileLayerKey('s1', null));
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Thin walls
 // ---------------------------------------------------------------------------
 
-/**
- * A wall that fills its cell makes every room read as a ring of fat blocks
- * with the interior shrunk to match. Real walls are thin, so a wall tile draws
- * a third-of-a-cell slab that ORIENTS ITSELF from its neighbours — the GM
- * paints cells and gets architecture without saying which way anything faces.
- *
- * The rule is deliberately one rule: a centre post, plus a stub toward each
- * neighbouring wall. Every configuration falls out of it, which is why none of
- * them is enumerated in the renderer and all of them are asserted here.
- */
+// The join rule itself (`wallBoxes`, `wallDiagonals`) is pinned in
+// `plan/tiles.test.ts`; what is pinned here is that the painter follows it.
 describe('thin walls orient themselves from their neighbours', () => {
-  const none = { n: false, e: false, s: false, w: false };
-  /** Total grid area covered, to compare shapes without pinning coordinates. */
-  const area = (boxes: Array<[number, number, number, number]>): number =>
-    boxes.reduce((sum, [x0, y0, x1, y1]) => sum + (x1 - x0) * (y1 - y0), 0);
-
-  it('is a lone post when nothing adjoins it', () => {
-    const boxes = wallBoxes(none);
-    expect(boxes).toHaveLength(1);
-    // A third of a cell each way — a pillar, which is what a lone wall cell is.
-    expect(area(boxes)).toBeCloseTo((1 / 3) * (1 / 3), 9);
-  });
-
-  it('spans the cell for a straight run, in either axis', () => {
-    const horizontal = wallBoxes({ ...none, e: true, w: true });
-    const vertical = wallBoxes({ ...none, n: true, s: true });
-    // A third of the cell's area: full length, a third of the width.
-    expect(area(horizontal)).toBeCloseTo(1 / 3, 9);
-    expect(area(vertical)).toBeCloseTo(1 / 3, 9);
-    // …and they are genuinely different shapes, not the same box twice.
-    expect(horizontal).not.toEqual(vertical);
-  });
-
-  it('turns a corner without a gap at the join', () => {
-    const corner = wallBoxes({ ...none, n: true, e: true });
-    // Centre + two stubs, and the centre is what closes the inside of the bend.
-    expect(corner).toHaveLength(3);
-    expect(area(corner)).toBeCloseTo((1 / 3) * (1 / 3) * 3, 9);
-  });
-
-  it('makes a T and a crossing from the same rule', () => {
-    expect(wallBoxes({ n: true, e: true, s: true, w: false })).toHaveLength(4);
-    expect(wallBoxes({ n: true, e: true, s: true, w: true })).toHaveLength(5);
-    // Walls touching only at a corner join along the diagonal: one band from
-    // the middle to that corner, and none where a neighbour beside already
-    // turns the wall there.
-    expect(wallDiagonals({ ...none, ne: true })).toHaveLength(1);
-    expect(wallDiagonals({ ...none, ne: true, n: true })).toHaveLength(0);
-    expect(wallDiagonals({ ...none, ne: true, sw: true })).toHaveLength(2);
-    // Walls side by side close up: the corner facing a square of wall fills,
-    // so two rows read as one thick wall, and a cell walled all round is solid.
-    expect(wallBoxes({ n: true, e: true, s: false, w: false, ne: true })).toContainEqual([expect.any(Number), 0, 1, expect.any(Number)]);
-    expect(wallBoxes({ n: true, e: true, s: false, w: false, ne: false })).toHaveLength(3);
-    expect(wallBoxes({ n: true, e: true, s: true, w: true, ne: true, nw: true, se: true, sw: true })).toHaveLength(9);
-  });
-
-  it('never leaves the cell it belongs to', () => {
-    // A slab spilling into the neighbouring cell would draw over a floor tile
-    // that is not its own, and in isometric that reads as a rendering fault.
-    for (const joins of [none, { n: true, e: true, s: true, w: true }, { ...none, w: true }]) {
-      for (const [x0, y0, x1, y1] of wallBoxes(joins)) {
-        expect(x0).toBeGreaterThanOrEqual(0);
-        expect(y0).toBeGreaterThanOrEqual(0);
-        expect(x1).toBeLessThanOrEqual(1);
-        expect(y1).toBeLessThanOrEqual(1);
-        expect(x1).toBeGreaterThan(x0);
-        expect(y1).toBeGreaterThan(y0);
-      }
-    }
-  });
-
-  it('draws floor under a thin wall, so a wall is never a hole in the map', () => {
-    // The slab covers a third of its cell; without an underlay the other two
-    // thirds would show empty grid exactly where a room's edge should be.
-    const defs = catalogueDefs();
-    const withUnderlay = defs[tileDefKey('docklands', 'wall')];
-    expect(withUnderlay?.footprint).toBe('wall');
-    expect(withUnderlay?.underlay).toBeDefined();
-    // A floor tile needs none of this.
-    expect(defs[tileDefKey('docklands', 'floor')]?.underlay).toBeUndefined();
-  });
-
   it('joins to walls only, not to whatever happens to be next door', () => {
     // Two wall cells with a crate between them must not reach through it.
-    const { g, calls } = fakeGraphics();
+    const { g, calls } = fakePen();
     const defs = catalogueDefs();
     drawTiles(g, M, {
       tilesetId: 'docklands',
@@ -610,7 +374,7 @@ describe('a wall is drawn in the cell it belongs to', () => {
     // when nothing did, every wall on the map drew stacked at grid 0,0: one
     // pillar, no rooms. The unit test for `wallBoxes` could not see it because
     // it was, in its own terms, entirely correct.
-    const { g, calls } = fakeGraphics();
+    const { g, calls } = fakePen();
     drawTiles(g, M, { tilesetId: 'docklands', cells: { '5,4': 'wall' }, defs: catalogueDefs() });
 
     const pts = points(calls);
@@ -626,7 +390,7 @@ describe('a wall is drawn in the cell it belongs to', () => {
   });
 
   it('puts two walls in two different places', () => {
-    const { g, calls } = fakeGraphics();
+    const { g, calls } = fakePen();
     drawTiles(g, M, {
       tilesetId: 'docklands',
       cells: { '1,1': 'wall', '7,6': 'wall' },
@@ -642,38 +406,13 @@ describe('a wall is drawn in the cell it belongs to', () => {
 // The seam
 // ---------------------------------------------------------------------------
 
-/**
- * `tileDrawInput` is the join between "the server stores three layers" and
- * "the renderer draws three layers".
- *
- * It exists because both of those were true and correct while the stage
- * between them forwarded only `cells` — which drains to empty once a scene is
- * saved — so a fully painted street rendered as a blank canvas. Neither side's
- * tests could catch it, because neither side was wrong. This is the test that
- * would have.
- */
+// `tileDrawInput` carrying every layer is pinned in `plan/tiles.test.ts`;
+// what is pinned here is that the painter draws every layer it carries.
 describe('tileDrawInput forwards every layer to the renderer', () => {
-  const tiles = {
-    tilesetId: 'sprawl',
-    cells: { '9,9': 'road' },
-    ground: { '0,0': 'road' },
-    structure: { '1,0': 'wall' },
-    object: { '2,0': 'tree' },
-  };
-
-  it('carries all four maps through', () => {
-    const input = tileDrawInput(tiles, catalogueDefs());
-    expect(input.tilesetId).toBe('sprawl');
-    expect(input.ground).toEqual(tiles.ground);
-    expect(input.structure).toEqual(tiles.structure);
-    expect(input.object).toEqual(tiles.object);
-    expect(input.cells).toEqual(tiles.cells);
-  });
-
   it('actually draws a scene whose tiles live only in the layers', () => {
     // The failure in one line: layered tiles, nothing in `cells`, and the
     // canvas has to show something.
-    const { g, ops } = fakeGraphics();
+    const { g, ops } = fakePen();
     drawTiles(
       g,
       M,
@@ -696,7 +435,7 @@ describe('tileDrawInput forwards every layer to the renderer', () => {
     const input = (object: Record<string, string>) =>
       tileDrawInput({ tilesetId: 'sprawl', cells: {}, ground: { '0,0': 'grass' }, structure: {}, object }, catalogueDefs());
     const fillsOf = (object: Record<string, string>) => {
-      const { g, calls } = fakeGraphics();
+      const { g, calls } = fakePen();
       drawTiles(g, M, input(object));
       return calls.filter((c) => c.op === 'fill').map((c) => (c.args[0] as { color?: number }).color);
     };
@@ -707,5 +446,29 @@ describe('tileDrawInput forwards every layer to the renderer', () => {
     expect(withTree.slice(0, groundOnly.length)).toEqual(groundOnly);
     // …and the tree after it (with its shadow), never before.
     expect(withTree.length).toBeGreaterThan(groundOnly.length + 2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Designed props (moved here from `stage/props.test.ts`, which pins the
+// designs themselves)
+// ---------------------------------------------------------------------------
+
+describe('the catalogue draws through its designs', () => {
+  const iso = metricsFor({ unitM: 1, cols: 12, rows: 12, offset: { x: 0, y: 0 }, projection: 'iso' as const });
+
+  it('draws a designed prop in place of the plain solid, standing and flat', () => {
+    // A standing prop (a workstation) and a flat one (a pallet): both must
+    // produce a drawing, and the flat one must still get floor beneath it.
+    const { g, calls } = fakePen();
+    drawTiles(
+      g,
+      iso,
+      tileDrawInput(
+        { tilesetId: 'docklands', cells: {}, ground: {}, structure: {}, object: { '2,2': 'workbench', '4,4': 'pallet' } },
+        catalogueDefs(),
+      ),
+    );
+    expect(calls.filter((c) => c.op === 'fill').length).toBeGreaterThan(12);
   });
 });

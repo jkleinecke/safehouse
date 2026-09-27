@@ -1,21 +1,21 @@
 /**
  * The vision modes' colours (docs/VISION.md §4.4–4.5) as data: for each pair
  * of eyes, one colour matrix for the floor and one for the bodies standing on
- * it. The 2D map sets them as its two ColorMatrixFilters (`stage/index.ts`
- * `setViewMode`); the 3D map hands them to the cover patch, which applies them
- * to the final colour of the covered materials that take them
- * (`stage3d/cover.ts` `setVision`), and the bodies' to its DOM plates as an
- * SVG filter (`stage3d/badges.ts` `setLook`). No Pixi here: the 3D chunk
- * reads this too, and it outlives the 2D stage.
+ * it. The 3D map hands them to the cover patch, which applies them to the
+ * final colour of the covered materials that take them (`stage3d/cover.ts`
+ * `setVision`), and the bodies' to its DOM plates as an SVG filter
+ * (`stage3d/badges.ts` `setLook`). Until P5 they were the 2D map's two
+ * ColorMatrixFilters; the numbers are still Pixi's, so each mode looks as it
+ * did there.
  *
  * ## The matrices
  *
  * Each is 20 numbers, row-major 4 × 5, the layout Pixi's
  * `ColorMatrixFilter.matrix` takes: one row per output channel (r, g, b, a),
  * each [× r, × g, × b, × a, + offset], on straight (not premultiplied) colour
- * in 0 … 1. In 2D that is the canvas's colour; in 3D the fragment's after
- * tone mapping and the output colour space — the same encoding, so the same
- * numbers give the same look.
+ * in 0 … 1. In 2D that was the canvas's colour; in 3D it is the fragment's
+ * after tone mapping and the output colour space — the same encoding, so the
+ * same numbers give the same look.
  *
  * Normal and astral eyes see the map as it is: no matrix at all (`null`).
  *
@@ -26,7 +26,7 @@
  * `contrast`); they are built here by the same arithmetic: each helper's
  * matrix exactly as Pixi 8 writes it, and chained exactly as its `_multiply`
  * chains them — the same terms, summed in the same order — so the numbers the
- * 2D filters now get are the ones the helper calls made, to the last bit.
+ * 2D filters got were the ones the helper calls made, to the last bit.
  * Two things in that arithmetic are easy to get wrong:
  *   - a chained call (`multiply` true) makes the filter `current × new`, so
  *     the NEW matrix acts on the colour FIRST: `brightness(1.3);
@@ -60,7 +60,7 @@ export interface ViewModeLook {
    * The ground and what is built on it: the map images, the painted world
    * and the floors below, with the tokens seen down on them. Not the
    * overlays and markers laid over it (grid, doors, zones, pins …), which
-   * keep their own colours in both renderers.
+   * keep their own colours, as they did on the 2D map.
    */
   readonly floor: ColorMatrix;
   /** The tokens on the floor in view and everything drawn with them: their rings, auras, shadows and badges. */

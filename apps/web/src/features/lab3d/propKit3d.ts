@@ -8,7 +8,7 @@
  * `MeshBuilder`: a box becomes a real six-faced box, a cylinder a closed
  * prism, a thick stroke a beam, a thin one a hairline, and a polygon a
  * polygon — all through the one placement transform the 2D kit uses, so a
- * desk is the same size on the same squares in both views.
+ * desk is the same size on the same squares as it was on the 2D map.
  *
  * ## What it cannot change
  *
@@ -27,16 +27,15 @@
  *   that, every circle a design stands on a face (wheels, pipes, logs, bales)
  *   would come out three times taller than wide on a true-scale storey.
  * - A few helpers stroke and fill through `k.g` directly with points from
- *   `at()`. The Graphics the kit is handed records those paths and the kit
- *   maps each 2D point back to the 3D point it came from, so a chandelier's
- *   arms and a well's rope survive rather than vanishing.
+ *   `at()`. The pen (`PropPen`) the kit is handed records those paths and the
+ *   kit maps each 2D point back to the 3D point it came from, so a
+ *   chandelier's arms and a well's rope survive rather than vanishing.
  */
-import type { Graphics } from 'pixi.js';
 import type { Point } from '@safehouse/contracts';
 import type { TileProp } from '@safehouse/rules';
 import { CELL, heightRise, ISO_HALF_H, ISO_HALF_W, type SceneMetrics } from '../grid/geometry.js';
 import { parseColor, shade } from '../grid/stage/colors.js';
-import { DESIGNS, GLASS, PropKit, propPlacement, type PropPlacement, type PropTones } from '../grid/stage/props.js';
+import { DESIGNS, GLASS, PropKit, propPlacement, type PropPen, type PropPlacement, type PropTones } from '../grid/stage/props.js';
 import type { TileDrawDef } from '../grid/types.js';
 import { polygonNormal, type MeshBuilder, type V3 } from './geometry3d.js';
 
@@ -67,7 +66,7 @@ export interface BuildPropOptions {
 const TINT_ALPHA = 0.25;
 /** Below this opacity a fill is see-through: the glass material. */
 const GLASS_ALPHA = 0.6;
-/** A stroke this wide (screen px on the 2D map) or wider is a part — a leg, a pole — and becomes a beam. */
+/** A stroke this wide (in the designs' px, which were screen px on the 2D map) or wider is a part — a leg, a pole — and becomes a beam. */
 const BEAM_WIDTH = 2;
 /** Screen px of stroke width per square of beam half-thickness: a 5.8 px lamppost is a 4.5 cm radius on a 1 m grid. */
 const PX_PER_SQUARE = 128;
@@ -75,8 +74,8 @@ const PX_PER_SQUARE = 128;
 const DISC_SIDES = 16;
 /**
  * Decals — a panel on a face, a seam, a lid on a box — are drawn after the
- * solid they sit on, often on the same plane. The 2D map lets the later one
- * win; a depth buffer flickers between them. So every decal is nudged toward
+ * solid they sit on, often on the same plane. Painted in 2D the later one
+ * wins; a depth buffer flickers between them. So every decal is nudged toward
  * the isometric viewer (east, up, south) by a couple of millimetres, a hair
  * more for each later one, which keeps the painter's order from the view the
  * designs were drawn for.
@@ -87,7 +86,7 @@ const LAYER_MAX = 400;
 /** Screen length of one square's edge on the 2:1 isometric map, per px of cell. */
 const ISO_EDGE = Math.hypot(ISO_HALF_W, ISO_HALF_H);
 
-/** The same derived palette `tileLayer.ts` hands every prop. */
+/** The same derived palette the palette's tile painter (`grid/gm/art/tileArt.ts`) hands every prop. */
 function tonesOf(base: number, accent: number): PropTones {
   return {
     base,
@@ -98,7 +97,7 @@ function tonesOf(base: number, accent: number): PropTones {
   };
 }
 
-/** The same per-cell seed `tileLayer.ts` uses (FNV-1a of "col,row"), so a prop varies the same way in both views. */
+/** The same per-cell seed the palette's tile painter (`grid/gm/art/tileArt.ts`) uses (FNV-1a of "col,row"), so a prop varies the same way in both. */
 function cellSeed(col: number, row: number): number {
   const s = `${col},${row}`;
   let h = 0x811c9dc5;
@@ -107,12 +106,6 @@ function cellSeed(col: number, row: number): number {
     h = Math.imul(h, 0x01000193);
   }
   return h >>> 0;
-}
-
-/** The light colour a tile's design is handed, or null when it gives off none (as `drawPropTile` parses it). */
-export function glowColorOf(def: TileDrawDef): number | null {
-  if (def.emissive === undefined) return null;
-  return parseColor(def.emissive, parseColor(def.colors[1], 0x5a6068));
 }
 
 /**
@@ -183,15 +176,17 @@ function styleOf(style: unknown, alpha: unknown): PaintStyle {
 }
 
 /**
- * The Graphics a 3D kit is handed. The kit's own drawing never touches it,
- * but a few design helpers stroke and fill through `k.g` with points from
+ * The pen a 3D kit is handed (`PropPen`). The kit's own drawing never touches
+ * it, but a few design helpers stroke and fill through `k.g` with points from
  * `k.at()`; this records those paths (moveTo / lineTo / closePath, then fill
  * or stroke — reusing the last path when a stroke follows a fill with nothing
- * drawn between, as Pixi does) and hands them to the kit. Every other method
- * is a no-op that returns the recorder.
+ * drawn between, the pen's rule, which was Pixi's) and hands them to the kit.
+ * Every other method, `ellipse` among them, is a no-op that returns the
+ * recorder: only the base kit's `disc` draws an ellipse, and this kit
+ * overrides it.
  */
 class PathRecorder {
-  readonly graphics: Graphics;
+  readonly graphics: PropPen;
   private kit: PropKit3D | null = null;
   private subs: SubPath[] = [];
   private cur: SubPath | null = null;
@@ -221,7 +216,7 @@ class PathRecorder {
         },
       },
     );
-    this.graphics = proxy as Graphics;
+    this.graphics = proxy as PropPen;
   }
 
   bind(kit: PropKit3D): void {
@@ -518,7 +513,7 @@ const warned = new Set<TileProp>();
  * Build one tile's prop design into `b`, standing on the floor at
  * `ctx.baseY`, at its real size over the squares it covers from its anchor
  * cell (`col`, `row`) — the same placement, tones, seed and glow colour the
- * 2D map draws it with. No-op for a tile without a design. A design that
+ * 2D map drew it with. No-op for a tile without a design. A design that
  * throws is skipped (and reported once), not allowed to sink the whole floor.
  */
 export function buildProp(b: MeshBuilder, def: TileDrawDef, col: number, row: number, ctx: PropBuildCtx, opts: BuildPropOptions = {}): void {

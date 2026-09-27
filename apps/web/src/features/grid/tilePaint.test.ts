@@ -201,7 +201,7 @@ describe('tileDefsFrom keeps every set’s tiles apart', () => {
     const defs = tileDefsFrom(served);
     const total = served.reduce((n, s) => n + s.tiles.length, 0);
     // One id key per tile; the slot keys beside them (rules/tilesets/slots.ts)
-    // are asserted in tileLayer.test.ts.
+    // are asserted in plan/tiles.test.ts.
     expect(Object.keys(defs).filter((k) => !k.split('/').slice(1).join('/').includes('/'))).toHaveLength(total);
     for (const set of served) {
       for (const t of set.tiles) {

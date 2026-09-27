@@ -65,7 +65,7 @@ It all runs **from the GM's laptop, in Docker** — the whole campaign in a back
 
 ### Non-goals
 
-- **NG1.** The Grid is a **2D tactical layer, not a simulation**: no 3D, no physics, no animated spell effects. Advanced sight automation (wall-based token vision, dynamic lighting) is deliberately late-phase (P6) — manual fog ships first and is fully playable.
+- **NG1.** The Grid is a **~~2D~~ tactical layer, not a simulation**: ~~no 3D,~~ no physics, no animated spell effects. *(Revised 2026-09-26: "no 3D" fell when the GM chose three.js as the map renderer `[D9]`, because dynamic lighting had become the selling point for leaving Roll20. The 3D is a view, not a simulation: a fixed isometric or top-down camera that pans and zooms but never rotates, over the same square grid the rules play on.)* Advanced sight automation (wall-based token vision, dynamic lighting) is deliberately late-phase (P6) — manual fog ships first and is fully playable.
 - **NG2.** Not a rules database or SRD: no browsable spell/gear compendium shipped with the app. Users enter or import their own content. (The NPC generator's *flavor* tables — names, quirks — are our own original writing; its *stats* are parameterized from GM-authored templates. §14.)
 - **NG3.** Not a chat/voice platform: voice stays on Discord. In-app messaging is limited to the roll/event log with short table-talk lines. (Per-scene ambient audio loops are a P6 stretch item — the table doesn't use Roll20's jukebox, so nothing here blocks the exit. Q9 resolved.)
 - **NG4.** Not multi-tenant SaaS: designed for one group. Nothing should *preclude* multiple campaigns per instance, but we don't build billing, org management, or public signup.
@@ -364,7 +364,7 @@ A deliberately boring three-piece system, sized for ~10 concurrent users and one
 │  React, phone-first │   WebSocket:              │  Fastify + ws             │
 │  ├─ sheet/log/track │    persisted events +     │  ├─ REST for CRUD         │
 │  └─ the Grid        │    ephemeral channel      │  ├─ WS hub: rooms, replay,│
-│     (PixiJS canvas) │◄─────────────────────────►│  │   visibility filter,   │
+│   (three.js canvas) │◄─────────────────────────►│  │   visibility filter,   │
 └────────────────────┘                            │  │   ephemeral relay      │
         ▲                                         │  ├─ rules engine (shared) │
         │ served by                               │  ├─ dice service (CSPRNG) │
@@ -388,7 +388,7 @@ A deliberately boring three-piece system, sized for ~10 concurrent users and one
 - **One deployable:** the server serves the built SPA statically in production. Docker Compose runs `app` + `postgres` + a backup cron — no reverse proxy on the LAN (§8), and every image is multi-arch (amd64/arm64) so the host laptop's architecture doesn't matter. `[D3]` `[D8]`
 - **Server-authoritative state:** dice are rolled server-side; combat, scene, token, and fog state mutate through server commands; clients render events. No client is ever trusted with hidden data or RNG (Principles 4–5, G5).
 - **Two event classes on one socket** (§11): *persisted* events (the replayable campaign log) and *ephemeral* events (token-drag interim positions, pings, pointer trails — relayed, throttled, never stored).
-- **The Grid client is a PixiJS (WebGL) canvas** `[D9]` inside the React shell, lazy-loaded so non-map views stay light. Layered stage: map images → grid → zones/walls → tokens → templates/drawings → fog → GM overlay. Fog geometry and token positions are server state; rendering is the client's job.
+- **The Grid client is a three.js (WebGL2) canvas** `[D9]` inside the React shell, lazy-loaded so non-map views stay light. It builds the painted floors, walls, doors and props as lit geometry, seen from a fixed isometric or top-down camera; stands the tokens up as figures; lays the flat overlays (the grid, the GM's walls, doors and zones, AoE templates, the ruler, pings) on the floor in view; puts the map images under the ground floor; and hides what a viewer may not see (fog, the sightline shroud) with masks every material reads. Fog geometry and token positions are server state; rendering is the client's job. There is no 2D fallback: a browser without WebGL2 gets a plain message instead of a map, and a map that stops (a lost graphics context, a change it could not draw) shows a panel with a **Reload map** button. *(Until 2026-09-27 this was a PixiJS (WebGL) canvas with a layered 2D stage: map images → grid → zones/walls → tokens → templates/drawings → fog → GM overlay. The three.js map replaced it in phases, with the 2D map kept as a per-device fallback until PixiJS was removed.)*
 - **No horizontal scaling, by design:** one Node process, in-process pub/sub. Redis, queues, and clustering are complexity we will never need at this scale.
 - **The Fixer runs server-side** as an agentic loop against a **local OpenAI-compatible LLM** (llama.cpp or vLLM, `[D12]`), with tools that are the app's own services, typed with the same Zod schemas as everything else in `contracts` — the full read-only state catalog of FR12.17 (`get_character`, `get_encounter`, `get_scene`, `get_npc`, `search_books`, …) plus draft-producing actions (`generate_npc`, `propose_geometry`, `draft_wiki_page`, `suggest_fog_reveal`, `tag_track`) — using OpenAI-style function calling, with grammar/JSON-schema constrained output for structured drafts. Streaming relays to the GM's panel over the existing WS. **Inference never leaves the laptop (or the LAN box the GM points it at)** — the Discord webhook remains the only outbound traffic in the whole system, and the app runs fully without the LLM (NG7).
 
@@ -434,7 +434,7 @@ Derivation applies modifiers in a fixed order (base → augmentation → magic �
 ```
 safehouse/
 ├─ apps/
-│  ├─ web/        # React SPA (Vite); the Grid is a lazy-loaded PixiJS chunk
+│  ├─ web/        # React SPA (Vite); the Grid is a lazy-loaded three.js chunk
 │  └─ server/     # Fastify + ws, serves web build in prod
 ├─ packages/
 │  ├─ rules/      # pure SR5 engine incl. generator + environment math
@@ -455,7 +455,7 @@ safehouse/
 |---|---|---|---|
 | Language | **TypeScript everywhere** | One language across client/server/rules engine — the shared engine (§7.2) is the whole argument; JSON-native; excellent AI-assisted-dev ergonomics | C#/.NET or Go backend (splits the rules engine or duplicates it — dealbreaker) |
 | Frontend | **React 18 + Vite** | Boring, huge ecosystem, fine on phones as an SPA | SvelteKit (fine choice, smaller ecosystem for our UI needs) |
-| Map canvas | **PixiJS (WebGL)** `[D9]` | The proven VTT rendering choice (Foundry runs on it): sprite batching for tokens, mask-based fog, smooth pan/zoom on modest hardware; lazy-loaded chunk | Konva/Canvas2D (simpler, but fog + many tokens + lighting later favors WebGL); Three.js (3D we'll never use) |
+| Map canvas | **three.js (WebGL2)** `[D9]`, since 2026-09-26 (~~PixiJS (WebGL)~~ before) | Dynamic lighting became the selling point for leaving Roll20, and a lit 3D world carries it: real walls, props and figures under real lights. A fixed isometric or top-down camera (pan and zoom, no rotation) keeps it a tactical map; quality tiers Low/Medium/High let each device trade fidelity for speed (the TV always Low); lazy-loaded chunk. *The 0.2 choice was PixiJS:* the proven VTT rendering choice (Foundry runs on it), sprite batching for tokens, mask-based fog, smooth pan/zoom on modest hardware. It was removed on 2026-09-27 | Konva/Canvas2D (simpler, but fog + many tokens + lighting later favors WebGL); PixiJS (the first choice, see above); Three.js was turned down in 0.2 as "3D we'll never use" and is now the choice |
 | UI kit | **Tailwind + shadcn/ui** | Fast to build a dense, dark, cyberpunk-friendly UI that still does light mode | MUI (heavier, harder to theme) |
 | Client data | **TanStack Query + Router**, Zustand for session/live state | Query for CRUD caching; a small store for WS-fed live state (tracker, scene, tokens) | Redux (overkill) |
 | Server | **Fastify + `ws`** | Minimal, fast, first-class TS; we own the WS hub — rooms, replay, filtering, ephemeral relay are a few hundred lines (§11) | NestJS (ceremony), Socket.IO (features we don't need), tRPC (nice, but REST+Zod is plainer to debug) |
@@ -732,7 +732,7 @@ Shadowrun 5e is owned by Catalyst Game Labs (under license from Topps); there is
 | Accessibility | Real buttons/labels, keyboard-navigable GM screens, WCAG AA contrast in both themes; dice results and token states distinguishable without color alone |
 | AI latency | Streaming always; first token depends on hardware and model size — the *fast* slot must stream promptly enough for table use on the actual laptop, or session-time features fall back to it being prep-only. AI work never blocks table flow — generation runs async and lands as drafts |
 | AI availability & resources | $0 per session — inference is local, on the **dedicated LAN inference box** (decided 0.8), so the laptop never shares resources with the model. Every AI feature degrades to its manual path when the box is absent or down (NG7); the compose `llm` fallback profile covers away games. The usage meter reports tokens and latency |
-| Bundle | Initial JS < 500 KB gz (no Pixi); the Grid is a lazy chunk < 900 KB gz including PixiJS; codex editor lazy-loaded |
+| Bundle | Initial JS < 500 KB gz, with no map renderer in it (three.js now; PixiJS until 2026-09-27); the Grid is a lazy chunk < 900 KB gz including that renderer; codex editor lazy-loaded |
 
 ---
 
@@ -817,7 +817,7 @@ Rules of the road: ship P1 before gold-plating anything; every phase leaves `mai
 | R6 | **Players don't adopt it** | Phone-first UX; Discord stays for talk (NG3) with rolls mirrored in; the GM using it well is the adoption strategy |
 | R7 | **Data loss** | Append-only ledgers/rolls, revisions, nightly + pre-session backups incl. uploads, restore drills (§15) |
 | R8 | **Realtime bugs corrupt shared state** | Single-writer server, total event order, commands validated by contracts, replay from log rather than client patching; ephemeral traffic can't touch persisted state by construction |
-| R9 | **The Grid is where hobby VTTs die** — vision/lighting especially | Hard phase gates: manual fog ships first and stays first-class permanently; FR9.16 only starts after P2–P4 are in weekly use; PixiJS gives proven rendering patterns; NG1 caps the ambition (no 3D/physics/effects); perf smoke tests in CI (§17.4) keep the Grid honest |
+| R9 | **The Grid is where hobby VTTs die** — vision/lighting especially | Hard phase gates: manual fog ships first and stays first-class permanently; FR9.16 only starts after P2–P4 are in weekly use; ~~PixiJS gives proven rendering patterns~~ since 2026-09-26 three.js draws the map (D9): it came in by phases, with the 2D map kept as a per-device fallback until PixiJS was removed on 2026-09-27, and its camera is fixed (iso or top-down, no rotation) with quality tiers (Low/Medium/High) so phones and the TV keep up; NG1 caps the ambition (~~no 3D~~ 3D as a fixed view only; no physics/effects); perf smoke tests in CI (§17.4) keep the Grid honest |
 | R10 | **Threat readouts get treated as promises** — SR5 has no CR and dice pools swing | Estimates show their math (Principle 3), are labeled as estimates, and sit beside live tuning levers (FR10.6); the copilot never acts without the GM |
 | R11 | **Local AI: model quality, and the inference box being down or left at home** | Resource contention is solved by design — inference lives on a dedicated LAN box (D12), not the session laptop. For quality: retrieval does the heavy lifting so the model synthesizes rather than recalls (FR12.14); citations come from retrieval, so a weak model can't fake a page (FR12.2); grammar-constrained output keeps structured drafts valid; fast/primary slots size work appropriately (FR12.16). Box absent → clean degradation to manual paths (NG7); the Fixer advises, the GM adjudicates |
 | R12 | **AI output drifts into reproducing book text or flattening the campaign's voice** | Citation-not-recitation posture (§14.9): AI rules answers stay at the table and quote sparingly; generated fiction is original and grounded in *this campaign's* codex, not generic sprawl-flavored mush; drafts are edited by a human before they're canon (Principle 8) |
@@ -830,7 +830,7 @@ Defaults adopted in this draft — each is cheap to reverse *now* and expensive 
 
 | # | Decision | Status |
 |---|---|---|
-| D1 | ~~Companion platform, not a VTT~~ → **Full tactical Grid is core** (M9): map making, tokens, fog, SR5-native measurement. Scope capped by NG1 (2D, no physics/effects); vision/lighting phased last | **Revised 0.2** |
+| D1 | ~~Companion platform, not a VTT~~ → **Full tactical Grid is core** (M9): map making, tokens, fog, SR5-native measurement. Scope capped by NG1 (~~2D~~ a fixed-camera 3D view since 2026-09-26, see D9; no physics/effects); vision/lighting phased last | **Revised 0.2** |
 | D2 | TypeScript monorepo; React/Vite + Fastify/ws + Postgres/Drizzle (§8) | **Accepted 0.4** |
 | D3 | Docker Compose **on the GM's laptop**, images built **multi-arch (amd64 + arm64)**; LAN-only during sessions, localhost between; no remote access, nothing internet-facing | **Accepted 0.5** |
 | D4 | Server-authoritative dice & state; pure shared rules engine | Proposed |
@@ -838,7 +838,7 @@ Defaults adopted in this draft — each is cheap to reverse *now* and expensive 
 | D6 | Discord remains the talk layer; app posts into it, doesn't replace it | Proposed |
 | D7 | ~~Discord OAuth + magic link~~ → **QR-code join links minting long-lived per-device tokens** (players and the TV scan at the table); no passwords, no external IdP; Discord kept for the outbound recap webhook only | **Revised 0.5** |
 | D8 | Single-node, no horizontal scaling, no Redis/queues | Proposed |
-| D9 | PixiJS (WebGL) renders the Grid, as a lazy-loaded chunk | Proposed 0.2 |
+| D9 | ~~PixiJS (WebGL) renders the Grid, as a lazy-loaded chunk~~ → **three.js (WebGL2) renders the Grid**, still as a lazy-loaded chunk. The GM chose it on 2026-09-26 on the strength of its look and lighting, tried first on a 3D lab page (since removed): dynamic lighting had become the selling point for leaving Roll20. Isometric and top-down cameras only, fixed (pan and zoom, no rotation); quality tiers Low/Medium/High per device. It replaced PixiJS in phases, with the 2D map kept as a per-device Classic fallback until PixiJS was removed on 2026-09-27. There is no fallback now: a browser without WebGL2 gets a plain message, a map that stops offers **Reload map**, and the TV shows its "renderer unavailable" notice and never retries by itself (the GM reloads it) | **Revised 2026-09-26** (Proposed 0.2) |
 | D10 | Generator ships original flavor tables only; stats are parameterized from GM-authored templates | Proposed 0.2 |
 | D11 | Refs are structured `{book, page}` and deep-link into the GM's own uploaded PDFs via self-hosted pdf.js with per-book page offsets; **library shared with the table** (per Q12), per-book GM-only toggle in reserve; books never enter git, never ship with the app | Accepted 0.4 |
 | D12 | AI provider: **local models via an OpenAI-compatible API — llama.cpp or vLLM — served from a dedicated inference box on the table's LAN** (laptop compose profile as away-game fallback). Two model slots (primary for prep/fiction, fast for live mechanical tasks), configured by env base URL. Nothing AI ever touches the internet; box absent = AI-free app | **Accepted 0.8** |

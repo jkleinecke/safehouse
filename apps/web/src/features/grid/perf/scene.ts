@@ -2,7 +2,7 @@
  * The scripted scene behind the Grid frame-budget harness (DESIGN.md §17.4:
  * "scripted scene with 60 tokens + fog on a throttled headless profile").
  *
- * Pure data — no DOM, no pixi, no network. A benchmark whose scene drifts is a
+ * Pure data — no DOM, no three, no network. A benchmark whose scene drifts is a
  * benchmark whose numbers cannot be compared across runs, so every coordinate
  * here comes out of a seeded PRNG and nothing is random at run time, and
  * `scene.test.ts` next door pins the properties any measurement over it would

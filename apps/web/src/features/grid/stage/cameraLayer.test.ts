@@ -7,17 +7,16 @@
  * the eye and the label, and drops the cone the moment the camera is off.
  */
 import { describe, expect, it } from 'vitest';
-import type { Graphics } from 'pixi.js';
 import type { Scene } from '@safehouse/contracts';
 import { metricsFor } from '../geometry.js';
 import type { CameraCone } from '../types.js';
-import type { InkLabel, LabelSink } from './ink.js';
+import type { Ink, InkLabel, LabelSink } from './ink.js';
 import { drawCameras } from './layers.js';
 
 const flat = metricsFor({ unitM: 1, cols: 12, rows: 8, offset: { x: 0, y: 0 }, projection: 'topdown' as const });
 const iso = metricsFor({ unitM: 1, cols: 12, rows: 8, offset: { x: 0, y: 0 }, projection: 'iso' as const });
 
-function counting(): { g: Graphics; ops: string[]; polys: number } {
+function counting(): { g: Ink; ops: string[]; polys: number } {
   const ops: string[] = [];
   const g: Record<string, unknown> = {};
   for (const op of ['clear', 'poly', 'circle', 'moveTo', 'lineTo', 'fill', 'stroke']) {
@@ -27,7 +26,7 @@ function counting(): { g: Graphics; ops: string[]; polys: number } {
     };
   }
   return {
-    g: g as unknown as Graphics,
+    g: g as unknown as Ink,
     ops,
     get polys() {
       return ops.filter((o) => o === 'poly').length;
@@ -36,8 +35,8 @@ function counting(): { g: Graphics; ops: string[]; polys: number } {
 }
 
 /**
- * The 2D sink constructs a real pixi Text for a new label; this one never
- * does, recording which keys were asked for instead.
+ * The map's sink (`DomLabels`) makes a DOM element for a new label; this one
+ * never does, recording which keys were asked for instead.
  */
 class StubPool extends Map<string, InkLabel> implements LabelSink {
   readonly made: string[] = [];

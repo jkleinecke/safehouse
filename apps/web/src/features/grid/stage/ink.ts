@@ -1,21 +1,20 @@
 /**
  * The pen the flat overlays draw with, and the labels they hang beside it —
- * pure, no pixi.
+ * pure, no renderer.
  *
  * Everything on the map that lies flat on the floor — the grid, the GM's
  * walls, zones and doors, the fog, camera cones, light reach, the light-map
  * wash, the AoE, the ruler and every draft — is drawn by a function that is
- * handed something to draw INTO. In the 2D stage that is a pixi `Graphics`,
- * and a Graphics IS an `Ink`: the interface below is exactly the part of its
- * API those functions use, with signatures a Graphics already satisfies, so
- * the 2D stage passes its own Graphics and nothing it draws changes. A 3D
- * stage hands the same functions a stand-in that builds floor meshes, and
- * gets the same overlays without a second copy of the drawing code, and
- * without pixi in its chunk.
+ * handed something to draw INTO. Until P5 the 2D stage handed them a pixi
+ * `Graphics`, and the interface below is exactly the part of its API those
+ * functions used, so the drawing code written for pixi carried over to the
+ * 3D map unchanged. The 3D map hands them a `FloorInk`
+ * (`stage3d/floorInk.ts`), which lays them on the floor as meshes, and the
+ * players' fog mask a Canvas2D ink (`stage3d/masks.ts`).
  *
- * Text is the one thing a Graphics cannot hold, so the labels those functions
- * used to make as pixi `Text` go through a `LabelSink` instead. The 2D stage's
- * sink is its old pool of Text (`textLabels.ts`); a 3D stage's can be DOM.
+ * Text is the one thing a Graphics could not hold, so the labels those
+ * functions used to make as pixi `Text` go through a `LabelSink` instead. The
+ * 3D map's sinks are DOM (`stage3d/labels.ts`).
  */
 
 /** A fill as the overlays give one: a 0xRRGGBB colour and its opacity. */
@@ -41,7 +40,8 @@ export interface InkStroke {
 
 /**
  * The Graphics-shaped pen: what the overlay drawing code calls, and nothing
- * else. The contract is pixi's, because the 2D stage is a Graphics:
+ * else. The contract is pixi's, because the 2D stage drew into a Graphics,
+ * and the inks keep its rules:
  *
  *   - a path is built with `moveTo`/`lineTo`, or a closed shape is added
  *     with `poly`, `rect`, `circle` or `ellipse`;

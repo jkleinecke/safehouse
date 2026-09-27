@@ -1,12 +1,13 @@
 /**
  * Ephemeral overlay effects, drawn: ruler, AoE template + scatter, fog-draft
  * polygon, wall/door/arc rubber bands, room/area drafts, the painted
- * selection and its drag ghost — pure, no pixi.
+ * selection and its drag ghost — pure, no three.
  *
  * Each function clears the `Ink` it is handed and draws its effect into it.
- * The 2D stage keeps one Graphics per effect, plus the ping and trail pools
- * that animate every frame, in `FxLayer` (`fxLayer.ts`); a 3D stage hands
- * the same functions its floor-mesh stand-in.
+ * The 3D stage hands each effect a `FloorInk` of its own
+ * (`stage3d/floorInk.ts`), which lays it on the floor in view. (Until P5 the
+ * 2D map kept one Graphics per effect, with its ping and trail pools, in its
+ * `FxLayer`.)
  */
 import { arcPoints } from '@safehouse/rules';
 import type { Point } from '@safehouse/contracts';

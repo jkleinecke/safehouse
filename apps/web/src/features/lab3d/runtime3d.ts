@@ -8,9 +8,9 @@
  * framing, and the frame loop. The stage keeps the rest: the figures, the
  * pointer, and the camera's moves (`Camera3D`).
  *
- * Imperative on purpose, like the 2D stage: the owner pushes option changes in
- * through `update`, and everything per frame happens in here without touching
- * React.
+ * Imperative on purpose, as the 2D stage was: the owner pushes option changes
+ * in through `update`, and everything per frame happens in here without
+ * touching React.
  *
  * Rendering is on demand. A frame is drawn only when something asks for one:
  * an `update` that changed something, the host being resized, a lighting
@@ -144,14 +144,21 @@ export interface Runtime3DOptions {
 export interface Runtime3DSetup {
   /**
    * Called once if the browser takes the WebGL context away (a driver reset,
-   * too many contexts open) — never for the runtime's own renderer swaps or
-   * its dispose. With this set the loss is final: the runtime draws nothing
-   * after it, and the owner should dispose it and fall back to something that
-   * does not need the GPU context. Without it the runtime waits out the loss
-   * instead: when the browser gives the context back (a phone tab brought
-   * back to the front), it redraws its shadows and carries on.
+   * too many contexts open, a phone tab sent to the background) — never for
+   * the runtime's own renderer swaps or its dispose. The loss is reported,
+   * then waited out: the runtime draws nothing while it lasts, but it keeps
+   * taking changes, and when the browser gives the context back (a phone tab
+   * brought back to the front) it redraws its shadows, carries on, and says
+   * so (`onContextRestored`). Nothing is owed in between; an owner that
+   * cannot wait may dispose it.
    */
   onContextLost?: () => void;
+  /**
+   * Called when a loss reported through `onContextLost` is over: the browser
+   * gave the context back, or a quality switch made a new canvas, which has
+   * a context of its own. The runtime is drawing again.
+   */
+  onContextRestored?: () => void;
   /**
    * Called when a quality switch has taken hold — after the renderer or the
    * lighting changed tier, before its shaders are compiled. A switch runs a
@@ -162,8 +169,10 @@ export interface Runtime3DSetup {
   onQualityApplied?: (quality: LabQuality) => void;
   /**
    * Called if a quality switch fails — crossing the Low line makes a new WebGL
-   * context, which a browser at its limit refuses. Without it the failure is
-   * logged and the runtime stays at the quality it had.
+   * context, which a browser at its limit refuses. The failure is logged
+   * either way. When it was the new context that was refused, the old one is
+   * already gone and the runtime draws nothing more (`swapRenderer`): the
+   * owner has nothing left to do with it but dispose it.
    */
   onQualityFailed?: (error: unknown) => void;
 }
@@ -297,20 +306,20 @@ export interface Runtime3D {
 
 /** A near-black blue, the app's ground colour, so the canvas edge disappears into the page. */
 const BACKGROUND = 0x060a12;
-/** The iso camera sits south-east of the map, as the 2D iso map is drawn: x runs down-right, y down-left. */
+/** The iso camera sits south-east of the map, as the 2D iso map was drawn: x runs down-right, y down-left. */
 const ISO_AZIMUTH = Math.PI / 4;
 /** True isometric: the angle whose tangent is 1/√2, 35.264°. */
 const ISO_ELEVATION = Math.atan(1 / Math.SQRT2);
 /**
  * The top view's tilt off straight down, in radians: exactly vertical has no
  * "up" to orient the screen by, so it sits a hair south of the zenith, which
- * keeps north at the top of the screen as the 2D plan does.
+ * keeps north at the top of the screen as the 2D plan did.
  */
 const TOP_TILT = 1e-3;
 /**
  * How dark the floors below the one in view are, per floor down: a
- * see-through slab of shade laid over each one, as the 2D map lays a
- * quarter-shade over each floor it shows through the open squares. One floor
+ * see-through slab of shade laid over each one, as the 2D map laid a
+ * quarter-shade over each floor it showed through the open squares. One floor
  * down is clearly "down there"; two floors down is nearly gone.
  */
 const BELOW_SHADE = 0.5;
@@ -844,16 +853,17 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
    * The browser gave the context back. three has already set its GPU state up
    * again (its own handler ran first, and asked for this by cancelling the
    * loss); the shadow maps are drawn only when asked, so they are asked for
-   * again, and a frame is drawn. An owner told of the loss has taken it as
-   * final, so nothing resumes for it.
+   * again, and a frame is drawn. The owner, told of the loss, is told it is
+   * over.
    */
   function onContextRestored(): void {
-    if (disposed || !contextLost || setup.onContextLost) return;
+    if (disposed || !contextLost) return;
     contextLost = false;
     scene3.traverse((o) => {
       if (o instanceof Light && o.shadow) o.shadow.needsUpdate = true;
     });
     requestRender();
+    setup.onContextRestored?.();
   }
 
   function makeRenderer(q: LabQuality): WebGLRenderer {
@@ -1316,16 +1326,24 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
     dropControls(controls);
     lighting?.dispose();
     lighting = null;
+    const wasLost = contextLost;
     dropRenderer(renderer);
+    // No context between the two canvases. If the new one is refused (a
+    // browser at its context limit: `makeRenderer` throws, and the owner is
+    // told through `onQualityFailed`) the runtime stays that way and draws no
+    // frame at all, rather than drawing into the dropped renderer, whose
+    // context is gone and whose every shader would fail to compile.
+    contextLost = true;
 
     renderer = makeRenderer(q);
     // A new canvas has a context of its own, so a loss the runtime was
-    // waiting out is over (a final one, reported to the owner, is not).
-    if (!setup.onContextLost) contextLost = false;
+    // waiting out is over, and the owner hears so once the canvas is sized.
+    contextLost = false;
     rendererLow = q === 'low';
     controls = makeControls(target);
     rebuildLighting();
     applySize();
+    if (wasLost) setup.onContextRestored?.();
     // The first frame on a new renderer compiles its shaders: not a frame time.
     lastFrame = 0;
   }

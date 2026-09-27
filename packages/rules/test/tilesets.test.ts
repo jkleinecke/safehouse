@@ -6,7 +6,7 @@
  * painter draws from it. None of those can tell a typo from a decision, so the
  * invariants they assume are pinned here.
  *
- * The load-bearing one is PATTERN DRIFT. `apps/web/.../stage/tileLayer.ts`
+ * The load-bearing one is PATTERN DRIFT. `apps/web/.../gm/art/tileArt.ts`
  * switches on `pattern` and silently falls through to a flat fill for anything
  * it does not recognise, and this package cannot import it to check. So
  * `TILE_PATTERNS` is exported as a value and `TilePattern` derived from it:

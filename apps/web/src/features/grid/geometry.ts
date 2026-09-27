@@ -1,5 +1,5 @@
 /**
- * Pure grid math (no pixi, no DOM) — unit-tested with vitest.
+ * Pure grid math (no three, no DOM) — unit-tested with vitest.
  *
  * World model: 1 grid square = CELL world pixels. Token/geometry positions are
  * in GRID UNITS; `Grid.offset` shifts the grid origin relative to the map

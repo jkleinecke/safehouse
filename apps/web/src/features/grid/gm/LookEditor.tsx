@@ -1,12 +1,13 @@
 /**
- * A token's look on the isometric map: describe it and let the AI dress the
- * figure, then adjust by hand.
+ * A token's look on the map: describe it and let the AI dress the figure,
+ * then adjust by hand.
  *
- * The figure is drawn, not painted (`stage/figure.ts`), so the AI's job is
- * to choose — archetype, metatype, coat, hair, eyes, what they carry, which
- * arm is chrome, and the colours — from the same lists the hand controls
- * offer. Whatever it leaves out stays as the token already had it. Nothing
- * reaches the map until Save.
+ * The figure is built, not painted (`lookFor` in `plan/figure.ts` says who it
+ * is, `lab3d/figure3d.ts` builds it), so the AI's job is to choose —
+ * archetype, metatype, coat, hair, eyes, what they carry, which arm is
+ * chrome, and the colours — from the same lists the hand controls offer.
+ * Whatever it leaves out stays as the token already had it. Nothing reaches
+ * the map until Save.
  *
  * The GM uses it for any token (in Prep's properties); a player for their
  * own runner (the right-click menu), and a runner's look follows them into
@@ -25,7 +26,7 @@ import {
   type TokenLook,
 } from '@safehouse/contracts';
 import { useDescribeLook, useSetTokenLook } from '../api.js';
-import { lookFor } from '../stage/figure.js';
+import { lookFor } from '../plan/figure.js';
 import { inputCls, Row } from './ui.js';
 
 const LABELS: Record<string, string> = {

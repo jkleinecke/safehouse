@@ -275,7 +275,7 @@ export function useUploadAttachment() {
  * bare id.
  *
  * The token rides as a query parameter because the consumers are `<img src>`,
- * pixi's texture loader and an `<a href>` — none of which can set an
+ * three's texture loader and an `<a href>` — none of which can set an
  * `Authorization` header, and `/files/:id` is authenticated (`app.ts`'s
  * `QUERY_TOKEN_PREFIXES`). Without it every map image on the GM's own screens
  * answered 401: the Grid drew a blank floor and the Scenes list drew a broken
@@ -283,8 +283,9 @@ export function useUploadAttachment() {
  * store. `TvStageView` already did this for the kiosk; this is the same rule at
  * the one helper the GM surfaces share.
  *
- * The query string leaves the URL without a file extension, which pixi needs a
- * parser hint for — `stage/assetUrl.ts` already registers one for every stage.
+ * The query string leaves the URL without a file extension. Pixi needed a
+ * parser hint for that (`stage/assetUrl.ts`, gone with the 2D map in P5);
+ * three loads through an `<img>`, which goes by what the file decodes as.
  */
 export function fileUrl(attachmentId: string): string {
   const token = getToken();

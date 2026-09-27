@@ -1,23 +1,27 @@
 /**
- * The 3D map's figures: the same Sixth World people the isometric map draws
- * (`grid/stage/figure.ts`), built as real geometry instead of painted.
+ * The map's figures: Sixth World people, built as real geometry.
  *
  * Nothing about who a token is gets decided here. Its archetype, metatype,
  * kit and colours come from `lookFor(token)`, and where its joints are from
- * `skeleton(frame)` — the very bones the 2D figure is drawn over — so a
- * runner in 3D is the runner in 2D: the same mohawk, the same chrome arm,
- * the same neon at the seams.
+ * `skeleton(frame)`, both in `grid/plan/figure.ts`, which the look editor
+ * reads too — so the runner a GM dresses there is the runner on the map: the
+ * same mohawk, the same chrome arm, the same neon at the seams.
  *
- * What changes is the drawing. The 2D figure fakes depth — it sorts its parts
- * back to front, shades each face by a fixed key light, inks an outline — and
- * 3D has a depth buffer, real lights and real shadows for all of that. So
- * limbs are square beams through the joints, the torso an oriented frustum,
- * the head a low-poly sphere with the hair a larger one pulled back over it,
- * and every lit seam, visor and LED goes to the glow mesh, where the bloom
- * pass finds it. There is no painted shadow under the feet: the lamps cast one.
+ * This is the drawing. The 2D map's figure, retired in P5, faked depth — it
+ * sorted its parts back to front, shaded each face by a fixed key light,
+ * inked an outline — and 3D has a depth buffer, real lights and real shadows
+ * for all of that. So limbs are square beams through the joints, the torso
+ * an oriented frustum, the head a low-poly sphere with the hair a larger one
+ * pulled back over it, and every lit seam, visor and LED goes to the glow
+ * mesh, where the bloom pass finds it. No shadow is drawn here: the solid
+ * mesh is built able to cast one, but the map turns that off and lays a soft
+ * blob under each figure instead (`grid/stage3d/figures.ts`), since a lamp's
+ * shadow map drawn again for every step a runner takes costs too much. The
+ * sizes of the kit, the widths of the neon and the blood pool are still the
+ * 2D figure's numbers, in body units.
  *
- * Proportions are true: a human is 1.8 m tall, and a metatype's build scales
- * that up and across exactly as it does on the map. (The map draws its
+ * Proportions are true: a human is 1.8 m tall, and a metatype's build
+ * (`FigureLook.build`) scales that up and across. (The 2D map drew its
  * figures larger than life so they read at a square's size; a camera that can
  * come close does not need to.)
  *
@@ -27,7 +31,7 @@
 import { Group, type Mesh, type Object3D } from 'three';
 import type { Token } from '@safehouse/contracts';
 import { shade } from '../grid/stage/colors.js';
-import { lookFor, skeleton, type FigureLook, type FigurePose, type Skeleton } from '../grid/stage/figure.js';
+import { lookFor, skeleton, type FigureLook, type FigurePose, type Skeleton } from '../grid/plan/figure.js';
 import { MeshBuilder, type LabMaterials, type V3 } from './geometry3d.js';
 
 export interface FigureCtx {
@@ -70,16 +74,17 @@ function unit(a: V3): V3 {
 /**
  * Body space to the figure's own world space, and the few shapes a figure is
  * made of. A body point is `[forward, side, up]` with a human 1 tall (as in
- * `figure.ts`); the figure's world space has its feet at the origin, facing
- * +x, its right hand toward +z, in squares. `across` scales forward and side,
- * `up` scales up — a troll is broader than it is tall, against a human.
+ * `grid/plan/figure.ts`); the figure's world space has its feet at the
+ * origin, facing +x, its right hand toward +z, in squares. `across` scales
+ * forward and side, `up` scales up — a troll is broader than it is tall,
+ * against a human.
  */
 class Body {
   constructor(
     private readonly b: MeshBuilder,
     private readonly across: number,
     private readonly up: number,
-    /** Down: everything solid is drawn dimmer, as the map does. */
+    /** Down: everything solid is drawn dimmer, as the 2D figure was. */
     private readonly down: boolean,
   ) {}
 
@@ -119,7 +124,7 @@ class Body {
     }
   }
 
-  /** A lit line through body points; `width` is the 2D figure's neon width. */
+  /** A lit line through body points; `width` is a neon width as the 2D figure drew it, in body units. */
   neon(pts: readonly V3[], width: number, color: number): void {
     this.wneon(
       pts.map((p) => this.at(p)),
@@ -154,9 +159,9 @@ class Body {
   /**
    * A box from `B` to `T` (its long axis, body points), `wS` either side and
    * `wD` before and behind — or a frustum, when the `T` end has its own
-   * widths. The side axis is the body's own, as on the map: the poses only
-   * ever tilt a box in the plane it faces along. An upright box's depth runs
-   * forward and back; one lying along the body, up and down.
+   * widths. The side axis is the body's own: the poses only ever tilt a box
+   * in the plane it faces along. An upright box's depth runs forward and
+   * back; one lying along the body, up and down.
    */
   box(B: V3, T: V3, wS: number, wD: number, color: number, tS = wS, tD = wD): void {
     const a = unit(sub(T, B));
@@ -489,20 +494,19 @@ export function buildFigure(token: Token, materials: LabMaterials, ctx: FigureCt
 }
 
 /**
- * Where a figure down from physical damage lies in its blood: the 2D figure's
- * pool (`figure.ts` `drawFigure`, its bleeding oval), in this figure's own
- * world space — feet at the origin, facing +x, squares — flat on its floor:
- * the pool's middle (`x` along the body, `z` to its right hand) and its
- * half-lengths along the body (`rx`) and across it (`rz`). Scaled by the
- * metatype's breadth as the body lying in it is. Null for a prop, which
- * never bleeds.
+ * Where a figure down from physical damage lies in its blood: the retired
+ * 2D figure's bleeding oval, in this figure's own world space — feet at the
+ * origin, facing +x, squares — flat on its floor: the pool's middle (`x`
+ * along the body, `z` to its right hand) and its half-lengths along the body
+ * (`rx`) and across it (`rz`). Scaled by the metatype's breadth as the body
+ * lying in it is. Null for a prop, which never bleeds.
  */
 export function bloodPool(token: Token, ctx: Pick<FigureCtx, 'unitM'>): { x: number; z: number; rx: number; rz: number } | null {
   const look = lookFor(token);
   if (look.crate) return null;
   const size = token.size > 0 ? token.size : 1;
   const across = (HUMAN_M / (ctx.unitM > 0 ? ctx.unitM : 1)) * Math.sqrt(size) * look.build.w;
-  // Body units, as the 2D oval has them: centred a little forward and to the
+  // Body units, as the 2D oval had them: centred a little forward and to the
   // right of the hips, 0.3 along the body and 0.2 across.
   return { x: 0.02 * across, z: 0.05 * across, rx: 0.3 * across, rz: 0.2 * across };
 }

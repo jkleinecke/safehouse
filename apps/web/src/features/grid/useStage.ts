@@ -1,19 +1,28 @@
 /**
  * React lifecycle for the lazily-loaded map stage.
- * `loadStage` (`stageLoader.ts`) is the ONLY way to a renderer: it picks the
- * classic or the 3D stage and reaches it by dynamic import, so pixi and three
- * each land in their own chunk and never enter the initial bundle (D9).
+ * `loadStage` (`stageLoader.ts`) is the ONLY way to the map: it reaches the
+ * 3D stage by dynamic import, so three lands in its own chunk and never
+ * enters the initial bundle (D9). It also says when a running map stops
+ * (`stopped`) and when it comes back, which the page shows over the map with
+ * a Reload map button (`remountKey`).
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { loadStage } from './stageLoader.js';
-import type { MovementThresholds, StageApi, StageCallbacks, StageSceneState } from './types.js';
+import type { MovementThresholds, StageApi, StageCallbacks, StageSceneState, StageStop } from './types.js';
 
 export interface UseStageResult {
   /** Attach to the canvas host element. */
   hostRef: (el: HTMLDivElement | null) => void;
   api: StageApi | null;
   loading: boolean;
+  /** Why the map could not start, in words the page can show as they are. */
   error: string | null;
+  /**
+   * Why the running map stopped drawing (`StageStop`), or null while it
+   * draws. A lost GPU context that comes back clears it by itself; the other
+   * stops last until the stage is remounted.
+   */
+  stopped: StageStop | null;
 }
 
 export interface UseStageParams {
@@ -25,9 +34,9 @@ export interface UseStageParams {
   /** Remote interim drag ghosts (tokenId → grid position). */
   drags: Record<string, { x: number; y: number }>;
   /**
-   * Change it to tear the stage down and mount a fresh one in the same host —
-   * how the renderer switch (3D / Classic) takes effect without a reload:
-   * `loadStage` chooses again on every mount.
+   * Change it to tear the stage down and mount a fresh one in the same host,
+   * from the current state: the page's Reload map button, after the map
+   * stopped or could not start. It also clears `error` and `stopped`.
    */
   remountKey?: number;
 }
@@ -36,6 +45,7 @@ export function useStage(params: UseStageParams): UseStageResult {
   const [api, setApi] = useState<StageApi | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [stopped, setStopped] = useState<StageStop | null>(null);
 
   const hostEl = useRef<HTMLDivElement | null>(null);
   const [hostReady, setHostReady] = useState(0);
@@ -65,6 +75,7 @@ export function useStage(params: UseStageParams): UseStageResult {
     let created: StageApi | null = null;
     setLoading(true);
     setError(null);
+    setStopped(null);
 
     // `Required`, not `StageCallbacks`: this shim is a hand-copied key list, and
     // every member added to the interface after it was written is optional, so a
@@ -117,7 +128,15 @@ export function useStage(params: UseStageParams): UseStageResult {
         callbacks: stable,
         urlFor: (id) => urlRef.current(id),
       },
-      { role: initial.role },
+      {
+        role: initial.role,
+        onStopped: (stop) => {
+          if (!cancelled) setStopped(stop);
+        },
+        onResumed: () => {
+          if (!cancelled) setStopped(null);
+        },
+      },
     )
       .then((stage) => {
         if (cancelled) {
@@ -156,5 +175,5 @@ export function useStage(params: UseStageParams): UseStageResult {
     api?.setRulerThresholds(params.thresholds);
   }, [api, params.thresholds]);
 
-  return { hostRef, api, loading, error };
+  return { hostRef, api, loading, error, stopped };
 }

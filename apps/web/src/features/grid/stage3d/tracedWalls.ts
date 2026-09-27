@@ -5,7 +5,7 @@
  * `scene.geometry.walls` and `doors` are lines the GM drew — over a map image,
  * mostly, where the image shows a wall. The rules read them on every floor
  * (`sightModelFor`): a runner's sightline stops at them, and so does every
- * lamp's area. On the 2D map they are thin lines for the GM and door knobs
+ * lamp's area. On the 2D map they were thin lines for the GM and door knobs
  * for everyone. Here they stand up as what they are, on every floor on show
  * — the floor in view, and a copy on each floor seen below it, as the rules
  * stand them on every floor: a lamp's pool downstairs that stops at a
@@ -19,7 +19,7 @@
  * Everyone sees them, as everyone is sent them (`sceneForViewer`: they are the
  * map's sight geometry). A locked door carries an amber lock plate for the
  * GM, whose payload is the only one that says so; the GM's selected wall or
- * door is tinted magenta, as the 2D map rings it — by a skin drawn a hair
+ * door is tinted magenta, as the 2D map ringed it — by a skin drawn a hair
  * proud of it (`drawPicked`), so selecting one changes nothing that stands.
  *
  * ## Light and shadow
@@ -71,7 +71,7 @@ const WALL_TOP = 0x4b525c;
 /** A door's leaf: a shade warmer, so a door reads as one. */
 const DOOR = 0x5a5046;
 const DOOR_TOP = 0x6d6255;
-/** The GM's selection, tinted as the 2D map rings it. */
+/** The GM's selection, tinted as the 2D map ringed it. */
 const PICKED = shade(C.magenta, 0.75);
 const PICKED_TOP = C.magenta;
 /** How far a wall stops short of the storey: the slab above and a hair, as a painted wall does (`world3d.ts`). */

@@ -1,21 +1,25 @@
 /**
- * The stage's redraw keys — pure, no pixi.
+ * The map's redraw keys — pure, no three, no DOM.
  *
  * A layer is redrawn when its key changes and at no other time: that is what
  * lets a pan, a zoom or a token move leave the grid, the fog and the GM's
  * markers alone. Each key is a string of exactly what its layer draws from,
  * so an edit that changes the drawing changes the key, and nothing else does.
  *
- * Both renderers decide their redraws with these same functions, so an edit
- * the 2D map redraws for is an edit the 3D one rebuilds for too.
+ * The 3D stage decides its rebuilds with these: the map images, the GM's
+ * geometry, the fog, the fog draft, the AoE template and the painted
+ * selection in `stage3d/index.ts`, the GM's markers in `stage3d/markers.ts`,
+ * and the fog and shroud masks in `stage3d/masks.ts`. The painted tiles have
+ * no key here: the 3D world diffs them square by square instead
+ * (`cellSignatures` and `changedCells`, in `lab3d/world3d.ts`), and rebuilds
+ * only the chunks a stroke touched.
  */
-import type { TileLayer } from '@safehouse/contracts';
 import { metricsKey, type SceneMetrics } from '../geometry.js';
 import type { GeometrySelection, StageSceneState } from '../types.js';
-import { tileLayerKey } from './tileLayer.js';
 
-export { shroudKey } from './shroudLayer.js';
-export { tileLayerKey } from './tileLayer.js';
+// The shroud's key lives with its amounts, in `plan/shroud.ts`; the masks
+// take it from here, with the fog's.
+export { shroudKey } from '../plan/shroud.js';
 
 /** The selected id when the selection is one of `kinds`, else null. */
 export function selectedOf(state: StageSceneState, ...kinds: GeometrySelection['kind'][]): string | null {
@@ -27,11 +31,6 @@ export function selectedOf(state: StageSceneState, ...kinds: GeometrySelection['
 export function selectionKey(state: StageSceneState, ...kinds: GeometrySelection['kind'][]): string {
   const id = selectedOf(state, ...kinds);
   return id === null ? '' : `${state.selection?.kind}:${id}`;
-}
-
-/** One floor's painted tiles: redrawn on any stroke that changed a cell (see `tileLayerKey`). */
-export function tilesKey(sceneId: string, level: number, tiles: TileLayer | null | undefined): string {
-  return `L${level}|${tileLayerKey(sceneId, tiles)}`;
 }
 
 /**

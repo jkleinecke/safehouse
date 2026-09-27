@@ -1,5 +1,5 @@
 /**
- * GM notes (FR9.25): where a note's box is, in world px — pure, no pixi.
+ * GM notes (FR9.25): where a note's box is, in world px — pure, no three.
  *
  * The one measurement the drawing and the hit-test both need. A note is
  * anchored at a grid point and is `width` cells wide; its height follows its

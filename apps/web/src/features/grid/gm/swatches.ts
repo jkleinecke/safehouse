@@ -1,19 +1,27 @@
 /**
- * Tile swatches drawn by the canvas's own renderer (docs/UX_MAP_BUILDER.md
- * §3.5): a square of the material as it will actually look on the map, not a
- * coloured dot beside a name. Fitts's Law on the most-clicked target in the
- * builder — and Similarity: what is in the palette is what lands on the floor.
+ * Tile swatches drawn by the tile painter (docs/UX_MAP_BUILDER.md §3.5): a
+ * square of the material itself — its colours, its pattern, a door's design,
+ * a piece of furniture — not a coloured dot beside a name. Fitts's Law on the
+ * most-clicked target in the builder — and Similarity: the GM picks the thing
+ * by what it looks like, not by decoding a legend.
  *
  * Every tile of a set gets a three-by-three cell scene with the tile in the
  * middle — the set's floor all round, and for a wall a wall either side so
  * its joins draw. The scenes are laid out on one sheet, a cell apart so no
- * wall run leaks into its neighbour, put through the same `drawTiles` the
- * canvas uses, and read back ONCE per set: reading pixels back from the GPU
- * is the slow part, and one readback for twenty-four tiles is a fraction of
- * twenty-four. Each swatch is then a window onto the cached sheet.
+ * wall run leaks into its neighbour, and the 2D tile painter (`drawTiles`)
+ * draws the whole sheet in one go onto a plain Canvas2D, through a
+ * `CanvasPen` (`art/canvasPen.ts`). The painter was written for pixi, and the
+ * pen keeps pixi's drawing rules, so the pictures look as they did when pixi
+ * drew them; pixi itself is gone. The sheet is encoded once per set, and each
+ * swatch is then a window onto it.
  *
- * Anything that cannot render (no WebGL, a server render, a test) shows the
- * two-colour CSS swatch the palette had before, so the palette never waits.
+ * The painter is big — the furniture designs alone are some 450 KB — so it
+ * is fetched by dynamic import the first time a palette asks for a sheet, and
+ * the Grid page does not carry it until then.
+ *
+ * Anything that cannot draw (no DOM, a DOM with no 2D canvas, a server
+ * render, a test) shows the two-colour CSS swatch the palette had before, so
+ * the palette never waits.
  */
 import { useEffect, useState, type CSSProperties } from 'react';
 import type { Scene } from '@safehouse/contracts';
@@ -134,37 +142,66 @@ export function swatchStyle(sheet: Sheet, tileId: string): CSSProperties | null 
   };
 }
 
-type PixiModule = typeof import('pixi.js');
-let rendererOnce: Promise<{ pixi: PixiModule; renderer: import('pixi.js').Renderer } | null> | null = null;
+/**
+ * Can this page draw on a 2D canvas at all? Not without a DOM (a server
+ * render, the node tests), and not in a stand-in DOM that has no 2D canvas
+ * behind it — which is asked here, before anything is fetched or made, so
+ * such a page neither downloads the painter nor logs a "not implemented"
+ * from asking a canvas for a context.
+ */
+function canDraw(): boolean {
+  return typeof document !== 'undefined' && typeof CanvasRenderingContext2D !== 'undefined';
+}
 
-/** One small renderer for every sheet, made on first use; null where there is none to be had. */
-function shared() {
-  if (!rendererOnce) {
-    rendererOnce = (async () => {
-      if (typeof document === 'undefined') return null;
-      try {
-        const pixi = await import('pixi.js');
-        const renderer = await pixi.autoDetectRenderer({
-          width: CELL,
-          height: CELL,
-          backgroundAlpha: 0,
-          antialias: true,
-          preference: 'webgl',
-        });
-        return { pixi, renderer };
-      } catch {
-        return null;
-      }
-    })();
+/**
+ * A canvas the size of a sheet, and its 2D context; null when the browser
+ * will not give one (out of canvases, or a size it refuses).
+ *
+ * `willReadFrequently` asks for a canvas kept in main memory rather than on
+ * the GPU. The sheet is drawn once and encoded once, so there is nothing for
+ * the GPU to speed up, and a GPU canvas would have to read its pixels back
+ * to be encoded — the slow step the pixi render had.
+ */
+function sheetCanvas(width: number, height: number): CanvasRenderingContext2D | null {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  try {
+    return canvas.getContext('2d', { willReadFrequently: true });
+  } catch {
+    return null;
   }
-  return rendererOnce;
+}
+
+/**
+ * The drawn sheet as a URL a CSS background can show; null when the canvas
+ * cannot be encoded (too big for this browser, say). `toBlob` encodes off the
+ * main thread — a full set's sheet is a couple of million pixels, a stall the
+ * GM would feel if it were encoded in line — and pixi's extract encoded this
+ * way too. The blob URL lives as long as the page, like the sheet it names
+ * (`cache`), so it is never revoked.
+ */
+function encode(canvas: HTMLCanvasElement): Promise<string | null> {
+  return new Promise((resolve) => {
+    canvas.toBlob((blob) => resolve(blob ? URL.createObjectURL(blob) : null), 'image/png');
+  });
 }
 
 async function render(set: TileSetLike): Promise<Sheet | null> {
-  const s = await shared();
-  if (!s) return null;
-  const layer = await import('../stage/tileLayer.js');
+  if (!canDraw()) return null;
+  // The painter and its pen, fetched on first use (module comment). The
+  // tile painter reaches props.ts; the dynamic import is what keeps both out
+  // of the Grid chunk.
+  const [{ drawTiles }, { CanvasPen }] = await Promise.all([
+    import('./art/tileArt.js'),
+    import('./art/canvasPen.js'),
+  ]);
   const { input, layout } = sheetInput(set);
+  // Twice the swatch size, so the sheet is crisp on a HiDPI screen: a cell
+  // is 2 × SWATCH_PX canvas px across, and `k` canvas px make one world px.
+  const k = (SWATCH_PX * 2) / CELL;
+  const ctx = sheetCanvas(layout.cols * SWATCH_PX * 2, layout.rows * SWATCH_PX * 2);
+  if (!ctx) return null;
   const grid = {
     unitM: 1,
     cols: layout.cols,
@@ -172,39 +209,36 @@ async function render(set: TileSetLike): Promise<Sheet | null> {
     offset: { x: 0, y: 0 },
     projection: 'topdown',
   } as Scene['grid'];
-  const g = new s.pixi.Graphics();
   try {
+    // The painter draws in world px from the sheet's top-left corner; the
+    // transform scales that onto the canvas. Anything past the sheet's edge
+    // falls off the canvas, as it fell outside pixi's extract frame.
+    ctx.setTransform(k, 0, 0, k, 0, 0);
     // Each piece at its one-square design size: the swatches share a sheet,
     // and a car at its real size would park in its neighbour's.
-    layer.drawTiles(g, { ...metricsFor(grid), designSize: true }, { tilesetId: set.id, ...input, defs: tileDefsFromSets([set]) });
-    const url = await s.renderer.extract.base64({
-      target: g,
-      frame: new s.pixi.Rectangle(0, 0, layout.cols * CELL, layout.rows * CELL),
-      resolution: (SWATCH_PX * 2) / CELL,
-    });
-    return { url, layout };
+    drawTiles(new CanvasPen(ctx), { ...metricsFor(grid), designSize: true }, { tilesetId: set.id, ...input, defs: tileDefsFromSets([set]) });
+    const url = await encode(ctx.canvas);
+    return url === null ? null : { url, layout };
   } finally {
-    g.destroy();
+    // Give the pixels back now rather than whenever the canvas is collected;
+    // the encoded copy is all the palette keeps.
+    ctx.canvas.width = 0;
+    ctx.canvas.height = 0;
   }
 }
 
 const cache = new Map<string, Promise<Sheet | null>>();
-// Sheets go through one renderer one at a time; a failure never breaks the line.
-let line: Promise<unknown> = Promise.resolve();
 
-/** The set's sheet, rendered once and then remembered. */
+/** The set's sheet, drawn once and then remembered. */
 export function sheetFor(set: TileSetLike): Promise<Sheet | null> {
   let p = cache.get(set.id);
   if (!p) {
-    p = line
-      .then(() => render(set))
-      .catch((err: unknown) => {
-        // A set that cannot render shows two-colour swatches, not an error
-        // the GM sees; the reason is left where a developer looks.
-        console.debug(`tile sheet ${set.id} fell back:`, err);
-        return null;
-      });
-    line = p;
+    p = render(set).catch((err: unknown) => {
+      // A set that cannot draw shows two-colour swatches, not an error the
+      // GM sees; the reason is left where a developer looks.
+      console.debug(`tile sheet ${set.id} fell back:`, err);
+      return null;
+    });
     cache.set(set.id, p);
   }
   return p;

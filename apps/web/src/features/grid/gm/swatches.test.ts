@@ -1,7 +1,9 @@
 /**
  * The swatch scene (docs/UX_MAP_BUILDER.md §3.5): what is painted around a
- * tile so its swatch shows it the way the map will. Pure; the render itself
- * needs a GPU and is exercised by the browser walkthrough.
+ * tile so its swatch shows it in place — on the set's floor, a wall between
+ * walls — as the 2D tile painter (`art/tileArt.ts`) draws it. Pure; the
+ * drawing itself needs a browser's 2D canvas and is exercised by the browser
+ * walkthrough.
  */
 import { describe, expect, it } from 'vitest';
 import { TILESETS } from '@safehouse/rules';

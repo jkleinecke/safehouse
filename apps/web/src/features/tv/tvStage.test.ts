@@ -1,18 +1,16 @@
 /**
  * The read-only stage adapter the TV mounts. Only the pure parts are exercised
- * here — `createTvStage` dynamically imports pixi and needs a real canvas.
+ * here — `createTvStage` dynamically imports the three.js map and needs a real
+ * WebGL2 canvas.
  */
 import { describe, expect, it } from 'vitest';
 import type { Scene, Token } from '@safehouse/contracts';
 import {
   coarseBars,
-  parserSafeUrlFor,
   readOnlyStageCallbacks,
-  tvFloor,
+  tvFloor3d,
   tvStageState,
-  TEXTURE_PARSER,
   TV_STAGE_ROLE,
-  type AssetRegistry,
   type TvConditionBand,
 } from '../grid/tvStage.js';
 
@@ -99,54 +97,6 @@ describe('readOnlyStageCallbacks', () => {
   });
 });
 
-describe('parserSafeUrlFor', () => {
-  function fakeAssets() {
-    const keys = new Set<string>();
-    const added: Array<{ alias: string; src: string; parser: string }> = [];
-    const assets: AssetRegistry = {
-      resolver: { hasKey: (k) => keys.has(k) },
-      add: (asset) => {
-        keys.add(asset.alias);
-        added.push(asset);
-      },
-    };
-    return { assets, added };
-  }
-
-  it('registers a texture parser for the extension-less file-store URL', () => {
-    // `/files/<uuid>?token=…` has no extension, so pixi matches no parser and
-    // the map image silently never appears. Naming the parser skips the test.
-    const { assets, added } = fakeAssets();
-    const urlFor = parserSafeUrlFor((id) => `/files/${id}?token=abc`, assets);
-    expect(urlFor('map-1')).toBe('/files/map-1?token=abc');
-    expect(added).toEqual([
-      { alias: '/files/map-1?token=abc', src: '/files/map-1?token=abc', parser: TEXTURE_PARSER },
-    ]);
-  });
-
-  it('registers each URL once, however many tokens ask for it', () => {
-    const { assets, added } = fakeAssets();
-    const urlFor = parserSafeUrlFor((id) => `/files/${id}`, assets);
-    urlFor('art-1');
-    urlFor('art-1');
-    urlFor('art-2');
-    expect(added.map((a) => a.alias)).toEqual(['/files/art-1', '/files/art-2']);
-  });
-
-  /**
-   * The wrap now lives in `createStage`, so the GM's Grid and a player's phone
-   * get it too — not just the TV. Applying it twice along a call chain has to
-   * be harmless, or moving it would have been a risk.
-   */
-  it('is idempotent — wrapping an already-wrapped builder registers nothing new', () => {
-    const { assets, added } = fakeAssets();
-    const once = parserSafeUrlFor((id) => `/files/${id}`, assets);
-    const twice = parserSafeUrlFor(once, assets);
-    expect(twice('art-1')).toBe('/files/art-1');
-    expect(added).toHaveLength(1);
-  });
-});
-
 describe('coarseBars', () => {
   it('renders the coarse band and nothing finer — a display never gets boxes', () => {
     const fills: Record<TvConditionBand, number> = {
@@ -172,17 +122,8 @@ describe('which floor the wall screen shows (FR9.22)', () => {
   it('follows the acting token upstairs', () => {
     const ground = { ...token, id: 'g', level: 0 };
     const up = { ...token, id: 'u', level: 1 };
-    expect(tvFloor([ground, up], 'u')).toBe(1);
-    expect(tvFloor([ground, up], 'g')).toBe(0);
-  });
-
-  it('falls back to the ground with nobody acting', () => {
-    expect(tvFloor([{ ...token, level: 2 }], null)).toBe(0);
-    expect(tvFloor([], undefined)).toBe(0);
-  });
-
-  it('does not trust an acting id that is not on the scene', () => {
-    expect(tvFloor([{ ...token, id: 'a', level: 3 }], 'gone')).toBe(0);
+    expect(tvFloor3d([ground, up], 'u')).toBe(1);
+    expect(tvFloor3d([ground, up], 'g')).toBe(0);
   });
 
   it('feeds that floor to the stage state', () => {

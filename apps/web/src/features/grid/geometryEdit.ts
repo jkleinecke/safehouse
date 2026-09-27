@@ -4,7 +4,7 @@
  * The server takes geometry as a whole-object replacement
  * (`PATCH /api/scenes/:id { geometry }` → `SceneGeometrySchema`), so every
  * editor gesture is "old geometry in, new geometry out". Keeping that here —
- * pure, immutable, no React, no pixi — means the editors are three lines of
+ * pure, immutable, no React, no three — means the editors are three lines of
  * wiring each and the rules are unit-tested instead of clicked.
  *
  * Ids are deterministic (`wall_1`, `wall_2`, …) rather than random: a test can
@@ -26,8 +26,8 @@ import {
 import { sceneLevels } from '@safehouse/rules';
 import { gridDist, isDegenerateSegment, MIN_SEGMENT, snapVertex } from './geometry.js';
 
-// The two pure gestures live in `geometry.ts` so the pixi stage can reach them
-// without pulling the contract schemas in; re-exported here as the editors'
+// The two pure gestures live in `geometry.ts` so the map's pointer can reach
+// them without pulling the contract schemas in; re-exported here as the editors'
 // natural home.
 export { isDegenerateSegment, MIN_SEGMENT, snapVertex };
 

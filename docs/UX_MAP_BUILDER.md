@@ -459,8 +459,10 @@ the TV a click away. The floor chips already lived on the canvas; they stay.
 The palette draws every swatch as the material — a three-by-three cell scene
 with the tile in the middle, every tile of a set laid out on one sheet a
 cell apart, put through the same renderer as the map and read back from the
-GPU once per set, then cached — with its two colours standing in until the
-sheet lands; the
+GPU once per set (since 2026-09-27, when PixiJS left the app and the map was
+three.js only, drawn instead by the old 2D tile painter onto a plain canvas:
+a picture in the old plan art, not the 3D map's look), then cached — with
+its two colours standing in until the sheet lands; the
 categories say their whole word; a fresh scene leads with **Draw a room**
 (the room tool, R) and the lead steps aside once there is a floor; Auto's
 explanation is its tooltip; the shapes and the eraser are the toolbar's.

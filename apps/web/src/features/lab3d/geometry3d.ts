@@ -9,7 +9,7 @@
  *   y = up, in squares — a storey is `storeyUnits(unitM)` squares tall.
  * A point handed to the builder is already in world units.
  *
- * Colours are sRGB hex numbers as the 2D map uses them; lighting is the
+ * Colours are sRGB hex numbers as the 2D map used them; lighting is the
  * engine's, so nothing here pre-shades a face. `emissive` parts (a lamp's
  * shade, a screen, a neon strip) go to their own mesh with an emissive
  * material, which is what the bloom pass and the light model key on.
@@ -400,7 +400,7 @@ export interface LabMaterials {
  * (`grid/stage3d/cover.ts`), which does nothing until a map stage shows a
  * viewer's masks; `cover` says which masks hide what is drawn with the set:
  * both for the world (the default), the fog alone for a stage's figures, as
- * the 2D map draws its tokens over its shroud.
+ * the 2D map drew its tokens over its shroud.
  */
 export function createLabMaterials(cover: CoverMode = 'full'): LabMaterials {
   const solid = new MeshStandardMaterial({ vertexColors: true, roughness: 0.85, metalness: 0.05, side: DoubleSide });

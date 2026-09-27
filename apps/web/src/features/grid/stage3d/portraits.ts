@@ -2,7 +2,7 @@
  * The tokens' portraits in the 3D map's top view (P4 of the move to 3D): a
  * round disc lying face up on each figure's head, with the token's portrait
  * on it — or its initial on the colour of where it came from — so a map seen
- * straight down reads as the 2D plan's token discs do.
+ * straight down reads as the 2D plan's token discs did.
  *
  * Why a disc on the figure and not the plate alone. Looking straight down a
  * figure is head and shoulders, and the plate (`badges.ts`) hangs over the
@@ -141,7 +141,7 @@ export class PortraitDisc {
     this.texture = new CanvasTexture(this.canvas);
     this.texture.colorSpace = SRGBColorSpace;
     // Not hidden by what hangs over the figure (a tree's crown, a door's
-    // lintel): the 2D plan draws its token discs over every tile.
+    // lintel): the 2D plan drew its token discs over every tile.
     this.material = new MeshBasicMaterial({
       map: this.texture,
       transparent: true,

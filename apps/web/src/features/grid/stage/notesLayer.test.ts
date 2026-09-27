@@ -8,17 +8,16 @@
  * GM-only mark on a knob everyone can see.
  */
 import { describe, expect, it } from 'vitest';
-import type { Graphics } from 'pixi.js';
 import type { Scene } from '@safehouse/contracts';
 import { metricsFor } from '../geometry.js';
-import type { InkLabel, LabelSink } from './ink.js';
+import type { Ink, InkLabel, LabelSink } from './ink.js';
 import { drawGeometry, drawNotes } from './layers.js';
 import { noteFrame, noteLines } from './notes.js';
 
 const flat = metricsFor({ unitM: 1, cols: 12, rows: 8, offset: { x: 0, y: 0 }, projection: 'topdown' as const });
 const iso = metricsFor({ unitM: 1, cols: 12, rows: 8, offset: { x: 0, y: 0 }, projection: 'iso' as const });
 
-function counting(): { g: Graphics; ops: string[]; rects: number[][] } {
+function counting(): { g: Ink; ops: string[]; rects: number[][] } {
   const ops: string[] = [];
   const rects: number[][] = [];
   const g: Record<string, unknown> = {};
@@ -29,10 +28,10 @@ function counting(): { g: Graphics; ops: string[]; rects: number[][] } {
       return g;
     };
   }
-  return { g: g as unknown as Graphics, ops, rects };
+  return { g: g as unknown as Ink, ops, rects };
 }
 
-/** A label sink that records what it was asked to show, so no real pixi Text is constructed. */
+/** A label sink that records what it was asked to show, so no real label (a DOM element on the 3D map) is made. */
 class StubPool extends Map<string, { text: string; style: { wordWrapWidth: number } }> implements LabelSink {
   readonly made: string[] = [];
   private readonly seen = new Set<string>();

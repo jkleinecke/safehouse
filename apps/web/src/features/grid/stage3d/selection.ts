@@ -1,9 +1,9 @@
 /**
  * The Build selection on the 3D map, standing up (P3 of the move to 3D).
  *
- * The 2D map rings every square of a selected painted object on the floor
- * (`stage/fx.ts` `drawPaintedSelection`), and lays a faint copy of it where a
- * drag or a paste will put it (`drawPaintedGhost`). Flat on a 3D floor both
+ * The 2D map ringed every square of a selected painted object on the floor
+ * (`stage/fx.ts` `drawPaintedSelection`), and laid a faint copy of it where a
+ * drag or a paste would put it (`drawPaintedGhost`). Flat on a 3D floor both
  * lie at the FOOT of what they mean — a wall's ring is half hidden behind the
  * wall it rings, and a ghost reads as a rug. So here each is a box as tall as
  * what stands on its squares:
@@ -28,7 +28,7 @@
  * front never hides one.
  *
  * Colours are the 2D map's (`stage/colors.ts`). Everything here is drawn over
- * the players' cover, as the 2D fx layer is over its fog — only the GM ever
+ * the players' cover, as the 2D fx layer was over its fog — only the GM ever
  * builds — and never takes a ray.
  */
 import {
@@ -108,7 +108,7 @@ export function tileTop(def: TileDrawDef | undefined, storey: number): number {
  * squares): the tallest thing any of them puts in the square. A square no
  * fill names — a big piece of furniture's other squares, stored in one —
  * takes the tallest thing in any of them. With no fills every square is flat,
- * which is the 2D map's ghost.
+ * which is how the 2D map drew its ghost.
  */
 export function boxTops(
   cells: readonly string[],
@@ -266,7 +266,7 @@ export class SelectionBoxes {
     });
     for (const m of this.materials()) {
       m.name = 'selection-box';
-      // Over the cover: the 2D map draws the selection and the ghost in its fx layer, above the fog.
+      // Over the cover: the 2D map drew the selection and the ghost in its fx layer, above the fog.
       exemptFromCover(m);
     }
   }
@@ -363,7 +363,7 @@ export class SelectionBoxes {
     if (edges.length === 0) return true;
 
     // The edges: camera-facing ribbons the 2D stroke's width (they grow and
-    // shrink with the zoom, as the 2D map's strokes do), over hairlines that
+    // shrink with the zoom, as the 2D map's strokes did), over hairlines that
     // keep them a pixel wide however far out the view is zoomed.
     const ribbons: number[] = [];
     const lines: number[] = [];

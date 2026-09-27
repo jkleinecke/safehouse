@@ -355,9 +355,16 @@ own downlights).
 
 ## What the renderer adds that the palette cannot
 
+*Since 2026-09-27 the map is three.js: it builds its own geometry from the
+same tile plan (`plan/tiles.ts`, read by `lab3d/world3d.ts`) and lights it
+with real lights. The 2D painter this section describes no longer draws the
+map. It survives in `gm/art/` to paint the Build palette's tile pictures,
+which is why they still look like this.*
+
 The face multipliers are deliberately flat, so the form has to come from
 somewhere else — the games paint it in. A procedural renderer gets it from
-four things, all in `stage/tileLayer.ts`:
+four things, all in the 2D tile painter (`gm/art/tileArt.ts`, first written
+as the 2D map's `stage/tileLayer.ts`):
 
 - **Per-cell grain.** Every floor cell's value is nudged by a hash of its
   position, ±4.5% — inside the tier-3 budget. A floor painted from one tile
@@ -406,15 +413,15 @@ four things, all in `stage/tileLayer.ts`:
 
 A door used to be a wall slab in a different brown with a bar across it.
 Every door and window in the catalogue now names a **cut** — `roller`,
-`wireglass`, `hatch`, `blown`, `serving`, `sign`… (`TILE_CUTS`) — and
-`stage/cuts.ts` draws that design onto the wall's visible face in isometric
-and as the floor-plan symbol in plan: a leaf with its frame, panels and
-handle; roller slats with a housing; wire mesh in glass on a sill; a
-shopfront with its lit interior; louvres; a wheel-hatch with its dogs; a
-ragged hole; a frame with the shards still in it; a serving hatch with its
-shelf; a porthole door; a neon tube on a sign box; chain-link mesh. Each set
-gets the openings its world would have, and a design added to the list
-without a drawing is a compile error, not a slab.
+`wireglass`, `hatch`, `blown`, `serving`, `sign`… (`TILE_CUTS`) — and the 2D
+painter (`gm/art/cutArt.ts`, once `stage/cuts.ts`) draws that design onto
+the wall's visible face in isometric and as the floor-plan symbol in plan: a
+leaf with its frame, panels and handle; roller slats with a housing; wire
+mesh in glass on a sill; a shopfront with its lit interior; louvres; a
+wheel-hatch with its dogs; a ragged hole; a frame with the shards still in
+it; a serving hatch with its shelf; a porthole door; a neon tube on a sign
+box; chain-link mesh. Each set gets the openings its world would have, and a
+design added to the list without a drawing is a compile error, not a slab.
 
 **Adjacent cells of one cut tile are one opening.** Two street doors are a
 double door that meets in the middle; two cells of roller door are one wide
@@ -493,7 +500,7 @@ The budget is a per-prop draw-call ceiling, checked over hundreds of cell
 seeds at every height the catalogue uses, lit and unlit: at most 110 calls
 in isometric (the forklift's pallet-and-crate variant, the busiest, is 103)
 and 30 in plan. On average a prop went from about 33 calls to about 52 in
-isometric and from 7 to 15 in plan. On a laptop canvas the grid still holds
+isometric and from 7 to 15 in plan. On a laptop canvas the 2D map still held
 its frame budget with no frame over 50 ms while panning, zooming or
 dragging (`e2e/perf.spec.ts`).
 
@@ -506,7 +513,9 @@ A water tile used to be a floor with three wavy lines printed on it, and a
 harbour painted forty squares wide was forty framed pictures of water sitting
 flush with the quay — the grid was the most visible thing on its surface. A
 ground tile marked `liquid` (`TILE_LIQUIDS`: `deep`, `shallow`) is drawn by
-`stage/water.ts` instead, and every square of it knows its neighbours:
+the 2D painter's `gm/art/waterArt.ts` instead (once `stage/water.ts`; the
+shore map it reads, `plan/water.ts`, is the 3D map's too), and every square
+of it knows its neighbours:
 
 - **One surface.** Each square's colour is a field: distance from the
   nearest land, known at the centre and estimated at the corners and edge
@@ -567,14 +576,22 @@ land, its neighbours' shores and palettes — so a quay painted three squares
 away still redraws the water it changed while the dirty rule stays one square
 wide.
 
-## What it costs, and how the stage pays for it
+## What it costs, and how the map pays for it
 
-Drawn this way a 40×30 scene is about 170,000 draw calls. A full-layer
+Drawn in 2D, a 40×30 scene was about 170,000 draw calls. A full-layer
 redraw on every brush stroke measured at 106–147ms on a real machine — lag
-under the one tool a GM uses most while building. So the stage cuts the layer
-into 8×8-cell chunks, each its own graphics, and a stroke redraws only the
-chunks it touched plus their neighbours (a wall run turns its corners from
-the cells next door). Shadows and lights are redrawn whole; both cross chunk
-borders freely and both are cheap. The same stroke now costs 15–30ms. See
-`stage/tileChunks.ts`; the one-shot `drawTiles` still exists for tests and
-draws the identical passes.
+under the one tool a GM uses most while building — so the 2D map cut the
+layer into 8×8-cell chunks and a stroke redrew only the chunks it touched
+plus their neighbours, which brought the same stroke down to 15–30ms.
+
+The 3D map, the only one since 2026-09-27, keeps the idea. It plans the
+floor from the shared tile plan (`plan/tiles.ts`: what each cell is, which
+way a wall turns, where an opening's run ends), builds each floor in chunks
+of 16×16 squares (`lab3d/world3d.ts`), and on a stroke compares every
+square's signature before and after (`cellSignatures`, `changedCells`,
+`expandCutRuns`) to rebuild only the chunks the change reaches — a floor's
+edges, a wall's joins, water's banks — and swap their meshes in.
+
+The one-shot `drawTiles` (`gm/art/tileArt.ts`) survives only to paint the
+Build palette's tile pictures: one sheet per set, drawn once and cached
+(`gm/swatches.ts`). Nothing on the map draws through it.

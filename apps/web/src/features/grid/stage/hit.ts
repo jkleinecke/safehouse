@@ -1,9 +1,10 @@
 /**
- * Pointer hit-testing — pure, no pixi (unit-tested).
+ * Pointer hit-testing — pure, no three (unit-tested).
  *
- * We hit-test ourselves rather than using pixi's interaction tree: token
- * geometry is already known, so this is one cheap loop with no display-object
- * event plumbing and no per-frame hit-area rebuilds.
+ * We hit-test ourselves rather than through the renderer (on the 2D map,
+ * pixi's interaction tree): token geometry is already known, so this is one
+ * cheap loop with no display-object event plumbing and no per-frame hit-area
+ * rebuilds.
  *
  * ## Why this works in WORLD pixels
  *
@@ -106,7 +107,7 @@ const TOKEN_CHEST_STOREYS = (0.75 * 1.8) / 3;
 /**
  * Where a click on a token is measured from: its chest. In 2D the exact
  * `tokenHitLift` (zero in plan view); in 3D three quarters up a 1.8 m figure
- * in 3 m storeys, growing with the token's size as the 2D figure does.
+ * in 3 m storeys, growing with the token's size as the 2D figure did.
  */
 export function tokenChestLift(m: SceneMetrics, size: number): Lift {
   const grow = Math.sqrt(Math.max(0.5, size));
@@ -230,7 +231,7 @@ export function hitPin(
  * The one test here not taken through the view, because a note is not a
  * point: it is a box drawn in its metrics' world px, and `at` turned back
  * into those px is the pointer on the drawing itself. On the 2D map world px
- * are the screen scaled, so this is the box on the screen, as it always was.
+ * were the screen scaled, so this was the box on the screen.
  * The 3D map draws with plan metrics and lays the note flat on its floor
  * (`stage3d/floorInk.ts`), where the same test is the box on the floor —
  * skewed with the floor in isometric, as the note is drawn there. A box

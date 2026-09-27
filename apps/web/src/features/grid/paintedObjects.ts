@@ -1,6 +1,6 @@
 /**
  * Painted objects: the walls, doors and furniture on a floor, as things a GM
- * can pick up — pure, no pixi, no React (unit-tested).
+ * can pick up — pure, no three, no React (unit-tested).
  *
  * A painted floor is stored one cell at a time, three layers deep
  * (`ground`, `structure`, `object`), which is the right shape for a brush and

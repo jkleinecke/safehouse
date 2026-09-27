@@ -95,9 +95,9 @@ export const FloorStairSchema = z.object({
  * park and useless at the water's edge — "a dock with a pier out into the
  * harbour" is at least three grounds, and the renderer only draws a quay wall,
  * a pier's pilings or a beach running under when the water and the land are
- * painted side by side (`stage/water.ts`). Areas are the plan's way to say so.
- * Unlike a room an area has no walls, so one square wide is a legal area: that
- * is exactly what a row of pier wall along the water is.
+ * painted side by side (`grid/plan/water.ts`). Areas are the plan's way to
+ * say so. Unlike a room an area has no walls, so one square wide is a legal
+ * area: that is exactly what a row of pier wall along the water is.
  */
 export const FloorAreaSchema = z.object({
   ground: z
