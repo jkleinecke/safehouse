@@ -1,5 +1,5 @@
 /**
- * The 3D lab's world: every painted floor of a scene, built as real geometry.
+ * The 3D map's world: every painted floor of a scene, built as real geometry.
  *
  * It reads the scene exactly the way the 2D map does — `planTiles` decides
  * what a cell is, which way a wall turns, where an opening's run ends and
@@ -7,11 +7,11 @@
  * So a wall that turns a corner on the map turns the same corner here, a
  * double door is one double door, and a curved glass wall is the same curve.
  *
- * World units are the lab's one convention (see `geometry3d.ts`): x east and
- * z south in squares, y up in squares, a storey `storeyUnits(unitM)` tall,
- * and floor L standing at `L * storey`. Every vertex is built in absolute
- * world coordinates, so a floor's group sits at the origin and hiding a floor
- * is hiding its group.
+ * World units are the 3D world's one convention (see `geometry3d.ts`): x
+ * east and z south in squares, y up in squares, a storey `storeyUnits(unitM)`
+ * tall, and floor L standing at `L * storey`. Every vertex is built in
+ * absolute world coordinates, so a floor's group sits at the origin and
+ * hiding a floor is hiding its group.
  *
  * Each floor is cut into chunks of `CHUNK` squares a side, one `MeshBuilder`
  * each, so a floor is a few dozen meshes the renderer can cull, not one
@@ -33,8 +33,8 @@
  * the dirty chunks' squares are looked at and built, and their meshes are
  * swapped for the old ones in the floor's group.
  *
- * This is lab code: honest, not finished. What it approximates is said where
- * it does it.
+ * It is honest about what it approximates: each approximation is said where
+ * it is made.
  */
 import { BufferAttribute, DynamicDrawUsage, Group, type Intersection } from 'three';
 import type { Scene, TileLayer } from '@safehouse/contracts';
@@ -72,16 +72,10 @@ import {
 } from './geometry3d.js';
 import { buildProp } from './propKit3d.js';
 
-/** How the world is built: storey height, whether walls are cut away, which floors. */
+/** How the world is built: storey height and which floors. */
 export interface WorldOptions {
   /** Metres per storey (`STOREY_M` is the house figure). */
   storeyM: number;
-  /**
-   * `full` builds walls to their painted height; `cut` stops every wall at a
-   * third of a storey, the architect's cutaway, so a room can be seen into
-   * from any angle without hiding the ones beside it.
-   */
-  walls: 'full' | 'cut';
   /** Floor indices to build (0 is the ground floor). Floors the scene lacks are skipped. */
   levels: readonly number[];
 }
@@ -173,8 +167,6 @@ export interface BuiltWorld {
   /** Squares per storey, as built. */
   storey: number;
   levels: BuiltLevel[];
-  /** The world's size now (kept up to date by `applyTiles`), and how long its whole build took. */
-  stats: { triangles: number; buildMs: number };
   /**
    * Bring floor `level` up to date with its painted tiles `tiles` (undefined:
    * the floor has none), building again only the chunks whose look the
@@ -184,10 +176,10 @@ export interface BuiltWorld {
    * merged again only when a leaf itself changed; doors that opened or shut
    * are shown so, as `setDoorOpen` would.
    *
-   * For a change of tiles alone: the grid, the storey, the palette's
-   * content and the walls option must be what the world was built with (a
-   * change of any of those is a new world). A floor whose tileset changed is
-   * built again whole. Null for a floor this world was not built with.
+   * For a change of tiles alone: the grid, the storey and the palette's
+   * content must be what the world was built with (a change of any of those
+   * is a new world). A floor whose tileset changed is built again whole. Null
+   * for a floor this world was not built with.
    *
    * The lighting does not know: the owner hands the patch's meshes to it
    * (`LabLighting.syncMeshes`), with the floor's lights worked out again.
@@ -217,7 +209,7 @@ export interface BuiltWorld {
    * no leaf of that floor (a chunk, a lamp's fixture, another floor's).
    */
   doorOfHit(level: number, hit: Intersection): string | null;
-  /** Free every geometry and detach the groups. Materials are the lab's and stay. */
+  /** Free every geometry and detach the groups. Materials are the owner's and stay. */
   dispose(): void;
 }
 
@@ -240,10 +232,10 @@ const GROUND_SLAB = 0.02;
 export const UPPER_SLAB = 0.25;
 
 /**
- * Each upper floor's own colour, on the edges of its slab and on its outline,
- * and on its button in the lab's panel — so "which floor is that?" has an
- * answer at a glance (2026-09-26: stacked floors in one colour read as one
- * jumble). Muted, so a slab edge is a label and not a light.
+ * Each upper floor's own colour, on the edges of its slab and on its outline
+ * — so "which floor is that?" has an answer at a glance (2026-09-26: stacked
+ * floors in one colour read as one jumble). Muted, so a slab edge is a label
+ * and not a light.
  */
 const FLOOR_TINTS: readonly number[] = [0x5b6470, 0x2f8fa3, 0xa3447f, 0xb08a3a, 0x4f9a5a, 0x7a5ab0, 0xa35a3a];
 
@@ -252,21 +244,15 @@ export function floorTint(level: number): number {
   return FLOOR_TINTS[((level % FLOOR_TINTS.length) + FLOOR_TINTS.length) % FLOOR_TINTS.length]!;
 }
 
-/** The same, as `#rrggbb`, for the page. */
-export function floorTintCss(level: number): string {
-  return `#${floorTint(level).toString(16).padStart(6, '0')}`;
-}
 /**
  * How far a full-height wall stops short of the storey: the slab above plus a
  * hair. Under a slab the gap is hidden; under an open atrium it keeps the
- * wall below the shade the lab lays over the floors beneath the one in view
- * (labView's `applyFloorVisibility`), which sits in that hair — so a lower
- * floor's walls are shaded to their tops, and the floor above's coloured
- * slab edge is never shaded at all.
+ * wall below the shade the runtime lays over the floors beneath the one in
+ * view (runtime3d's `applyFloorVisibility`), which sits in that hair — so a
+ * lower floor's walls are shaded to their tops, and the floor above's
+ * coloured slab edge is never shaded at all.
  */
 const TOP_TRIM = UPPER_SLAB + 0.04;
-/** Where `walls: 'cut'` stops a wall, in storeys. */
-const CUT_HEIGHT = 0.33;
 /** How far a flat object (a rug, a stain) floats above the floor per layer. */
 const DECAL_LIFT = 0.01;
 /**
@@ -380,19 +366,14 @@ function inBand(r: readonly [number, number, number, number], axis: 'x' | 'y'): 
 interface WallHeights {
   /** The wall's painted height, world units: what design fractions are measured against. */
   full: number;
-  /** How high it is actually built (cut away, or trimmed into the slab above). */
+  /** How high it is actually built (a full-storey wall is trimmed into the slab above, `TOP_TRIM`). */
   built: number;
-  /** Cut away: its top is a section, drawn dark. */
-  cutAway: boolean;
 }
 
-function wallHeights(def: TileDrawDef, storey: number, walls: WorldOptions['walls']): WallHeights {
+function wallHeights(def: TileDrawDef, storey: number): WallHeights {
   const h = def.height ?? 0;
   const full = Math.max(h * storey, 0.02);
-  if (walls === 'cut') {
-    return { full, built: Math.max(Math.min(h, CUT_HEIGHT) * storey, 0.02), cutAway: h > CUT_HEIGHT };
-  }
-  return { full, built: h >= 1 ? full - TOP_TRIM : full, cutAway: false };
+  return { full, built: h >= 1 ? full - TOP_TRIM : full };
 }
 
 /**
@@ -633,7 +614,6 @@ interface LevelCtx {
   y: number;
   storey: number;
   unitM: number;
-  opts: WorldOptions;
   plan: TilePlan;
   /**
    * The chunk (`chunkOf`) of the square whose standing things are being
@@ -798,10 +778,10 @@ function buildWallCell(ctx: LevelCtx, cell: TileCell): void {
   const b = ctx.chunk(col, row);
   const joins = joinsOf(ctx.plan.walls, col, row);
   const tones = tonesOf(def);
-  const heights = wallHeights(def, ctx.storey, ctx.opts.walls);
+  const heights = wallHeights(def, ctx.storey);
   const y0 = ctx.y;
   const y1 = ctx.y + heights.built;
-  const top = heights.cutAway ? shade(tones.base, 0.55) : tones.base;
+  const top = tones.base;
   const cut = cutOf(def);
   // A see-through wall with no design — a velvet rope, a low screen — is
   // built as the glass it reads as, in its own colour.
@@ -864,8 +844,8 @@ function buildArcPiece(ctx: LevelCtx, cell: TileCell, seg: NonNullable<TileCell[
   const { def } = cell;
   const b = ctx.chunk(cell.col, cell.row);
   const tones = tonesOf(def);
-  const heights = wallHeights(def, ctx.storey, ctx.opts.walls);
-  const top = heights.cutAway ? shade(tones.base, 0.55) : tones.base;
+  const heights = wallHeights(def, ctx.storey);
+  const top = tones.base;
   const f = segFrame(seg.a, seg.b, 0.04);
   const y0 = ctx.y;
   const y1 = ctx.y + heights.built;
@@ -1080,7 +1060,7 @@ interface Emitted {
  * builder. Nothing is finished into meshes here (`finishChunks`,
  * `mergeLeaves`).
  */
-function emitLevel(level: number, plan: TilePlan, unitM: number, storey: number, opts: WorldOptions, scope: Scope): Emitted {
+function emitLevel(level: number, plan: TilePlan, unitM: number, storey: number, scope: Scope): Emitted {
   const builders = new Map<string, MeshBuilder>();
   const emitters = new Map<string, MeshBuilder>();
   const leaves = new Map<string, LeafSrc>();
@@ -1089,7 +1069,6 @@ function emitLevel(level: number, plan: TilePlan, unitM: number, storey: number,
     y: level * storey,
     storey,
     unitM,
-    opts,
     plan,
     at: '',
     chunk(col, row) {
@@ -1593,15 +1572,6 @@ function drawShutLeaves(layer: LeafLayer): void {
   }
 }
 
-function trianglesOf(built: BuiltMeshes): number {
-  let n = 0;
-  for (const mesh of [built.solid, built.glass, built.glow]) {
-    const pos = mesh?.geometry.getAttribute('position');
-    if (pos !== undefined) n += pos.count / 3;
-  }
-  return n;
-}
-
 /** One floor as the world keeps it, to build again in part (`applyTiles`). */
 interface LevelState {
   /** What `BuiltWorld.levels` shows of it (`settle` keeps it current). */
@@ -1659,7 +1629,6 @@ export function buildWorld(
   materials: LabMaterials,
   opts: WorldOptions,
 ): BuiltWorld {
-  const started = performance.now();
   const storey = storeyUnits(scene.grid.unitM, opts.storeyM);
   const m = metricsFor(scene.grid);
   const group = new Group();
@@ -1669,7 +1638,6 @@ export function buildWorld(
 
   const levels: BuiltLevel[] = [];
   const states = new Map<number, LevelState>();
-  const stats = { triangles: 0, buildMs: 0 };
 
   /**
    * Build floor `st` again from `source`: the chunks `dirty` names (every
@@ -1689,7 +1657,7 @@ export function buildWorld(
     const out =
       source === null || (dirty !== null && dirty.size === 0)
         ? null
-        : emitLevel(level, source.plan, m.unitM, storey, opts, dirty === null ? EVERYWHERE : scopeOf(dirty));
+        : emitLevel(level, source.plan, m.unitM, storey, dirty === null ? EVERYWHERE : scopeOf(dirty));
     const removed: BuiltMeshes[] = [];
     const added: BuiltMeshes[] = [];
     const rebuilt = new Set<string>();
@@ -1765,22 +1733,17 @@ export function buildWorld(
     };
     const tiles = levelTiles(scene, level) as TileLayer | undefined;
     const done = rebuild(st, tiles === undefined ? null : sourceOf(tiles, defs, m), null, null);
-    // Counted open or shut: every leaf is on the GPU either way.
-    for (const b of done.added) stats.triangles += trianglesOf(b);
     propFailures += done.propFailures;
     states.set(level, st);
     group.add(levelGroup);
     levels.push(st.view);
   }
   if (propFailures > 0) console.warn(`[lab3d] ${propFailures} prop(s) failed to build and were left out`);
-  stats.triangles = Math.round(stats.triangles);
-  stats.buildMs = performance.now() - started;
 
   return {
     group,
     storey,
     levels,
-    stats,
     applyTiles(level, tiles, tileDefs) {
       const st = states.get(level);
       if (st === undefined) return null;
@@ -1798,9 +1761,6 @@ export function buildWorld(
         dirty = chunksOf(reachOf(changed, before, after));
       }
       const done = rebuild(st, after, dirty, changed);
-      for (const b of done.removed) stats.triangles -= trianglesOf(b);
-      for (const b of done.added) stats.triangles += trianglesOf(b);
-      stats.triangles = Math.round(stats.triangles);
       if (done.propFailures > 0) console.warn(`[lab3d] ${done.propFailures} prop(s) failed to build and were left out`);
       return {
         level,

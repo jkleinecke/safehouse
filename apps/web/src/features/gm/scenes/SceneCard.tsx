@@ -35,8 +35,6 @@ export interface SceneCardProps {
   summary: SceneSummary;
   /** Deep link to this scene's canvas. */
   gridHref: string;
-  /** Link to this scene in the 3D lab; built from the scene when absent. */
-  labHref?: string;
   busy?: SceneBusy;
   /** Non-null while the name is being edited. */
   renameDraft?: string | null;
@@ -201,14 +199,6 @@ export default function SceneCard(props: SceneCardProps) {
           title="Draw walls, paint fog and place tokens on the canvas"
         >
           open on the Map ↗
-        </Link>
-        <Link
-          to={props.labHref ?? `/c/${scene.campaignId}/lab/3d/${scene.id}`}
-          className={btn}
-          data-testid="open-in-lab3d"
-          title="Draw this scene in the 3D lab — a prototype, read-only, with a benchmark"
-        >
-          open in 3D lab ↗
         </Link>
         <span className="mono-label text-faint">
           walls, fog painting and tokens are canvas work — this screen is the list

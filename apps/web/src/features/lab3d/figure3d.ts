@@ -1,16 +1,16 @@
 /**
- * The 3D lab's figures: the same Sixth World people the isometric map draws
+ * The 3D map's figures: the same Sixth World people the isometric map draws
  * (`grid/stage/figure.ts`), built as real geometry instead of painted.
  *
  * Nothing about who a token is gets decided here. Its archetype, metatype,
  * kit and colours come from `lookFor(token)`, and where its joints are from
  * `skeleton(frame)` — the very bones the 2D figure is drawn over — so a
- * runner in the lab is the runner on the map: the same mohawk, the same
- * chrome arm, the same neon at the seams.
+ * runner in 3D is the runner in 2D: the same mohawk, the same chrome arm,
+ * the same neon at the seams.
  *
  * What changes is the drawing. The 2D figure fakes depth — it sorts its parts
  * back to front, shades each face by a fixed key light, inks an outline — and
- * the lab has a depth buffer, real lights and real shadows for all of that. So
+ * 3D has a depth buffer, real lights and real shadows for all of that. So
  * limbs are square beams through the joints, the torso an oriented frustum,
  * the head a low-poly sphere with the hair a larger one pulled back over it,
  * and every lit seam, visor and LED goes to the glow mesh, where the bloom
@@ -461,11 +461,11 @@ function buildCrate(b: MeshBuilder, look: FigureLook, size: number, base: number
 // ------------------------------------------------------------ the API
 
 /**
- * A token as a 3D figure: its feet at the origin, facing +x (before
- * `placeFigure` turns it), standing, crouched or prone as `token.pose` says —
- * or a crate, for a prop. Its own small meshes (a solid one that casts and
- * takes shadows, a glow one for its neon), sharing the lab's materials.
- * Free it with `disposeFigure`.
+ * A token as a 3D figure: its feet at the origin, facing +x (the figure pool,
+ * `grid/stage3d/figures.ts`, stands it on its square and turns it), standing,
+ * crouched or prone as `token.pose` says — or a crate, for a prop. Its own
+ * small meshes (a solid one that casts and takes shadows, a glow one for its
+ * neon), sharing the materials it is given. Free it with `disposeFigure`.
  */
 export function buildFigure(token: Token, materials: LabMaterials, ctx: FigureCtx): Group {
   const look = lookFor(token);
@@ -507,18 +507,7 @@ export function bloodPool(token: Token, ctx: Pick<FigureCtx, 'unitM'>): { x: num
   return { x: 0.02 * across, z: 0.05 * across, rx: 0.3 * across, rz: 0.2 * across };
 }
 
-/**
- * Stand a figure where its token is: at the token's centre on its floor
- * (x, level × storey, y), turned to `token.rotation` — degrees, 0 facing east
- * (+x), 90 south (+z).
- */
-export function placeFigure(group: Group, token: Token, ctx: FigureCtx): void {
-  group.position.set(token.x, (token.level ?? 0) * ctx.storey, token.y);
-  // three turns +x toward -z for a positive angle about y; the grid's 90° is +z.
-  group.rotation.set(0, -((token.rotation ?? 0) * Math.PI) / 180, 0);
-}
-
-/** Free a figure's geometry and take it out of the scene (the materials are the lab's). */
+/** Free a figure's geometry and take it out of the scene (the materials are the owner's). */
 export function disposeFigure(group: Group): void {
   group.traverse((o: Object3D) => {
     (o as Mesh).geometry?.dispose();

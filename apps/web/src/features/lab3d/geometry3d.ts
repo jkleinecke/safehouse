@@ -1,9 +1,9 @@
 /**
- * The 3D lab's geometry builder: everything the lab draws goes through one of
- * these, so a whole floor's walls, furniture and figures end up as a handful
- * of meshes — a draw call per material, not per sofa.
+ * The 3D map's geometry builder: everything the runtime draws goes through one
+ * of these, so a whole floor's walls, furniture and figures end up as a
+ * handful of meshes — a draw call per material, not per sofa.
  *
- * World units (the lab's one convention, shared by every builder here):
+ * World units (the 3D world's one convention, shared by every builder here):
  *   x = the grid's x (squares, east),
  *   z = the grid's y (squares, south),
  *   y = up, in squares — a storey is `storeyUnits(unitM)` squares tall.
@@ -384,7 +384,7 @@ export class MeshBuilder {
 }
 
 /**
- * The four shared materials every builder's output uses. One set per lab —
+ * The four shared materials every builder's output uses. One set per runtime —
  * and one more per map stage, for its figures (`FigurePool`).
  */
 export interface LabMaterials {
@@ -436,7 +436,7 @@ export function createLabMaterials(cover: CoverMode = 'full'): LabMaterials {
   };
 }
 
-/** Free a built chunk's geometry (materials are shared and freed by the lab). */
+/** Free a built chunk's geometry (materials are shared and freed by their owner). */
 export function disposeBuilt(built: BuiltMeshes): void {
   for (const o of built.all) {
     const g = (o as Mesh).geometry;

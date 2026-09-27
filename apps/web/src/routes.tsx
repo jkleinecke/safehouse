@@ -69,13 +69,7 @@ const RunsBoard = lazy(() => import('./features/codex/RunsBoard.js'));
 const BuildListPage = lazy(() => import('./features/build/BuildListPage.js'));
 const BuildPage = lazy(() => import('./features/build/BuildPage.js'));
 
-// The 3D lab: a prototype that draws one scene with three.js, to measure
-// whether the map should move to a real 3D engine. This `import()` is the only
-// way into `features/lab3d/`, so three.js and everything built on it ride
-// their own chunk and nobody who never opens the lab downloads a byte of it.
-const Lab3DPage = lazy(() => import('./features/lab3d/Lab3DPage.js'));
-
-/** Suspense boundary for a lazy route chunk (codex, builder, 3D lab) — one line while it arrives. */
+/** Suspense boundary for a lazy route chunk (codex, builder) — one line while it arrives. */
 function Chunk({ children }: { children: ReactNode }) {
   return (
     <Suspense
@@ -123,9 +117,6 @@ export const routes: RouteObject[] = [
       // decides who may read or write which build.
       { path: 'build', element: <Chunk><BuildListPage /></Chunk> },
       { path: 'build/:buildId', element: <Chunk><BuildPage /></Chunk> },
-      // GM-only (the page guards itself): the 3D lab, a picker without a scene.
-      { path: 'lab/3d', element: <Chunk><Lab3DPage /></Chunk> },
-      { path: 'lab/3d/:sceneId', element: <Chunk><Lab3DPage /></Chunk> },
       {
         path: 'gm',
         children: [

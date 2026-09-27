@@ -4,8 +4,8 @@
  *
  * It drives the runtime's one orthographic camera and the orbit controls'
  * `target` (the point the view looks at and turns about), and nothing else
- * moves them: the controls never listen to the DOM on a stage (the runtime is
- * made with `orbit: false`), and their per-frame update is switched off here,
+ * moves them: the runtime never attaches the controls to the canvas, so they
+ * never listen to the DOM, and their per-frame update is switched off here,
  * so every pan, zoom and turn is exactly the one asked for — no damping, no
  * glide, and no second opinion on the zoom.
  *
@@ -421,17 +421,6 @@ export class Camera3D implements ViewCamera {
   private azimuth(): number {
     const cam = this.rt.camera;
     return this.sph.setFromVector3(this.offset.copy(cam.position).sub(this.rt.controls.target)).theta;
-  }
-
-  /** Put the camera at bearing `theta` about the target, at the same distance and elevation. */
-  private setAzimuth(theta: number): void {
-    const cam = this.rt.camera;
-    const target = this.rt.controls.target;
-    this.sph.setFromVector3(this.offset.copy(cam.position).sub(target));
-    this.sph.theta = theta;
-    cam.position.setFromSpherical(this.sph).add(target);
-    cam.lookAt(target);
-    cam.updateMatrixWorld();
   }
 
   /**

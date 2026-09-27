@@ -1,8 +1,8 @@
 /**
- * The 3D lab's lighting: the rules' lamps as three.js light, at three prices.
+ * The 3D map's lighting: the rules' lamps as three.js light, at three prices.
  *
  * Every lamp comes from the rules light model (`lightSourcesFor`), with the
- * area it reaches already cut by walls (`lightPolygonsFor`), so the lab
+ * area it reaches already cut by walls (`lightPolygonsFor`), so the map
  * lights exactly the squares the dice read as lit. What changes with the
  * device is how much of that light is computed per pixel, per frame:
  *
@@ -49,7 +49,8 @@
  * shared by every lighting after (`variantsOf`). Either change would make
  * three compile every lit shader again, a stall of a good part of a second.
  *
- * Lab code: honest, not finished. Each approximation is named where it is made.
+ * It is honest about what it approximates: each approximation is named where
+ * it is made.
  */
 import {
   AdditiveBlending,
@@ -88,7 +89,7 @@ import type { BuiltWorld } from './world3d.js';
 /** How much of the lighting runs per frame: phones and TVs, laptops, gaming PCs. */
 export type LabQuality = 'low' | 'medium' | 'high';
 
-/** One lamp as the lab lights it: the rules' source, the area it reaches, and how high it hangs. */
+/** One lamp as the lighting lights it: the rules' source, the area it reaches, and how high it hangs. */
 export interface LabLightSource {
   /** The floor it is on. */
   level: number;
@@ -160,8 +161,6 @@ export interface LabLighting {
    * out of every reach of.
    */
   refreshShadows(near?: ShadowScope): void;
-  /** Lamps lit per pixel now, how many of those cast shadows, and how many are baked. */
-  stats(): { realtime: number; shadowed: number; baked: number };
   /**
    * The baked light on the floor at one point: the irradiance at (x, z) on
    * the top of floor `level` (world units, the world group's frame) from
@@ -349,7 +348,7 @@ const NEAR_MIN = 0.3;
 /** A parked pool light: off, and far out of the way. */
 const PARK_Y = -10000;
 /**
- * Varyings the lab's lit material uses besides shadow coordinates (view
+ * Varyings the world's lit material uses besides shadow coordinates (view
  * position, normal, vertex colour, baked light) plus one spare: each point
  * shadow costs one more, and some GPUs stop at 15.
  */
@@ -1132,7 +1131,7 @@ export function createLighting(ctx: {
   const storey = ctx.storey > 0 ? ctx.storey : world.storey;
 
   // Everything lives in one group that follows the world's frame, so the
-  // lamps stand where the world's vertices say, whatever the page does
+  // lamps stand where the world's vertices say, whatever the owner does
   // with the world group.
   const root = new Group();
   root.name = 'lab-lighting';
@@ -1471,8 +1470,9 @@ export function createLighting(ctx: {
         cam.near = L.near;
         cam.updateProjectionMatrix();
       }
-      // Drawn once where it lands, not every frame: nothing in the lab moves
-      // but the camera, and a shadow does not depend on the camera.
+      // Drawn once where it lands, not every frame: a shadow does not depend
+      // on the camera, and whatever else moves (a figure, a door leaf) asks
+      // for the maps it falls in to be drawn again (`refreshShadows`).
       light.shadow.autoUpdate = false;
       light.shadow.needsUpdate = true;
     }
@@ -1869,17 +1869,6 @@ export function createLighting(ctx: {
       for (const u of lowUs) u.keyDir.value.copy(KEY_DIR).transformDirection(root.matrix);
       if (slots.length === 0) return;
       for (const r of pick()) accumulate(r);
-    },
-
-    stats() {
-      let rt = 0;
-      let shadowed = 0;
-      for (const slot of slots) {
-        if (slot.lamp < 0) continue;
-        rt += 1;
-        if (slot.shadow) shadowed += 1;
-      }
-      return { realtime: rt, shadowed, baked: lamps.length - rt };
     },
 
     dispose() {

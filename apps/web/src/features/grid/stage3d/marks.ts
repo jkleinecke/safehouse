@@ -14,10 +14,10 @@
  * Each mesh has its own material, for its own opacity; they are all the same
  * shader, so none of them costs a compile.
  *
- * World units are the lab's: x = grid x, z = grid y, y up in squares. Marks
- * are handed over in grid units and lie just over the floor in view, among
- * the flat overlays (`FloorInk`'s lift). Like the 2D fx layer they lie over
- * the players' fog and shroud (`cover.ts`), never under them.
+ * World units are the 3D world's: x = grid x, z = grid y, y up in squares.
+ * Marks are handed over in grid units and lie just over the floor in view,
+ * among the flat overlays (`FloorInk`'s lift). Like the 2D fx layer they lie
+ * over the players' fog and shroud (`cover.ts`), never under them.
  */
 import { CircleGeometry, Group, Mesh, MeshBasicMaterial, RingGeometry, type BufferGeometry } from 'three';
 import type { Point } from '@safehouse/contracts';

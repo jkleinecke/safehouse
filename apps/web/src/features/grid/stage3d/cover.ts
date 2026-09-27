@@ -41,7 +41,7 @@
  * discard is compiled in only while a fog mask is shown (`discardOn`): a
  * shader with a `discard` in it gives up early depth testing, and on the
  * tile-based GPUs of phones and TV sticks its hidden-surface removal too,
- * whether or not the discard ever fires. The GM, the lab and a player on an
+ * whether or not the discard ever fires. The GM and a player on an
  * unfogged scene draw with programs that have none; a player's stage pays
  * one recompile of every covered program when its first fog arrives (none
  * at all when the fog is there from the first frame, which is the usual
@@ -88,7 +88,7 @@
  * turns the discard on or off — and new eyes are two matrices. One stage
  * draws a map at a time: the one that owns the cover (`claimCover`) writes
  * it, and puts it back to "nothing covered", seen with plain eyes, when it
- * goes (`releaseCover`). With nothing covered (the lab, a GM with no lens)
+ * goes (`releaseCover`). With nothing covered (a GM with no lens)
  * the patch skips its reads on a uniform branch. Beside the set, each
  * material has one uniform of its own: which of a vision mode's matrices it
  * takes, if any.

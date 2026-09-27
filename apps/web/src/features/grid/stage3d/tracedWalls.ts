@@ -471,9 +471,9 @@ export class TracedWalls {
 
   /**
    * Stand the built mesh on floor `floor`, and a copy of it on each floor
-   * below, as the runtime shows them (`below: 'dim'`). The copies share its
-   * geometry and materials, so they cost a draw and nothing to build; they
-   * are never picked.
+   * below, as the runtime shows them, under its shade (runtime3d's
+   * `applyFloorVisibility`). The copies share its geometry and materials, so
+   * they cost a draw and nothing to build; they are never picked.
    */
   private standFloors(floor: number, storey: number): void {
     this.inView.position.y = floor * storey;

@@ -1,33 +1,32 @@
 /**
  * The 3D map's runtime: one scene drawn by three.js into a host element.
  *
- * This is the part of the 3D lab that a real map stage can stand on. It owns
- * the WebGL renderer and its Low/Medium/High swap, the materials, the world
- * build, the figures, the lighting with its per-floor lamps, which floors are
- * shown and the shade over the ones below, the iso and top camera framing,
- * and the frame loop. The lab (`labView.ts`) is a thin shell over it that adds
- * the benchmark and the HUD numbers; the 3D map stage (`grid/stage3d/`, P1)
- * will be another.
+ * It is what the 3D map stage (`grid/stage3d/`) stands on, and that stage is
+ * its owner. It owns the WebGL renderer and its Low/Medium/High swap, the
+ * materials, the world build, the lighting with its per-floor lamps, which
+ * floors are shown and the shade over the ones below, the iso and top camera
+ * framing, and the frame loop. The stage keeps the rest: the figures, the
+ * pointer, and the camera's moves (`Camera3D`).
  *
  * Imperative on purpose, like the 2D stage: the owner pushes option changes in
  * through `update`, and everything per frame happens in here without touching
  * React.
  *
  * Rendering is on demand. A frame is drawn only when something asks for one:
- * an `update` that changed something, the orbit controls moving the camera,
- * the host being resized, a lighting re-pick falling due after the camera
- * moved, or a frame hook (`onBeforeFrame`) saying an animation is still
- * running. An idle view draws nothing, which matters on a TV left on for
- * hours and on a phone's battery. Anything that moves the camera or the scene
- * from outside calls `requestRender`.
+ * an `update` that changed something, the host being resized, a lighting
+ * re-pick falling due after the camera moved, or a frame hook
+ * (`onBeforeFrame`) saying an animation is still running. An idle view draws
+ * nothing, which matters on a TV left on for hours and on a phone's battery.
+ * Anything that moves the camera or the scene from outside calls
+ * `requestRender`.
  *
  * What lives where:
- *   - the WebGL renderer, the orbit controls and the lighting are bound to one
- *     canvas, and are rebuilt together when the quality crosses the Low line
- *     (antialiasing and the shadow map are fixed for a renderer's life, and
- *     Low turns both off);
- *   - the camera, the world meshes, the figures and the light list belong to
- *     the scene and survive a renderer swap untouched.
+ *   - the WebGL renderer and the lighting are bound to one canvas, and are
+ *     rebuilt together, the orbit controls (the camera rig) with them, when
+ *     the quality crosses the Low line (antialiasing and the shadow map are
+ *     fixed for a renderer's life, and Low turns both off);
+ *   - the camera, the world meshes and the light list belong to the scene and
+ *     survive a renderer swap untouched.
  *
  * What an `update` costs depends on what changed, and a scene arriving as a
  * new object is compared by content, not by identity (`sceneChange`). The
@@ -47,7 +46,7 @@
  *     the changed squares fall in are drawn again;
  *   - the world is rebuilt whole (and its lighting made afresh) only when
  *     what all of it is built from changed: the grid's size or scale, a floor
- *     added or removed, the palette's content, or the walls option;
+ *     added or removed, or the palette's content;
  *   - the lamps alone are refreshed on the same lighting (`setSources`: only
  *     lamps whose area changed are baked again) when the traced walls or
  *     doors or the GM's lights changed — only the lights the changed walls
@@ -64,9 +63,6 @@
  * Each door and tile edit logs what it cost at debug level (`[lab3d] edit`),
  * and the frame that shows it (`[lab3d] edit frame`); `info().lastEditMs`
  * keeps the last one's total.
- *
- * Nothing here is shared with the 2D map, and nothing in the 2D map changes
- * because this exists.
  */
 import {
   ACESFilmicToneMapping,
@@ -106,7 +102,6 @@ import {
 import type { TileDrawDef } from '../grid/types.js';
 import { applyCover } from '../grid/stage3d/cover.js';
 import { STOREY_M, createLabMaterials, storeyUnits, type LabMaterials } from './geometry3d.js';
-import { buildFigure, disposeFigure, placeFigure, type FigureCtx } from './figure3d.js';
 import { createLighting, type LabLighting, type LabLightSource, type LabQuality, type ShadowScope } from './lighting3d.js';
 import { UPPER_SLAB, buildWorld, type BuiltWorld, type WorldPatch } from './world3d.js';
 
@@ -118,28 +113,18 @@ export type { LabQuality, ShadowScope } from './lighting3d.js';
  * perspective lens was tried and dropped (2026-09-26 — not useful on a map).
  */
 export type LabCamera = 'iso' | 'top';
-/** What the floors below the one in view do: shaded (as the 2D map shades them), gone, or drawn as they are. */
-export type LabBelow = 'dim' | 'hide' | 'show';
-/** Walls at full height, or cut down so the rooms can be seen into (the world builder decides how). */
-export type LabWalls = 'full' | 'cut';
 
 /** Everything the runtime draws and how. `update` takes any subset of these. */
 export interface Runtime3DOptions {
   scene: Scene;
   /**
-   * The tokens on the map. Their carried lights light the scene whatever
-   * `figures` says; with `figures` on they are also stood up as figures.
+   * The tokens on the map, for the lights they carry: the runtime stands up
+   * no figures (the owner runs its own pool). A change to them costs nothing
+   * here unless a token carrying a light moved, turned or changed that
+   * light, and even then only the token lights are recomputed
+   * (`setSources`).
    */
   tokens: readonly Token[];
-  /**
-   * Whether the runtime builds a figure for each token itself (default
-   * true, as the lab wants: every change to the tokens builds them all
-   * again). A stage that runs its own figure pool passes false and still
-   * passes the tokens: then a change to them costs nothing here unless a
-   * token carrying a light moved, turned or changed that light, and even
-   * then only the token lights are recomputed (`setSources`).
-   */
-  figures?: boolean;
   defs: Readonly<Record<string, TileDrawDef>>;
   quality: LabQuality;
   /**
@@ -147,34 +132,24 @@ export interface Runtime3DOptions {
    * "the scene's own" into the scene's row before it gets here.
    */
   ambient: LightRow;
-  walls: LabWalls;
   /**
-   * The floor in view. Floors above it are hidden, with their figures and
-   * their lights; floors below it are drawn as `below` says.
+   * The floor in view. Floors above it are hidden, with their lights; floors
+   * below it are drawn under a shade (`applyFloorVisibility`).
    */
   floor: number;
-  below: LabBelow;
   camera: LabCamera;
 }
 
 /** How the runtime is wired to its owner, fixed for its life. */
 export interface Runtime3DSetup {
   /**
-   * Whether the orbit controls listen on the canvas (drag to turn, wheel to
-   * zoom), as the lab wants. Default true. A stage that runs its own pointer
-   * passes false: the controls then never touch the DOM and serve only as the
-   * camera rig, their `target` being the point the view looks at and turns
-   * about.
-   */
-  orbit?: boolean;
-  /**
    * Called once if the browser takes the WebGL context away (a driver reset,
    * too many contexts open) — never for the runtime's own renderer swaps or
    * its dispose. With this set the loss is final: the runtime draws nothing
    * after it, and the owner should dispose it and fall back to something that
-   * does not need the GPU context. Without it (the lab) the runtime waits out
-   * the loss instead: when the browser gives the context back (a phone tab
-   * brought back to the front), it redraws its shadows and carries on.
+   * does not need the GPU context. Without it the runtime waits out the loss
+   * instead: when the browser gives the context back (a phone tab brought
+   * back to the front), it redraws its shadows and carries on.
    */
   onContextLost?: () => void;
   /**
@@ -193,13 +168,6 @@ export interface Runtime3DSetup {
   onQualityFailed?: (error: unknown) => void;
 }
 
-/** Light counts as the lighting reports them. */
-export interface LabLightCounts {
-  realtime: number;
-  shadowed: number;
-  baked: number;
-}
-
 /** One drawn frame, as the hooks after it see it. */
 export interface FrameInfo {
   /** The frame's timestamp (the `requestAnimationFrame` clock, which is `performance.now()`'s). */
@@ -212,16 +180,15 @@ export interface FrameInfo {
   dt: number;
   /** CPU time spent in this frame, from its start through submitting the draw calls, hooks included. */
   cpu: number;
-  /** Draw calls and triangles in this frame, every pass included (shadow maps too). */
+  /** Draw calls in this frame, every pass included (shadow maps too). */
   drawCalls: number;
-  triangles: number;
 }
 
 /**
  * Runs at the start of each frame, before the controls and the render, with
  * the frame's timestamp and `FrameInfo.dt`. Return true while something it
- * drives is still moving (a figure walking to its square, a benchmark orbit):
- * the runtime then draws another frame after this one.
+ * drives is still moving (a figure walking to its square): the runtime then
+ * draws another frame after this one.
  */
 export type BeforeFrameHook = (now: number, dt: number) => boolean | void;
 /**
@@ -234,12 +201,8 @@ export type BeforeRenderHook = () => void;
 /** Runs after each frame is drawn, with what it cost. */
 export type AfterFrameHook = (frame: FrameInfo) => void;
 
-/** How the runtime is set up now, for a HUD or a report. */
+/** What the runtime's edits have cost so far, for the owner's edit log. */
 export interface Runtime3DInfo {
-  lights: LabLightCounts;
-  /** How long the world took to build, and how many triangles it came to (kept up to date as tiles change). */
-  worldBuildMs: number;
-  worldTriangles: number;
   /**
    * The last painted door or tile edit's whole `update`, in ms: the world's
    * part of it, the lights worked out again, and the lighting brought in
@@ -249,13 +212,6 @@ export interface Runtime3DInfo {
   lastEditMs: number;
   /** How many painted door and tile edits there have been, so an owner can tell whether an `update` made one. */
   edits: number;
-  /** The pixel ratio the renderer draws at, and the canvas size in CSS pixels. */
-  pixelRatio: number;
-  width: number;
-  height: number;
-  /** The GPU as WebGL names it (unmasked when the browser allows). */
-  gpu: string;
-  quality: LabQuality;
 }
 
 /** A running 3D runtime. Every method is a no-op after `dispose`. */
@@ -292,15 +248,8 @@ export interface Runtime3D {
    */
   precompile(object: Object3D): Promise<void>;
   /**
-   * Resolves once no quality switch is pending or under way: the new tier is
-   * in place, its shaders compiled and a frame drawn with it. At once when
-   * nothing is switching. Never rejects. (The lab's benchmark waits on it so
-   * it measures the tier it asked for.)
-   */
-  ready(): Promise<void>;
-  /**
-   * Let the orbit controls drive the camera, or stop them (a benchmark flying
-   * the camera itself). Holds across renderer swaps.
+   * Let the orbit controls drive the camera, or stop them (a stage that moves
+   * the camera itself, `Camera3D`). Holds across renderer swaps.
    */
   setOrbitEnabled(on: boolean): void;
   /**
@@ -375,23 +324,9 @@ const LIGHT_PICK_MS = 250;
  */
 const PICK_DRIFT_SQ = 1e-4;
 
-const NO_LIGHTS: LabLightCounts = { realtime: 0, shadowed: 0, baked: 0 };
-
 function pixelRatioFor(q: LabQuality): number {
   const dpr = typeof window !== 'undefined' && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
   return Math.min(dpr, q === 'low' ? 1 : 2);
-}
-
-/** The GPU's name: the unmasked renderer string when the browser offers it, else whatever WebGL says. */
-function gpuName(renderer: WebGLRenderer): string {
-  try {
-    const gl = renderer.getContext();
-    const ext = gl.getExtension('WEBGL_debug_renderer_info');
-    const name: unknown = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
-    return typeof name === 'string' && name.length > 0 ? name : 'unknown';
-  } catch {
-    return 'unknown';
-  }
 }
 
 /** Every floor index a scene has, ground first. */
@@ -814,16 +749,12 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
   let opts: Runtime3DOptions = { ...initial };
   let disposed = false;
   let contextLost = false;
-  const orbit = setup.orbit ?? true;
   let orbitEnabled = true;
 
   const scene3 = new ThreeScene();
   scene3.background = new Color(BACKGROUND);
   const materials: LabMaterials = createLabMaterials();
 
-  const figures = new Group();
-  figures.name = 'lab-figures';
-  scene3.add(figures);
   /** The shade over the floors below the one in view (`applyFloorVisibility`). */
   const shades = new Group();
   shades.name = 'lab-below-shade';
@@ -895,7 +826,6 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
 
   let renderer = makeRenderer(opts.quality);
   let rendererLow = opts.quality === 'low';
-  let gpu = gpuName(renderer);
   let controls = makeControls(new Vector3(opts.scene.grid.cols / 2, 0, opts.scene.grid.rows / 2));
 
   // --- building ------------------------------------------------------------
@@ -957,19 +887,23 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
   }
 
   /**
-   * Let a set of controls go. Controls made without an element (`orbit:
-   * false`) are left undisposed: three's `dispose` is `disconnect`, which
-   * reads the element unguarded and throws on null, and there is nothing
-   * connected to undo. That throw used to escape from a camera switch, a
-   * renderer swap and the teardown, leaving the renderer's context alive.
+   * Let a set of controls go. They are made without an element, so they are
+   * left undisposed: three's `dispose` is `disconnect`, which reads the
+   * element unguarded and throws on null, and there is nothing connected to
+   * undo. That throw used to escape from a camera switch, a renderer swap
+   * and the teardown, leaving the renderer's context alive.
    */
   function dropControls(c: OrbitControls): void {
     c.removeEventListener('change', requestRender);
-    if (c.domElement !== null) c.dispose();
   }
 
+  /**
+   * The orbit controls, as the camera rig only: made without an element, so
+   * they never listen to the DOM (the owner runs its own pointer), their
+   * `target` being the point the view looks at and turns about.
+   */
   function makeControls(target: Vector3): OrbitControls {
-    const c = new OrbitControls(camera, orbit ? renderer.domElement : null);
+    const c = new OrbitControls(camera, null);
     c.enableDamping = true;
     c.dampingFactor = 0.12;
     // Pan across the floor, the way a map is dragged, not across the screen.
@@ -980,7 +914,7 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
     c.minDistance = 2;
     c.maxDistance = sceneBox().radius * 8;
     // Pan and zoom only, never tilt or turn: the GM wants a fixed view
-    // (2026-09-26). The benchmark's orbit moves the camera itself.
+    // (2026-09-26).
     c.enableRotate = false;
     if (cameraKind === 'top') {
       c.minPolarAngle = TOP_TILT;
@@ -989,8 +923,8 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
     c.enabled = orbitEnabled;
     c.target.copy(target);
     c.update();
-    // Every camera move the controls make (a drag, the wheel, damping
-    // settling) asks for the frame that shows it.
+    // Every camera move the controls make (an `update` after the target
+    // moved, damping settling) asks for the frame that shows it.
     c.addEventListener('change', requestRender);
     return c;
   }
@@ -1005,7 +939,6 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
     }
     world = buildWorld(opts.scene, opts.defs, materials, {
       storeyM: STOREY_M,
-      walls: opts.walls,
       levels: floorIndices(opts.scene),
     });
     storey = world.storey;
@@ -1013,10 +946,10 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
   }
 
   /**
-   * The owner's tokens, each on a floor the scene has. One left on a floor
-   * the GM has since removed stands on the top floor, as `levelTiles` clamps
-   * it, rather than floating over the roof with its light on no floor at
-   * all. Figures and token lights both read this list, so they agree.
+   * The owner's tokens, each on a floor the scene has, for the token lights
+   * to read. One left on a floor the GM has since removed stands on the top
+   * floor, as `levelTiles` clamps it, rather than over the roof with its
+   * light on no floor at all.
    */
   function standTokens(): Token[] {
     const top = floorIndices(opts.scene).length - 1;
@@ -1025,24 +958,6 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
       const on = Math.min(Math.max(0, Number.isFinite(level) ? Math.floor(level) : 0), top);
       return on === level ? t : { ...t, level: on };
     });
-  }
-
-  /** Every token as a figure, or none when the owner runs its own (`figures: false`). */
-  function rebuildFigures(): void {
-    for (const child of [...figures.children]) disposeFigure(child as Group);
-    if (opts.figures === false) return;
-    const ctx: FigureCtx = { unitM: opts.scene.grid.unitM > 0 ? opts.scene.grid.unitM : 1, storey };
-    for (const token of tokens) {
-      // One token the figure builder cannot make sense of costs that figure, not the view.
-      try {
-        const g = buildFigure(token, materials, ctx);
-        placeFigure(g, token, ctx);
-        g.userData.level = token.level ?? 0;
-        figures.add(g);
-      } catch (err) {
-        console.warn(`[lab3d] token ${token.id} could not be built as a figure`, err);
-      }
-    }
   }
 
   /** Floor `level`'s sight model, made when first asked for and kept (`sightModels`). */
@@ -1319,10 +1234,9 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
     lastLightPick = performance.now();
   }
 
-  /** Is floor `level` drawn, with the floor in view and what is below it as they are? */
+  /** Is floor `level` drawn: the floor in view, or one below it (under its shade)? */
   function floorShown(level: number): boolean {
-    if (level > opts.floor) return false;
-    return level === opts.floor || opts.below !== 'hide';
+    return level <= opts.floor;
   }
 
   /**
@@ -1343,15 +1257,10 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
         for (const b of lv.built) for (const o of b.all) o.visible = show;
       }
     }
-    for (const f of figures.children) {
-      const level = typeof f.userData.level === 'number' ? f.userData.level : 0;
-      f.visible = floorShown(level);
-    }
     for (const child of [...shades.children]) {
       (child as Mesh).geometry.dispose();
       child.removeFromParent();
     }
-    if (opts.below !== 'dim') return;
     const cols = opts.scene.grid.cols;
     const rows = opts.scene.grid.rows;
     for (let level = 1; level <= opts.floor; level += 1) {
@@ -1414,7 +1323,6 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
     // waiting out is over (a final one, reported to the owner, is not).
     if (!setup.onContextLost) contextLost = false;
     rendererLow = q === 'low';
-    gpu = gpuName(renderer);
     controls = makeControls(target);
     rebuildLighting();
     applySize();
@@ -1438,7 +1346,6 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
   /** The tier asked for and not yet in place; the latest ask wins. */
   let pendingQuality: LabQuality | null = null;
   let switching = false;
-  const readyWaiters: Array<() => void> = [];
 
   function scheduleQuality(q: LabQuality): void {
     pendingQuality = q;
@@ -1480,7 +1387,6 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
     }
     switching = false;
     busy.hide();
-    for (const done of readyWaiters.splice(0)) done();
   }
 
   /** Put tier `q` in place: a new renderer across the Low line, the lighting re-tiered otherwise. */
@@ -1626,8 +1532,10 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
 
     let more = false;
     for (const hook of beforeHooks) if (hook(now, dt) === true) more = true;
-    // Damping keeps the camera gliding after a drag: `update` moves it and
-    // asks for the next frame (its change event) until it settles.
+    // With the controls on, damping keeps the camera gliding after a move
+    // they made: `update` moves it and asks for the next frame (its change
+    // event) until it settles. The map's camera turns them off and moves the
+    // view itself (`setOrbitEnabled`, `Camera3D`).
     if (orbitEnabled) controls.update();
     repickLamps(now);
     // What reads the light reads it as this frame is lit, the pick included.
@@ -1640,7 +1548,6 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
       dt,
       cpu: performance.now() - t0,
       drawCalls: renderer.info.render.calls,
-      triangles: renderer.info.render.triangles,
     };
     if (editFrame) {
       // What an edit costs past its `update`: this frame uploads the new
@@ -1662,7 +1569,6 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
     rebuildWorld();
     tokens = standTokens();
     tokenLights = tokenLightKey(tokens);
-    rebuildFigures();
     collectSources(true, true);
     applyFloorVisibility();
     rebuildLighting();
@@ -1684,7 +1590,6 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
   function teardown(): void {
     busy.dispose();
     pendingQuality = null;
-    for (const done of readyWaiters.splice(0)) done();
     if (raf !== 0) cancelAnimationFrame(raf);
     raf = 0;
     if (pickTimer !== null) clearTimeout(pickTimer);
@@ -1695,7 +1600,6 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
     dropControls(controls);
     lighting?.dispose();
     lighting = null;
-    for (const child of [...figures.children]) disposeFigure(child as Group);
     if (world) {
       world.dispose();
       world.group.removeFromParent();
@@ -1724,28 +1628,25 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
       // What changed, by what it costs (the header lists it).
       const change = next.scene === prev.scene ? SAME_SCENE : sceneChange(prev.scene, next.scene);
       const defsChanged = next.defs !== prev.defs && !sameData(next.defs, prev.defs);
-      const wallsChanged = next.walls !== prev.walls;
       const tokensChanged = next.tokens !== prev.tokens;
-      const floorsChanged = next.floor !== prev.floor || next.below !== prev.below;
-      const figuresOn = next.figures !== false;
-      const figuresToggled = figuresOn !== (prev.figures !== false);
+      const floorsChanged = next.floor !== prev.floor;
       const qualityChanged = next.quality !== prev.quality;
       const ambientChanged = next.ambient !== prev.ambient;
       const cameraChanged = next.camera !== prev.camera;
       const sceneSwapped = next.scene.id !== prev.scene.id;
 
-      // The world first (it sets the storey height), then what stands in it
-      // and the lights, which are measured in storeys. Painted tiles that
-      // changed on some floors build again only the chunks they reach, and a
-      // door that only opened or shut is flipped where it stands; anything
-      // else the whole world is built from builds it again, which drops the
-      // lighting (its bake lives on the old world's meshes). So does another
-      // scene arriving: all of it would be built again, chunk by chunk.
+      // The world first (it sets the storey height), then the lights, which
+      // are measured in storeys. Painted tiles that changed on some floors
+      // build again only the chunks they reach, and a door that only opened
+      // or shut is flipped where it stands; anything else the whole world is
+      // built from builds it again, which drops the lighting (its bake lives
+      // on the old world's meshes). So does another scene arriving: all of it
+      // would be built again, chunk by chunk.
       let rebuilt = false;
       let doorsFlipped = false;
       const patches: WorldPatch[] = [];
       const edited = change.tiles.length > 0 || change.doors.length > 0;
-      if (change.world || defsChanged || wallsChanged || (sceneSwapped && change.tiles.length > 0) || (edited && world === null)) {
+      if (change.world || defsChanged || (sceneSwapped && change.tiles.length > 0) || (edited && world === null)) {
         rebuildWorld();
         rebuilt = true;
       } else if (edited && world !== null) {
@@ -1781,8 +1682,6 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
         tokenLightsChanged = key !== tokenLights;
         tokenLights = key;
       }
-      const figuresRebuilt = figuresToggled || (figuresOn && (rebuilt || tokensChanged));
-      if (figuresRebuilt) rebuildFigures();
       // Painted tiles and doors change the sight of their own floor only, and
       // only at the squares that changed; the traced walls and doors and the
       // GM's lights stand on every floor. What is kept of each floor's light
@@ -1837,7 +1736,7 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
 
       // What is shown is settled before the lighting hears of any of it:
       // the lighting picks its real-time lamps from the top floor on show.
-      if (rebuilt || figuresRebuilt || floorsChanged) applyFloorVisibility();
+      if (rebuilt || floorsChanged) applyFloorVisibility();
       else if (patches.length > 0) showPatched(patches);
 
       // The lighting: made afresh with a new world or a new renderer (the
@@ -1861,9 +1760,10 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
         if (patches.length > 0) lighting.syncMeshes(shownSources(), patchScope(patches));
         else if (lightsChanged || floorsChanged) lighting.setSources(shownSources());
         // Shadows are drawn once, so anything that casts one and moved,
-        // came or went (a figure, a floor, a door leaf) asks for them again —
-        // a door leaf only for the lamps whose light reaches it.
-        if (figuresRebuilt || floorsChanged) lighting.refreshShadows();
+        // came or went (a floor, a door leaf) asks for them again — a door
+        // leaf only for the lamps whose light reaches it. The owner's figures
+        // ask for theirs (`refreshShadows`).
+        if (floorsChanged) lighting.refreshShadows();
         else if (doorsFlipped) lighting.refreshShadows(doorScope(change.doors));
       }
       if (!relit && ambientChanged) lighting?.setAmbient(next.ambient);
@@ -1891,7 +1791,6 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
         patches.length > 0 ||
         doorsFlipped ||
         lightsChanged ||
-        figuresRebuilt ||
         floorsChanged ||
         qualityChanged ||
         ambientChanged ||
@@ -1919,11 +1818,6 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
     doorOfHit(hit) {
       if (disposed || world === null) return null;
       return world.doorOfHit(opts.floor, hit);
-    },
-
-    ready() {
-      if (disposed || (!switching && pendingQuality === null)) return Promise.resolve();
-      return new Promise((resolve) => readyWaiters.push(resolve));
     },
 
     precompile(object) {
@@ -1976,18 +1870,7 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
     },
 
     info() {
-      return {
-        lights: lighting?.stats() ?? NO_LIGHTS,
-        worldBuildMs: world?.stats.buildMs ?? 0,
-        worldTriangles: world?.stats.triangles ?? 0,
-        lastEditMs,
-        edits,
-        pixelRatio: renderer.getPixelRatio(),
-        width,
-        height,
-        gpu,
-        quality: opts.quality,
-      };
+      return { lastEditMs, edits };
     },
 
     get options() {

@@ -1,5 +1,5 @@
 /**
- * The 3D lab's furniture: every prop design in `stage/props.ts`, built as
+ * The 3D map's furniture: every prop design in `stage/props.ts`, built as
  * geometry instead of painted.
  *
  * The eighty designs are written against `PropKit` — boxes, cylinders,

@@ -274,7 +274,7 @@ function floorOval(g: Graphics, rig: Rig, f: number, sd: number, long: number, w
   g.poly(pts).fill({ color, alpha });
 }
 
-/** A pose's joints in body units — shared with the 3D lab, which builds its figures from the same bones. */
+/** A pose's joints in body units — shared with the 3D map's figures (`lab3d/figure3d.ts`), which are built from the same bones. */
 export interface Skeleton {
   hip: V3;
   neck: V3;

@@ -10,10 +10,9 @@
  * What stands where:
  *   - the runtime draws the world — painted floors, walls, doors, props and
  *     their lighting — for the floor in view, with the floors below it under
- *     a shade. It builds no figures of its own (`figures: false`); it is
- *     still handed the tokens, so the lights they carry light the rooms —
- *     for anyone but the GM, only those the fog does not cover
- *     (`lightTokens`);
+ *     a shade. It builds no figures of its own; it is still handed the
+ *     tokens, so the lights they carry light the rooms — for anyone but the
+ *     GM, only those the fog does not cover (`lightTokens`);
  *   - `Camera3D` is the view, and the pointer's `ViewCamera`: isometric or
  *     top-down as the scene's projection says, orthographic both;
  *   - the same `PointerController` as the 2D map turns the DOM's pointer
@@ -282,13 +281,10 @@ function runtimeOptions(
   return {
     scene,
     tokens: lightTokens(state, fogged),
-    figures: false,
     defs,
     quality,
     ambient: ambientOf(scene),
-    walls: 'full',
     floor: clampLevel(scene, state.level ?? 0),
-    below: 'dim',
     camera: cameraKindOf(scene),
   };
 }
@@ -1469,7 +1465,6 @@ export async function createStage(opts: StageOptions, hooks: Stage3DHooks): Prom
     // The stage is made after the runtime; the quality callbacks reach it late.
     let stage: Stage3D | null = null;
     rt = createRuntime3D(root, runtimeOptions(opts.state, CATALOGUE_DEFS, hooks.quality, fogged), {
-      orbit: false,
       onContextLost: () => hooks.onLost('context lost'),
       onQualityApplied: (q) => stage?.qualityApplied(q),
       // Crossing the Low line makes a new WebGL context, which a browser at

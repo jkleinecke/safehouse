@@ -59,8 +59,8 @@
  * face the way it goes and keeps that facing when it stops. There is no walk
  * cycle yet (P6): figures glide and turn.
  *
- * World units are the lab's: x = grid x, z = grid y, y up in squares, floor
- * `L` at y = L × storey.
+ * World units are the 3D world's: x = grid x, z = grid y, y up in squares,
+ * floor `L` at y = L × storey.
  *
  * Two kinds of figure share the pool, kept apart by `sync`'s two lists:
  *   - the floor in view's own, which everything above is about;
@@ -258,8 +258,8 @@ function flatMaterial(color: number, opacity: number, cover: CoverMode = 'fog'):
 }
 
 /**
- * What one kind of figure is drawn with (see the module note): the lab's
- * materials for the body, their see-through twins for a ghost, the blob
+ * What one kind of figure is drawn with (see the module note): the runtime's
+ * materials (`LabMaterials`) for the body, their see-through twins for a ghost, the blob
  * shadow's and the blood pool's — all under one cover.
  */
 interface FigureLook {
@@ -508,7 +508,7 @@ export class FigurePool {
     this.fitXrayFloor();
   }
 
-  /** The ghost, blob and pool materials that go with a set of the lab's, under the cover that set wears. */
+  /** The ghost, blob and pool materials that go with a set of the runtime's, under the cover that set wears. */
   private lookOf(lab: LabMaterials): FigureLook {
     const cover = coverModeOf(lab.solid) ?? 'fog';
     const blob = new MeshBasicMaterial({
@@ -707,7 +707,7 @@ export class FigurePool {
 
   /**
    * Mark what draws the floor in view's figures as bodies (`cover.ts`
-   * `markBody`), so a vision mode gives them the bodies' colours: the lab's
+   * `markBody`), so a vision mode gives them the bodies' colours: the runtime's
    * set they are made from, which their lit bodies and the lighting's
    * stand-ins compile through, and whatever stands under their roots now —
    * body, ghost, silhouette, shadow, blood, rings, aura and portrait. The
