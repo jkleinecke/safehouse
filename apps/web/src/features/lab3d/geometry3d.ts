@@ -157,9 +157,21 @@ export class MeshBuilder {
       n = [-n[0], -n[1], -n[2]];
     }
     const buf = this.target(kind);
+    // Every triangle wound to face the way its normal does. Three's
+    // triangulator winds its triangles its own way, whatever order the
+    // points came in, and on a double-sided material a triangle wound
+    // against its normal is drawn as its back face — with the normal turned
+    // over, so a floor lit as if it faced the ground (2026-09-26: a black
+    // half-square along the inside of every diagonal wall on the security
+    // floor, and a dark spot on each diagonal wall's post).
+    const tri = (a: V3, b: V3, c: V3) => {
+      const f = cross(sub(b, a), sub(c, a));
+      if (f[0] * n[0] + f[1] * n[1] + f[2] * n[2] < 0) buf.push(a, c, b, n, color);
+      else buf.push(a, b, c, n, color);
+    };
     if (pts.length === 3 || pts.length === 4) {
       // The common case, and convex in every design that draws one.
-      for (let i = 1; i + 1 < pts.length; i += 1) buf.push(pts[0]!, pts[i]!, pts[i + 1]!, n, color);
+      for (let i = 1; i + 1 < pts.length; i += 1) tri(pts[0]!, pts[i]!, pts[i + 1]!);
       return;
     }
     // Project to the plane's dominant axes and let three triangulate.
@@ -176,10 +188,10 @@ export class MeshBuilder {
       tris = [];
     }
     if (tris.length === 0) {
-      for (let i = 1; i + 1 < pts.length; i += 1) buf.push(pts[0]!, pts[i]!, pts[i + 1]!, n, color);
+      for (let i = 1; i + 1 < pts.length; i += 1) tri(pts[0]!, pts[i]!, pts[i + 1]!);
       return;
     }
-    for (const [a, b, c] of tris) buf.push(pts[a!]!, pts[b!]!, pts[c!]!, n, color);
+    for (const [a, b, c] of tris) tri(pts[a!]!, pts[b!]!, pts[c!]!);
   }
 
   /** A quad a→b→c→d. */
