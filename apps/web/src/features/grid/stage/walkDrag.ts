@@ -34,11 +34,13 @@
  * A player's runner is walked on the map: the scene's grid, widened only to
  * take in the square the token stood on when the drag began (a runner the GM
  * left off the edge can still be walked back on). The pointer beyond the
- * map's edge pulls the runner to the edge and no further. That is not a new
- * rule so much as the server's own reach: its search for a way round a wall
- * covers the grid and the two ends of the move and nothing else, so a drag
- * that went off the map, round a sealed room outside it and back in would
- * be dropped where the server finds no way, and refused. Kept on the map,
+ * map's edge pulls the runner to the edge and no further. The server holds
+ * a player's move to the same ground (`onWalkGround`, so a crafted drop far
+ * off the map is refused before it is searched), and its search for a way
+ * round a wall covers the grid and the two ends of the move and nothing
+ * else, so a drag that went off the map, round a sealed room outside it and
+ * back in would be dropped where the server finds no way, and refused. Kept
+ * on the map,
  * every frame's walk runs one legal step at a time inside the ground the
  * server searches, from the square the token stands on — so whatever the
  * drag reaches, the server finds a way to, and accepts.
@@ -57,7 +59,14 @@
  * search: nothing here goes looking for a way round, it only walks.
  */
 import type { Point, Role } from '@safehouse/contracts';
-import { squareOf, walkToward, type WalkSceneInput, type WalkSquare } from '@safehouse/rules';
+import {
+  squareOf,
+  walkBounds,
+  walkToward,
+  type WalkBounds,
+  type WalkSceneInput,
+  type WalkSquare,
+} from '@safehouse/rules';
 
 /** One frame of a token drag, as `walkDragTarget` needs it. */
 export interface DragWalkInput {
@@ -106,34 +115,18 @@ export function walkDragTarget(input: DragWalkInput): Point {
 }
 
 /** A rectangle of squares, both ends included. */
-export interface SquareBounds {
-  minCol: number;
-  minRow: number;
-  maxCol: number;
-  maxRow: number;
-}
+export type SquareBounds = WalkBounds;
 
 /**
  * The ground a player's runner is walked on: the scene's grid, widened to
  * take in the square of `origin` (where the token stood when the drag
- * began). The rules search the same grid, widened by both ends of the move
- * (`canWalk`), so this is always inside what the server searches.
+ * began). The rules' own (`walkBounds`), because it is the server's too:
+ * the server refuses a player's move that ends off this ground
+ * (`onWalkGround`), and the rules search the same grid, widened by both
+ * ends of the move (`canWalk`), so a drag kept on it is always inside what
+ * the server accepts and searches.
  */
-export function walkBounds(scene: WalkSceneInput, origin: Point): SquareBounds {
-  const start = squareOf(origin);
-  const side = (n: number | undefined): number => (n !== undefined && Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0);
-  const cols = side(scene.grid?.cols);
-  const rows = side(scene.grid?.rows);
-  // A start that is not a number widens nothing (the walk refuses it anyway).
-  const col = Number.isFinite(start.col) ? start.col : 0;
-  const row = Number.isFinite(start.row) ? start.row : 0;
-  return {
-    minCol: Math.min(0, col),
-    minRow: Math.min(0, row),
-    maxCol: Math.max(cols - 1, col),
-    maxRow: Math.max(rows - 1, row),
-  };
-}
+export { walkBounds };
 
 /** `square`, moved the least way that puts it inside `b`. */
 function clampSquare(square: WalkSquare, b: SquareBounds): WalkSquare {

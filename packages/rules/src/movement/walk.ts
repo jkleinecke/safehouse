@@ -423,6 +423,55 @@ function gridSide(n: number | undefined): number {
   return n !== undefined && Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
 }
 
+/** A rectangle of squares, both ends included. */
+export interface WalkBounds {
+  minCol: number;
+  minRow: number;
+  maxCol: number;
+  maxRow: number;
+}
+
+/**
+ * The ground a player's runner walks on: the scene's grid, widened only to
+ * take in the square of `from`, where the token stands (so a runner the GM
+ * left off the edge of the map can still be walked back onto it).
+ *
+ * The map's edge is the one wall a player meets that nobody painted. The
+ * client's drag keeps a runner on this ground (`walkDragTarget`), and the
+ * server refuses a player's move that ends off it (`onWalkGround`), so a
+ * drop far off the map, crafted by hand, is refused before it is searched:
+ * without that, a move a million squares out behind a wall had the search
+ * in `canWalk` cover every square between (up to `MAX_SEARCH_SQUARES`, a
+ * third of a second of the server's time per request). With it, the search
+ * never covers more than the map and the square the runner stands in.
+ *
+ * A `from` that is not a number widens nothing (the walk refuses it anyway).
+ */
+export function walkBounds(scene: WalkSceneInput, from: Point): WalkBounds {
+  const start = squareOf(from);
+  const cols = gridSide(scene.grid?.cols);
+  const rows = gridSide(scene.grid?.rows);
+  const col = Number.isFinite(start.col) ? start.col : 0;
+  const row = Number.isFinite(start.row) ? start.row : 0;
+  return {
+    minCol: Math.min(0, col),
+    minRow: Math.min(0, row),
+    maxCol: Math.max(cols - 1, col),
+    maxRow: Math.max(rows - 1, row),
+  };
+}
+
+/**
+ * Is the square of `to` on the ground a runner standing at `from` walks on
+ * (`walkBounds`)? A `to` that is not a number is not on any ground.
+ */
+export function onWalkGround(scene: WalkSceneInput, from: Point, to: Point): boolean {
+  const goal = squareOf(to);
+  if (!Number.isFinite(goal.col) || !Number.isFinite(goal.row)) return false;
+  const b = walkBounds(scene, from);
+  return goal.col >= b.minCol && goal.col <= b.maxCol && goal.row >= b.minRow && goal.row <= b.maxRow;
+}
+
 /**
  * Is there any path of legal steps from `start` to `goal` over the squares
  * of `bounds`? A breadth-first search, over flat arrays because it visits

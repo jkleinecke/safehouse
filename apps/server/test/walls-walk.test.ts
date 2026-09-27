@@ -199,6 +199,8 @@ describe('a painted wall and a painted door', () => {
   });
 
   it('lets the runner in through the door once it is open, and round inside the room', async () => {
+    // The runner steps up to the door, and the player opens it from there.
+    expect((await drop(playerWs, sq(5, 1))).type).toBe('token.moved');
     const opened = await post(`/api/scenes/${sceneId}/doors`, player.token, { cell: '5,2', level: 0, op: 'open' });
     expect(opened.statusCode).toBe(200);
     const answer = await drop(playerWs, sq(3, 7));
@@ -213,6 +215,7 @@ describe('a painted wall and a painted door', () => {
   });
 
   it('shut again, it blocks again', async () => {
+    await place(sq(4, 1));
     const closed = await post(`/api/scenes/${sceneId}/doors`, player.token, { cell: '5,2', level: 0, op: 'close' });
     expect(closed.statusCode).toBe(200);
     await place(sq(5, 0));
@@ -229,6 +232,8 @@ describe('a traced wall and a traced door', () => {
     const res = await patch(`/api/tokens/${tokenId}`, player.token, sq(21, 3));
     expect(res.statusCode).toBe(403);
 
+    // Up to the door, which the player opens from there.
+    expect((await drop(playerWs, sq(22, 1))).type).toBe('token.moved');
     const opened = await post(`/api/scenes/${sceneId}/doors`, player.token, { doorId: 'd.room', op: 'open' });
     expect(opened.statusCode).toBe(200);
     expect((await drop(playerWs, sq(22, 4))).type).toBe('token.moved');
@@ -258,6 +263,69 @@ describe('a slanted painted wall', () => {
     expect(await stored()).toEqual(sq(26, 22));
     // Along its own side of the wall, a runner walks.
     expect((await drop(playerWs, sq(25, 22))).type).toBe('token.moved');
+  });
+});
+
+describe('the map’s edge', () => {
+  /*
+   * The walls review (2026-09-27): a drop far off the map made the server
+   * search every square between the map and it. A player's move now has to
+   * end on the map (widened only to take in where the runner stands), and
+   * that is asked before any search, so the answer is the edge's own.
+   */
+  const OFF_MAP = { code: 'blocked', message: "Your runner can't leave the map" };
+
+  it('refuses a player’s move off the map, near or far, over the socket and by PATCH', async () => {
+    await place(sq(5, 0));
+    const step = await drop(playerWs, sq(5, -1));
+    expect(step.type).toBe('error');
+    expect(step.payload).toEqual(OFF_MAP);
+    expect(await stored()).toEqual(sq(5, 0));
+    // Along an open row, a hundred thousand squares out: a walk with no wall
+    // in the way, which the search would have taken. Refused at the edge.
+    const far = await drop(playerWs, { x: 100_000.5, y: 0.5 });
+    expect(far.type).toBe('error');
+    expect(far.payload).toEqual(OFF_MAP);
+    // From inside the shut room, to a million squares out: refused at the
+    // edge, not by the wall, so no search was ever made.
+    await place(sq(5, 5));
+    const patched = await patch(`/api/tokens/${tokenId}`, player.token, { x: 1_000_000.5, y: 5.5 });
+    expect(patched.statusCode).toBe(403);
+    expect(patched.json()).toMatchObject({ error: OFF_MAP });
+    expect(await stored()).toEqual(sq(5, 5));
+  });
+
+  it('never relays a player’s drag frame off the map', async () => {
+    await place(sq(12, 12));
+    await settle(150);
+    const mark = gmWs.frames.length;
+    playerWs.send({ cmd: 'token.drag', tokenId, ...sq(12, -3) });
+    await settle(150);
+    playerWs.send({ cmd: 'token.drag', tokenId, ...sq(12, 0) });
+    const frame = await nextAfter(gmWs, mark, (f) => f.type === 'token.dragging');
+    expect(frame.payload).toMatchObject({ tokenId, ...sq(12, 0) });
+    await settle();
+    const frames = gmWs.frames.slice(mark).filter((f) => f.type === 'token.dragging');
+    expect(frames.map((f) => f.payload)).toEqual([expect.objectContaining(sq(12, 0))]);
+  });
+
+  it('lets a runner the GM left off the map walk back onto it, and no further out', async () => {
+    await place(sq(-3, 12));
+    expect((await drop(playerWs, sq(1, 12))).type).toBe('token.moved');
+    await place(sq(-3, 12));
+    // Still on the ground it stands on: the map widened to take in its square.
+    expect((await drop(playerWs, sq(-2, 12))).type).toBe('token.moved');
+    // From there, further out is off it.
+    const out = await drop(playerWs, sq(-4, 12));
+    expect(out.type).toBe('error');
+    expect(out.payload).toEqual(OFF_MAP);
+    expect(await stored()).toEqual(sq(-2, 12));
+  });
+
+  it('never stops the GM', async () => {
+    await place(sq(5, 0));
+    expect((await drop(gmWs, sq(5, -4))).type).toBe('token.moved');
+    expect((await patch(`/api/tokens/${tokenId}`, boot.gmToken, { x: 1_000_000.5, y: 0.5 })).statusCode).toBe(200);
   });
 });
 

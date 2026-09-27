@@ -44,6 +44,7 @@ import {
   TileStrokeBuffer,
 } from './api.js';
 import { GridCommands } from './commands.js';
+import { DOOR_REACH_NOTICE, canWorkDoor, type DoorRef } from './doorReach.js';
 import { metersBetween, metricsFor, rectPolygon, rollScatter } from './geometry.js';
 import { newId } from './gm/ui.js';
 import PrepPlacing from './hud/PrepPlacing.js';
@@ -232,12 +233,37 @@ export default function GridPage() {
    * stroke ends. See `TileStrokeBuffer` for what it is defending against.
    */
   const [tileNotice, setTileNotice] = useState<string | null>(null);
-  // What the door said back (FR9.24): "that door is locked" is the whole point.
+  // What the door said back (FR9.24): "That door is locked" is the whole
+  // point. And a runner too far from the door to reach it (the GM's rule,
+  // 2026-09-27) is told so: by the map, before it asks (`canWorkDoor`), or by
+  // the server, if the runner moved away while it was asking.
   const [doorNotice, setDoorNotice] = useState<string | null>(null);
-  const showDoorNotice = useCallback((e: unknown) => {
-    setDoorNotice(e instanceof ApiError && e.code === 'door_locked' ? 'that door is locked' : 'the door did not move');
-    window.setTimeout(() => setDoorNotice(null), 2000);
+  const doorNoticeTimer = useRef<number | null>(null);
+  const tellDoor = useCallback((text: string) => {
+    setDoorNotice(text);
+    // A second word while the first is still showing keeps it up for the
+    // full time again, rather than the first one's timer taking it down.
+    if (doorNoticeTimer.current !== null) window.clearTimeout(doorNoticeTimer.current);
+    doorNoticeTimer.current = window.setTimeout(() => {
+      doorNoticeTimer.current = null;
+      setDoorNotice(null);
+    }, 2000);
   }, []);
+  useEffect(
+    () => () => {
+      if (doorNoticeTimer.current !== null) window.clearTimeout(doorNoticeTimer.current);
+    },
+    [],
+  );
+  const showDoorNotice = useCallback(
+    (e: unknown) => {
+      const code = e instanceof ApiError ? e.code : null;
+      if (code === 'door_locked') tellDoor('That door is locked');
+      else if (code === 'door_out_of_reach') tellDoor(DOOR_REACH_NOTICE);
+      else tellDoor('The door did not move');
+    },
+    [tellDoor],
+  );
   const paintRef = useRef(paintTiles.mutateAsync);
   paintRef.current = paintTiles.mutateAsync;
   const strokeRef = useRef<TileStrokeBuffer | null>(null);
@@ -487,6 +513,20 @@ export default function GridPage() {
   // about (the server's `blocked` names no token, since it answers the
   // sender's own last move).
   const lastDropRef = useRef<string | null>(null);
+  // Whether this viewer may work a door from where their runner stands
+  // (`canWorkDoor`: always for the GM, beside it for a player); a door out
+  // of reach says so. The tokens are read through their ref, so a runner's
+  // every step does not rebuild the stage callbacks.
+  const reachable = useCallback(
+    (door: DoorRef): boolean => {
+      if (!scene) return false;
+      const tokens = tokensRef.current;
+      const ok = canWorkDoor({ role: viewer.role, scene, tokens, myCharacterId: myCharacterId ?? null, door });
+      if (!ok) tellDoor(DOOR_REACH_NOTICE);
+      return ok;
+    },
+    [scene, viewer.role, myCharacterId, tellDoor],
+  );
 
   const callbacks: StageCallbacks = useMemo(
     () => ({
@@ -510,6 +550,10 @@ export default function GridPage() {
         if (!scene) return;
         const door = scene.geometry.doors.find((d) => d.id === doorId);
         if (!door) return;
+        // A player works a door only from beside it (the GM's rule,
+        // 2026-09-27): one out of their runner's reach says so, and nothing
+        // is sent. The GM reaches every door.
+        if (!reachable({ doorId })) return;
         // A player's hand on the handle goes to the server, which knows the
         // lock (FR9.24); the GM's goes the same way, so there is one path —
         // and for the GM the door opens in the inspector too, where the lock
@@ -519,6 +563,7 @@ export default function GridPage() {
       },
       onTileDoorToggle: (cell, level) => {
         if (!scene) return;
+        if (!reachable({ cell, level })) return;
         const open = tileDoorOpen(scene, level, cell);
         doorOp.mutate({ cell, level, op: open ? 'close' : 'open' }, { onError: showDoorNotice });
       },
@@ -968,7 +1013,7 @@ export default function GridPage() {
         s.openGmPanel();
       },
     }),
-    [commands, scene, isGm, patchGeometry, tilesets, doorOp, showDoorNotice, paintMutate, paintBatch],
+    [commands, scene, isGm, patchGeometry, tilesets, doorOp, showDoorNotice, reachable, paintMutate, paintBatch],
   );
 
   const urlFor = useCallback((id: string) => fileUrl(id), []);

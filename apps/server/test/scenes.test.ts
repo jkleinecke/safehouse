@@ -1168,7 +1168,7 @@ describe('sightlines: the party’s pooled sight unmasks the map, and the server
     // no party memory written into the fog, no sight event, nobody arriving
     // or leaving, only the move and the door the table always heard.
     const since = await mark();
-    for (const x of [3.5, 2.5]) {
+    const step = async (x: number) => {
       const moved = await t.app.inject({
         method: 'PATCH',
         url: `/api/tokens/${rookTokenId}`,
@@ -1176,10 +1176,14 @@ describe('sightlines: the party’s pooled sight unmasks the map, and the server
         payload: { x, y: 4.5 },
       });
       expect(moved.statusCode).toBe(200);
-    }
+    };
+    // Up to the door (a player works a door only from beside it), open it
+    // and shut it again, and home.
+    for (const x of [3.5, 4.5]) await step(x);
     for (const op of ['open', 'close'] as const) {
       expect((await post(`/api/scenes/${sightSceneId}/doors`, phoneToken, { cell: '5,4', level: 0, op })).statusCode).toBe(200);
     }
+    await step(2.5);
 
     expect((await view(sb.gmToken)).fog).not.toHaveProperty('sight');
     for (const { role, token } of viewers) {
@@ -1191,7 +1195,7 @@ describe('sightlines: the party’s pooled sight unmasks the map, and the server
     const events = await tableSince(since);
     expect(events.filter((e) => e.type === 'fog.updated')).toEqual([]);
     expect(events.filter((e) => e.type === 'token.added' || e.type === 'token.removed')).toEqual([]);
-    expect(events.filter((e) => e.type === 'token.moved').map((e) => e.payload['x'])).toEqual([3.5, 2.5]);
+    expect(events.filter((e) => e.type === 'token.moved').map((e) => e.payload['x'])).toEqual([3.5, 4.5, 2.5]);
   });
 
   it('switched on, shows the table the runner’s room and its walls, and nothing through the shut door', async () => {
@@ -1233,9 +1237,15 @@ describe('sightlines: the party’s pooled sight unmasks the map, and the server
   });
 
   it('delivers the guard behind the door as a NEW token the moment the runner opens it', async () => {
+    // He steps up to the shut door, which shows him nothing new...
+    const walk = (x: number) =>
+      t.app.inject({ method: 'PATCH', url: `/api/tokens/${rookTokenId}`, headers: as(phoneToken), payload: { x, y: 4.5 } });
+    expect((await walk(4.5)).statusCode).toBe(200);
     const since = await mark();
     const opened = await post(`/api/scenes/${sightSceneId}/doors`, phoneToken, { cell: '5,4', level: 0, op: 'open' });
     expect(opened.statusCode).toBe(200);
+    // ...and back to where he stood, looking through the open doorway.
+    expect((await walk(2.5)).statusCode).toBe(200);
 
     const events = await tableSince(since);
     const sightAt = events.findIndex((e) => e.type === 'fog.updated' && e.payload['op'] === 'sight');
@@ -2121,6 +2131,15 @@ describe('the secrecy sweep: what the map withholds, no other channel carries (P
     const crate = await post(`/api/scenes/${houseId}/tokens`, sw.gmToken, { source: 'prop', name: CRATE2, x: 1.4375, y: 4.5625 });
     expect(crate.statusCode).toBe(201);
     const crate2Id = (crate.json() as { token: { id: string } }).token.id;
+    // Wren at the door, whose player opens it (a player works a door only
+    // with a runner beside it).
+    const atDoor = await post(`/api/scenes/${houseId}/tokens`, sw.gmToken, {
+      source: 'character',
+      sourceId: runnerCharacterId,
+      x: 5.5,
+      y: 1.5,
+    });
+    expect(atDoor.statusCode).toBe(201);
     const gmRead = async () =>
       (
         (await t.app.inject({ method: 'GET', url: `/api/scenes/${houseId}`, headers: as(sw.gmToken) })).json() as {

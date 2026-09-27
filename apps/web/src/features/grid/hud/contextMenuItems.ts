@@ -12,6 +12,7 @@
 import type { FogRevealAs, Point, Scene, Token, TokenLight, TokenPose } from '@safehouse/contracts';
 import { regionFashion, sceneLevels, type RegionFashion } from '@safehouse/rules';
 import type { DoorOpInput } from '../api.js';
+import { canWorkDoor, type DoorRef } from '../doorReach.js';
 import { pointInPolygon } from '../geometry.js';
 import type { ContextTarget } from '../types.js';
 
@@ -236,10 +237,28 @@ function floorItems(input: ContextMenuInput): MenuItem[] {
   return items;
 }
 
+/**
+ * Whether this viewer may work the door the menu is about, from where their
+ * runner stands (`canWorkDoor`: the GM's rule, 2026-09-27, that a player
+ * opens or shuts a door only with their runner next to it). A player's menu
+ * on a door out of reach is the floor's menu instead: the door's verbs are
+ * left out, and a ping on it is still there to say "look at this door".
+ */
+function mayWorkDoor(input: ContextMenuInput, door: DoorRef): boolean {
+  return canWorkDoor({
+    role: input.role,
+    scene: input.scene,
+    tokens: input.tokens,
+    myCharacterId: input.myCharacterId,
+    door,
+  });
+}
+
 function doorItems(input: ContextMenuInput, doorId: string): MenuItem[] {
   const { role, actions, scene } = input;
   const door = scene.geometry.doors.find((d) => d.id === doorId);
   if (!door) return [];
+  if (!mayWorkDoor(input, { doorId })) return floorItems(input);
   const items: MenuItem[] = [
     {
       id: 'door-toggle',
@@ -263,6 +282,7 @@ function tileDoorItems(input: ContextMenuInput, cell: string, level: number): Me
   const { role, actions, scene } = input;
   const state = tileDoorState(scene, level, cell);
   if (!state) return [];
+  if (!mayWorkDoor(input, { cell, level })) return floorItems(input);
   const items: MenuItem[] = [
     {
       id: 'door-toggle',

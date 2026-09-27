@@ -21,9 +21,15 @@
  *
  * Walls (the GM's rule, 2026-09-27): a player's runner never passes a wall
  * or a closed door. A move a player makes, over the socket or by PATCH, is
- * stored only when the rules can walk it from where the token stands
- * (`canWalk`, rules movement/walk.ts), and a drag frame that could not be
- * walked is never relayed. The GM is never asked. See `playerMayWalk`.
+ * stored only when it ends on the map and the rules can walk it from where
+ * the token stands (`onWalkGround`, `canWalk`, rules movement/walk.ts), and
+ * a drag frame that could not be walked is never relayed. The GM is never
+ * asked. See `playerWalkRefusal`.
+ *
+ * Doors (the GM's rule, 2026-09-27): a player opens or shuts a door only
+ * with a runner of theirs standing next to it; the GM from anywhere. A
+ * player too far away is told so, and nothing about the door's lock
+ * (`doorRefusal`, services/doors.ts; `reachesDoor`, rules movement/reach.ts).
  *
  * Sightlines (P6): every committed write that can move the party's sight (a
  * runner's move, a door, a light, paint, a scene PATCH, a fog op, the scene
@@ -40,8 +46,10 @@ import { z } from 'zod';
 import {
   TILESETS,
   canWalk,
+  doorPlaceOf,
   layerOf,
   migrateTileLayer,
+  onWalkGround,
   parseCellKey,
   sceneLevels,
   tileById,
@@ -83,7 +91,7 @@ import {
 import type { EventTx } from '../hub.js';
 import { checkSceneFileHeader, exportScene, importScene, unpackFiles } from '../services/scene-transfer.js';
 import { emitFogProximity } from '../fixer/proximity.js';
-import { applyDoorOp, doorRefusal, tileDoorState, withTileDoor, withTracedDoor } from '../services/doors.js';
+import { applyDoorOp, doorRefusal, runnersReach, tileDoorState, withTileDoor, withTracedDoor } from '../services/doors.js';
 import { affectsSight, recomputeSight } from '../services/sight.js';
 import { runFogOp } from '../services/fogOps.js';
 import {
@@ -105,6 +113,24 @@ import {
 
 /** ~15 Hz per token for interim drag relay (§11 "throttled"). */
 const DRAG_INTERVAL_MS = 66;
+
+/** Why a player's move was refused: the socket's error frame, and the PATCH's 403. */
+interface WalkRefusal {
+  readonly code: 'blocked';
+  readonly message: string;
+}
+
+/** What a player is told when a wall is in the way. */
+const BLOCKED: WalkRefusal = { code: 'blocked', message: "Your runner can't go through walls" };
+
+/**
+ * What a player is told when a move would take their runner off the map
+ * (`onWalkGround`). The same code as a wall's, because to a runner the
+ * map's edge is one: a client refused either lets the figure go straight
+ * back to where it stands. The client's drag never goes past the edge, so
+ * only a move made by hand is ever told this.
+ */
+const OFF_MAP: WalkRefusal = { code: 'blocked', message: "Your runner can't leave the map" };
 
 function parseBody<T extends z.ZodType>(schema: T, body: unknown): z.output<T> {
   const parsed = schema.safeParse(body ?? {});
@@ -414,18 +440,32 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
    * is the GM's, from the GM's screen (`useStairs`), and stays so; a player
    * move is judged on the floor the token already stands on.
    *
+   * And a player's move ends on the map (`onWalkGround`): the scene's grid,
+   * widened only to take in the square the runner stands in, so a runner the
+   * GM left off the edge can still be walked back on. The client's drag
+   * already keeps a runner there (`walkDragTarget`), so this refuses only a
+   * move crafted by hand, and it is asked FIRST, before any search: a drop a
+   * million squares off the map behind a wall would otherwise have `canWalk`
+   * search every square between (the walls review, 2026-09-27: up to four
+   * million squares, a third of a second of the server's time, per request
+   * and unthrottled). Kept on the map, no search covers more than the map
+   * and the square the runner stands in.
+   *
    * `here` is the scene as the caller read it: locked, inside the move's own
    * transaction, for a move that is stored, so a door shut a moment ago is
    * shut to it; as read for the frame, for a drag frame that is only relayed.
    * And `token` is where the runner stands: for a move that is stored, read
-   * locked inside that same transaction too (`playerMoveJudged`).
+   * locked inside that same transaction too (`playerMoveJudged`). Answers
+   * null for a move the runner may make, else what the player is told.
    */
-  function playerMayWalk(here: Scene, token: TokenRow, to: { x: number; y: number }): boolean {
-    return canWalk(here, token.level, { x: token.x, y: token.y }, to, { size: token.size });
+  function playerWalkRefusal(here: Scene, token: TokenRow, to: { x: number; y: number }): WalkRefusal | null {
+    const from = { x: token.x, y: token.y };
+    if (!onWalkGround(here, from, to)) return OFF_MAP;
+    return canWalk(here, token.level, from, to, { size: token.size }) ? null : BLOCKED;
   }
 
   /**
-   * `playerMayWalk` for a player's move about to be STORED, inside its own
+   * `playerWalkRefusal` for a player's move about to be STORED, inside its own
    * transaction: judged from where the token stands now and against the
    * walls as they stand now, both read locked, the token first and then the
    * scene (the order every token write takes them in: `tokenRow`).
@@ -439,21 +479,19 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
    * scene's lock before the token's, as a GM's move of the same token takes
    * them the other way round, was two transactions each waiting on the
    * other. A missing axis (`to.x` or `to.y`) stays where the token stands.
-   * Answers the token as it stands, and whether the move may be stored.
+   * Answers the token as it stands, and why the move may not be stored
+   * (null when it may).
    */
   async function playerMoveJudged(
     tx: EventTx,
     sceneId: string,
     tokenId: string,
     to: { x?: number | undefined; y?: number | undefined },
-  ): Promise<{ stood: TokenRow; walkable: boolean }> {
+  ): Promise<{ stood: TokenRow; refusal: WalkRefusal | null }> {
     const stood = await svc.withDb(tx.db).tokenRow(tokenId, { lock: true });
     const here = serializeScene(await lockedScene(tx, sceneId));
-    return { stood, walkable: playerMayWalk(here, stood, { x: to.x ?? stood.x, y: to.y ?? stood.y }) };
+    return { stood, refusal: playerWalkRefusal(here, stood, { x: to.x ?? stood.x, y: to.y ?? stood.y }) };
   }
-
-  /** What a player is told when a wall is in the way. */
-  const BLOCKED = { code: 'blocked', message: "Your runner can't go through walls" } as const;
 
   /** Load a scene, check campaign binding, and report whether the caller is GM. */
   async function openScene(
@@ -682,15 +720,28 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
    * A door, opened or shut or locked (FR9.24).
    *
    * The one scene write a PLAYER may make: their own screen, their own hand
-   * on the handle, no asking. A locked door refuses them by name — "that
-   * door is locked" is what the runner learns and what the table should
-   * hear — and the lock itself is the GM's. Traced doors by id; painted ones
-   * by floor and cell. Both land as a `scene.updated`, so every device
-   * re-reads the scene and a sightline through an open door is a sightline.
+   * on the handle, no asking — as long as the hand is there. THE GM'S RULE
+   * (2026-09-27): "a player can open or close a door only when their runner
+   * is standing next to it; the GM can from anywhere." So a player's op is
+   * judged from where the runners they control stand on this scene, read
+   * inside the op's transaction (`runnersOf`, `runnersReach`: a painted door
+   * from its own floor, a traced one from any). A locked door refuses a
+   * runner at its handle by name — "that door is locked" is what the runner
+   * learns and what the table should hear — and the lock itself is the
+   * GM's. A player too far away is told only that (`DOOR_OUT_OF_REACH`),
+   * the same words for a locked door, an open one and one that is not there,
+   * so the doors cannot be probed from across the map (`doorRefusal` says
+   * the order). Traced doors by id; painted ones by floor and cell. Both
+   * land as a `scene.updated`, so every device re-reads the scene and a
+   * sightline through an open door is a sightline.
+   *
+   * What a player is answered is the door's `open`, never its `locked`: a
+   * runner who shuts a door the GM had locked standing open learns it is
+   * shut, not that it was locked.
    */
   app.post('/api/scenes/:id/doors', async (req) => {
     const { id } = req.params as { id: string };
-    const { scene, gm } = await openScene(req, id);
+    const { scene, gm, auth } = await openScene(req, id);
     const body = parseBody(DoorOpBody, req.body);
     const result = await app.hub.atomic(scene.campaignId, async (tx) => {
       // The door, and the rest of the scene written back around it, read
@@ -705,11 +756,20 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       const fresh = await lockedScene(tx, id);
       if (!gm && !sceneOnTable(fresh)) throw httpError(404, 'not_found', 'unknown scene');
       const current = serializeScene(fresh);
+      // Where the caller's runners stand, for a player (the GM reaches every
+      // door from anywhere, and nobody else controls a runner: a table
+      // display or an observer is next to no door).
+      const runners = !gm && auth.role === 'player' ? await svc.withDb(tx.db).runnersOf(id, auth.userId) : [];
+      const place = doorPlaceOf(current, body);
+      const nextTo = !gm && runnersReach(runners, place);
+      // What a player is told of a door: whether it is open. Its lock is
+      // the GM's (`sceneForViewer`), and stays off this answer too.
+      const told = (state: { open: boolean; locked: boolean }) => (gm ? state : { open: state.open });
       if (body.doorId !== undefined) {
-        const door = current.geometry.doors.find((d) => d.id === body.doorId);
-        if (!door) throw httpError(404, 'not_found', 'no such door');
-        const refusal = doorRefusal(gm, door, body.op);
-        if (refusal) throw httpError(403, refusal.code, refusal.message);
+        const door = current.geometry.doors.find((d) => d.id === body.doorId) ?? null;
+        const refusal = doorRefusal(gm, door, body.op, nextTo);
+        if (refusal) throw httpError(refusal.status, refusal.code, refusal.message);
+        if (door === null) throw httpError(404, 'not_found', 'no such door');
         const state = applyDoorOp(door, body.op);
         await tx.emit({ type: 'scene.updated', payload: { sceneId: id, changed: ['geometry'] } });
         await svc.withDb(tx.db).updateScene(fresh, { geometry: withTracedDoor(current.geometry, door.id, state) });
@@ -717,21 +777,26 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         // the room beyond is seen, and whoever stands in it arrives on the
         // table with the same commit; shut, they leave it.
         await recomputeSight(tx, id);
-        return { door: { id: door.id, ...state } };
+        return { door: { id: door.id, ...told(state) } };
       }
       if (body.cell === undefined) throw httpError(400, 'bad_request', 'name a door: doorId, or cell (and level)');
       const ref = { level: body.level, cell: body.cell };
       const found = tileDoorState(current, ref);
+      const refusal = doorRefusal(gm, found, body.op, nextTo);
+      if (refusal) {
+        // A door that is not there (to the GM, or to a runner beside the
+        // cell) is named as a painted one always was.
+        if (refusal.status === 404) throw httpError(404, 'not_found', 'no door painted in that cell');
+        throw httpError(refusal.status, refusal.code, refusal.message);
+      }
       if (found === null) throw httpError(404, 'not_found', 'no door painted in that cell');
-      const refusal = doorRefusal(gm, found, body.op);
-      if (refusal) throw httpError(403, refusal.code, refusal.message);
       const state = applyDoorOp(found, body.op);
       const write = withTileDoor(current, ref, state);
       if (write === null) throw httpError(404, 'not_found', 'no door painted in that cell');
       await tx.emit({ type: 'scene.updated', payload: { sceneId: id, changed: ['tiles'] } });
       await svc.withDb(tx.db).updateScene(fresh, write);
       await recomputeSight(tx, id);
-      return { door: { cell: body.cell, level: body.level, ...state } };
+      return { door: { cell: ref.cell, level: ref.level, ...told(state) } };
     });
     return result;
   });
@@ -832,12 +897,12 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     const sightKeys = ['x', 'y', 'level', 'hidden', 'light', 'rotation'] as const;
     const movesSight = sightKeys.some((k) => body[k] !== undefined);
     const after = await app.hub.atomic(scene.campaignId, async (tx) => {
-      // A player's move must be one their runner could walk (`playerMayWalk`),
-      // judged from where the token stands and against the scene as it
-      // stands, both inside this transaction (`playerMoveJudged`).
+      // A player's move must be one their runner could walk, on the map
+      // (`playerWalkRefusal`), judged from where the token stands and against
+      // the scene as it stands, both inside this transaction (`playerMoveJudged`).
       if (auth.role !== 'gm' && (body.x !== undefined || body.y !== undefined)) {
-        const { walkable } = await playerMoveJudged(tx, scene.id, id, body);
-        if (!walkable) throw httpError(403, BLOCKED.code, BLOCKED.message);
+        const { refusal } = await playerMoveJudged(tx, scene.id, id, body);
+        if (refusal) throw httpError(403, refusal.code, refusal.message);
       }
       const written = await svc.withDb(tx.db).patchToken(id, body);
       await emitTokenChange(tx, scene, before, written, { positional, nonPositional });
@@ -1487,12 +1552,13 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     // And on a staged scene no frame is the table's at all (`sceneOnTable`).
     const current = serializeScene(scene);
     // A player's frame the runner could not walk to from where the token
-    // stands (`playerMayWalk`) is not relayed: every other screen would draw
-    // the runner through the wall on its way to a drop the server refuses.
-    // The client's own drag stops at the wall (`walkToward`), so this only
-    // ever drops frames from a client that does not; the drag's start is
-    // where the token is stored, because nothing is stored until the drop.
-    if (ctx.auth.role !== 'gm' && !playerMayWalk(current, token, parsed.data)) return;
+    // stands, or off the map (`playerWalkRefusal`), is not relayed: every
+    // other screen would draw the runner through the wall on its way to a
+    // drop the server refuses. The client's own drag stops at the wall
+    // (`walkToward`) and the map's edge, so this only ever drops frames from
+    // a client that does not; the drag's start is where the token is stored,
+    // because nothing is stored until the drop.
+    if (ctx.auth.role !== 'gm' && playerWalkRefusal(current, token, parsed.data) !== null) return;
     const concealed =
       !sceneOnTable(current) ||
       tokenConcealed(token, current) ||
@@ -1518,17 +1584,19 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     // for where a token IS (FR9.5), so a stored move nobody was told about
     // leaves every other screen — including the TV — drawing it in the old
     // square until someone reloads.
-    // Null once the move is stored; the token as it stands when a wall
-    // refused the move.
-    const refused = await app.hub.atomic(ctx.campaignId, async (tx): Promise<TokenRow | null> => {
-      // A player's drop must be one their runner could walk (`playerMayWalk`),
-      // judged from where the token stands and against the scene as it
-      // stands, both inside this transaction (`playerMoveJudged`): a door
-      // shut while the drag was in the air is shut to the drop, and a GM's
-      // move of the runner that landed meanwhile is where it is judged from.
+    // Null once the move is stored; the token as it stands, and why, when a
+    // wall or the map's edge refused the move.
+    type Refused = { stood: TokenRow; refusal: WalkRefusal };
+    const refused = await app.hub.atomic(ctx.campaignId, async (tx): Promise<Refused | null> => {
+      // A player's drop must be one their runner could walk, on the map
+      // (`playerWalkRefusal`), judged from where the token stands and against
+      // the scene as it stands, both inside this transaction
+      // (`playerMoveJudged`): a door shut while the drag was in the air is
+      // shut to the drop, and a GM's move of the runner that landed meanwhile
+      // is where it is judged from.
       if (ctx.auth.role !== 'gm') {
-        const { stood, walkable } = await playerMoveJudged(tx, scene.id, token.id, parsed.data);
-        if (!walkable) return stood;
+        const { stood, refusal } = await playerMoveJudged(tx, scene.id, token.id, parsed.data);
+        if (refusal) return { stood, refusal };
       }
       const after = await svc.withDb(tx.db).patchToken(token.id, {
         x: parsed.data.x,
@@ -1547,17 +1615,18 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     });
     if (refused !== null) {
       // Refused: the token stays where it is, and the player is told why.
-      ctx.reply({ type: 'error', payload: { ...BLOCKED }, ephemeral: true });
+      const { stood, refusal } = refused;
+      ctx.reply({ type: 'error', payload: { code: refusal.code, message: refusal.message }, ephemeral: true });
       // The drag's frames put a ghost of the runner on every other screen,
       // and only a `token.moved` takes it away. No move is coming, so one
       // last frame sends the ghost home to the square the token never left
       // (where it stands now, read in the refusal), told to whoever the
       // frames went to.
       const current = serializeScene(scene);
-      const concealed = !sceneOnTable(current) || tokenConcealed(refused, current);
+      const concealed = !sceneOnTable(current) || tokenConcealed(stood, current);
       app.hub.emitEphemeral(ctx.campaignId, {
         type: 'token.dragging',
-        payload: { tokenId: token.id, sceneId: scene.id, x: refused.x, y: refused.y, by: ctx.auth.userId },
+        payload: { tokenId: token.id, sceneId: scene.id, x: stood.x, y: stood.y, by: ctx.auth.userId },
         visibility: concealed ? 'gm' : 'public',
       });
       return;

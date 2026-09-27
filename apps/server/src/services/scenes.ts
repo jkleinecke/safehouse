@@ -1409,6 +1409,35 @@ export class ScenesService {
     return rows[0]?.owner === auth.userId;
   }
 
+  /**
+   * The tokens on scene `sceneId` a player controls (`canControlToken`):
+   * their runners, the tokens of characters they own, on every floor. For
+   * the door rule (a player works a door only with a runner next to it,
+   * `doorRefusal`), which asks where each of them stands.
+   *
+   * A plain read, not a locked one, inside the door's own transaction: a
+   * door op writes no token, so a move of the runner committing a moment
+   * later is simply a move made after the door, and the door judged from
+   * where the runner stood before it is the order the two happened in.
+   */
+  async runnersOf(sceneId: string, userId: string): Promise<TokenRow[]> {
+    const owned = await this.db.select({ id: characters.id }).from(characters).where(eq(characters.ownerUserId, userId));
+    if (owned.length === 0) return [];
+    return this.db
+      .select()
+      .from(tokens)
+      .where(
+        and(
+          eq(tokens.sceneId, sceneId),
+          eq(tokens.source, 'character'),
+          inArray(
+            tokens.sourceId,
+            owned.map((c) => c.id),
+          ),
+        ),
+      );
+  }
+
   // --- fog (FR9.13/9.14) ---------------------------------------------------
 
   async applyFogOp(scene: SceneRow, op: FogOpInput): Promise<{ fog: FogState; region?: FogRegion }> {

@@ -185,7 +185,26 @@ describe('doors and walls', () => {
     contextMenuItems(gm)[0]!.run();
     expect(gm.actions.doorOp).toHaveBeenCalledWith({ doorId: 'd1', op: 'open' });
     expect(contextMenuItems(gm)[1]!.label).toBe('Unlock it');
-    expect(ids(contextMenuItems(input({ role: 'player', target: { kind: 'door', id: 'd1' } })))).toEqual(['door-toggle']);
+    // A player's runner beside it (d1 runs along the top edge of square 4,0).
+    const beside = [token('Whisper', { x: 4.5, y: 0.5 })];
+    expect(
+      ids(contextMenuItems(input({ role: 'player', myCharacterId: 'char-Whisper', tokens: beside, target: { kind: 'door', id: 'd1' } }))),
+    ).toEqual(['door-toggle']);
+  });
+
+  it('gives a player only the floor’s menu on a door their runner is not next to', () => {
+    // Whisper stands at (2,2), two squares from d1 and a square from the painted door at (3,3).
+    const far = contextMenuItems(input({ role: 'player', myCharacterId: 'char-Whisper', target: { kind: 'door', id: 'd1' } }));
+    expect(ids(far)).toEqual(['ping']);
+    // No runner at all: the same.
+    expect(ids(contextMenuItems(input({ role: 'player', target: { kind: 'door', id: 'd1' } })))).toEqual(['ping']);
+    // The painted door at (3,3) is diagonal to Whisper's square: in reach.
+    const painted = input({ role: 'player', myCharacterId: 'char-Whisper', target: { kind: 'tileDoor', cell: '3,3', level: 0 } });
+    expect(ids(contextMenuItems(painted))).toEqual(['door-toggle']);
+    const away = [token('Whisper', { x: 8.5, y: 8.5 })];
+    expect(
+      ids(contextMenuItems(input({ role: 'player', myCharacterId: 'char-Whisper', tokens: away, target: { kind: 'tileDoor', cell: '3,3', level: 0 } }))),
+    ).toEqual(['ping']);
   });
 
   it('reads a painted door off its floor', () => {
