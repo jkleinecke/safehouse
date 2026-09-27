@@ -264,7 +264,7 @@ export function serializeScene(row: SceneRow): Scene {
  * Strip GM-layer data for player/observer/display viewers (Principle 4):
  * GM notes (the scene's text and the boxes on the map, FR9.25), the GM's
  * annotations (zones, non-public pins, cameras, the note on a wall, which
- * doors are locked, the token layers), and every unrevealed fog region —
+ * doors are locked, a lamp's label, the token layers), and every unrevealed fog region —
  * players get only revealed fog geometry (FR9.13), revealed live or as
  * explored (P6), each with its fashion said.
  *
@@ -338,7 +338,14 @@ export function sceneForViewer(scene: Scene, gm: boolean): Scene {
       // its tiles (below) already are: the presentation boundary, not the
       // secrecy one. Lights carried by TOKENS are the tokens', and go (and are
       // withheld) with them.
-      ...(scene.geometry.lights ? { lights: scene.geometry.lights } : {}),
+      //
+      // Less each lamp's `label`, which is the GM's annotation and not the
+      // lamp: the map draws it for the GM alone (stage3d/markers.ts), and
+      // nothing a player device or the TV draws reads it. Sent whole, a lamp
+      // the GM labelled "ritual circle" or "vault alarm strobe" named what
+      // stands in a room the table has not found, on every phone's wire, as a
+      // wall's note or a private pin would have (review, 2026-09-27).
+      ...(scene.geometry.lights ? { lights: scene.geometry.lights.map(({ label: _label, ...lamp }) => lamp) } : {}),
     },
     ...(scene.tiles ? { tiles: tilesForPlayers(scene.tiles) } : {}),
     levels: scene.levels.map((l) => (l.tiles ? { ...l, tiles: tilesForPlayers(l.tiles) } : l)),

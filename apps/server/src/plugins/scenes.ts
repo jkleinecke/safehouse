@@ -356,6 +356,38 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
   const tokenVis = (token: ConcealableToken, scene: SceneRow): Visibility =>
     tokenEventVisibility(token, serializeScene(scene));
 
+  /**
+   * The scene as it stands inside the caller's transaction, read `FOR
+   * UPDATE`, as the fog ops and the sight pass read it. Two kinds of caller
+   * need it: a token event judged against the scene (`tokenVis`,
+   * `emitTokenChange`), and a route that writes the scene back from what it
+   * read (a door, paint, arcs, floors, the set).
+   *
+   * The lock is the point. Postgres reads committed rows, so a plain read
+   * made while another transaction is still in flight gets the scene as it
+   * was BEFORE that transaction: a runner stepping away from the vault
+   * (whose sight pass is about to send `token.removed` for the guard in it),
+   * the GM hiding the room, hiding a token layer, switching the sightlines
+   * on.
+   * - A guard moved, renamed or placed in that room in the same moment was
+   *   judged against the old fog, so his new square, his name or the whole
+   *   of him went out as a public event (persisted, in the log, folded
+   *   straight onto the TV) right after the table had been told he was
+   *   gone, and nothing ever took him off again.
+   * - A door opened in the same moment (a PLAYER's write) waited for the
+   *   GM's change to commit and then wrote the scene back as it had read
+   *   it: the layer shown again, the sightlines off again, and every token
+   *   they had withheld on the next read of every phone and the TV.
+   * A pass, a fog op or a scene write holds this row locked until it
+   * commits, so a locked read waits for it and is handed what it wrote; and
+   * a caller holding the lock makes the next pass wait in turn, and read the
+   * tokens where they now stand. PGlite runs one transaction at a time, so
+   * the tests cannot interleave two; the race is the production database's
+   * (DATABASE_URL, the docker stack).
+   */
+  const lockedScene = (tx: EventTx, sceneId: string): Promise<SceneRow> =>
+    svc.withDb(tx.db).sceneRow(sceneId, { lock: true });
+
   /** Load a scene, check campaign binding, and report whether the caller is GM. */
   async function openScene(
     req: FastifyRequest,
@@ -539,7 +571,10 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     }
     const updated = await app.hub.atomic(scene.campaignId, async (tx) => {
       const txSvc = svc.withDb(tx.db);
-      const fresh = await txSvc.sceneRow(id);
+      // Locked (`lockedScene`): merged over a row read without the lock, the
+      // write below would put back a layer, a switch or a stroke that another
+      // write was committing in the same moment.
+      const fresh = await lockedScene(tx, id);
       const scene0 = serializeScene(fresh);
       const redraw = (tiles: NonNullable<typeof scene0.tiles>) => ({
         ...migrateTileLayer(tiles),
@@ -590,8 +625,19 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     const { id } = req.params as { id: string };
     const { scene, gm } = await openScene(req, id);
     const body = parseBody(DoorOpBody, req.body);
-    const current = serializeScene(scene);
     const result = await app.hub.atomic(scene.campaignId, async (tx) => {
+      // The door, and the rest of the scene written back around it, read
+      // inside this transaction and locked (`lockedScene`), never from the
+      // row `openScene` read before it opened. `updateScene` writes every
+      // part of the geometry envelope from the row it is handed (the walls,
+      // the pins, the token layers, the sightlines switch), so a door opened
+      // from that earlier row put back whatever the GM had changed in
+      // between: a layer she had just hidden shown again, the sightlines she
+      // had just switched on off again, and the tokens they withheld on the
+      // table at its next read. A player's hand on a handle, undoing the GM.
+      const fresh = await lockedScene(tx, id);
+      if (!gm && !sceneOnTable(fresh)) throw httpError(404, 'not_found', 'unknown scene');
+      const current = serializeScene(fresh);
       if (body.doorId !== undefined) {
         const door = current.geometry.doors.find((d) => d.id === body.doorId);
         if (!door) throw httpError(404, 'not_found', 'no such door');
@@ -599,7 +645,7 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         if (refusal) throw httpError(403, refusal.code, refusal.message);
         const state = applyDoorOp(door, body.op);
         await tx.emit({ type: 'scene.updated', payload: { sceneId: id, changed: ['geometry'] } });
-        await svc.withDb(tx.db).updateScene(scene, { geometry: withTracedDoor(current.geometry, door.id, state) });
+        await svc.withDb(tx.db).updateScene(fresh, { geometry: withTracedDoor(current.geometry, door.id, state) });
         // A door is the commonest thing that moves the party's sight: opened,
         // the room beyond is seen, and whoever stands in it arrives on the
         // table with the same commit; shut, they leave it.
@@ -616,7 +662,7 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       const write = withTileDoor(current, ref, state);
       if (write === null) throw httpError(404, 'not_found', 'no door painted in that cell');
       await tx.emit({ type: 'scene.updated', payload: { sceneId: id, changed: ['tiles'] } });
-      await svc.withDb(tx.db).updateScene(scene, write);
+      await svc.withDb(tx.db).updateScene(fresh, write);
       await recomputeSight(tx, id);
       return { door: { cell: body.cell, level: body.level, ...state } };
     });
@@ -666,7 +712,9 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         payload: { token: created },
         // Judged against the fog as it stands now, inside the transaction,
         // so a guard placed in a room the GM hid a moment ago stays the GM's.
-        visibility: tokenVis(created, await txSvc.sceneRow(scene.id)),
+        // Read LOCKED (`lockedScene`): a sight pass or a fog op still in
+        // flight is waited for, not read around.
+        visibility: tokenVis(created, await lockedScene(tx, scene.id)),
       });
       // A runner placed is a pair of eyes on the table, and a token carrying
       // a light lights the dark for them. Anyone else changes no one's sight.
@@ -756,8 +804,9 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         type: 'token.removed',
         payload: { tokenId: id, sceneId: scene.id },
         // Judged against the scene as it stands inside this transaction, as
-        // the create and the move are, not the row read before it opened.
-        visibility: tokenVis(token, await txSvc.sceneRow(scene.id)),
+        // the create and the move are, not the row read before it opened;
+        // locked, as theirs is (`lockedScene`).
+        visibility: tokenVis(token, await lockedScene(tx, scene.id)),
       });
       // A runner taken off the map takes their eyes with them; a lamp-post
       // token its light.
@@ -801,8 +850,10 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     // read before opening it. A fog op that committed in between (the GM
     // hiding the room this guard is being dropped into) must decide who hears
     // the move: judged against the older fog, the drop went out as a public
-    // `token.moved`, a position in a room the table had just lost.
-    const current = serializeScene(await svc.withDb(tx.db).sceneRow(scene.id));
+    // `token.moved`, a position in a room the table had just lost. And read
+    // LOCKED (`lockedScene`), so "in between" includes a fog op or a sight
+    // pass that has not committed yet.
+    const current = serializeScene(await lockedScene(tx, scene.id));
     const table = sceneOnTable(current);
     const was = !table || tokenConcealed(before, current);
     const now = !table || tokenConcealed(after, current);
@@ -883,7 +934,10 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
 
     const updated = await app.hub.atomic(scene.campaignId, async (tx) => {
       const txSvc = svc.withDb(tx.db);
-      const fresh = await txSvc.sceneRow(id);
+      // Locked (`lockedScene`): merged over a row read without the lock, the
+      // write below would put back a layer, a switch or a stroke that another
+      // write was committing in the same moment.
+      const fresh = await lockedScene(tx, id);
       // The tile layer rides inside the geometry JSONB, so read it back
       // through the serializer rather than off the row.
       const scene0 = serializeScene(fresh);
@@ -993,7 +1047,10 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     const body = parseBody(ArcsBody, req.body);
     const updated = await app.hub.atomic(scene.campaignId, async (tx) => {
       const txSvc = svc.withDb(tx.db);
-      const fresh = await txSvc.sceneRow(id);
+      // Locked (`lockedScene`): merged over a row read without the lock, the
+      // write below would put back a layer, a switch or a stroke that another
+      // write was committing in the same moment.
+      const fresh = await lockedScene(tx, id);
       const scene0 = serializeScene(fresh);
       const floors = sceneLevels(scene0);
       if (body.level >= floors.length) {
@@ -1045,7 +1102,10 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
 
     const updated = await app.hub.atomic(scene.campaignId, async (tx) => {
       const txSvc = svc.withDb(tx.db);
-      const fresh = await txSvc.sceneRow(id);
+      // Locked (`lockedScene`): merged over a row read without the lock, the
+      // write below would put back a layer, a switch or a stroke that another
+      // write was committing in the same moment.
+      const fresh = await lockedScene(tx, id);
       const current = serializeScene(fresh);
       // Keep the tiles already painted on a floor the GM is only renaming.
       // Sending a level without tiles must not wipe the storey.

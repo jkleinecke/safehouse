@@ -6,7 +6,7 @@
  * not by the client — and a GM-only map 404s on /files/:id for players.
  */
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { characters, combatants, scenes as scenesTable } from '@safehouse/db';
 import { SheetV1Schema } from '@safehouse/contracts';
 import {
@@ -2035,6 +2035,131 @@ describe('the secrecy sweep: what the map withholds, no other channel carries (P
       const raw = JSON.stringify(heard);
       expect(raw, role).not.toContain(heldId);
       expect(raw, role).not.toContain(elsewhereId);
+    }
+  });
+
+  it('sends the table the GM’s lamps, and not the labels only the GM’s map draws', async () => {
+    const LAMP = 'the ritual circle, still warm';
+    const gmRead = await t.app.inject({ method: 'GET', url: `/api/scenes/${houseId}`, headers: as(sw.gmToken) });
+    const geometry = (gmRead.json() as { scene: { geometry: Record<string, unknown> } }).scene.geometry;
+    // A lamp in the counting room, labelled as a GM labels one for herself.
+    await patchScene(houseId, {
+      geometry: { ...geometry, lights: [{ id: 'lamp-circle', at: { x: 16.5, y: 16.5 }, label: LAMP }] },
+    });
+    const lampsOf = (raw: string) =>
+      ((JSON.parse(raw) as { scene: { geometry: { lights?: Record<string, unknown>[] } } }).scene.geometry.lights ?? []);
+
+    expect(lampsOf((await sceneFor(sw.gmToken, houseId)).raw)[0]?.['label']).toBe(LAMP);
+    for (const { role, token } of viewers) {
+      const v = await sceneFor(token, houseId);
+      // The lamp itself still comes: it lights what the table sees of the floor.
+      const lamps = lampsOf(v.raw);
+      expect(lamps.map((l) => l['id']), role).toEqual(['lamp-circle']);
+      expect(lamps[0], role).not.toHaveProperty('label');
+      expect(v.raw, role).not.toContain(LAMP);
+      const list = await t.app.inject({ method: 'GET', url: `/api/campaigns/${sw.campaignId}/scenes`, headers: as(token) });
+      expect(list.body, role).not.toContain(LAMP);
+    }
+  });
+
+  it('judges a token event against the fog a transaction still in flight is writing, not the fog before it', async () => {
+    // Postgres reads committed rows. A plain read of the scene, made while
+    // the GM's hide (or a runner's sight pass) has not committed yet, gets
+    // the fog from before it; a read FOR UPDATE waits for it and gets the
+    // fog it wrote. PGlite runs one transaction at a time, so that moment is
+    // staged: once the room is hidden, every UNLOCKED read of this scene is
+    // handed the row as it stood before the hide, which is exactly what such
+    // a read got in production, and a locked read the scene as it now is.
+    // The guard in the room was on the table, and has just been taken off.
+    const [before] = await t.db.select().from(scenesTable).where(eq(scenesTable.id, houseId));
+    await fogOp(houseId, { op: 'hide', regionId: roomId });
+    const from = await mark();
+
+    const RENAMED = 'Guard-Upsilon';
+    const PLACED_NAME = 'Guard-Phi';
+    const STEP = { x: 18.4375, y: 13.5625 };
+    const PLACED = { x: 13.4375, y: 18.5625 };
+    let placedId = '';
+    const real = ScenesService.prototype.sceneRow;
+    const spy = vi
+      .spyOn(ScenesService.prototype, 'sceneRow')
+      .mockImplementation(function (this: ScenesService, id: string, opts?: { lock?: boolean }) {
+        return id === houseId && opts?.lock !== true ? Promise.resolve(before!) : real.call(this, id, opts);
+      });
+    try {
+      // The GM, in that same moment: the guard walked on inside the room,
+      // renamed, a second guard placed in it and taken away again.
+      await patchToken(guardId, STEP);
+      await patchToken(guardId, { name: RENAMED });
+      const placed = await post(`/api/scenes/${houseId}/tokens`, sw.gmToken, { source: 'npc_template', name: PLACED_NAME, ...PLACED });
+      expect(placed.statusCode).toBe(201);
+      placedId = (placed.json() as { token: { id: string } }).token.id;
+      expect((await t.app.inject({ method: 'DELETE', url: `/api/tokens/${placedId}`, headers: as(sw.gmToken) })).statusCode).toBe(200);
+    } finally {
+      spy.mockRestore();
+    }
+
+    // The GM heard every one of them, on the GM's sockets alone.
+    const gmHeard = (await since(sw.gmToken, from)).filter((e) => e.type.startsWith('token.'));
+    expect(gmHeard.map((e) => e.type)).toEqual(['token.moved', 'token.updated', 'token.added', 'token.removed']);
+    for (const e of gmHeard) expect(e.visibility, e.type).toBe('gm');
+    // The table none of it: the room it was told had gone dark stays dark.
+    for (const { role, token } of viewers) {
+      const heard = await since(token, from);
+      expect(heard.filter((e) => e.type.startsWith('token.')), role).toEqual([]);
+      const raw = JSON.stringify(heard);
+      for (const secret of [guardId, placedId, RENAMED, PLACED_NAME, String(STEP.x), String(PLACED.x)]) {
+        expect(raw, `${role}: ${secret}`).not.toContain(secret);
+      }
+      expect((await sceneFor(token, houseId)).tokenIds, role).not.toContain(guardId);
+    }
+  });
+
+  it('never lets a player’s door write back the scene it read before the GM’s last change', async () => {
+    // A crate in the open at the front, and a door beside it.
+    const CRATE2 = 'Crate-Upsilon';
+    const crate = await post(`/api/scenes/${houseId}/tokens`, sw.gmToken, { source: 'prop', name: CRATE2, x: 1.4375, y: 4.5625 });
+    expect(crate.statusCode).toBe(201);
+    const crate2Id = (crate.json() as { token: { id: string } }).token.id;
+    const gmRead = async () =>
+      (
+        (await t.app.inject({ method: 'GET', url: `/api/scenes/${houseId}`, headers: as(sw.gmToken) })).json() as {
+          scene: { geometry: Record<string, unknown> & { doors: { id: string; open: boolean }[] }; tokenLayers?: { id: string; hidden: boolean; tokenIds: string[] }[] };
+        }
+      ).scene;
+    const now = await gmRead();
+    await patchScene(houseId, {
+      geometry: { ...now.geometry, doors: [{ id: 'door-front', a: { x: 6, y: 1 }, b: { x: 6, y: 2 }, open: false, locked: false }] },
+    });
+    for (const { role, token } of viewers) expect((await sceneFor(token, houseId)).tokenIds, role).toContain(crate2Id);
+
+    // The GM puts the crate on a hidden layer, and it leaves the table. A
+    // player's door opened in that same moment read the scene before it.
+    const [before] = await t.db.select().from(scenesTable).where(eq(scenesTable.id, houseId));
+    await patchScene(houseId, {
+      tokenLayers: [...(now.tokenLayers ?? []), { id: 'layer-crates', name: 'Crates', hidden: true, tokenIds: [crate2Id] }],
+    });
+    const real = ScenesService.prototype.sceneRow;
+    const spy = vi
+      .spyOn(ScenesService.prototype, 'sceneRow')
+      .mockImplementation(function (this: ScenesService, id: string, opts?: { lock?: boolean }) {
+        return id === houseId && opts?.lock !== true ? Promise.resolve(before!) : real.call(this, id, opts);
+      });
+    try {
+      const opened = await post(`/api/scenes/${houseId}/doors`, phoneToken, { doorId: 'door-front', op: 'open' });
+      expect(opened.statusCode).toBe(200);
+    } finally {
+      spy.mockRestore();
+    }
+
+    // The door is open, and the GM's layer is still hidden: the crate stays off the table.
+    const after = await gmRead();
+    expect(after.geometry.doors.find((d) => d.id === 'door-front')?.open).toBe(true);
+    expect(after.tokenLayers?.find((l) => l.id === 'layer-crates')).toMatchObject({ hidden: true, tokenIds: [crate2Id] });
+    for (const { role, token } of viewers) {
+      const v = await sceneFor(token, houseId);
+      expect(v.tokenIds, role).not.toContain(crate2Id);
+      expect(v.raw, role).not.toContain(CRATE2);
     }
   });
 });
