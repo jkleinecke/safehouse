@@ -14,6 +14,13 @@
  * visibility so the hub never serializes them onto player/display sockets.
  * Revealing a hidden token, or the fog it stands in, emits `token.added` (a
  * NEW entity arriving, FR9.7); hiding either emits `token.removed`.
+ *
+ * Sightlines (P6): every committed write that can move the party's sight (a
+ * runner's move, a door, a light, paint, a scene PATCH, a fog op, the scene
+ * going live) runs the sight pass (`recomputeSight`, services/sight.ts) in
+ * its own transaction, after its write: the party's pooled sight is worked
+ * out again, kept in the fog, told to the table as `fog.updated` op 'sight'
+ * when it changed, and the tokens it uncovers or covers arrive and leave.
  */
 import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -65,6 +72,7 @@ import type { EventTx } from '../hub.js';
 import { checkSceneFileHeader, exportScene, importScene, unpackFiles } from '../services/scene-transfer.js';
 import { emitFogProximity } from '../fixer/proximity.js';
 import { applyDoorOp, doorRefusal, tileDoorState, withTileDoor, withTracedDoor } from '../services/doors.js';
+import { affectsSight, recomputeSight } from '../services/sight.js';
 import {
   PerKeyThrottle,
   ScenesService,
@@ -100,11 +108,34 @@ const SceneCreateBody = z.object({
   notes: z.string().max(20_000).optional(),
 });
 
+/**
+ * `schema` for a PATCH: every key optional, and NONE of them defaulted.
+ *
+ * zod 4 fills in a missing key's default even under `.partial()`, and the
+ * service merges a patch over what is stored. So a patch built with
+ * `.partial()` said more than the GM did: `{grid: {cols: 40}}` arrived as
+ * `{cols: 40, unitM: 1, offset: {x: 0, y: 0}, projection: 'topdown'}`, and
+ * widening the map put it back to 1 m squares, uncalibrated, top-down; and
+ * `{environment: {light: 3}}` arrived with `visibility`, `glare` and `wind`
+ * all 0, so darkening a scene cleared its smoke. Each key's own bounds are
+ * kept, only the default is taken off, so a patch says exactly the keys it
+ * was sent. Output is a plain record: the service merges it and validates the
+ * result whole (`normalizeGrid`, `normalizeEnvironment`).
+ */
+function patchOf<Shape extends z.ZodRawShape>(schema: z.ZodObject<Shape>) {
+  const shape: Record<string, z.ZodOptional<z.ZodType>> = {};
+  for (const [key, field] of Object.entries(schema.shape) as [string, z.ZodType][]) {
+    const bare = field instanceof z.ZodDefault ? (field.removeDefault() as z.ZodType) : field;
+    shape[key] = bare.optional();
+  }
+  return z.object(shape);
+}
+
 const ScenePatchBody = z.object({
   name: z.string().min(1).max(200).optional(),
   state: z.enum(['draft', 'archived']).optional(),
-  grid: GridSchema.partial().optional(),
-  environment: SceneEnvironmentSchema.partial().optional(),
+  grid: patchOf(GridSchema).optional(),
+  environment: patchOf(SceneEnvironmentSchema).optional(),
   geometry: SceneGeometrySchema.optional(),
   /**
    * Only the settings the GM changed, each WITHOUT its default. zod fills a
@@ -269,6 +300,8 @@ const FogOpBody = z.object({
   shape: z.array(PointSchema).min(3).optional(),
   /** For `reveal`: live (the default, as every reveal was before) or as explored (`FogRevealAsSchema`). */
   as: FogRevealAsSchema.optional(),
+  /** For `forget`: the one floor whose memory goes; absent is every floor. */
+  level: z.number().int().min(0).max(MAX_LEVELS - 1).optional(),
   announce: z.boolean().optional(),
 });
 
@@ -410,7 +443,13 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     const { scene } = await openScene(req, id, { gmOnly: true });
     const body = parseBody(ScenePatchBody, req.body);
     const updated = await app.hub.atomic(scene.campaignId, async (tx) => {
-      const written = await svc.withDb(tx.db).updateScene(scene, {
+      const txSvc = svc.withDb(tx.db);
+      // Merged over the scene as it stands inside this transaction, as the
+      // tile routes do, not the row read before it opened: the scene before
+      // the patch is also what the token diff below starts from.
+      const fresh = await txSvc.sceneRow(id, { lock: true });
+      const before = serializeScene(fresh);
+      const written = await txSvc.updateScene(fresh, {
         ...body,
         grid: body.grid as Record<string, unknown> | undefined,
         environment: body.environment as Record<string, unknown> | undefined,
@@ -421,23 +460,31 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         type: 'scene.updated',
         payload: { sceneId: id, changed: written.changed, environment: written.scene.environment },
       });
-      // A layer shown or hidden is tokens arriving on or leaving the table
-      // (FR9.26): the same events a reveal or a hide of one token emits, so a
-      // player screen learns about each of them the only way it ever does.
-      // Whether each token is on a player's wire is the whole answer
-      // (`tokenConcealed`), not the layer alone: a guard whose layer is shown
-      // while he stands in unrevealed fog is still not the table's to see,
-      // and one hidden on his own account never was.
+      // Then the party's sight, which a PATCH can move every way there is:
+      // walls and the GM's lights (geometry), the ambient light
+      // (environment), the grid, the token layers (a runner on a hidden layer
+      // is not an eye), and the sightlines switch itself (vision).
       //
-      // The scene's vision can move the same edge: sightlines switched on fog
-      // a scene whatever its fog switch says (`sceneFogOn`), so the guards
-      // outside what the party sees leave the table with it, and come back
-      // when they go off. The dimming switch (`playersSeeOwnSight`) changes
-      // nobody's answer, so flipping it sends nothing.
-      if (body.tokenLayers !== undefined || body.vision !== undefined) {
-        await emitConcealmentChanges(tx, scene.id, serializeScene(scene), written.scene);
-      }
-      return written.scene;
+      // The pass also runs the one token diff for the whole patch, from the
+      // scene before it (`before`). A layer shown or hidden is tokens
+      // arriving on or leaving the table (FR9.26), and whether each is on a
+      // player's wire is the whole answer (`tokenConcealed`), not the layer
+      // alone: a guard whose layer is shown while he stands in unrevealed fog
+      // is still not the table's to see. Sightlines switched on fog a scene
+      // whatever its fog switch says (`sceneFogOn`), so the guards outside
+      // what the party sees leave the table with it and come back when they
+      // go off. The dimming switch (`playersSeeOwnSight`) changes nobody's
+      // answer, so flipping it sends nothing.
+      //
+      // When that switch moves whether the scene is fogged at all, the table
+      // is told in the sight event's `active` even if the sight itself did
+      // not change (no runner on the map yet): a TV folding fog events learns
+      // it there, as it learns the GM's fog switch.
+      const pass = await recomputeSight(tx, id, {
+        before,
+        announce: sceneFogOn(before) !== sceneFogOn(written.scene),
+      });
+      return { ...written.scene, fog: pass.fog };
     });
     return { scene: updated };
   });
@@ -500,7 +547,11 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       if (Object.keys(patch).length === 0) return scene0;
       const written = await txSvc.updateScene(fresh, patch);
       await tx.emit({ type: 'scene.updated', payload: { sceneId: id, changed: written.changed } });
-      return written.scene;
+      // A slot means the same thing in every set, so the walls stand where
+      // they stood; but a set's lamps and glowing windows are its own, and
+      // the dark moves with them.
+      const pass = await recomputeSight(tx, id);
+      return { ...written.scene, fog: pass.fog };
     });
     return { scene: updated };
   });
@@ -529,6 +580,10 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         const state = applyDoorOp(door, body.op);
         await tx.emit({ type: 'scene.updated', payload: { sceneId: id, changed: ['geometry'] } });
         await svc.withDb(tx.db).updateScene(scene, { geometry: withTracedDoor(current.geometry, door.id, state) });
+        // A door is the commonest thing that moves the party's sight: opened,
+        // the room beyond is seen, and whoever stands in it arrives on the
+        // table with the same commit; shut, they leave it.
+        await recomputeSight(tx, id);
         return { door: { id: door.id, ...state } };
       }
       if (body.cell === undefined) throw httpError(400, 'bad_request', 'name a door: doorId, or cell (and level)');
@@ -542,6 +597,7 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       if (write === null) throw httpError(404, 'not_found', 'no door painted in that cell');
       await tx.emit({ type: 'scene.updated', payload: { sceneId: id, changed: ['tiles'] } });
       await svc.withDb(tx.db).updateScene(scene, write);
+      await recomputeSight(tx, id);
       return { door: { cell: body.cell, level: body.level, ...state } };
     });
     return result;
@@ -565,7 +621,13 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         type: 'scene.activated',
         payload: { sceneId: activated.id, name: activated.name },
       });
-      return activated;
+      // The table's first look at the scene is the party's sight as it
+      // stands now. Every committed change keeps it current, but a scene can
+      // come to this without one: imported (its live squares are not carried
+      // in, `importScene`), or staged while a runner's sheet changed. On a
+      // scene without sightlines this writes and sends nothing.
+      const pass = await recomputeSight(tx, activated.id);
+      return { ...activated, fog: pass.fog };
     });
     return { scene };
   });
@@ -586,6 +648,9 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         // so a guard placed in a room the GM hid a moment ago stays the GM's.
         visibility: tokenVis(created, await txSvc.sceneRow(scene.id)),
       });
+      // A runner placed is a pair of eyes on the table, and a token carrying
+      // a light lights the dark for them. Anyone else changes no one's sight.
+      if (affectsSight(created)) await recomputeSight(tx, scene.id);
       return created;
     });
     return reply.status(201).send({ token });
@@ -624,9 +689,20 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     }
     // The permission reads above are all hoisted out of the block; only the
     // row write and the event(s) describing it are inside it.
+    // What in a token moves the party's sight: where it stands and on which
+    // floor, whether it is on the table at all, the light it carries, and
+    // which way it faces (a beam points where its token does). A rename, a
+    // pose or a new look moves nothing, and skips the pass; so does any
+    // change to a token that is neither a runner nor a light (`affectsSight`).
+    const sightKeys = ['x', 'y', 'level', 'hidden', 'light', 'rotation'] as const;
+    const movesSight = sightKeys.some((k) => body[k] !== undefined);
     const after = await app.hub.atomic(scene.campaignId, async (tx) => {
       const written = await svc.withDb(tx.db).patchToken(id, body);
       await emitTokenChange(tx, scene, before, written, { positional, nonPositional });
+      // After the token's own event, so a guard the move walks into sight
+      // arrives after the move that showed him, and the sight event carries
+      // where the party is looking now.
+      if (movesSight && (affectsSight(before) || affectsSight(written))) await recomputeSight(tx, scene.id);
       // A runner's look is the runner's: it goes onto the character and onto
       // every token of theirs, in this scene and every other.
       if (body.look !== undefined && written.source === 'character' && written.sourceId) {
@@ -653,6 +729,9 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         payload: { tokenId: id, sceneId: scene.id },
         visibility: tokenVis(token, scene),
       });
+      // A runner taken off the map takes their eyes with them; a lamp-post
+      // token its light.
+      if (affectsSight(token)) await recomputeSight(tx, scene.id);
     });
     return { ok: true };
   });
@@ -726,37 +805,10 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     }
   }
 
-  /**
-   * Tokens arriving on the table and leaving it because the SCENE changed
-   * around them — a layer shown or hidden, a fog region revealed or hidden,
-   * the fog switched on or off — rather than because the token itself did.
-   *
-   * Every token on the scene is asked `tokenConcealed` against the scene as
-   * it was and as it is now. One that comes out of concealment is a public
-   * `token.added` (a NEW entity arriving, FR9.7, carrying where it stands);
-   * one that goes into it is a public `token.removed`. Tokens whose answer
-   * did not change say nothing, so a reveal costs one event per guard it
-   * actually uncovers. Players' maps and the TV already fold both events, so
-   * neither needs to know WHY a token came or went — only the server knows
-   * that, and it is the server's secret.
-   *
-   * Runs inside the caller's transaction, after the scene write, so the
-   * tokens are read through the same handle and the events commit with it.
-   */
-  async function emitConcealmentChanges(
-    tx: EventTx,
-    sceneId: string,
-    // With `vision`: sightlines move the edge as much as the fog does (`tokenConcealed`).
-    before: Pick<Scene, 'tokenLayers' | 'fog' | 'vision'>,
-    after: Pick<Scene, 'tokenLayers' | 'fog' | 'vision'>,
-  ): Promise<void> {
-    for (const row of await svc.withDb(tx.db).tokensOf(sceneId)) {
-      const was = tokenConcealed(row, before);
-      const now = tokenConcealed(row, after);
-      if (was && !now) await tx.emit({ type: 'token.added', payload: { token: serializeToken(row) } });
-      if (!was && now) await tx.emit({ type: 'token.removed', payload: { tokenId: row.id, sceneId } });
-    }
-  }
+  // Tokens arriving on the table and leaving it because the SCENE changed
+  // around them (a layer, a fog op, the party's sight) are the sight pass's
+  // concealment diff: `emitConcealmentChanges` in services/sight.ts, run by
+  // `recomputeSight` after every write that can move that edge.
 
   // --- fog (FR9.13/9.14) ----------------------------------------------------
 
@@ -872,7 +924,11 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         type: 'scene.updated',
         payload: { sceneId: id, changed: written.changed, tilesPainted: painted },
       });
-      return written.scene;
+      // Paint is the walls, the doors and the lamps: a wall painted between a
+      // runner and a room takes the room out of their sight, a lamp painted
+      // lights it.
+      const pass = await recomputeSight(tx, id);
+      return { ...written.scene, fog: pass.fog };
     });
     // The count for the floor that was actually painted. Reading
     // `updated.tiles` reported the GROUND floor's total for every stroke, so
@@ -932,7 +988,9 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
             };
       const written = await txSvc.updateScene(fresh, patch);
       await tx.emit({ type: 'scene.updated', payload: { sceneId: id, changed: written.changed } });
-      return written.scene;
+      // An arc is a wall, and stops sight in every square it passes through.
+      const pass = await recomputeSight(tx, id);
+      return { ...written.scene, fog: pass.fog };
     });
     return { scene: updated };
   });
@@ -967,7 +1025,10 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         type: 'scene.updated',
         payload: { sceneId: id, changed: written.changed, levels: levels.length + 1 },
       });
-      return written.scene;
+      // A floor taken away takes its walls and lamps with it, and a runner
+      // still standing on it now sees an empty storey.
+      const pass = await recomputeSight(tx, id);
+      return { ...written.scene, fog: pass.fog };
     });
     return { scene: updated };
   });
@@ -1017,7 +1078,10 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       // either, so the second wrote the first's hidden room back open: no
       // event said so, and the players' next re-read had the room and its
       // guards again.
-      const fresh = await svc.withDb(tx.db).sceneRow(scene.id);
+      // Locked, too: the sight pass rewrites the same column after every
+      // move, and a fog op applied to a copy read before a pass committed
+      // would write the party's memory back as it was before that move.
+      const fresh = await svc.withDb(tx.db).sceneRow(scene.id, { lock: true });
       // The scene as `applyFogOp` reads it, so the token diff below compares
       // against the very state the op was applied to.
       const before = serializeScene(fresh);
@@ -1028,9 +1092,11 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         ...(body.region ? { region: { ...body.region, id: body.region.id ?? undefined } } : {}),
         ...(body.shape ? { shape: body.shape } : {}),
         ...(body.as ? { as: body.as } : {}),
+        ...(body.level !== undefined ? { level: body.level } : {}),
       });
       const isDefine = body.op === 'define';
       const isSwitch = body.op === 'enable' || body.op === 'disable';
+      const isForget = body.op === 'forget';
       // A reveal says its fashion, always: a device folding the events (the
       // TV) files the region or shape under live or remembered by it, and
       // moves a region from one to the other when the GM changes her mind.
@@ -1047,6 +1113,10 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
           ? // The switch is one bit and says nothing else: no region, no id,
             // whatever else the body happened to carry.
             { sceneId: scene.id, op: body.op, active }
+          : isForget
+            ? // Which floor was forgotten, and nothing else. The memory itself
+              // follows in the sight pass's own event below, whole.
+              { sceneId: scene.id, op: body.op, ...(body.level !== undefined ? { level: body.level } : {}), active }
           : {
               sceneId: scene.id,
               op: body.op,
@@ -1086,16 +1156,21 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
           visibility: 'public',
         });
       }
-      // After the fog event, so a device folding events in order has the new
-      // fog in hand when the tokens it uncovered arrive.
-      await emitConcealmentChanges(tx, scene.id, before, { ...before, fog });
+      // Then the sight pass, with the scene before the op: it refills the
+      // memory a `forget` wiped from what the runners still see (and says so
+      // in one `op: 'sight'` event, only if the memory ends up different from
+      // before), and it runs the op's token diff, from the scene before to
+      // the scene after, once. After the fog event, so a device folding
+      // events in order has the new fog in hand when the tokens it uncovered
+      // arrive. On a scene without sightlines the diff is all it does.
+      const pass = await recomputeSight(tx, scene.id, { before });
       if (body.announce && body.op === 'reveal' && region) {
         await tx.emit({
           type: 'log.posted',
           payload: { kind: 'scene', sceneId: scene.id, text: `Revealed: ${region.name}` },
         });
       }
-      return { fog };
+      return { fog: pass.fog };
     });
   }
 
@@ -1363,6 +1438,13 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         ...(parsed.data.rotation !== undefined ? { rotation: parsed.data.rotation } : {}),
       });
       await emitTokenChange(tx, scene, token, after, { positional: true, nonPositional: false });
+      // The drop, not the drag: the party's sight is worked out again once,
+      // here, in the same commit as the move. A runner stepping round a
+      // corner shows the table the corridor (a public `fog.updated`, op
+      // 'sight') and whoever stands in it (`token.added`) with the move that
+      // did it; a guard walked with a flashlight moves the light he casts.
+      // A guard with no light moves nobody's sight (`affectsSight`).
+      if (affectsSight(token) || affectsSight(after)) await recomputeSight(tx, scene.id);
     });
     // "They're at the lab door, reveal?" (FR12.8). On the COMMIT only, never on
     // drag frames — a nudge per interim position would be a strobe. GM-only and

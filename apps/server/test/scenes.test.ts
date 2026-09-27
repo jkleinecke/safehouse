@@ -8,6 +8,8 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { characters, combatants, scenes as scenesTable } from '@safehouse/db';
+import { SheetV1Schema } from '@safehouse/contracts';
+import { cellBitsCount, cellBitsHas, decodeCellBits, type CellBits } from '@safehouse/rules';
 import { eq } from 'drizzle-orm';
 import { ScenesService, activeSceneModifiers, computeScatter } from '../src/services/scenes.js';
 // The fog a player is sent, shared with the web's tests so the server's
@@ -112,6 +114,34 @@ describe('scene CRUD + activation (FR9.1)', () => {
     expect(scene.environment.light).toBe(2);
     expect(scene.environment.wind).toBe(0);
     expect(scene.name).toBe('Warehouse floor');
+  });
+
+  it('patches only the keys it is sent: a grid or environment patch keeps the rest of each', async () => {
+    // zod fills a missing key's default even in a `.partial()` schema, and the
+    // service merges the patch over the stored scene. So widening the map
+    // put it back on 1 m squares, uncalibrated and top-down, and darkening
+    // it cleared its smoke, glare and wind.
+    const made = await post(`/api/campaigns/${boot.campaignId}/scenes`, boot.gmToken, { name: 'Smoky arcade' });
+    const id = (made.json() as { scene: { id: string } }).scene.id;
+    const patch = async (payload: Record<string, unknown>) => {
+      const res = await t.app.inject({ method: 'PATCH', url: `/api/scenes/${id}`, headers: gm(), payload });
+      expect(res.statusCode, JSON.stringify(payload)).toBe(200);
+      return (res.json() as { scene: { grid: Record<string, unknown>; environment: Record<string, unknown> } }).scene;
+    };
+
+    await patch({
+      grid: { unitM: 2, offset: { x: 0.5, y: 0.25 }, projection: 'iso', opacity: 0.4 },
+      environment: { visibility: 2, glare: 1, wind: 3, note: 'smoke machine' },
+    });
+    const widened = await patch({ grid: { cols: 44 } });
+    expect(widened.grid).toEqual({ unitM: 2, cols: 44, rows: 30, offset: { x: 0.5, y: 0.25 }, projection: 'iso', opacity: 0.4 });
+    const darkened = await patch({ environment: { light: 3 } });
+    expect(darkened.environment).toEqual({ light: 3, visibility: 2, glare: 1, wind: 3, note: 'smoke machine' });
+    // Each key keeps its own bounds: a patch still cannot say nonsense.
+    for (const payload of [{ grid: { unitM: -1 } }, { grid: { projection: 'fisheye' } }, { environment: { light: 4 } }]) {
+      const res = await t.app.inject({ method: 'PATCH', url: `/api/scenes/${id}`, headers: gm(), payload });
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+    }
   });
 });
 
@@ -759,10 +789,19 @@ describe('a fogged scene reaches players and the TV covered, and tells them noth
     expect(await tableEventsSince(beforeDim, 'token.added')).toEqual([]);
     expect(await tableEventsSince(beforeDim, 'token.removed')).toEqual([]);
 
-    // Sightlines on: everything the party does not see is hidden, and the
-    // party sees nothing yet (no sight pass has run), so the guard leaves the
-    // table as a public token.removed and the runner stays. A patch that
-    // says only `sight` leaves the dimming switch as it was.
+    // Sightlines on: everything the party does not see is hidden. The vault
+    // is pitch black and the runner has normal eyes, so the party sees the
+    // square he stands on and nothing else (the sight pass runs with the
+    // switch), and the guard two squares off leaves the table as a public
+    // token.removed while the runner stays. A patch that says only `sight`
+    // leaves the dimming switch as it was.
+    const dark = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/scenes/${fogSceneId}`,
+      headers: as(fb.gmToken),
+      payload: { environment: { light: 3 } },
+    });
+    expect(dark.statusCode).toBe(200);
     const beforeOn = await mark();
     expect(await patchVision({ sight: 'on' })).toEqual({ playersSeeOwnSight: true, sight: 'on' });
     for (const { role, token } of viewers) {
@@ -783,6 +822,23 @@ describe('a fogged scene reaches players and the TV covered, and tells them noth
     }
     const added = await tableEventsSince(beforeOff, 'token.added');
     expect(added.map((p) => (p['token'] as { id: string }).id)).toEqual([guardId]);
+
+    // The square the runner stood on is the party's memory now, kept with
+    // the sightlines off. Forgotten, the fog is the one this scene had before
+    // sightlines, which is what the case after this one plays on; and the
+    // lights back on.
+    expect((await view(fb.gmToken)).fog['sight']).toBeDefined();
+    await fogOp({ op: 'forget' });
+    for (const who of [fb.gmToken, ...viewers.map((v) => v.token)]) {
+      expect((await view(who)).fog).not.toHaveProperty('sight');
+    }
+    const lit = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/scenes/${fogSceneId}`,
+      headers: as(fb.gmToken),
+      payload: { environment: { light: 0 } },
+    });
+    expect(lit.statusCode).toBe(200);
   });
 
   it('shows the table a vault revealed as seen-before, dimmed and empty of the guard, and sends him once it is revealed live (P6)', async () => {
@@ -869,6 +925,350 @@ describe('a fogged scene reaches players and the TV covered, and tells them noth
       expectNoVault(v.raw, role);
       expectNoGuard(v, role);
     }
+  });
+});
+
+/**
+ * The party's sight, kept by the server (P6 sightlines, the sight pass in
+ * services/sight.ts).
+ *
+ * With a scene's sightlines on, the table sees what the runners see: walls
+ * and shut doors stop an eye, darkness stops it unless the runner's eyes see
+ * through (strict SR5), and what any runner sees is LIVE on every phone and
+ * the TV at once (pooled). What they have seen stays as EXPLORED memory,
+ * ORed in at once (always automatic) and wiped only by the GM (`forget`).
+ * The server works it out after every committed change and withholds every
+ * token standing anywhere the party does not see right now.
+ *
+ * The map, 12 x 9, painted in the docklands set: a wall down column 5 with a
+ * door in it at (5,4). The runner starts in the west room, the guard stands
+ * in the east one, straight through the door from him.
+ *
+ * Its own campaign, so its events and its scene are its own.
+ */
+describe('sightlines: the party’s pooled sight unmasks the map, and the server keeps it (P6)', () => {
+  let sb: { campaignId: string; gmToken: string };
+  let viewers: { role: string; token: string }[];
+  let phoneToken: string;
+  let sightSceneId: string;
+  let rookId: string;
+  let oxId: string;
+  let rookTokenId: string;
+  let guardId: string;
+
+  const GUARD = 'Guard-Sigma';
+  const WALL: Record<string, string> = {};
+  for (let row = 0; row < 9; row += 1) WALL[`5,${row}`] = row === 4 ? 'door' : 'wall';
+
+  interface View {
+    raw: string;
+    fog: { active?: boolean; sight?: { cols: number; rows: number; levels: Record<string, { live: string; explored: string }> } };
+    tokenIds: string[];
+  }
+
+  async function view(token: string): Promise<View> {
+    const res = await t.app.inject({ method: 'GET', url: `/api/scenes/${sightSceneId}`, headers: as(token) });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { scene: { fog: View['fog'] }; tokens: { id: string }[] };
+    return { raw: res.body, fog: body.scene.fog, tokenIds: body.tokens.map((x) => x.id).sort() };
+  }
+
+  /** One floor's live or explored squares, as the copy a device was sent says them. */
+  function squares(fog: View['fog'], part: 'live' | 'explored', level = 0): CellBits {
+    const sight = fog.sight;
+    expect(sight, 'the fog carries the party sight').toBeDefined();
+    return decodeCellBits(sight!.levels[String(level)]?.[part] ?? '', sight!.cols, sight!.rows);
+  }
+
+  async function patchScene(payload: Record<string, unknown>): Promise<void> {
+    const res = await t.app.inject({ method: 'PATCH', url: `/api/scenes/${sightSceneId}`, headers: as(sb.gmToken), payload });
+    expect(res.statusCode, JSON.stringify(payload)).toBe(200);
+  }
+
+  async function fogOp(payload: Record<string, unknown>): Promise<void> {
+    const res = await post(`/api/scenes/${sightSceneId}/fog`, sb.gmToken, payload);
+    expect(res.statusCode, JSON.stringify(payload)).toBe(200);
+  }
+
+  /** The public events the phone can read back, oldest first, from after `since`. */
+  async function tableSince(since: number): Promise<{ id: number; type: string; payload: Record<string, unknown> }[]> {
+    const log = await t.app.inject({
+      method: 'GET',
+      url: `/api/campaigns/${sb.campaignId}/log?limit=500`,
+      headers: as(phoneToken),
+    });
+    expect(log.statusCode).toBe(200);
+    const events = (log.json() as { events: { id: unknown; type: string; payload: Record<string, unknown> }[] }).events;
+    return events
+      .map((e) => ({ id: Number(e.id), type: e.type, payload: e.payload }))
+      .filter((e) => e.id > since)
+      .reverse();
+  }
+
+  async function mark(): Promise<number> {
+    const log = await t.app.inject({ method: 'GET', url: `/api/campaigns/${sb.campaignId}/log?limit=1`, headers: as(phoneToken) });
+    const events = (log.json() as { events: { id: unknown }[] }).events;
+    return Math.max(0, ...events.map((e) => Number(e.id)));
+  }
+
+  const sightEvents = (events: { type: string; payload: Record<string, unknown> }[]) =>
+    events.filter((e) => e.type === 'fog.updated' && e.payload['op'] === 'sight').map((e) => e.payload);
+
+  function sheet(alias: string, metatype: string) {
+    return SheetV1Schema.parse({
+      v: 1,
+      identity: { alias, metatype },
+      attributes: { bod: 3, agi: 3, rea: 3, str: 3, wil: 3, log: 3, int: 3, cha: 3, edg: { max: 2, current: 2 } },
+    });
+  }
+
+  beforeAll(async () => {
+    const second = await t.app.inject({ method: 'POST', url: '/api/campaigns', headers: gm(), payload: { name: 'Dark Docks' } });
+    expect(second.statusCode).toBe(201);
+    const created = second.json() as { campaignId: string; token: string };
+    sb = { campaignId: created.campaignId, gmToken: created.token };
+    const phone = await joinAs(t.app, sb.campaignId, sb.gmToken, 'player', 'Rook');
+    const tv = await joinAs(t.app, sb.campaignId, sb.gmToken, 'display', 'Table TV');
+    phoneToken = phone.token;
+    viewers = [
+      { role: 'player', token: phone.token },
+      { role: 'display', token: tv.token },
+    ];
+    const made = await t.db
+      .insert(characters)
+      .values([
+        { campaignId: sb.campaignId, ownerUserId: phone.user.id, name: 'Rook', sheet: sheet('Rook', 'human') },
+        { campaignId: sb.campaignId, ownerUserId: phone.user.id, name: 'Ox', sheet: sheet('Ox', 'troll') },
+      ])
+      .returning();
+    rookId = made.find((c) => c.name === 'Rook')!.id;
+    oxId = made.find((c) => c.name === 'Ox')!.id;
+
+    const scene = await post(`/api/campaigns/${sb.campaignId}/scenes`, sb.gmToken, { name: 'Loading dock', grid: { cols: 12, rows: 9 } });
+    sightSceneId = (scene.json() as { scene: { id: string } }).scene.id;
+    expect((await post(`/api/scenes/${sightSceneId}/activate`, sb.gmToken, {})).statusCode).toBe(200);
+    const painted = await post(`/api/scenes/${sightSceneId}/tiles`, sb.gmToken, { tilesetId: 'docklands', paint: WALL });
+    expect(painted.statusCode).toBe(200);
+
+    const rook = await post(`/api/scenes/${sightSceneId}/tokens`, sb.gmToken, { source: 'character', sourceId: rookId, x: 2.5, y: 4.5 });
+    rookTokenId = (rook.json() as { token: { id: string } }).token.id;
+    const guard = await post(`/api/scenes/${sightSceneId}/tokens`, sb.gmToken, { source: 'npc_template', name: GUARD, x: 8.5, y: 4.5 });
+    guardId = (guard.json() as { token: { id: string } }).token.id;
+  }, 60_000);
+
+  it('switched on, shows the table the runner’s room and its walls, and nothing through the shut door', async () => {
+    // The scene starts open (its fog switch off), so the guard is on the table until the sightlines go on.
+    expect((await view(viewers[0]!.token)).tokenIds).toEqual([guardId, rookTokenId].sort());
+    const since = await mark();
+    await patchScene({ vision: { sight: 'on' } });
+
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      expect(v.fog.active, role).toBe(true);
+      expect(v.fog.sight?.cols, role).toBe(12);
+      expect(v.fog.sight?.rows, role).toBe(9);
+      const live = squares(v.fog, 'live');
+      // His square, his whole room, its walls and the shut door's face...
+      for (const [col, row] of [[2, 4], [0, 0], [4, 8], [5, 0], [5, 4]] as const) {
+        expect(cellBitsHas(live, col, row), `${role} ${col},${row}`).toBe(true);
+      }
+      // ...and nothing behind the door.
+      for (const [col, row] of [[6, 4], [8, 4], [11, 0]] as const) {
+        expect(cellBitsHas(live, col, row), `${role} ${col},${row}`).toBe(false);
+      }
+      // Seen is remembered at once: the memory is exactly what is live.
+      expect(v.fog.sight?.levels['0']?.explored, role).toBe(v.fog.sight?.levels['0']?.live);
+      // The guard behind the door is not on the wire at all.
+      expect(v.tokenIds, role).toEqual([rookTokenId]);
+      expect(v.raw, role).not.toContain(guardId);
+      expect(v.raw, role).not.toContain(GUARD);
+    }
+
+    const events = await tableSince(since);
+    const heard = sightEvents(events);
+    expect(heard).toHaveLength(1);
+    expect(heard[0]).toMatchObject({ sceneId: sightSceneId, cols: 12, rows: 9, active: true });
+    expect(heard[0]!['levels']).toEqual((await view(viewers[0]!.token)).fog.sight?.levels);
+    expect(events.filter((e) => e.type === 'token.removed').map((e) => e.payload)).toEqual([
+      { tokenId: guardId, sceneId: sightSceneId },
+    ]);
+  });
+
+  it('delivers the guard behind the door as a NEW token the moment the runner opens it', async () => {
+    const since = await mark();
+    const opened = await post(`/api/scenes/${sightSceneId}/doors`, phoneToken, { cell: '5,4', level: 0, op: 'open' });
+    expect(opened.statusCode).toBe(200);
+
+    const events = await tableSince(since);
+    const sightAt = events.findIndex((e) => e.type === 'fog.updated' && e.payload['op'] === 'sight');
+    const arrivedAt = events.findIndex((e) => e.type === 'token.added');
+    expect(sightAt).toBeGreaterThanOrEqual(0);
+    // After the sight that shows him, so a device folding in order has the
+    // hole in its fog before the man standing in it arrives.
+    expect(arrivedAt).toBeGreaterThan(sightAt);
+    expect(events[arrivedAt]!.payload['token']).toMatchObject({ id: guardId, name: GUARD, x: 8.5, y: 4.5 });
+
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      expect(v.tokenIds, role).toEqual([guardId, rookTokenId].sort());
+      const live = squares(v.fog, 'live');
+      expect(cellBitsHas(live, 6, 4), role).toBe(true);
+      expect(cellBitsHas(live, 8, 4), role).toBe(true);
+      // Through the doorway only: the east room's far corner is still behind the wall.
+      expect(cellBitsHas(live, 11, 0), role).toBe(false);
+    }
+  });
+
+  it('grows the party’s memory as the runner walks, and the table hears the sight with the move', async () => {
+    const was = squares((await view(sb.gmToken)).fog, 'explored');
+    const since = await mark();
+    // The runner's own player walks him through the door into the east room.
+    const moved = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/tokens/${rookTokenId}`,
+      headers: as(phoneToken),
+      payload: { x: 8.5, y: 1.5 },
+    });
+    expect(moved.statusCode).toBe(200);
+
+    const v = await view(sb.gmToken);
+    const live = squares(v.fog, 'live');
+    const explored = squares(v.fog, 'explored');
+    // The whole east room now...
+    expect(cellBitsHas(live, 11, 0)).toBe(true);
+    expect(cellBitsHas(live, 11, 8)).toBe(true);
+    // ...and the west room out of sight, but remembered.
+    expect(cellBitsHas(live, 0, 0)).toBe(false);
+    expect(cellBitsHas(explored, 0, 0)).toBe(true);
+    // Memory only grows: every square it held, it still holds, and more.
+    for (let row = 0; row < 9; row += 1) {
+      for (let col = 0; col < 12; col += 1) {
+        if (cellBitsHas(was, col, row)) expect(cellBitsHas(explored, col, row), `${col},${row}`).toBe(true);
+      }
+    }
+    expect(cellBitsCount(explored)).toBeGreaterThan(cellBitsCount(was));
+
+    const events = await tableSince(since);
+    expect(events.find((e) => e.type === 'token.moved')?.payload).toMatchObject({ tokenId: rookTokenId, x: 8.5, y: 1.5 });
+    const heard = sightEvents(events);
+    expect(heard).toHaveLength(1);
+    expect(heard[0]!['levels']).toEqual(v.fog.sight?.levels);
+    // The guard was in sight before and is in sight still: nothing about him.
+    expect(events.filter((e) => e.type === 'token.added' || e.type === 'token.removed')).toEqual([]);
+  });
+
+  it('switched off, nobody is seen live any more and the memory is kept', async () => {
+    const remembered = (await view(sb.gmToken)).fog.sight?.levels['0']?.explored;
+    expect(remembered).toBeTruthy();
+    const since = await mark();
+    await patchScene({ vision: { sight: 'off' } });
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      // The fog switch was never thrown, so the map is open again...
+      expect(v.fog.active, role).toBe(false);
+      // ...and the party's memory stands, with no live squares in it.
+      expect(v.fog.sight?.levels, role).toEqual({ '0': { live: '', explored: remembered } });
+    }
+    expect(sightEvents(await tableSince(since))).toMatchObject([{ active: false, levels: { '0': { live: '', explored: remembered } } }]);
+  });
+
+  it('forgets on the GM’s word: a floor never seen is a no-op, and the rest keeps only what the runners see now', async () => {
+    // Back on: the runner in the east room sees it, and the memory still holds the west room.
+    await patchScene({ vision: { sight: 'on' } });
+    let v = await view(sb.gmToken);
+    expect(cellBitsHas(squares(v.fog, 'explored'), 0, 0)).toBe(true);
+    expect(cellBitsHas(squares(v.fog, 'live'), 0, 0)).toBe(false);
+    const levels = v.fog.sight?.levels;
+
+    // The roof has no memory to forget: the op is heard, and the sight is not.
+    let since = await mark();
+    await fogOp({ op: 'forget', level: 1 });
+    expect((await view(sb.gmToken)).fog.sight?.levels).toEqual(levels);
+    let events = await tableSince(since);
+    expect(events.filter((e) => e.type === 'fog.updated').map((e) => e.payload)).toEqual([
+      { sceneId: sightSceneId, op: 'forget', level: 1, active: true },
+    ]);
+
+    // Every floor: the west room goes; the room they stand in is remembered again at once.
+    since = await mark();
+    await fogOp({ op: 'forget' });
+    v = await view(sb.gmToken);
+    expect(cellBitsHas(squares(v.fog, 'explored'), 0, 0)).toBe(false);
+    expect(v.fog.sight?.levels['0']?.explored).toBe(v.fog.sight?.levels['0']?.live);
+    events = await tableSince(since);
+    expect(events.filter((e) => e.type === 'fog.updated').map((e) => e.payload['op'])).toEqual(['forget', 'sight']);
+    expect(sightEvents(events)[0]!['levels']).toEqual(v.fog.sight?.levels);
+
+    // Off and forgotten: no sight left at all, on any copy.
+    await patchScene({ vision: { sight: 'off' } });
+    await fogOp({ op: 'forget' });
+    for (const token of [sb.gmToken, ...viewers.map((x) => x.token)]) {
+      expect((await view(token)).fog, token).not.toHaveProperty('sight');
+    }
+  });
+
+  it('shows a dark room to thermographic eyes and not to normal ones, and follows a runner’s eyes when the sheet changes', async () => {
+    // Lights out, and sightlines back on. The runner (a human, normal eyes)
+    // stands three squares from the guard in the pitch-black east room.
+    const since = await mark();
+    await patchScene({ environment: { light: 3 }, vision: { sight: 'on' } });
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      const live = squares(v.fog, 'live');
+      // A runner knows where he stands, and in the dark that is all.
+      expect(cellBitsCount(live), role).toBe(1);
+      expect(cellBitsHas(live, 8, 1), role).toBe(true);
+      expect(v.tokenIds, role).toEqual([rookTokenId]);
+      expect(v.raw, role).not.toContain(guardId);
+    }
+    expect((await tableSince(since)).filter((e) => e.type === 'token.removed').map((e) => e.payload['tokenId'])).toEqual([guardId]);
+
+    // A troll steps up beside him: thermographic eyes see the whole dark room, guard and all.
+    let mark2 = await mark();
+    const ox = await post(`/api/scenes/${sightSceneId}/tokens`, sb.gmToken, { source: 'character', sourceId: oxId, x: 9.5, y: 1.5 });
+    expect(ox.statusCode).toBe(201);
+    const oxTokenId = (ox.json() as { token: { id: string } }).token.id;
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      const live = squares(v.fog, 'live');
+      expect(cellBitsHas(live, 8, 4), role).toBe(true);
+      expect(cellBitsHas(live, 11, 8), role).toBe(true);
+      expect(v.tokenIds, role).toEqual([guardId, oxTokenId, rookTokenId].sort());
+    }
+    let events = await tableSince(mark2);
+    expect(events.filter((e) => e.type === 'token.added').map((e) => (e.payload['token'] as { id: string }).id)).toEqual([
+      oxTokenId,
+      guardId,
+    ]);
+
+    // The troll leaves: the dark closes over the guard again.
+    mark2 = await mark();
+    const gone = await t.app.inject({ method: 'DELETE', url: `/api/tokens/${oxTokenId}`, headers: as(sb.gmToken) });
+    expect(gone.statusCode).toBe(200);
+    for (const { role, token } of viewers) {
+      expect((await view(token)).tokenIds, role).toEqual([rookTokenId]);
+    }
+    events = await tableSince(mark2);
+    expect(events.filter((e) => e.type === 'token.removed').map((e) => e.payload['tokenId'])).toEqual([oxTokenId, guardId]);
+
+    // The runner's player fits thermographic cybereyes: his own eyes now see
+    // the room, with the save that fitted them.
+    mark2 = await mark();
+    const fitted = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/characters/${rookId}`,
+      headers: as(phoneToken),
+      payload: { sheet: { augments: [{ name: 'Cybereyes (rating 2)', essence: 0.2, note: 'thermographic vision' }] } },
+    });
+    expect(fitted.statusCode, fitted.body).toBe(200);
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      expect(cellBitsHas(squares(v.fog, 'live'), 8, 4), role).toBe(true);
+      expect(v.tokenIds, role).toEqual([guardId, rookTokenId].sort());
+    }
+    events = await tableSince(mark2);
+    expect(sightEvents(events)).toHaveLength(1);
+    expect(events.filter((e) => e.type === 'token.added').map((e) => (e.payload['token'] as { id: string }).id)).toEqual([guardId]);
   });
 });
 

@@ -23,6 +23,7 @@ import {
   SCENE_FILE_VERSION,
   type SceneFile,
   type SceneFileAttachment,
+  type FogState,
   type Scene,
 } from '@safehouse/contracts';
 import { characters, combatants, npcTemplates, scenes, type Db } from '@safehouse/db';
@@ -103,6 +104,32 @@ export async function unpackFiles(db: Db, campaignId: string, file: SceneFile): 
   return ids;
 }
 
+/**
+ * The fog a scene file brings in, less the party's sight where it no longer
+ * means anything.
+ *
+ * `live` never comes in. It is the squares some runner could see at the
+ * moment of export, a cache the sight pass rewrites after every committed
+ * change, and it is trusted as it stands: a guard on a live square is sent
+ * to the table. Imported, it would have been a window no runner is looking
+ * through, open until something moved; on a scene whose sightlines are off,
+ * where no pass rewrites it, open for good. The pass works it out afresh
+ * when the scene goes live (`activate`).
+ *
+ * `explored`, the party's memory of the map, comes back only into the
+ * campaign it was exported from: it is what THAT party has seen. Anywhere
+ * else it goes too, and the new table starts the map fresh.
+ */
+function importedFog(fog: FogState, sameCampaign: boolean): FogState {
+  const { sight, ...rest } = fog;
+  if (!sameCampaign || sight === undefined) return rest;
+  const levels: NonNullable<FogState['sight']>['levels'] = {};
+  for (const [key, floor] of Object.entries(sight.levels)) {
+    if (floor.explored !== '') levels[key] = { live: '', explored: floor.explored };
+  }
+  return Object.keys(levels).length > 0 ? { ...rest, sight: { ...sight, levels } } : rest;
+}
+
 /** Build the scene and its tokens from a file, with new ids throughout. Returns the new scene. */
 export async function importScene(db: Db, campaignId: string, file: SceneFile, fileIds: Map<string, string>): Promise<Scene> {
   const svc = new ScenesService(db);
@@ -131,7 +158,7 @@ export async function importScene(db: Db, campaignId: string, file: SceneFile, f
     environment: src.environment as unknown as Record<string, unknown>,
     geometry: { ...src.geometry, pins },
     ...(src.tiles ? { tiles: src.tiles } : {}),
-    fog: src.fog,
+    fog: importedFog(src.fog, sameCampaign),
     mapAttachmentIds: src.mapAttachmentIds.map((id) => fileIds.get(id)).filter((id): id is string => id !== undefined),
     ...(src.notes !== undefined ? { notes: src.notes } : {}),
   });

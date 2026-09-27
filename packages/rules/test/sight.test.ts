@@ -139,6 +139,57 @@ describe('sightFor: walls', () => {
     expect(open.has('5,0')).toBe(true);
     expect(open.has('6,0')).toBe(false);
   });
+
+  it('does not lend a block on the far side of a 45-degree wall as if it were a room corner', () => {
+    // The reviewer's case: a wall drawn at 45 degrees (col + row = 7, its
+    // squares touching corner to corner) with a crate at (6,2) behind it.
+    // From the floor square (5,1), both side neighbours are wall and the
+    // diagonal one is the crate: the same 3x3 as a room's corner, which is
+    // why the crate used to be lent to the table from behind the wall.
+    const diagonal = model([
+      '.......#..',
+      '......#...',
+      '.....##...',
+      '....#.....',
+      '...#......',
+      '..#.......',
+      '.#........',
+      '#.........',
+    ]);
+    const seen = sightFor(at(2, 2), diagonal, null, NORMAL, { cols: 10, rows: 8 });
+    // The wall's own face is seen, square by square...
+    for (const [col, row] of [[6, 1], [5, 2], [4, 3], [3, 4]] as const) {
+      expect(seen.has(`${col},${row}`), `${col},${row}`).toBe(true);
+    }
+    // ...and the crate behind it is not.
+    expect(seen.has('6,2')).toBe(false);
+    // Nothing on the far side at all.
+    for (const [key] of seen) {
+      const [col, row] = key.split(',').map(Number) as [number, number];
+      expect(col + row, key).toBeLessThanOrEqual(7);
+    }
+  });
+
+  it('still lends the corner of a room whose walls are thick', () => {
+    // Two courses of wall all round: the inner corner square is where the
+    // inner walls meet and runs on both ways, so it is remembered; the outer
+    // course, behind it, never is.
+    const bunker = model([
+      '########',
+      '########',
+      '##....##',
+      '##....##',
+      '########',
+      '########',
+    ]);
+    const seen = sightFor(at(3, 2), bunker, null, NORMAL, { cols: 8, rows: 6 });
+    for (const [col, row] of [[1, 1], [6, 1], [1, 4], [6, 4]] as const) {
+      expect(seen.has(`${col},${row}`), `${col},${row}`).toBe(true);
+    }
+    for (const [col, row] of [[0, 0], [7, 0], [0, 5], [7, 5], [0, 2], [3, 0], [3, 5]] as const) {
+      expect(seen.has(`${col},${row}`), `${col},${row}`).toBe(false);
+    }
+  });
 });
 
 describe('sightFor: painted doors', () => {
@@ -171,6 +222,24 @@ describe('sightFor: painted doors', () => {
     expect(seen.has('9,4')).toBe(true);
     // Beyond the frame, off the line of the doorway, the wall still hides it.
     expect(seen.has('6,0')).toBe(false);
+  });
+
+  it('a runner standing in the shut door sees that square alone, never both rooms', () => {
+    // A ray out of the viewer's own square passes whatever is in it, so a
+    // runner dropped on a closed door used to see the room on each side,
+    // and the table was shown (and sent the guards of) the room the door is
+    // shut on.
+    const inDoor = sightFor(at(5, 4), dock(false), null, NORMAL, { cols: 10, rows: 9 });
+    expect([...inDoor.keys()]).toEqual(['5,4']);
+    // Opened, the door is a doorway, and standing in it shows both rooms.
+    const inDoorway = sightFor(at(5, 4), dock(true), null, NORMAL, { cols: 10, rows: 9 });
+    expect(inDoorway.has('2,4')).toBe(true);
+    expect(inDoorway.has('8,4')).toBe(true);
+  });
+
+  it('a runner standing in a wall square sees that square alone', () => {
+    const seen = sightFor(at(5, 1), dock(false), null, NORMAL, { cols: 10, rows: 9 });
+    expect([...seen.keys()]).toEqual(['5,1']);
   });
 });
 

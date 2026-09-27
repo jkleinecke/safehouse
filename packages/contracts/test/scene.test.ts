@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   SceneSchema,
   TokenSchema,
+  FOG_SIGHT_MAX_SIDE,
+  FogOpSchema,
   FogRevealAsSchema,
   FogRevealCommandSchema,
   FogStateSchema,
@@ -153,6 +155,28 @@ describe('SceneSchema', () => {
     expect(bad({ cols: 4, rows: 4, levels: { '0': { live: 'not base64!' } } })).toBe(false);
     expect(bad({ cols: 4, rows: 4, levels: { ground: { live: '' } } })).toBe(false);
     expect(bad({ cols: 0, rows: 4, levels: {} })).toBe(false);
+  });
+
+  it('bounds the party sight a scene file can make a reader allocate', () => {
+    // A crafted file saying `cols: 1e9, rows: 1e9` made the first read of its
+    // scene try for about 10^17 bytes. The record is refused instead.
+    const ok = (sight: unknown) => FogStateSchema.safeParse({ ...scene.fog, sight }).success;
+    expect(FOG_SIGHT_MAX_SIDE).toBe(1024);
+    expect(ok({ cols: 1024, rows: 1024, levels: {} })).toBe(true);
+    expect(ok({ cols: 1e9, rows: 1e9, levels: { '0': { live: 'AQ==' } } })).toBe(false);
+    expect(ok({ cols: 40, rows: 1025, levels: {} })).toBe(false);
+    // A floor per key, so a million made-up floors are not a million bitsets:
+    // two digits of floor, far past the dozen a scene can have.
+    expect(ok({ cols: 4, rows: 4, levels: { '99': { live: '' } } })).toBe(true);
+    expect(ok({ cols: 4, rows: 4, levels: { '100': { live: '' } } })).toBe(false);
+  });
+
+  it('lets the GM forget what the party has seen, one floor or all of them', () => {
+    const forget = { cmd: 'fog.reveal', sceneId: 'scn_1', op: 'forget' };
+    expect(FogOpSchema.options).toContain('forget');
+    expect(FogRevealCommandSchema.parse(forget).level).toBeUndefined();
+    expect(FogRevealCommandSchema.parse({ ...forget, level: 1 }).level).toBe(1);
+    expect(FogRevealCommandSchema.safeParse({ ...forget, level: -1 }).success).toBe(false);
   });
 
   it('sightlines are off unless said on, and fog a scene whatever its switch says', () => {

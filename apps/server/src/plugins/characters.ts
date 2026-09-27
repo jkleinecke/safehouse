@@ -31,6 +31,7 @@ import { z } from 'zod';
 import { ModifierOpSchema, SheetV1Schema, type Modifier, type SheetV1 } from '@safehouse/contracts';
 import { characters, type Db } from '@safehouse/db';
 import { ScenesService, serializeToken } from '../services/scenes.js';
+import { recomputeSightForCharacter, sheetVisionModes } from '../services/sight.js';
 import type { EventTx } from '../hub.js';
 import { assertCampaign, httpError, requireAuth, type AuthContext } from '../services/auth.js';
 import {
@@ -176,6 +177,11 @@ async function commit(
   opts: CommitOptions,
   tx?: EventTx,
 ): Promise<number | null> {
+  // Whether this save changes the runner's eyes (P6 sightlines): the party's
+  // sight on every scene they stand on is worked out again in the same
+  // commit. Asked of the sheet before and after, and almost always "no", so
+  // an ammo count or a damage box costs two name scans and nothing else.
+  const eyesChanged = sheetVisionModes(rec.sheet).join(',') !== sheetVisionModes(opts.sheet).join(',');
   return app.hub.atomicIn(rec.campaignId, tx, async (t) => {
     await saveCharacter(t.db, rec.id, {
       sheet: opts.sheet,
@@ -199,6 +205,7 @@ async function commit(
         ...opts.payload,
       },
     });
+    if (eyesChanged) await recomputeSightForCharacter(t, rec.id);
     return revision;
   });
 }

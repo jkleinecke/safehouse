@@ -706,6 +706,65 @@ describe('table gestures: pointer, focus, display (FR9.15/FR9.21)', () => {
   });
 });
 
+/**
+ * The party's sight rides the drop (P6 sightlines): a runner's `token.move`
+ * works the pooled sight out again in the same commit, and the table's
+ * sockets hear the move, then the sight (`fog.updated`, op 'sight'), then
+ * whoever the move brought into view (`token.added`), in that order.
+ *
+ * Played on this file's scene as the blocks above left it (the fog on, the
+ * runner at (61.5, 68.5)), made big enough for him, and dark.
+ */
+describe('the party’s sight rides the token.move commit (P6)', () => {
+  it('a runner with a flashlight walks up to a guard in the dark: the table hears the move, the sight, then the guard', async () => {
+    const tables = (m: { player: number; display: number }) =>
+      [
+        [playerWs, m.player],
+        [displayWs, m.display],
+      ] as const;
+    const patchScene = async (payload: Record<string, unknown>) => {
+      const res = await t.app.inject({ method: 'PATCH', url: `/api/scenes/${sceneId}`, headers: headers(boot.gmToken), payload });
+      expect(res.statusCode, JSON.stringify(payload)).toBe(200);
+    };
+
+    // A grid the runner stands on, pitch black, with its sightlines on.
+    await patchScene({ grid: { cols: 80, rows: 80 }, environment: { light: 3 }, vision: { sight: 'on' } });
+    const guard = await post(`/api/scenes/${sceneId}/tokens`, boot.gmToken, { source: 'npc_template', name: 'Guard-Mu', x: 66.5, y: 68.5 });
+    expect(guard.statusCode).toBe(201);
+    const guardId = (guard.json() as { token: { id: string } }).token.id;
+    const hasGuard = (f: Frame) => JSON.stringify(f).includes(guardId);
+
+    // The GM hands the runner a flashlight: three metres of light round him,
+    // not yet reaching the guard five squares off.
+    const lit = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/tokens/${ownTokenId}`,
+      headers: headers(boot.gmToken),
+      payload: { light: { radiusM: 3 } },
+    });
+    expect(lit.statusCode).toBe(200);
+    await settle();
+
+    const marks = { player: playerWs.frames.length, display: displayWs.frames.length };
+    playerWs.send({ cmd: 'token.move', tokenId: ownTokenId, x: 64.5, y: 68.5 });
+    for (const [ws, mark] of tables(marks)) {
+      const moved = await nextAfter(ws, mark, (f) => f.type === 'token.moved' && (f.payload as { tokenId?: string }).tokenId === ownTokenId);
+      const sight = await nextAfter(ws, mark, isFog('sight'));
+      const arrival = await nextAfter(ws, mark, (f) => f.type === 'token.added' && hasGuard(f));
+      expect(sight.visibility).toBe('public');
+      expect(sight.payload).toMatchObject({ sceneId, op: 'sight', cols: 80, rows: 80, active: true });
+      expect(arrival.visibility).toBe('public');
+      expect((arrival.payload as { token: unknown }).token).toMatchObject({ id: guardId, x: 66.5, y: 68.5 });
+      // In order: the move, the sight it gave, the guard standing in it.
+      expect(ws.frames.indexOf(moved)).toBeLessThan(ws.frames.indexOf(sight));
+      expect(ws.frames.indexOf(sight)).toBeLessThan(ws.frames.indexOf(arrival));
+    }
+
+    // Sightlines off again, and the lights back on, for whatever follows.
+    await patchScene({ environment: { light: 0 }, vision: { sight: 'off' } });
+  });
+});
+
 describe('PerKeyThrottle (the ~15 Hz drag relay budget)', () => {
   it('passes the leading edge and swallows the rest of the window, per key', () => {
     let now = 1_000;

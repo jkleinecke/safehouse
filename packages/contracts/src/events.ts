@@ -135,9 +135,10 @@ export const TokenDragCommandSchema = z.object({
 export type TokenDragCommand = z.infer<typeof TokenDragCommandSchema>;
 
 /**
- * Fog ops (FR9.13/9.14): reveal/hide a named region, define or remove one, or
- * switch the scene's fog on or off (`FogOpSchema`). The command keeps its old
- * name, `fog.reveal`, because that is what every client already sends.
+ * Fog ops (FR9.13/9.14): reveal/hide a named region, define or remove one,
+ * switch the scene's fog on or off, or forget what the party has seen
+ * (`FogOpSchema`). The command keeps its old name, `fog.reveal`, because
+ * that is what every client already sends.
  */
 export const FogRevealCommandSchema = z.object({
   cmd: z.literal('fog.reveal'),
@@ -155,6 +156,11 @@ export const FogRevealCommandSchema = z.object({
    * every reveal was before explored reveals existed.
    */
   as: FogRevealAsSchema.optional(),
+  /**
+   * For op 'forget': the one floor whose memory goes (`Token.level`, 0 the
+   * ground). Absent forgets every floor.
+   */
+  level: z.number().int().min(0).optional(),
   /** Announce the reveal in the session log (FR9.14). */
   announce: z.boolean().optional(),
 });

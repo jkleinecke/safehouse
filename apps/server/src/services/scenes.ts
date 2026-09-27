@@ -54,7 +54,7 @@ import {
   SceneLevelSchema,
   type SceneLevel,
 } from '@safehouse/contracts';
-import { deriveCharacter, environment, generateNpc, tokenLive } from '@safehouse/rules';
+import { deriveCharacter, environment, fogCells, generateNpc, tokenLive } from '@safehouse/rules';
 import {
   attachments,
   characters,
@@ -466,7 +466,31 @@ export function tokenConcealed(
   token: ConcealableToken,
   scene: Pick<Scene, 'tokenLayers' | 'fog' | 'vision'>,
 ): boolean {
-  return tokenHidden(token, scene) || tokenFogged(token, scene.fog, scene.vision);
+  return concealer(scene)(token);
+}
+
+/**
+ * `tokenConcealed` for every token of one scene: the scene is read ONCE (its
+ * hidden layers gathered, its fog read with `fogCells`, the party's bitsets
+ * decoded once per floor) and the answer handed back as a question to ask of
+ * each token. Every path that walks a scene's tokens (the composed payload,
+ * the concealment diffs, staging a fight) asks through this, so a sightlines
+ * scene with its per-floor bitsets costs one decode per floor per walk, not
+ * one per token; and the answer is the same one `tokenConcealed` gives,
+ * because that is built on this.
+ */
+export function concealer(
+  scene: Pick<Scene, 'tokenLayers' | 'fog' | 'vision'>,
+): (token: ConcealableToken) => boolean {
+  const layered = hiddenByLayer(scene);
+  const cells = fogCells(scene.fog, { vision: scene.vision });
+  return (token) =>
+    token.hidden ||
+    layered.has(token.id) ||
+    // `tokenFogged`, with the fog read once: a runner is never fogged, and
+    // anyone else is when no square they stand on is LIVE.
+    (token.source !== 'character' &&
+      !cells.tokenLive({ x: token.x, y: token.y, level: token.level, size: token.size }));
 }
 
 /**
@@ -781,6 +805,26 @@ export interface FogOpInput {
   shape?: Point[];
   /** For `reveal`: live (the default) or as explored (`FogRevealAsSchema`). */
   as?: FogRevealAs;
+  /** For `forget`: the one floor whose memory goes; absent is every floor. */
+  level?: number;
+}
+
+/**
+ * The party's memory of the map (`FogSight` explored) wiped: of floor
+ * `level`, or of every floor when none is named. What the runners see right
+ * now (`live`) is left for the sight pass that follows every fog op, which
+ * remembers it again at once; a floor with nothing left in either is taken
+ * off, and a record with no floors left goes, so a scene whose memory is
+ * wholly forgotten stores and sends the fog it had before sightlines.
+ */
+function forgetExplored(sight: FogState['sight'], level: number | undefined): FogState['sight'] {
+  if (sight === undefined) return undefined;
+  const levels: NonNullable<FogState['sight']>['levels'] = {};
+  for (const [key, floor] of Object.entries(sight.levels)) {
+    const explored = level === undefined || key === String(level) ? '' : floor.explored;
+    if (floor.live !== '' || explored !== '') levels[key] = { live: floor.live, explored };
+  }
+  return Object.keys(levels).length > 0 ? { ...sight, levels } : undefined;
 }
 
 /**
@@ -885,8 +929,17 @@ export class ScenesService {
 
   // --- scenes --------------------------------------------------------------
 
-  async sceneRow(sceneId: string): Promise<SceneRow> {
-    const rows = await this.db.select().from(scenes).where(eq(scenes.id, sceneId)).limit(1);
+  /**
+   * One scene row. `lock` takes it `FOR UPDATE`, for a read that is going to
+   * write the row back from what it read: the fog above all, which the fog
+   * ops and the sight pass both rewrite whole. Two of those in flight on one
+   * scene then take turns, and the second reads what the first committed, so
+   * neither can write the party's memory (or a reveal) back over the other's.
+   * Only inside a transaction (`Hub.atomic`), where the lock is held to the end.
+   */
+  async sceneRow(sceneId: string, opts: { lock?: boolean } = {}): Promise<SceneRow> {
+    const query = this.db.select().from(scenes).where(eq(scenes.id, sceneId)).limit(1);
+    const rows = opts.lock ? await query.for('update') : await query;
     const row = rows[0];
     if (!row) throw httpError(404, 'not_found', 'unknown scene');
     return row;
@@ -1011,7 +1064,8 @@ export class ScenesService {
     // ground that is not LIVE (FR9.13, P6: unrevealed, or revealed only as
     // explored): any of those, and it is not on a player's wire.
     const dto = serializeScene(row);
-    const visibleTokens = tokenRows.filter((t) => gm || !tokenConcealed(t, dto)).map(serializeToken);
+    const concealed = concealer(dto);
+    const visibleTokens = tokenRows.filter((t) => gm || !concealed(t)).map(serializeToken);
     const liveDrawings = drawingRows
       .filter((d) => !d.expiresAt || d.expiresAt.getTime() > now)
       .map(serializeDrawing);
@@ -1232,12 +1286,18 @@ export class ScenesService {
       // reveals. Once flipped it is the answer (`fogOn`), and a scene with no
       // regions at all can be fogged, which before the switch it could not.
       fog.enabled = op.op === 'enable';
+    } else if (op.op === 'forget') {
+      // The party's memory, the GM's to wipe (`forgetExplored`): nothing the
+      // GM revealed moves, only what the runners have seen for themselves.
+      const sight = forgetExplored(fog.sight, op.level);
+      if (sight !== undefined) fog.sight = sight;
+      else delete fog.sight;
     } else {
       // hide: one named region, whichever fashion it was revealed in, or (no
       // regionId) the GM's reset: every reveal of both fashions, regions and
       // shapes, taken back at once. The party's own memory of the map
       // (`sight`) is not the GM's reveal and is left alone; forgetting it is
-      // a separate act.
+      // a separate act (`forget`, above).
       if (op.regionId) {
         fog.revealed = fog.revealed.filter((id) => id !== op.regionId);
         exploredIds = exploredIds.filter((id) => id !== op.regionId);
@@ -1434,7 +1494,7 @@ export class ScenesService {
     const combatantIds: string[] = [];
     let shown = 0;
     // Read once: whether each token is on the table is asked of the same scene.
-    const current = serializeScene(scene);
+    const concealed = concealer(serializeScene(scene));
     for (const t of stageable) {
       const raw = t.sourceId ? sheetById.get(t.sourceId) : undefined;
       // FR9.10/FR4.2: derive the initiative line through the ENGINE, exactly as
@@ -1460,7 +1520,7 @@ export class ScenesService {
       // alone, so a guard the server was withholding from every player's map
       // because he stood in unrevealed fog went onto the public roster by
       // name the moment the GM staged the fight.
-      const visibility = tokenConcealed(t, current) ? 'gm' : 'public';
+      const visibility = concealed(t) ? 'gm' : 'public';
       if (visibility === 'public') shown += 1;
       const row = (
         await this.db

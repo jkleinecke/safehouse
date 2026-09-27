@@ -5,7 +5,9 @@
  * and closed doors, painted and traced, stop it, and nothing else does. That
  * is geometry. Sightlines need the rest of the question a runner asks at the
  * table: "which of those can I actually make out?" This module adds the two
- * things geometry does not know about, and pools the answer over the party:
+ * things geometry does not know about, darkness and wall faces, settles where
+ * a runner standing in a wall or a shut door looks from, and pools the
+ * answer over the party:
  *
  * - DARKNESS, strict SR5 (the GM, 2026-09-27, decision 3). A square is seen
  *   when a ray reaches it AND it is not in total darkness for the viewer's
@@ -38,6 +40,23 @@
  *   of it is; its own light row is not asked, because the light map is built
  *   by the same centre rays and has the same grazing gap on wall squares.
  *
+ *   A corner is lent only where it IS a corner. Within the 3x3 around a seen
+ *   square, a room's corner (two walls meeting in an L, the corner square
+ *   where they join) looks exactly like a wall drawn at 45 degrees with a
+ *   block standing on its far side (a crate, the second course of a thick
+ *   diagonal wall): both side neighbours are wall and so is the diagonal
+ *   one. Lent in the second case, that block (and a guard standing in it)
+ *   went to the table from behind the wall. What tells them apart is one
+ *   square further out: the two walls of a corner each run on AWAY from the
+ *   corner (the wall beside the floor continues along its own row or
+ *   column), while the squares of a diagonal wall touch only corner to
+ *   corner, and a step along a row or column from one of them lands on the
+ *   open floor in front of it. So a diagonal neighbour walled in on both
+ *   sides is lent only when both of those walls run on away from it. A
+ *   corner whose two walls are one square long each is then missed, which
+ *   is the safe way to be wrong: a notch in the memory, never a square from
+ *   the far side of a wall.
+ *
  *   The face is also the ONLY way a square that blocks sight is seen: no ray
  *   is cast to one on its own light row. A wall square has one light row
  *   for both of its faces, and a lamp in the room behind it lights that row
@@ -46,6 +65,21 @@
  *   in the dark saw the office wall's squares glowing from the far side:
  *   the far side of a wall, told to the table. Through its face, the wall is
  *   seen exactly when the floor in front of it is, on the viewer's side.
+ *
+ * - WHERE THE RUNNER STANDS. A runner is always taken to see their own
+ *   square. One standing IN a square that blocks sight (dropped on a closed
+ *   painted door, or on a wall square) sees that square and nothing else.
+ *   `visibleFrom` lets a ray out of the viewer's own square whatever is in
+ *   it, which is right for a lamp and for a runner in an open doorway, but a
+ *   runner on a CLOSED door would otherwise see both rooms at once, and the
+ *   pooled sight would show the table (and send it the guards of) the room
+ *   the door is shut on. "The nearer side" was considered and refused: a
+ *   token stands on its square's centre, exactly as near to one side of a
+ *   door as the other, and nothing here knows which way it came in; a wrong
+ *   guess is the leak itself. So the table keeps the runner and its memory
+ *   of both rooms (dimmed, nobody in them) until the runner steps off the
+ *   door, or opens it: an open painted door is a doorway, sight passes, and
+ *   a runner standing in it sees into both rooms, as they would.
  *
  * ## How far a runner sees
  *
@@ -188,7 +222,9 @@ const AROUND: ReadonlyArray<readonly [number, number]> = [
  * The viewer's own square is always seen, lit or not: a runner knows where
  * they are standing. It lends its sight to the walls around it only when it
  * is lit enough to see, so a runner in a pitch-black corridor does not map
- * the corridor's walls by standing in it.
+ * the corridor's walls by standing in it. A viewer standing in a square that
+ * blocks sight (a closed door, a wall) sees that square alone (see "WHERE
+ * THE RUNNER STANDS" at the top of this file).
  *
  * Pass `lightMap` null to leave light out (every square lit), which is a
  * daylit scene's answer anyway and saves building a map for it.
@@ -223,6 +259,14 @@ export function sightFor(
 
   const blocks = (col: number, row: number) => model.cells.get(visibleKey(col, row))?.blocksSight === true;
 
+  // Standing in a closed door or a wall: that square, and nothing else. A ray
+  // out of it would see both sides of what the runner is standing in.
+  if (blocks(viewer.col, viewer.row)) {
+    const own = new Map<string, SeenCell>();
+    if (onGrid(viewer.col, viewer.row)) own.set(visibleKey(viewer.col, viewer.row), { col: viewer.col, row: viewer.row });
+    return own;
+  }
+
   // Rays only to OPEN squares the viewer could make out if nothing stood in
   // the way; `visibleFrom` adds the viewer's own square whatever this says.
   // A square that blocks sight gets no ray of its own: its light row cannot
@@ -249,6 +293,21 @@ export function sightFor(
   const traced: SightModel | null = model.segments.some((s) => s.blocksSight)
     ? { cells: new Map(), segments: model.segments }
     : null;
+  // Whether the block diagonal from `cell` (one step `dc` along the row and
+  // `dr` down the column) is a face this floor square sees. With either side
+  // square between them open it is: that side of the block faces this floor.
+  // With both side squares walled, the block is seen only as the corner where
+  // those two walls meet, which is when each of them runs on away from it:
+  // the wall beside along the row continues past the floor square, and so
+  // does the one beside down the column. A 45-degree wall's squares meet only
+  // corner to corner, so a step along from one lands on the floor in front of
+  // it, and the block on its far side is not lent (see "WALL FACES" above).
+  const cornerSeen = (cell: SeenCell, dc: number, dr: number): boolean => {
+    const besideRow = blocks(cell.col + dc, cell.row);
+    const besideCol = blocks(cell.col, cell.row + dr);
+    if (!besideRow || !besideCol) return true;
+    return blocks(cell.col + dc, cell.row - dr) && blocks(cell.col - dc, cell.row + dr);
+  };
   for (const cell of reached.values()) {
     // Only an open square lends its sight to the walls around it, so this
     // never chains along a wall run.
@@ -261,6 +320,7 @@ export function sightFor(
       if (!onGrid(col, row) || !blocks(col, row)) continue;
       const key = visibleKey(col, row);
       if (out.has(key)) continue;
+      if (dc !== 0 && dr !== 0 && !cornerSeen(cell, dc, dr)) continue;
       if (traced !== null && !lineOfSight(cell, { col, row }, traced).clear) continue;
       out.set(key, { col, row });
     }

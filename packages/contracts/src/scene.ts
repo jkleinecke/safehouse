@@ -399,8 +399,14 @@ export type FogRegion = z.infer<typeof FogRegionSchema>;
  *   Turning fog off keeps every region and every reveal, so a GM can prepare
  *   a scene's fog while the table still sees the whole map, and turning it
  *   back on picks up exactly where it was left.
+ * - `forget` wipes the party's memory of the map (`FogSight` explored): of one
+ *   floor when the op names a `level`, of every floor when it does not. It is
+ *   the GM's alone, and the only way a square ever leaves the memory: the
+ *   sight pass only ever adds to it. What the runners can see RIGHT NOW is
+ *   remembered again at once (sightlines unmask automatically), so forgetting
+ *   takes away the rooms they have left, never the one they stand in.
  */
-export const FogOpSchema = z.enum(['reveal', 'hide', 'define', 'remove', 'enable', 'disable']);
+export const FogOpSchema = z.enum(['reveal', 'hide', 'define', 'remove', 'enable', 'disable', 'forget']);
 export type FogOp = z.infer<typeof FogOpSchema>;
 
 /**
@@ -457,16 +463,33 @@ export const FogSightLevelSchema = z.object({
 export type FogSightLevel = z.infer<typeof FogSightLevelSchema>;
 
 /**
+ * The most squares a side the party's sight is kept for: a sight record says
+ * how big a grid its bitsets were written for, and whatever reads one
+ * allocates that many bits (`decodeCellBits`). Unbounded, a scene file
+ * crafted to say `cols: 1e9, rows: 1e9` made the first read of it try for
+ * about 10^17 bytes, and every read of that scene after it threw. 1024 is
+ * far past any map a table plays (the painted-floor budget is a 240x240
+ * scene), and a bitset that big is still only 128 KB. The server's sight
+ * pass keeps sight for the first 1024 squares each way of a grid bigger than
+ * that; ground past it is never seen.
+ */
+export const FOG_SIGHT_MAX_SIDE = 1024;
+
+/**
  * The party's sight and memory, per floor (`FogSightLevelSchema`), keyed by
  * the floor's index as a decimal string (`"0"` is the ground, as
- * `Token.level` counts). `cols` and `rows` are the grid the bitsets were
- * written for, so a scene resized since is read square by square and never
- * shifted: a bit past the edge of the grid is simply not there.
+ * `Token.level` counts), at most two digits: a scene has a dozen floors at
+ * most, and a key per floor is a bitset per floor, so a record with a
+ * million made-up floors in it is refused rather than decoded. `cols` and
+ * `rows` are the grid the bitsets were written for (at most
+ * `FOG_SIGHT_MAX_SIDE` each), so a scene resized since is read square by
+ * square and never shifted: a bit past the edge of the grid is simply not
+ * there.
  */
 export const FogSightSchema = z.object({
-  cols: z.number().int().positive(),
-  rows: z.number().int().positive(),
-  levels: z.record(z.string().regex(/^(0|[1-9][0-9]*)$/), FogSightLevelSchema).default({}),
+  cols: z.number().int().positive().max(FOG_SIGHT_MAX_SIDE),
+  rows: z.number().int().positive().max(FOG_SIGHT_MAX_SIDE),
+  levels: z.record(z.string().regex(/^(0|[1-9][0-9]?)$/), FogSightLevelSchema).default({}),
 });
 export type FogSight = z.infer<typeof FogSightSchema>;
 

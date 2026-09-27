@@ -180,6 +180,34 @@ describe('scene import', () => {
     expect(map?.campaignId).toBe(awayId);
   });
 
+  it('never brings the party’s live sight in, and brings its memory only home (P6)', async () => {
+    // A file whose scene the party was looking at when it was exported: the
+    // square at (0,0) live, and (0,0)-(1,0) remembered. Live squares are
+    // trusted as they stand (a guard on one is sent to the table), so
+    // imported they would be a window nobody looks through, open until
+    // something moved, and for good on a scene whose sightlines are off.
+    const file = await exportFile();
+    const looking = {
+      ...file,
+      scene: { ...file.scene, fog: { regions: [], revealed: [], revealedShapes: [], sight: { cols: 30, rows: 30, levels: { '0': { live: 'AQ==', explored: 'Aw==' } } } } },
+    };
+    const res = await importInto(home, looking);
+    expect(res.statusCode).toBe(201);
+    const id = (res.json() as { scene: { id: string } }).scene.id;
+    const home1 = (await opened(home, id)).scene as unknown as { fog: { sight?: unknown } };
+    expect(home1.fog.sight).toEqual({ cols: 30, rows: 30, levels: { '0': { live: '', explored: 'Aw==' } } });
+
+    // Another campaign's table never walked this map: no memory either.
+    const parsed = SceneFileSchema.parse(looking);
+    const away = await importScene(t.db, awayId, parsed, await unpackFiles(t.db, awayId, parsed));
+    expect(away.fog).not.toHaveProperty('sight');
+
+    // And a file that says its sight is a billion squares a side is refused
+    // before anything tries to allocate it.
+    const huge = { ...file, scene: { ...file.scene, fog: { ...looking.scene.fog, sight: { cols: 1e9, rows: 1e9, levels: {} } } } };
+    expect((await importInto(home, huge)).statusCode).toBe(400);
+  });
+
   it('refuses a file that is not a scene, and says so', async () => {
     const res = await importInto(home, { format: 'something.else', version: 1 });
     expect(res.statusCode).toBe(400);
