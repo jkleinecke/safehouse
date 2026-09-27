@@ -58,8 +58,12 @@ export async function deleteScene(sceneId: string): Promise<void> {
 
 export interface FogOpVars {
   sceneId: string;
-  op: 'reveal' | 'hide';
-  /** Omit on `hide` to re-fog the whole scene (the server clears every reveal). */
+  op: 'reveal' | 'hide' | 'refog';
+  /**
+   * Omit on `hide` to hide every reveal. `refog` is the fog bar's "Fog
+   * everything": every reveal hidden, the brush cleared, what the party has
+   * seen forgotten and the fog switched on, in one step.
+   */
   regionId?: string;
   /**
    * For `reveal`: live (the server's default, so it is not sent) or as seen

@@ -232,7 +232,7 @@ export default function ScenesPage() {
           )
         }
         onRefogAll={() =>
-          void run(scene.id, 'save', () => fog.mutateAsync({ sceneId: scene.id, op: 'hide' }))
+          void run(scene.id, 'save', () => fog.mutateAsync({ sceneId: scene.id, op: 'refog' }))
         }
         notesValue={notesValue}
         notesDirty={notesValue !== savedNotes}

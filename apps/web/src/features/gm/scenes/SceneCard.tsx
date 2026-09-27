@@ -290,9 +290,9 @@ export default function SceneCard(props: SceneCardProps) {
               className={btn + ' py-1'}
               disabled={anyBusy}
               onClick={props.onRefogAll}
-              title="Re-fog the whole scene, including anything painted freehand"
+              title="Fog everything: hide every reveal and brush mark, forget what the party has seen, and switch the fog on — the same as the fog bar's button"
             >
-              re-fog everything
+              fog everything
             </button>
             {summary.freehandReveals > 0 && (
               <span className="mono-label text-faint">
