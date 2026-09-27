@@ -147,6 +147,15 @@ every mode as the panel's header, because switching scenes is not a mode.
 The view controls (snap, zoom, fit, Plan/Iso) and the GM-view toggle move to
 the canvas's own corner, out of the tool row, so the tool row is only tools.
 
+*2026-09-27: the fog left Prep's toolbar and panel. Every fog control is one
+bar under the toolbar in Prep and Play — Fog, Party sight, the brush with
+its paint and size, Fog everything, See as players — because the fog
+switch, the sightlines, the brush and "see as the party" had each grown two
+or three homes (the Fog region tool, a split menu, the Fog tab, switches on
+the mode row and in the LOS tab) and a GM could not tell which to press
+first. The Fog region tool is gone; the named regions older scenes and the
+Fixer bring are revealed from Prep's list.*
+
 ### 3.2 One place per thing: tools in the toolbar, an inspector in the panel
 
 Every drawable thing has exactly one way to make it (its tool) and one way to
@@ -164,7 +173,8 @@ pins, cameras and notes all behave the same way, so learning one teaches all.
 
 Single-key tools on the current mode's toolbar — **V** select, **R** room,
 **A** area, **B** brush, **E** erase, **W** wall, **D** door, **Z** zone,
-**P** pin, **F** fog region, **C** camera, **N** note, **M** measure,
+**P** pin, **F** fog region (the fog brush since 2026-09-27, §3.1),
+**C** camera, **N** note, **M** measure,
 **O** area of effect, **X** point, **G** focus; **Esc** returns to select,
 **1–9** switch floors, **Delete** (or Backspace) removes whatever is selected
 — shown in every tool's tooltip. A key only fires when

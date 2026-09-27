@@ -384,7 +384,9 @@ A per-scene switch. The rules are `partySight` and `sightFor`
 - **What each screen draws.** Phones and the TV stamp the squares into the
   fog mask they already had (`stage3d/masks.ts`: live clear, seen before at
   0.62, hidden solid). The GM sees every square tinted by its state, and
-  a **See as party** lens shows exactly what the table is shown.
+  a **See as party** lens shows exactly what the table is shown. (Later
+  that day it became the fog bar's **See as players**, which draws the
+  table's own cover rather than the GM's tint: §8.3.)
 
 ### 8.3 The fog: three states, and a secrecy boundary
 
@@ -396,6 +398,17 @@ reveal as seen before; otherwise hidden. The GM reveals regions, drawn
 shapes and single squares (the brush) either way, fogs any of them again,
 and forgets one floor's memory or all of it; the switch turns the fog off
 without losing any of it.
+
+*Later on 2026-09-27 the GM's hands on all of this became one **fog bar**,
+under the toolbar in Prep and Play (`grid/hud/FogBar.tsx`): **Fog** on or
+off, **Party sight** on or off, the **brush** (round now, 1 to 10 squares
+across, painting live, seen before or hidden; `[` and `]` size it, a ring
+shows it, F picks it up), **Fog everything** and **See as players**. Fog
+everything is one op, `refog`: the fog on, every reveal hidden, the brush
+cleared and the party's memory of every floor forgotten, which leaves the
+table exactly what the runners see now; forgetting one floor alone is no
+longer on the GM's screen. No tool draws a new region any more; the named
+regions older scenes and the Fixer bring are revealed from Prep's list.*
 
 §6 said fog and vision are not secrecy for the terrain, and that holds:
 the floor plan, the walls and doors, the map images and the GM's lamps are
@@ -425,7 +438,20 @@ hidden with the room. Lights carried by tokens come and go with their
 tokens. Walls under the fog still cast shadows, so a hidden room's lamp
 does not shine through its own walls.
 
-### 8.5 Still open
+### 8.5 Walls stop feet as well as looks (2026-09-27)
+
+§1 called the floor the GM built the collision map; for the runners it now
+is one. A player's runner never passes a wall or a closed door, painted or
+traced: the server asks the rules' walk map (`canWalk`,
+`packages/rules/src/movement/walk.ts`) of every player move and refuses
+one the runner could not walk, and a player's drag stops at the wall and
+comes round its end after the pointer. Only the GM moves a token through
+walls. The doors of §1 changed with it: a player opens or shuts a door only
+with their runner next to it, within one square (`movement/reach.ts`),
+while the GM works any door from anywhere, and a runner out of reach gets
+the same answer whether the door is locked or not.
+
+### 8.6 Still open
 
 - Traced walls and doors have no floor, so they block sight on every
   floor; floors seen below through open squares use the mask of the floor
