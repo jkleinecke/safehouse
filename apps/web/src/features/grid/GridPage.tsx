@@ -89,7 +89,7 @@ import { useCameraCones } from './useCameraCones.js';
 import { useLightMap } from './useLightMap.js';
 import { useShroud } from './useShroud.js';
 import { stairAdvice, useStairOffer } from './useStairs.js';
-import { editArcs, historyFor, useHistory } from './history.js';
+import { brushFog, editArcs, historyFor, useHistory } from './history.js';
 import { useGridStore } from './store.js';
 import {
   boxSelect,
@@ -246,6 +246,8 @@ export default function GridPage() {
   const strokeCovered = useRef(new Set<string>());
   // Arc walls the eraser has already taken in the stroke under way.
   const arcsErased = useRef(new Set<string>());
+  // The squares of the fog brush stroke in hand (Prep), sent whole when it ends.
+  const fogStroke = useRef(new Set<string>());
 
 
   // -- commands -------------------------------------------------------------
@@ -696,6 +698,26 @@ export default function GridPage() {
         arcsErased.current.clear();
         strokeRef.current?.flush();
       },
+      // -- the fog brush (Prep; FR9.13's square-by-square brush) ------------
+      // A stroke is gathered square by square and sent whole when it ends, as
+      // one fog op on the floor being built, in the fashion picked in Prep's
+      // menu: revealed live, revealed as seen before, or fogged again. One
+      // step on the history, so Ctrl+Z puts every square's mark back
+      // (`brushFog`). Nothing is drawn optimistically: the map redraws from
+      // the server's answer, which is also what the table is told.
+      onFogBrush: (col, row) => {
+        if (!scene || !isGm) return;
+        fogStroke.current.add(`${col},${row}`);
+      },
+      onFogBrushEnd: () => {
+        const cells = [...fogStroke.current];
+        fogStroke.current.clear();
+        if (!scene || !isGm || cells.length === 0) return;
+        const st = useGridStore.getState();
+        void brushFog(scene, st.activeLevel, cells, st.fogBrush).catch(() =>
+          setTileNotice('that fog stroke did not save — paint it again'),
+        );
+      },
       // -- room / area rectangles (FR9.2) -----------------------------------
       // Two requests, floor then walls, because a cell holds one tile per
       // request and a room's edge cells need both: floor in the ground layer
@@ -987,8 +1009,8 @@ export default function GridPage() {
       s.setGmTab('tokens');
       s.openGmPanel();
     },
-    revealRegion: (regionId) => {
-      if (scene) commands.fogReveal(scene.id, regionId, true);
+    revealRegion: (regionId, as = 'live') => {
+      if (scene) commands.fogReveal(scene.id, regionId, true, as);
     },
     hideRegion: (regionId) => {
       if (scene) commands.fogHide(scene.id, regionId);

@@ -548,7 +548,9 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
   app.post('/api/generations/:id/accept', async (req, reply) => {
     const campaignId = gmFor(req, undefined);
     const { id } = req.params as { id: string };
-    const result = await acceptDraft(app.db, campaignId, id);
+    // One transaction on the hub: a draft that changes the scene on the
+    // table (a fog reveal, a layout) is told to the table as it commits.
+    const result = await acceptDraft(app.hub, campaignId, id);
     app.hub.emitEphemeral(campaignId, {
       type: 'fixer.generation',
       payload: { id, status: 'accepted', applied: result.applied },

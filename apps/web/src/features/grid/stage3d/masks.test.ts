@@ -25,7 +25,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import type { Role, Scene, Token } from '@safehouse/contracts';
-import { cellBitsFrom, encodeCellBits } from '@safehouse/rules';
+import { cellBitsFrom, encodeCellBits, paintBrush } from '@safehouse/rules';
 import { FOG_WIRE_UNREVEALED } from '../../../../../../packages/contracts/test/fog-fixtures.js';
 import { metricsFor } from '../geometry.js';
 import { EXPLORED_ALPHA } from '../stage/layers.js';
@@ -301,6 +301,32 @@ describe("the party's sight stamped on the cover (P6)", () => {
       const vault = { id: 'r1', name: 'the vault', polygon: [{ x: 8, y: 1 }, { x: 10, y: 1 }, { x: 10, y: 3 }, { x: 8, y: 3 }] };
       expect(masks.update(state('player', { ...FOG_WIRE_UNREVEALED, regions: [vault], revealed: [vault.id], sight: stepped }, 1), m).fog).toBe(true);
       expect(regionPaints.count).toBe(before + 2);
+    } finally {
+      masks.dispose();
+    }
+  });
+
+  it("stamps the GM's brush over the rest: live clear, seen before dimmed, fogged again covered over the memory but never over what the party sees (P6)", () => {
+    // The square-by-square brush (FR9.13): a mark replaces what the regions
+    // and the memory say about its square, and gives way only to a runner's
+    // eyes, as `fogCells` decides it.
+    const brush = paintBrush(undefined, COLS, ROWS, 0, { live: ['9,7'], explored: ['8,0'], hidden: ['5,5', '1,1'] });
+    const painted = { ...fogged, brush };
+    const masks = new CoverMasks('low');
+    try {
+      const before = regionPaints.count;
+      expect(masks.update(state('player', fogged), m).fog).toBe(true);
+      expect(masks.update(state('player', painted), m).fog).toBe(true);
+      // A stroke is stamped, not painted: the regions are not drawn again.
+      expect(regionPaints.count).toBe(before + 1);
+      expectCover(masks, expected([[2, 1], [9, 7], [1, 1]], [[6, 5], [8, 0]]));
+      expect(at(masks, 5, 5)).toBe(1); // remembered, and fogged again
+      expect(at(masks, 1, 1)).toBe(0); // fogged again, but a runner is looking at it
+      // Upstairs the ground floor's marks change nothing.
+      const upstairs = { ...FOG_WIRE_UNREVEALED, brush };
+      withMasks(state('display', upstairs, 1), (other) => expect(fogOverEverySquare(other)).toEqual(everywhere(1)));
+      // A brush alone, with no sight at all, is stamped just the same.
+      withMasks(state('display', upstairs, 0), (other) => expectCover(other, expected([[9, 7]], [[8, 0]])));
     } finally {
       masks.dispose();
     }

@@ -179,6 +179,27 @@ describe('SceneSchema', () => {
     expect(FogRevealCommandSchema.safeParse({ ...forget, level: -1 }).success).toBe(false);
   });
 
+  it("keeps the GM's brush as bounded bitsets, and takes a stroke only of real squares (P6)", () => {
+    const ok = (brush: unknown) => FogStateSchema.safeParse({ ...scene.fog, brush }).success;
+    const brush = { cols: 12, rows: 8, levels: { '0': { live: 'AQ==', hidden: 'Ag==' } } };
+    // Parsed, the marks a floor does not name read as none, and nothing else is added.
+    expect(FogStateSchema.parse({ ...scene.fog, brush }).brush).toEqual({
+      cols: 12,
+      rows: 8,
+      levels: { '0': { live: 'AQ==', explored: '', hidden: 'Ag==' } },
+    });
+    expect(FogStateSchema.parse(scene.fog)).not.toHaveProperty('brush');
+    expect(ok({ cols: 1e9, rows: 1, levels: {} })).toBe(false);
+    expect(ok({ cols: 4, rows: 4, levels: { roof: { live: '' } } })).toBe(false);
+
+    const stroke = { cmd: 'fog.reveal', sceneId: 'scn_1', op: 'brush', level: 0 };
+    expect(FogOpSchema.options).toContain('brush');
+    expect(FogRevealCommandSchema.parse({ ...stroke, brush: { hidden: ['3,4', '0,0'] } }).brush).toEqual({ hidden: ['3,4', '0,0'] });
+    for (const bad of ['-1,2', '3', '3,4,5', 'a,b', '01,2']) {
+      expect(FogRevealCommandSchema.safeParse({ ...stroke, brush: { live: [bad] } }).success, bad).toBe(false);
+    }
+  });
+
   it('sightlines are off unless said on, and fog a scene whatever its switch says', () => {
     expect(SceneSchema.parse(scene).vision.sight).toBeUndefined();
     expect(sightlinesOn(SceneSchema.parse(scene).vision)).toBe(false);

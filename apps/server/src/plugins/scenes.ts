@@ -39,6 +39,7 @@ import {
 } from '@safehouse/rules';
 import {
   DisplaySetCommandSchema,
+  FogBrushStrokeSchema,
   FogOpSchema,
   FogRevealAsSchema,
   FogRegionSchema,
@@ -73,6 +74,7 @@ import { checkSceneFileHeader, exportScene, importScene, unpackFiles } from '../
 import { emitFogProximity } from '../fixer/proximity.js';
 import { applyDoorOp, doorRefusal, tileDoorState, withTileDoor, withTracedDoor } from '../services/doors.js';
 import { affectsSight, recomputeSight } from '../services/sight.js';
+import { runFogOp } from '../services/fogOps.js';
 import {
   PerKeyThrottle,
   ScenesService,
@@ -300,8 +302,10 @@ const FogOpBody = z.object({
   shape: z.array(PointSchema).min(3).optional(),
   /** For `reveal`: live (the default, as every reveal was before) or as explored (`FogRevealAsSchema`). */
   as: FogRevealAsSchema.optional(),
-  /** For `forget`: the one floor whose memory goes; absent is every floor. */
+  /** For `forget`: the one floor whose memory goes; absent is every floor. For `brush`: the floor painted; absent is the ground. */
   level: z.number().int().min(0).max(MAX_LEVELS - 1).optional(),
+  /** For `brush`: the squares painted, by what each is painted with (`FogBrushStrokeSchema`). */
+  brush: FogBrushStrokeSchema.optional(),
   announce: z.boolean().optional(),
 });
 
@@ -1041,137 +1045,30 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
   });
 
   /**
-   * Fog events keep the payload player-safe: a *reveal* may carry the region
-   * polygon (players now see it), `define`/unrevealed geometry stays GM-only,
-   * and `hide` and `remove` carry an id with no geometry at all. Every public
-   * one says whether the scene is fogged at all (`active`, as `sceneForViewer`
-   * does); a `define` that fogs an open scene or redraws a revealed region
-   * also tells the table, with nothing of an unrevealed region in it. The
-   * switch (`enable`, `disable`) is public and says only that: `{op, active}`.
-   * A reveal also says its fashion (`as`: live, or explored), so the TV
-   * files the ground it opens as live or as remembered.
-   *
-   * Then the tokens. A fog op moves the edge of what the table may see, so
-   * every token whose answer to `tokenConcealed` changed with it arrives
-   * (`token.added`) or leaves (`token.removed`), exactly as a layer shown or
-   * hidden does (`emitConcealmentChanges`). A guard in a room is sent to the
-   * players when the room is revealed LIVE, and not a moment before: a room
-   * revealed as explored shows them the room, dimmed, and nobody in it, and
-   * a room dropped from live to explored takes its guards off their screens.
-   *
-   * The `scenes.fog` write and its events commit together (`Hub.atomic`). Fog
-   * is the sharpest case of the half-commit in the whole app: a reveal that
-   * stored without emitting leaves players still fogged out of a room the
-   * server now considers open, and a `hide` that stored without emitting is
-   * worse — the client keeps drawing geometry the server has taken back, which
-   * is a Principle 4 leak the GM cannot see from their own screen.
+   * A fog op, from the Fog panel, the Prep brush or the socket: applied and
+   * told in one transaction (`runFogOp`, services/fogOps.ts, which a Fixer
+   * draft the GM accepts goes through too). The events it sends are
+   * player-safe by construction — a reveal may carry the region it opens, a
+   * `define` stays the GM's, `hide` and `remove` carry an id and no geometry
+   * — and the tokens the op uncovers or covers arrive and leave in the same
+   * commit; the rules are written out there.
    */
   async function applyFog(
     scene: SceneRow,
     body: z.output<typeof FogOpBody>,
   ): Promise<{ fog: unknown }> {
-    return app.hub.atomic(scene.campaignId, async (tx) => {
-      // Re-read through the transaction, as the tile routes do, rather than
-      // applying the op to the row the caller read before it opened. Two fog
-      // ops in flight — the GM hiding one room and revealing the next in
-      // quick succession — each merged into the fog as it stood before
-      // either, so the second wrote the first's hidden room back open: no
-      // event said so, and the players' next re-read had the room and its
-      // guards again.
-      // Locked, too: the sight pass rewrites the same column after every
-      // move, and a fog op applied to a copy read before a pass committed
-      // would write the party's memory back as it was before that move.
-      const fresh = await svc.withDb(tx.db).sceneRow(scene.id, { lock: true });
-      // The scene as `applyFogOp` reads it, so the token diff below compares
-      // against the very state the op was applied to.
-      const before = serializeScene(fresh);
-      const wasOn = sceneFogOn(before);
-      const { fog, region } = await svc.withDb(tx.db).applyFogOp(fresh, {
+    return app.hub.atomic(scene.campaignId, (tx) =>
+      runFogOp(tx, scene.id, {
         op: body.op,
         ...(body.regionId ? { regionId: body.regionId } : {}),
         ...(body.region ? { region: { ...body.region, id: body.region.id ?? undefined } } : {}),
         ...(body.shape ? { shape: body.shape } : {}),
         ...(body.as ? { as: body.as } : {}),
         ...(body.level !== undefined ? { level: body.level } : {}),
-      });
-      const isDefine = body.op === 'define';
-      const isSwitch = body.op === 'enable' || body.op === 'disable';
-      const isForget = body.op === 'forget';
-      // A reveal says its fashion, always: a device folding the events (the
-      // TV) files the region or shape under live or remembered by it, and
-      // moves a region from one to the other when the GM changes her mind.
-      const fashion = body.op === 'reveal' ? { as: body.as ?? 'live' } : {};
-      // Whether the scene is fogged at all, as a player's copy says it
-      // (`sceneForViewer`, `sceneFogOn`): a device folding the events (the
-      // TV) keeps it true through a reset or the last reveal taken back, and
-      // turns it over when the GM flips the switch. A scene with sightlines
-      // on stays fogged whatever the switch says, and says so.
-      const active = sceneFogOn({ fog, vision: before.vision });
-      await tx.emit({
-        type: 'fog.updated',
-        payload: isSwitch
-          ? // The switch is one bit and says nothing else: no region, no id,
-            // whatever else the body happened to carry.
-            { sceneId: scene.id, op: body.op, active }
-          : isForget
-            ? // Which floor was forgotten, and nothing else. The memory itself
-              // follows in the sight pass's own event below, whole.
-              { sceneId: scene.id, op: body.op, ...(body.level !== undefined ? { level: body.level } : {}), active }
-          : {
-              sceneId: scene.id,
-              op: body.op,
-              ...(body.regionId ? { regionId: body.regionId } : {}),
-              // A region's shape and name go public only on its REVEAL, when
-              // they become the players' to see. A `remove` used to carry the
-              // region it took away, revealed or not, and that put a room the
-              // table had never seen — its name, its outline — on every
-              // player's socket at the moment it stopped mattering to the GM.
-              ...(body.op === 'reveal' && region ? { region } : {}),
-              ...(!isDefine && body.shape ? { shape: body.shape } : {}),
-              ...fashion,
-              ...(isDefine ? {} : { active }),
-            },
-        visibility: isDefine ? 'gm' : 'public',
-      });
-      // A `define` is the GM's, but two of them change what the table sees:
-      // one that turns the fog on (the first region on a scene whose switch
-      // was never flipped), and a revealed region redrawn, which moves ground
-      // the players see — live, or dimmed as explored. The table hears that
-      // much, and no more — the region itself only when it is a revealed
-      // one, whose shape is already theirs — so the players' Grids fetch the
-      // scene again and the TV folds it in.
-      const revealedRegion =
-        isDefine && region && (fog.revealed.includes(region.id) || (fog.exploredRegionIds ?? []).includes(region.id))
-          ? region
-          : undefined;
-      if (isDefine && (wasOn !== active || revealedRegion)) {
-        await tx.emit({
-          type: 'fog.updated',
-          payload: {
-            sceneId: scene.id,
-            op: 'define',
-            active,
-            ...(revealedRegion ? { regionId: revealedRegion.id, region: revealedRegion } : {}),
-          },
-          visibility: 'public',
-        });
-      }
-      // Then the sight pass, with the scene before the op: it refills the
-      // memory a `forget` wiped from what the runners still see (and says so
-      // in one `op: 'sight'` event, only if the memory ends up different from
-      // before), and it runs the op's token diff, from the scene before to
-      // the scene after, once. After the fog event, so a device folding
-      // events in order has the new fog in hand when the tokens it uncovered
-      // arrive. On a scene without sightlines the diff is all it does.
-      const pass = await recomputeSight(tx, scene.id, { before });
-      if (body.announce && body.op === 'reveal' && region) {
-        await tx.emit({
-          type: 'log.posted',
-          payload: { kind: 'scene', sceneId: scene.id, text: `Revealed: ${region.name}` },
-        });
-      }
-      return { fog: pass.fog };
-    });
+        ...(body.brush ? { brush: body.brush } : {}),
+        ...(body.announce ? { announce: true } : {}),
+      }),
+    );
   }
 
   // --- drawings, AoE templates, scatter (FR9.12/9.15) -----------------------

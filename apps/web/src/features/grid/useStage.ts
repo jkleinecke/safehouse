@@ -111,6 +111,8 @@ export function useStage(params: UseStageParams): UseStageResult {
       onTileDoorToggle: (cell, level) => cbRef.current.onTileDoorToggle?.(cell, level),
       onTilePaint: (col, row, erase) => cbRef.current.onTilePaint?.(col, row, erase),
       onTileStrokeEnd: () => cbRef.current.onTileStrokeEnd?.(),
+      onFogBrush: (col, row) => cbRef.current.onFogBrush?.(col, row),
+      onFogBrushEnd: () => cbRef.current.onFogBrushEnd?.(),
       onTileRect: (c0, r0, c1, r1, mode) => cbRef.current.onTileRect?.(c0, r0, c1, r1, mode),
       onContextMenu: (request) => cbRef.current.onContextMenu?.(request),
       onPaintedSelect: (id) => cbRef.current.onPaintedSelect?.(id),

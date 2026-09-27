@@ -53,6 +53,8 @@ const TOOL_DEFS: Record<GridTool, Omit<ToolDef, 'id'>> = {
   pin: { label: 'Pin', glyph: '⚑' },
   // A fog region is an area the GM can reveal, not an area of fog (PrepPlacing).
   fogdef: { label: 'Reveal area', glyph: '⬡' },
+  // Square by square, in the fashion picked in Prep's menu (PrepPlacing).
+  fogbrush: { label: 'Fog brush', glyph: '▦' },
   camera: { label: 'Camera', glyph: '◉' },
   light: { label: 'Light', glyph: '✹' },
   note: { label: 'Note', glyph: '🗒' },

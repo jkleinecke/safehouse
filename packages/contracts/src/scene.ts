@@ -405,8 +405,12 @@ export type FogRegion = z.infer<typeof FogRegionSchema>;
  *   sight pass only ever adds to it. What the runners can see RIGHT NOW is
  *   remembered again at once (sightlines unmask automatically), so forgetting
  *   takes away the rooms they have left, never the one they stand in.
+ * - `brush` paints squares of one floor (`level`) with the GM's reveal brush
+ *   (`FogBrushStrokeSchema`, stored as `FogState.brush`): revealed live,
+ *   revealed as seen before, fogged again, or handed back to whatever else
+ *   decides them (`clear`, which is how a stroke is undone).
  */
-export const FogOpSchema = z.enum(['reveal', 'hide', 'define', 'remove', 'enable', 'disable', 'forget']);
+export const FogOpSchema = z.enum(['reveal', 'hide', 'define', 'remove', 'enable', 'disable', 'forget', 'brush']);
 export type FogOp = z.infer<typeof FogOpSchema>;
 
 /**
@@ -494,21 +498,100 @@ export const FogSightSchema = z.object({
 export type FogSight = z.infer<typeof FogSightSchema>;
 
 /**
+ * What the GM's reveal BRUSH has painted on one floor (FR9.13's
+ * square-by-square brush, which the first fog never had; P6). Three sets of
+ * squares, in the bitset form the party's sight uses (`CellBitsSchema`):
+ *
+ * - `live`: squares revealed LIVE, the map and everyone on it;
+ * - `explored`: squares revealed AS SEEN BEFORE, the map dimmed with nobody
+ *   on it;
+ * - `hidden`: squares FOGGED AGAIN, hidden even where one of the GM's
+ *   regions or shapes has them revealed.
+ *
+ * A square is in one of the three or none (the `brush` op keeps it so; a
+ * reader that ever finds one in two takes hidden first, then live). A square
+ * in none is decided as if the brush had never been there.
+ *
+ * Why squares, and why a bitset rather than more reveal shapes: the brush
+ * paints squares, and a square is also what the server withholds tokens by
+ * and what the party's sight is kept in, so this is the same currency as
+ * everything it sits beside. And "fog again" is a thing a list of reveal
+ * polygons cannot say: a polygon can only open ground, so fogging one square
+ * of a revealed room back would mean cutting the room's polygon into pieces.
+ * A painted square is a mark on that square, and the latest mark wins.
+ */
+export const FogBrushLevelSchema = z.object({
+  live: CellBitsSchema.default(''),
+  explored: CellBitsSchema.default(''),
+  hidden: CellBitsSchema.default(''),
+});
+export type FogBrushLevel = z.infer<typeof FogBrushLevelSchema>;
+
+/**
+ * The GM's brush marks, per floor (`FogBrushLevelSchema`), keyed and bounded
+ * exactly as the party's sight is (`FogSightSchema`): the floor's index as
+ * one or two digits, and the grid the bitsets were written for, at most
+ * `FOG_SIGHT_MAX_SIDE` squares each way, so a scene resized since reads its
+ * marks square by square and never shifted.
+ */
+export const FogBrushSchema = z.object({
+  cols: z.number().int().positive().max(FOG_SIGHT_MAX_SIDE),
+  rows: z.number().int().positive().max(FOG_SIGHT_MAX_SIDE),
+  levels: z.record(z.string().regex(/^(0|[1-9][0-9]?)$/), FogBrushLevelSchema).default({}),
+});
+export type FogBrush = z.infer<typeof FogBrushSchema>;
+
+/**
+ * What the brush paints a square with (`FogBrushStrokeSchema`): one of the
+ * three marks (`FogBrushLevelSchema`), or `clear`, which takes the square's
+ * mark off so the square is decided by the regions, the shapes and the
+ * party's sight again. The GM's toolbar offers the three; `clear` is what an
+ * undo sends for a square that had no mark before the stroke.
+ */
+export const FogBrushPaintSchema = z.enum(['live', 'explored', 'hidden', 'clear']);
+export type FogBrushPaint = z.infer<typeof FogBrushPaintSchema>;
+
+/** One square as the brush names it: `"col,row"`, as the tile layers key a square. */
+export const FogCellKeySchema = z.string().regex(/^(0|[1-9][0-9]{0,3}),(0|[1-9][0-9]{0,3})$/);
+
+/** The most squares one stroke may name per paint: a whole 240x240 floor, with room to spare. */
+export const FOG_BRUSH_MAX_CELLS = 65_536;
+
+/**
+ * One stroke of the brush, on the floor the op names (`level`): the squares
+ * to paint with each paint (`FogBrushPaintSchema`). A stroke from the
+ * toolbar names one paint; an undo names as many as the squares had marks
+ * before it, so the squares go back exactly in one request. A square named
+ * under two paints takes the last in the order live, explored, hidden,
+ * clear.
+ */
+export const FogBrushStrokeSchema = z.object({
+  live: z.array(FogCellKeySchema).max(FOG_BRUSH_MAX_CELLS).optional(),
+  explored: z.array(FogCellKeySchema).max(FOG_BRUSH_MAX_CELLS).optional(),
+  hidden: z.array(FogCellKeySchema).max(FOG_BRUSH_MAX_CELLS).optional(),
+  clear: z.array(FogCellKeySchema).max(FOG_BRUSH_MAX_CELLS).optional(),
+});
+export type FogBrushStroke = z.infer<typeof FogBrushStrokeSchema>;
+
+/**
  * Server-authoritative fog state per scene (FR9.13).
  *
  * Every square of every floor is in one of THREE states (`cellState` in
  * @safehouse/rules works it out; P6):
  * - LIVE: the table sees the map there, and everyone standing on it, moving.
  *   The fog is off, or the GM revealed the ground live (`revealed`,
- *   `revealedShapes`), or a runner can see it (`sight` live).
+ *   `revealedShapes`, the brush's `live`), or a runner can see it (`sight`
+ *   live).
  * - EXPLORED: the map is shown dimmed, as remembered, with nobody on it. The
- *   GM revealed it as explored (`exploredRegionIds`, `exploredShapes`), or
- *   the party has seen it before (`sight` explored).
- * - HIDDEN: everything else, while the fog is on.
+ *   GM revealed it as explored (`exploredRegionIds`, `exploredShapes`, the
+ *   brush's `explored`), or the party has seen it before (`sight` explored).
+ * - HIDDEN: everything else, while the fog is on, and whatever the GM's
+ *   brush has fogged again (`brush` hidden) unless a runner sees it now.
  *
- * The GM's reveals (both fashions) cover the same ground on every floor, as
- * the regions always have; only the party's sight is per floor, because a
- * runner on the ground floor has not seen the roof.
+ * The GM's regions and shapes (both fashions) cover the same ground on every
+ * floor, as the regions always have; the party's sight and the GM's brush are
+ * per floor, because a runner on the ground floor has not seen the roof, and
+ * a brush paints the floor the GM is looking at.
  */
 export const FogStateSchema = z.object({
   regions: z.array(FogRegionSchema).default([]),
@@ -538,6 +621,16 @@ export const FogStateSchema = z.object({
    * without sightlines.
    */
   sight: FogSightSchema.optional(),
+  /**
+   * The GM's reveal brush, per floor (`FogBrushSchema`): squares painted
+   * live, as seen before, or fogged again, the latest mark on each square
+   * winning over the regions and shapes (not over what a runner sees now).
+   * Sent to the table as it is, since it says nothing a covered square does
+   * not already say. Absent on a scene the brush has never touched, which is
+   * every scene saved before it existed. It does not turn the fog on by
+   * itself (`fogOn`): a scene is fogged by its switch or its sightlines.
+   */
+  brush: FogBrushSchema.optional(),
   /**
    * The GM's fog switch for this scene, and the one fog field that is STORED
    * as a decision rather than derived: true fogs the scene (the whole map is

@@ -40,6 +40,11 @@
  *   The GM chose ALWAYS AUTOMATIC unmasking (2026-09-27), so every pass ORs
  *   live into explored at once. Only the GM takes a square out of it
  *   (`forget`), or fogs ground again with the reveal tools.
+ *
+ * And one thing the pass takes away: a square the GM's brush fogged again
+ * (`FogState.brush` hidden) that a runner sees now loses the mark. The party
+ * has seen it again, so it is remembered from here on like every square they
+ * see; the brush fogs what they have left, never what they are looking at.
  * With the sightlines OFF the pass empties every `live` and keeps `explored`:
  * the memory is the table's, and a scene switched back on picks it up again.
  * A floor with nothing in either is dropped, and a record with no floors
@@ -72,10 +77,12 @@ import {
   type Scene,
 } from '@safehouse/contracts';
 import {
+  cellBitsHas,
   cellBitsUnion,
   decodeCellBits,
   emptyCellBits,
   encodeCellBits,
+  eraseBrush,
   partySight,
   visionModesFor,
   type CellBits,
@@ -218,6 +225,28 @@ function sameSight(a: FogSight | undefined, b: FogSight | undefined): boolean {
     if ((x?.live ?? '') !== (y?.live ?? '') || (x?.explored ?? '') !== (y?.explored ?? '')) return false;
   }
   return true;
+}
+
+/**
+ * The public `fog.updated {op: 'brush'}` payload: the GM's brush as it now
+ * is, every floor, whole (`FogBrushSchema`: `cols`, `rows`, `levels`), so a
+ * device folding events (the TV) replaces its copy with it and a phone reads
+ * the scene again. A record that is gone says `levels: {}` on the scene's
+ * sight grid. `active` is whether the scene is fogged at all, as on every
+ * public fog event; `extra` carries what the event is about (a stroke's
+ * `level`).
+ *
+ * Public because nothing in it is the GM's secret: every mark is ground the
+ * table is shown open, dimmed, or as fog.
+ */
+export function brushEventPayload(
+  sceneId: string,
+  scene: Scene,
+  active: boolean,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const brush = scene.fog.brush ?? { ...sightGrid(scene), levels: {} };
+  return { sceneId, op: 'brush', ...extra, cols: brush.cols, rows: brush.rows, levels: brush.levels, active };
 }
 
 /**
@@ -375,9 +404,11 @@ export async function recomputeSight(tx: EventTx, sceneId: string, opts: SightPa
   const prior = stored.fog.sight;
 
   let next: FogSight | undefined;
+  let seen: Map<number, CellBits> | null = null;
   if (sightlinesOn(stored.vision)) {
     const { cols, rows } = sightGrid(stored);
-    next = withLive(prior, cols, rows, await currentSight(tx.db, stored));
+    seen = await currentSight(tx.db, stored);
+    next = withLive(prior, cols, rows, seen);
   } else {
     next = withoutLive(prior);
   }
@@ -385,10 +416,31 @@ export async function recomputeSight(tx: EventTx, sceneId: string, opts: SightPa
   const fog: FogState = { ...stored.fog };
   if (next !== undefined) fog.sight = next;
   else delete fog.sight;
-  if (!sameSight(prior, next)) {
+  // The brush's "fogged again" is spent on every square a runner sees now
+  // (see the top of this file). `eraseBrush` hands back the very record when
+  // no such square is seen, which is every pass on a scene the brush never
+  // fogged: nothing written, nothing said.
+  const priorBrush = stored.fog.brush;
+  const live = seen;
+  const brush =
+    live === null || live.size === 0
+      ? priorBrush
+      : eraseBrush(
+          priorBrush,
+          (level, col, row) => {
+            const bits = live.get(level);
+            return bits !== undefined && cellBitsHas(bits, col, row);
+          },
+          ['hidden'],
+        );
+  if (brush !== undefined) fog.brush = brush;
+  else delete fog.brush;
+  const brushMoved = brush !== priorBrush;
+  if (!sameSight(prior, next) || brushMoved) {
     await tx.db.update(scenes).set({ fog }).where(eq(scenes.id, sceneId));
   }
   const after: Scene = { ...stored, fog };
+  if (brushMoved) await tx.emit({ type: 'fog.updated', payload: brushEventPayload(sceneId, after, sceneFogOn(after)) });
 
   const reference = opts.before !== undefined ? opts.before.fog.sight : prior;
   const told = !sameSight(reference, next) || opts.announce === true;
@@ -406,7 +458,7 @@ export async function recomputeSight(tx: EventTx, sceneId: string, opts: SightPa
       },
     });
   }
-  if (told || opts.before !== undefined) {
+  if (told || brushMoved || opts.before !== undefined) {
     await emitConcealmentChanges(tx, sceneId, opts.before ?? stored, after);
   }
   return { fog, told };

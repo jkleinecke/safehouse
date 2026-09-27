@@ -9,8 +9,8 @@
  * `GridPage` supplies the actions, which are the same mutations the panel
  * tabs and the inspector already call.
  */
-import type { Point, Scene, Token, TokenLight, TokenPose } from '@safehouse/contracts';
-import { sceneLevels } from '@safehouse/rules';
+import type { FogRevealAs, Point, Scene, Token, TokenLight, TokenPose } from '@safehouse/contracts';
+import { regionFashion, sceneLevels, type RegionFashion } from '@safehouse/rules';
 import type { DoorOpInput } from '../api.js';
 import { pointInPolygon } from '../geometry.js';
 import type { ContextTarget } from '../types.js';
@@ -45,7 +45,9 @@ export interface ContextMenuActions {
   noteHere(x: number, y: number): void;
   cameraHere(x: number, y: number): void;
   placeTokenHere(x: number, y: number): void;
-  revealRegion(regionId: string): void;
+  /** Reveal a named fog region to the table, live (the default) or as seen before (P6). */
+  revealRegion(regionId: string, as?: FogRevealAs): void;
+  /** Fog a named region again, whichever way it was revealed. */
   hideRegion(regionId: string): void;
   wallToDoor(wallId: string): void;
   /** Take one square out of a painted wall, splitting it in two. */
@@ -83,14 +85,55 @@ export function tileDoorState(
   return { open: door.open === true, locked: door.locked === true };
 }
 
-/** The named fog region the point is inside, if any (first match wins, like the reveal). */
-export function regionAt(scene: Scene, at: Point): { id: string; name: string; revealed: boolean } | null {
+/**
+ * The named fog region the point is inside, if any (first match wins, like
+ * the reveal), and how the table is shown it now (`regionFashion`, P6): live,
+ * seen before, or hidden. `revealed` is whether it is live, as it was before
+ * the seen-before fashion existed.
+ */
+export function regionAt(
+  scene: Scene,
+  at: Point,
+): { id: string; name: string; revealed: boolean; fashion: RegionFashion } | null {
   for (const region of scene.fog?.regions ?? []) {
     if (pointInPolygon(at, region.polygon)) {
-      return { id: region.id, name: region.name, revealed: (scene.fog?.revealed ?? []).includes(region.id) };
+      const fashion = scene.fog ? regionFashion(scene.fog, region.id) : 'hidden';
+      return { id: region.id, name: region.name, revealed: fashion === 'live', fashion };
     }
   }
   return null;
+}
+
+/**
+ * The fog verbs for the region under the pointer (P6; the GM, 2026-09-27):
+ * the two fashions it is NOT in, as the Fog panel's three buttons offer them.
+ * A hidden room can be revealed live or as seen before; a live one dropped
+ * to seen before (the party has left it) or fogged again; a seen-before one
+ * opened live (they are back) or fogged again. The fashion it is already in
+ * is no verb, and is left out.
+ */
+function regionItems(actions: ContextMenuActions, region: { id: string; name: string; fashion: RegionFashion }): MenuItem[] {
+  const live: MenuItem = {
+    id: 'fog-reveal',
+    label: `Reveal ${region.name} live`,
+    hint: 'players and the TV see it, and everyone in it',
+    run: () => actions.revealRegion(region.id, 'live'),
+  };
+  const explored: MenuItem = {
+    id: 'fog-explored',
+    label: `Reveal ${region.name} as seen before`,
+    hint: 'shown dimmed, as remembered, with nobody in it',
+    run: () => actions.revealRegion(region.id, 'explored'),
+  };
+  const hide: MenuItem = {
+    id: 'fog-hide',
+    label: `Fog ${region.name} again`,
+    hint: 'the table sees nothing of it',
+    run: () => actions.hideRegion(region.id),
+  };
+  if (region.fashion === 'live') return [explored, hide];
+  if (region.fashion === 'explored') return [live, hide];
+  return [live, explored];
 }
 
 function tokenItems(input: ContextMenuInput, token: Token): MenuItem[] {
@@ -176,18 +219,7 @@ function floorItems(input: ContextMenuInput): MenuItem[] {
   if (role !== 'gm') return items;
   items.push({ id: 'focus', label: 'Focus everyone here', hint: 'pans the players and the TV', run: () => actions.focus(x, y) });
   const region = regionAt(scene, grid);
-  if (region) {
-    items.push(
-      region.revealed
-        ? { id: 'fog-hide', label: `Fog ${region.name} again`, run: () => actions.hideRegion(region.id) }
-        : {
-            id: 'fog-reveal',
-            label: `Reveal ${region.name}`,
-            hint: 'players and the TV see it now',
-            run: () => actions.revealRegion(region.id),
-          },
-    );
-  }
+  if (region) items.push(...regionItems(actions, region));
   if (input.mode !== 'build') {
     items.push({
       id: 'place',

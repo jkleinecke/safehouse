@@ -33,11 +33,28 @@
  * `decodeCellBits`), because it is sent after every committed move and a
  * phone should decode it without parsing anything.
  *
+ * The GM's reveal BRUSH (FR9.13's square-by-square brush) is per floor and
+ * kept in the same bitsets (`FogBrushSchema`): squares she painted live, as
+ * seen before, or fogged again. A painted square is a mark on that square,
+ * and it beats the regions and shapes there, because it is the later and the
+ * finer act; it never beats what a runner sees right now. `paintBrush` and
+ * `eraseBrush` below are how the server writes it, and the one rule that
+ * reads it is `fogCells`, like everything else here.
+ *
  * Where the sight comes from (the rules of darkness and vision modes, the
  * walls, the pooling over runners) is not this module's business: the
  * server's sight pass writes the bitsets, and this only reads them.
  */
-import { sceneFogOn, type FogState, type Point, type SceneVision } from '@safehouse/contracts';
+import {
+  sceneFogOn,
+  type FogBrush,
+  type FogBrushLevel,
+  type FogBrushStroke,
+  type FogState,
+  type Point,
+  type SceneVision,
+} from '@safehouse/contracts';
+import { parseCellKey } from '../tilesets/types.js';
 import { pointInPolygon } from './fog.js';
 
 // ---------------------------------------------------------------------------
@@ -244,7 +261,7 @@ export type CellState = 'hidden' | 'explored' | 'live';
  * the regions the table may know about).
  */
 export type FogCellsInput = Pick<FogState, 'regions' | 'revealed' | 'revealedShapes'> &
-  Partial<Pick<FogState, 'enabled' | 'active' | 'exploredRegionIds' | 'exploredShapes' | 'sight'>>;
+  Partial<Pick<FogState, 'enabled' | 'active' | 'exploredRegionIds' | 'exploredShapes' | 'sight' | 'brush'>>;
 
 export interface FogCellsOptions {
   /**
@@ -341,14 +358,24 @@ function floorKey(level: number): string | null {
  *
  * In order, for a square:
  * 1. The fog is off (`sceneFogOn`): live, whatever else is stored.
- * 2. The party sees it (`sight` live on that floor), or its centre is in a
- *    region or shape the GM revealed live: live.
- * 3. The party has seen it (`sight` explored on that floor), or its centre
+ * 2. The party sees it (`sight` live on that floor): live. What a runner is
+ *    looking at is on the table, whatever the GM painted there.
+ * 3. The GM's brush has marked it on that floor (`brush`): fogged again is
+ *    hidden, revealed live is live, revealed as seen before is explored. The
+ *    mark is the answer: it was painted over whatever the regions and shapes
+ *    say about the square, square by square, and the latest act wins.
+ * 4. Its centre is in a region or shape the GM revealed live: live.
+ * 5. The party has seen it (`sight` explored on that floor), or its centre
  *    is in a region or shape the GM revealed as explored: explored.
- * 4. Otherwise: hidden.
+ * 6. Otherwise: hidden.
  *
  * Live beats explored, so a region somehow in both reveal lists is live, and
  * a square the party is looking at is live whatever the GM revealed it as.
+ *
+ * A square fogged again with the brush stays hidden over the party's memory
+ * of it too (step 3 comes before step 5), until a runner sees it again: the
+ * sight pass then takes the mark off (`eraseBrush`), and the square goes
+ * back to being remembered when they look away, as every square they see is.
  */
 export function fogCells(fog: FogCellsInput, options: FogCellsOptions = {}): FogCells {
   const on = sceneFogOn({ fog, vision: options.vision });
@@ -384,10 +411,29 @@ export function fogCells(fog: FogCellsInput, options: FogCellsOptions = {}): Fog
     return bits;
   };
 
+  const brush = fog.brush;
+  const brushFloors = new Map<string, BrushBits | null>();
+  const brushBits = (level: number): BrushBits | null => {
+    const key = floorKey(level);
+    if (key === null || brush === undefined) return null;
+    let bits = brushFloors.get(key);
+    if (bits === undefined) {
+      const stored = brush.levels[key];
+      bits = stored ? decodeBrushLevel(stored, brush.cols, brush.rows) : null;
+      brushFloors.set(key, bits);
+    }
+    return bits;
+  };
+
   const state = (level: number, col: number, row: number): CellState => {
     if (!on) return 'live';
     const bits = floorBits(level);
     if (bits && cellBitsHas(bits.live, col, row)) return 'live';
+    const marks = brushBits(level);
+    if (marks) {
+      const mark = markAt(marks, col, row);
+      if (mark !== null) return mark;
+    }
     const centre = { x: col + 0.5, y: row + 0.5 };
     if (inAny(liveAreas, centre)) return 'live';
     if (bits && cellBitsHas(bits.explored, col, row)) return 'explored';
@@ -443,4 +489,240 @@ export function cellState(
  */
 export function tokenLive(fog: FogCellsInput, token: FogToken, options: FogCellsOptions = {}): boolean {
   return fogCells(fog, options).tokenLive(token);
+}
+
+// ---------------------------------------------------------------------------
+// Where a named region stands
+// ---------------------------------------------------------------------------
+
+/**
+ * How a named region is shown to the table (P6): revealed LIVE, revealed as
+ * EXPLORED (seen before: dimmed, with nobody in it), or HIDDEN. Read off the
+ * GM's copy, where a region is in one reveal list or neither; should both
+ * ever name it, live wins, as it does in `fogCells`. The name of the region's
+ * whole state, not of every square in it: the party's sight and the GM's
+ * brush can make squares of it otherwise.
+ */
+export type RegionFashion = CellState;
+
+export function regionFashion(
+  fog: Pick<FogState, 'revealed'> & Partial<Pick<FogState, 'exploredRegionIds'>>,
+  regionId: string,
+): RegionFashion {
+  if (fog.revealed.includes(regionId)) return 'live';
+  if ((fog.exploredRegionIds ?? []).includes(regionId)) return 'explored';
+  return 'hidden';
+}
+
+// ---------------------------------------------------------------------------
+// The GM's reveal brush
+// ---------------------------------------------------------------------------
+
+/** What the brush can leave on a square (`FogBrushLevelSchema`). */
+export type BrushMark = 'live' | 'explored' | 'hidden';
+
+/** The three marks, in the order a reader takes them should a square ever be in more than one. */
+export const BRUSH_MARKS: readonly BrushMark[] = ['hidden', 'live', 'explored'];
+
+/** One floor's marks, decoded. */
+interface BrushBits {
+  live: CellBits;
+  explored: CellBits;
+  hidden: CellBits;
+}
+
+function decodeBrushLevel(level: FogBrushLevel, cols: number, rows: number): BrushBits {
+  return {
+    live: decodeCellBits(level.live, cols, rows),
+    explored: decodeCellBits(level.explored, cols, rows),
+    hidden: decodeCellBits(level.hidden, cols, rows),
+  };
+}
+
+function encodeBrushLevel(bits: BrushBits): FogBrushLevel {
+  return { live: encodeCellBits(bits.live), explored: encodeCellBits(bits.explored), hidden: encodeCellBits(bits.hidden) };
+}
+
+function markAt(bits: BrushBits, col: number, row: number): BrushMark | null {
+  for (const mark of BRUSH_MARKS) if (cellBitsHas(bits[mark], col, row)) return mark;
+  return null;
+}
+
+function emptyLevel(level: FogBrushLevel | undefined): boolean {
+  return level === undefined || (level.live === '' && level.explored === '' && level.hidden === '');
+}
+
+/** Floor keys in floor order, so a written record never depends on insertion order. */
+function floorOrder(keys: Iterable<string>): string[] {
+  return [...new Set(keys)].sort((a, b) => Number(a) - Number(b));
+}
+
+/** Whether the brush has marked anything on floor `level`. */
+export function brushOnFloor(brush: FogBrush | undefined, level: number): boolean {
+  const key = floorKey(level);
+  return key !== null && brush !== undefined && !emptyLevel(brush.levels[key]);
+}
+
+/**
+ * The mark on each square of floor `level`, decoded once: what a square
+ * held before a stroke, so an undo can put it back exactly (the map's
+ * history). Null for a square with no mark, one off the grid the marks were
+ * kept for, and every square of a floor never painted.
+ */
+export function brushReader(brush: FogBrush | undefined, level: number): (col: number, row: number) => BrushMark | null {
+  const key = floorKey(level);
+  const stored = key === null || brush === undefined ? undefined : brush.levels[key];
+  if (brush === undefined || stored === undefined || emptyLevel(stored)) return () => null;
+  const bits = decodeBrushLevel(stored, brush.cols, brush.rows);
+  return (col, row) => markAt(bits, col, row);
+}
+
+/** Two brush records that say the same thing: the same grid, and the same three strings on every floor. */
+export function sameBrush(a: FogBrush | undefined, b: FogBrush | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  if (a.cols !== b.cols || a.rows !== b.rows) return false;
+  for (const key of floorOrder([...Object.keys(a.levels), ...Object.keys(b.levels)])) {
+    const x = a.levels[key];
+    const y = b.levels[key];
+    if ((x?.live ?? '') !== (y?.live ?? '')) return false;
+    if ((x?.explored ?? '') !== (y?.explored ?? '')) return false;
+    if ((x?.hidden ?? '') !== (y?.hidden ?? '')) return false;
+  }
+  return true;
+}
+
+/**
+ * Every floor of a record decoded onto a `cols` x `rows` grid, kept by
+ * position (`cellBitsResize`) when the record was written for another size.
+ */
+function decodedFloors(brush: FogBrush | undefined, cols: number, rows: number): Map<string, BrushBits> {
+  const floors = new Map<string, BrushBits>();
+  if (brush === undefined) return floors;
+  for (const [key, level] of Object.entries(brush.levels)) {
+    if (floorKey(Number(key)) !== key || emptyLevel(level)) continue;
+    const bits = decodeBrushLevel(level, brush.cols, brush.rows);
+    floors.set(
+      key,
+      brush.cols === cols && brush.rows === rows
+        ? bits
+        : {
+            live: cellBitsResize(bits.live, cols, rows),
+            explored: cellBitsResize(bits.explored, cols, rows),
+            hidden: cellBitsResize(bits.hidden, cols, rows),
+          },
+    );
+  }
+  return floors;
+}
+
+/** Decoded floors written back as a record: empty floors dropped, and no floor at all is no record. */
+function encodedBrush(floors: ReadonlyMap<string, BrushBits>, cols: number, rows: number): FogBrush | undefined {
+  const levels: FogBrush['levels'] = {};
+  for (const key of floorOrder(floors.keys())) {
+    const level = encodeBrushLevel(floors.get(key)!);
+    if (!emptyLevel(level)) levels[key] = level;
+  }
+  return Object.keys(levels).length > 0 ? { cols, rows, levels } : undefined;
+}
+
+/**
+ * The brush record after one stroke on floor `level` (`FogBrushStrokeSchema`):
+ * each square named under a mark takes that mark, and only it (a square has
+ * one mark or none), and each square named under `clear` loses its mark. In
+ * the order live, explored, hidden, clear, so a square named twice ends with
+ * the later. Squares off the `cols` x `rows` grid, and keys that are not
+ * squares, are skipped.
+ *
+ * The record comes back on the `cols` x `rows` grid, which is the scene's as
+ * it is now: a record written before a resize is carried over square by
+ * square (`cellBitsResize`), never shifted. Floors with nothing left are
+ * dropped, and a record with no floor left is none (undefined), so a scene
+ * whose every mark was undone stores the fog it had before the brush.
+ */
+export function paintBrush(
+  prior: FogBrush | undefined,
+  cols: number,
+  rows: number,
+  level: number,
+  stroke: FogBrushStroke,
+): FogBrush | undefined {
+  const key = floorKey(level);
+  const c = gridSide(cols);
+  const r = gridSide(rows);
+  if (key === null || c === 0 || r === 0) return prior;
+  const floors = decodedFloors(prior, c, r);
+  const floor = floors.get(key) ?? { live: emptyCellBits(c, r), explored: emptyCellBits(c, r), hidden: emptyCellBits(c, r) };
+  const paints: Array<[BrushMark | 'clear', readonly string[] | undefined]> = [
+    ['live', stroke.live],
+    ['explored', stroke.explored],
+    ['hidden', stroke.hidden],
+    ['clear', stroke.clear],
+  ];
+  for (const [paint, cells] of paints) {
+    for (const cellKey of cells ?? []) {
+      const cell = parseCellKey(cellKey);
+      if (cell === null) continue;
+      for (const mark of BRUSH_MARKS) cellBitsSet(floor[mark], cell.col, cell.row, mark === paint);
+    }
+  }
+  floors.set(key, floor);
+  return encodedBrush(floors, c, r);
+}
+
+/**
+ * The brush record with the marks `marks` taken off every square `where`
+ * says, on every floor. `prior` itself when nothing was taken off, so a
+ * caller can tell a change by identity.
+ *
+ * Two acts take marks off without painting:
+ * - The GM revealing or hiding a named region, or opening a shape (the
+ *   server's `applyFogOp`): the later act is the answer, so the squares
+ *   whose centres the area covers lose every mark, and the region decides
+ *   them again (`eraseBrushUnder`). "Reveal the lab" reveals the whole lab,
+ *   the cupboard fogged again last week included.
+ * - A runner seeing a square the brush had fogged again (the sight pass):
+ *   the party has seen it again, so its `hidden` mark goes, and the square is
+ *   remembered like every other square they have seen.
+ */
+export function eraseBrush(
+  prior: FogBrush | undefined,
+  where: (level: number, col: number, row: number) => boolean,
+  marks: readonly BrushMark[] = BRUSH_MARKS,
+): FogBrush | undefined {
+  if (prior === undefined) return prior;
+  const floors = decodedFloors(prior, prior.cols, prior.rows);
+  let changed = false;
+  for (const [key, bits] of floors) {
+    const level = Number(key);
+    for (const mark of marks) {
+      const set = bits[mark];
+      const bytes = set.bytes;
+      for (let i = 0; i < bytes.length; i += 1) {
+        const byte = bytes[i] ?? 0;
+        if (byte === 0) continue;
+        for (let b = 0; b < 8; b += 1) {
+          if (((byte >> b) & 1) === 0) continue;
+          const index = i * 8 + b;
+          const col = index % set.cols;
+          const row = Math.floor(index / set.cols);
+          if (!where(level, col, row)) continue;
+          cellBitsSet(set, col, row, false);
+          changed = true;
+        }
+      }
+    }
+  }
+  return changed ? encodedBrush(floors, prior.cols, prior.rows) : prior;
+}
+
+/**
+ * The brush record with every mark taken off the squares whose centres lie
+ * inside `polygon`, on every floor (`eraseBrush`): what revealing or hiding
+ * a named region, or opening a shape, does to the brush under it. `prior`
+ * itself when there was nothing there.
+ */
+export function eraseBrushUnder(prior: FogBrush | undefined, polygon: readonly Point[]): FogBrush | undefined {
+  if (prior === undefined || polygon.length < 3) return prior;
+  const areas = [area(polygon)];
+  return eraseBrush(prior, (_level, col, row) => inAny(areas, { x: col + 0.5, y: row + 0.5 }));
 }

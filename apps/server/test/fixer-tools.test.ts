@@ -213,7 +213,7 @@ describe('every write is a draft (Principle 8, FR12.15)', () => {
     const drafts = await listDrafts(t.db as Db, boot.campaignId, { status: 'draft' });
     expect(drafts.find((d) => d.id === generationId)).toMatchObject({ kind: 'npc', status: 'draft' });
 
-    const accepted = await acceptDraft(t.db as Db, boot.campaignId, generationId);
+    const accepted = await acceptDraft(t.app.hub, boot.campaignId, generationId);
     expect(accepted.applied.table).toBe('npc_templates');
     expect(accepted.generation.status).toBe('accepted');
     expect(accepted.generation.target).toMatchObject({ table: 'npc_templates', id: accepted.applied.id });
@@ -237,8 +237,8 @@ describe('every write is a draft (Principle 8, FR12.15)', () => {
       tags: ['location'],
     });
     const id = draft['generationId'] as string;
-    await acceptDraft(t.db as Db, boot.campaignId, id);
-    await expect(acceptDraft(t.db as Db, boot.campaignId, id)).rejects.toMatchObject({
+    await acceptDraft(t.app.hub, boot.campaignId, id);
+    await expect(acceptDraft(t.app.hub, boot.campaignId, id)).rejects.toMatchObject({
       statusCode: 409,
     });
   });
@@ -263,7 +263,7 @@ describe('every write is a draft (Principle 8, FR12.15)', () => {
     const beforeRow = (await t.db.select().from(scenes).where(eq(scenes.id, fx.sceneId)).limit(1))[0]!;
     expect(FogStateSchema.parse(beforeRow.fog).revealed).toEqual([]);
 
-    await acceptDraft(t.db as Db, boot.campaignId, draft['generationId'] as string);
+    await acceptDraft(t.app.hub, boot.campaignId, draft['generationId'] as string);
     const afterRow = (await t.db.select().from(scenes).where(eq(scenes.id, fx.sceneId)).limit(1))[0]!;
     expect(FogStateSchema.parse(afterRow.fog).revealed).toEqual([fx.fogRegionId]);
   });

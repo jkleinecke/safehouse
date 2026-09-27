@@ -14,10 +14,13 @@
  * history, and undoing never reaches into a map they are not looking at.
  * A group folds several requests into one step — a room is two strokes,
  * floor then walls, and one Ctrl+Z should take the whole room.
+ *
+ * The fog brush (Prep) is on the same history: a stroke is a fog op, and its
+ * undo is the fog op that puts each square's mark back (`brushStroke`).
  */
 import { create } from 'zustand';
-import type { Scene } from '@safehouse/contracts';
-import { levelTiles } from '@safehouse/rules';
+import type { FogBrushStroke, Scene } from '@safehouse/contracts';
+import { brushReader, levelTiles, parseCellKey, type BrushMark } from '@safehouse/rules';
 import type { ArcWall } from '@safehouse/contracts';
 import { apiPatch, apiPost, apiPut, queryClient } from '../../api/client.js';
 
@@ -330,6 +333,85 @@ export function describeGeometry(before: Scene['geometry'], after: Scene['geomet
     if (JSON.stringify(a) !== JSON.stringify(b)) return `edit a ${one}`;
   }
   return 'edit the map';
+}
+
+// ---------------------------------------------------------------------------
+// The fog brush (Prep; FR9.13's square-by-square brush)
+// ---------------------------------------------------------------------------
+
+/**
+ * One stroke of the fog brush and its undo: `paint` over `cells` on floor
+ * `level`, as a fog op's `brush` (`FogBrushStrokeSchema`), and the op that
+ * puts every square back the way the scene held it (`brushReader`): each
+ * square under the mark it had, and one that had none cleared. Squares that
+ * already carry the mark are left out of both, so painting over your own
+ * stroke costs nothing and undoes nothing; a stroke that changes no square
+ * at all is null, and nothing is sent.
+ *
+ * The undo is exact for the GM's marks, which are the only thing a stroke
+ * writes: the regions and the party's memory are never touched by the brush,
+ * so there is nothing else to put back.
+ */
+export function brushStroke(
+  scene: Pick<Scene, 'fog'>,
+  level: number,
+  cells: readonly string[],
+  paint: BrushMark,
+): { stroke: FogBrushStroke; undo: FogBrushStroke; count: number } | null {
+  const before = brushReader(scene.fog.brush, level);
+  const painted: string[] = [];
+  const undo: Record<BrushMark | 'clear', string[]> = { live: [], explored: [], hidden: [], clear: [] };
+  for (const key of new Set(cells)) {
+    const cell = parseCellKey(key);
+    if (cell === null || cell.col < 0 || cell.row < 0) continue;
+    const had = before(cell.col, cell.row);
+    if (had === paint) continue;
+    painted.push(key);
+    undo[had ?? 'clear'].push(key);
+  }
+  if (painted.length === 0) return null;
+  const back: FogBrushStroke = {};
+  for (const mark of ['live', 'explored', 'hidden', 'clear'] as const) if (undo[mark].length > 0) back[mark] = undo[mark];
+  return { stroke: { [paint]: painted }, undo: back, count: painted.length };
+}
+
+/** "reveal 12 squares live", "fog 3 squares again" — what a fog brush stroke did, for the undo button. */
+export function describeBrush(paint: BrushMark, count: number): string {
+  const n = `${count} square${count === 1 ? '' : 's'}`;
+  if (paint === 'live') return `reveal ${n} live`;
+  if (paint === 'explored') return `reveal ${n} as seen before`;
+  return `fog ${n} again`;
+}
+
+/** Send one fog brush stroke, straight to the server; no recording. */
+export async function sendFogBrush(sceneId: string, level: number, stroke: FogBrushStroke): Promise<void> {
+  await apiPost(`/api/scenes/${sceneId}/fog`, { op: 'brush', level, brush: stroke });
+}
+
+/**
+ * Paint a stroke of the fog brush as one step on the history: sent, the
+ * scene read again, and an entry whose undo puts every square's mark back
+ * (`brushStroke`). Nothing is sent for a stroke that changes nothing. A
+ * refused stroke throws before anything is recorded, like every other edit
+ * here.
+ */
+export async function brushFog(
+  scene: Pick<Scene, 'id' | 'fog'>,
+  level: number,
+  cells: readonly string[],
+  paint: BrushMark,
+): Promise<void> {
+  const step = brushStroke(scene, level, cells, paint);
+  if (step === null) return;
+  const sceneId = scene.id;
+  await sendFogBrush(sceneId, level, step.stroke);
+  invalidate(sceneId);
+  useHistory.getState().push({
+    sceneId,
+    label: describeBrush(paint, step.count),
+    undo: () => sendFogBrush(sceneId, level, step.undo),
+    redo: () => sendFogBrush(sceneId, level, step.stroke),
+  });
 }
 
 /** "calibrate the grid", "change the map image" — what a scene patch did. */

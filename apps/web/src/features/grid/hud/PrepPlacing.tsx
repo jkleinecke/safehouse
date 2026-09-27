@@ -5,6 +5,7 @@
  *
  *   Token ▾         which runner, NPC or prop, and how big — then click the map
  *   Reveal area ▾   a rectangle (two clicks) or a polygon (click round, back on the first)
+ *   Fog brush ▾     drag over squares: reveal them live, as seen before, or fog them again
  *   Camera          click to mount one
  *   Light           click to put a lamp down on a square
  *   Note            click to drop one
@@ -20,9 +21,17 @@
  * GM who drew one over the ground they wanted hidden had drawn the one place
  * that could be revealed. Whether the scene is fogged at all is the Fog
  * switch on the mode row (`PrepControls`).
+ *
+ * The fog brush is the other way to shape what the table sees (FR9.13's
+ * square-by-square brush, P6): a drag over squares of the floor being built,
+ * which reveals them live, reveals them as seen before (dimmed, nobody on
+ * them), or fogs them again, even inside a region the table has open. Its
+ * menu says which. It paints the fog, not the floor; the fog must be on (the
+ * switch, or the scene's sightlines) for the table to see any of it.
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useCharacters, useNpcTemplates } from '../api.js';
+import { FOG_BRUSH_PAINTS, fogBrushTitle } from '../gm/FogTab.js';
 import { useGridStore, type TokenStamp } from '../store.js';
 import type { GridTool } from '../types.js';
 import HudButton, { HudIcon } from './HudButton.js';
@@ -245,6 +254,8 @@ export default function PrepPlacing({ campaignId }: { campaignId: string }) {
   const fogShape = useGridStore((s) => s.fogShape);
   const setFogShape = useGridStore((s) => s.setFogShape);
   const clearFogDraft = useGridStore((s) => s.clearFogDraft);
+  const fogBrush = useGridStore((s) => s.fogBrush);
+  const setFogBrush = useGridStore((s) => s.setFogBrush);
   const current = useGridStore((s) => s.tool);
   return (
     <div className="flex items-center gap-1.5" role="group" aria-label="Placing">
@@ -290,6 +301,26 @@ export default function PrepPlacing({ campaignId }: { campaignId: string }) {
               <span className="flex-1">Polygon</span>
               <span className="mono-label text-faint">back on the first to close</span>
             </Item>
+          </>
+        )}
+      </Split>
+      <Split tool="fogbrush" glyph="▦" label={fogBrushTitle(fogBrush)} menuLabel="What the fog brush paints">
+        {(close) => (
+          <>
+            {FOG_BRUSH_PAINTS.map(({ paint, label, hint }) => (
+              <Item
+                key={paint}
+                on={fogBrush === paint}
+                onClick={() => {
+                  setFogBrush(paint);
+                  setTool('fogbrush');
+                  close();
+                }}
+              >
+                <span className="flex-1">{label}</span>
+                <span className="mono-label text-faint">{hint}</span>
+              </Item>
+            ))}
           </>
         )}
       </Split>

@@ -13,7 +13,7 @@ import {
 } from './modes.js';
 
 const ALL_TOOLS: GridTool[] = [
-  'select', 'ruler', 'aoe', 'pointer', 'fogdef', 'focus', 'door', 'zone', 'pin', 'camera', 'light', 'note',
+  'select', 'ruler', 'aoe', 'pointer', 'fogdef', 'fogbrush', 'focus', 'door', 'zone', 'pin', 'camera', 'light', 'note',
   'tile', 'tile-area', 'tile-room', 'tile-erase', 'arc', 'token',
 ];
 

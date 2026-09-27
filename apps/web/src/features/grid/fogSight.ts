@@ -16,8 +16,12 @@
  * then, only if the stored record ended up different, the pass's own `sight`
  * event with the result. `forgetSight` is what the server does in between,
  * so a device folding the first event alone is already right.
+ *
+ * The GM's reveal brush travels the same way (`fog.updated {op: 'brush',
+ * cols, rows, levels}`, the whole record, `brushOfEvent`), after a stroke and
+ * after anything else that moved it.
  */
-import { FogSightSchema, type FogSight, type FogState } from '@safehouse/contracts';
+import { FogBrushSchema, FogSightSchema, type FogBrush, type FogSight, type FogState } from '@safehouse/contracts';
 
 /**
  * The sight an `op: 'sight'` event carries: `{ sight }`, where `sight` is
@@ -38,6 +42,21 @@ export function sightOfEvent(payload: Record<string, unknown>): { sight: FogSigh
   const parsed = FogSightSchema.safeParse({ cols: payload['cols'], rows: payload['rows'], levels });
   if (!parsed.success) return null;
   return { sight: Object.keys(parsed.data.levels).length === 0 ? undefined : parsed.data };
+}
+
+/**
+ * The GM's brush an `op: 'brush'` event carries (`FogBrushSchema`): `{ brush }`,
+ * undefined when the event says there is none left (`levels: {}`), or null
+ * when the payload cannot be read as a brush record, in which case the device
+ * should read the scene again rather than guess. Refused whole on anything
+ * the schema refuses, as the sight is.
+ */
+export function brushOfEvent(payload: Record<string, unknown>): { brush: FogBrush | undefined } | null {
+  const levels = payload['levels'];
+  if (typeof levels !== 'object' || levels === null || Array.isArray(levels)) return null;
+  const parsed = FogBrushSchema.safeParse({ cols: payload['cols'], rows: payload['rows'], levels });
+  if (!parsed.success) return null;
+  return { brush: Object.keys(parsed.data.levels).length === 0 ? undefined : parsed.data };
 }
 
 /**

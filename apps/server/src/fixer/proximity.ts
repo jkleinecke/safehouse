@@ -12,16 +12,30 @@
  *  - it does not nag. The same token/region pair fires once and stays quiet
  *    until the token walks back out of the ring.
  *
+ * What it suggests is a LIVE reveal, and it suggests one only where a live
+ * reveal is the right next step (P6):
+ *  - a region still HIDDEN, with a token at its door or inside it: as ever;
+ *  - a region shown as SEEN BEFORE (dimmed, nobody in it), only once a token
+ *    is INSIDE it. At the door there is nothing to suggest: the table already
+ *    sees the room, and opening it live then would put its guards on every
+ *    screen before anyone has stepped through;
+ *  - a region revealed live: never, it is open;
+ *  - nothing at all on a scene with its SIGHTLINES on. There the party's own
+ *    eyes do the unmasking, automatically (the GM, 2026-09-27): what a runner
+ *    can see is live the moment they can see it, whatever the regions say. A
+ *    region revealed live would stay open behind them after they leave,
+ *    guards and all, which is exactly what sightlines exist to stop.
+ *
  * The geometry is pure and lives here; the scene layer only has to call
  * `emitFogProximity` after a token settles.
  */
 import { eq } from 'drizzle-orm';
 import type { Point, Visibility } from '@safehouse/contracts';
-import { FogStateSchema, GridSchema } from '@safehouse/contracts';
+import { FogStateSchema, GridSchema, SceneVisionSchema, sightlinesOn } from '@safehouse/contracts';
 // The inside test is shared with the server's fog secrecy (`tokenConcealed`),
 // which asks the same question of the same polygons: one ray caster, so the
 // nudge and the withholding can never disagree about where a region ends.
-import { pointInPolygon } from '@safehouse/rules';
+import { pointInPolygon, regionFashion } from '@safehouse/rules';
 import { scenes, tokens, type Db } from '@safehouse/db';
 import { httpError } from '../services/auth.js';
 import { activeSceneRow } from './state-core.js';
@@ -35,6 +49,8 @@ export interface ProximityPrompt {
   tokenHidden: boolean;
   regionId: string;
   regionName: string;
+  /** How the table is shown the region now: still fogged, or dimmed as seen before (`regionFashion`). */
+  shownAs: 'hidden' | 'explored';
   /** Metres from the token to the region edge; 0 when already inside it. */
   distanceM: number;
   inside: boolean;
@@ -79,13 +95,17 @@ export function distanceToPolygon(p: Point, polygon: Point[]): number {
 export interface ProximityInput {
   grid: unknown;
   fog: unknown;
+  /** The scene's vision settings (`SceneVision`): with sightlines on, the party's eyes unmask and nothing is suggested. */
+  vision?: unknown;
   tokens: Array<{ id: string; name: string; x: number; y: number; hidden: boolean }>;
   radiusM?: number;
 }
 
 /**
- * The whole rule, as a pure function: unrevealed named regions × tokens within
- * `radiusM`, nearest first.
+ * The whole rule, as a pure function: named regions not yet live × tokens
+ * within `radiusM` (and, for a region shown as seen before, inside it),
+ * nearest first; none on a scene with sightlines on (see the top of this
+ * file).
  */
 export function fogProximityPrompts(input: ProximityInput): {
   prompts: ProximityPrompt[];
@@ -97,25 +117,36 @@ export function fogProximityPrompts(input: ProximityInput): {
   const radiusM = Math.max(input.radiusM ?? DEFAULT_PROXIMITY_M, 0);
   const fog = FogStateSchema.safeParse(input.fog ?? {});
   if (!fog.success) return { prompts: [], unitM, radiusM };
-  const revealed = new Set(fog.data.revealed);
-  const hidden = fog.data.regions.filter((region) => !revealed.has(region.id));
+  const vision = SceneVisionSchema.safeParse(input.vision ?? {});
+  if (vision.success && sightlinesOn(vision.data)) return { prompts: [], unitM, radiusM };
+  const notLive = fog.data.regions.flatMap((region) => {
+    const shownAs = regionFashion(fog.data, region.id);
+    return shownAs === 'live' ? [] : [{ region, shownAs }];
+  });
   const prompts: ProximityPrompt[] = [];
   for (const token of input.tokens) {
-    for (const region of hidden) {
+    for (const { region, shownAs } of notLive) {
       const distanceM = distanceToPolygon({ x: token.x, y: token.y }, region.polygon) * unitM;
       if (distanceM > radiusM) continue;
       const inside = distanceM === 0;
+      // Seen before: the room is on the table already, dimmed. Only a token
+      // standing in it makes a live reveal the next step.
+      if (shownAs === 'explored' && !inside) continue;
       prompts.push({
         tokenId: token.id,
         tokenName: token.name,
         tokenHidden: token.hidden,
         regionId: region.id,
         regionName: region.name,
+        shownAs,
         distanceM: Number(distanceM.toFixed(2)),
         inside,
-        message: inside
-          ? `${token.name} is inside "${region.name}" and it is still fogged — reveal?`
-          : `${token.name} is ${distanceM.toFixed(1)} m from "${region.name}" — reveal?`,
+        message:
+          shownAs === 'explored'
+            ? `${token.name} is back inside "${region.name}", shown as seen before — reveal it live?`
+            : inside
+              ? `${token.name} is inside "${region.name}" and it is still fogged — reveal?`
+              : `${token.name} is ${distanceM.toFixed(1)} m from "${region.name}" — reveal?`,
       });
     }
   }
@@ -140,6 +171,8 @@ export async function fogProximityState(
   const { prompts, unitM, radiusM } = fogProximityPrompts({
     grid: row.grid,
     fog: row.fog,
+    // The vision settings ride in the geometry envelope (`serializeScene`).
+    vision: typeof row.geometry === 'object' && row.geometry !== null ? (row.geometry as Record<string, unknown>)['vision'] : undefined,
     tokens: tokenRows.map((t) => ({
       id: t.id,
       name: t.name,
@@ -214,8 +247,8 @@ export async function emitFogProximity(
       sceneName: state.sceneName,
       radiusM: state.radiusM,
       prompts: fresh,
-      /** Nothing has changed on the table — this is a nudge (Principle 8). */
-      action: { tool: 'suggest_fog_reveal', regions: fresh.map((p) => p.regionId) },
+      /** Nothing has changed on the table — this is a nudge (Principle 8). A reveal it suggests is LIVE. */
+      action: { tool: 'suggest_fog_reveal', regions: fresh.map((p) => p.regionId), as: 'live' },
     },
     visibility: 'gm',
   });

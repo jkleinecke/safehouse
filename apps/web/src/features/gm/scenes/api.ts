@@ -18,7 +18,7 @@
  */
 import { useEffect, useRef } from 'react';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { FogRegion, FogState, Scene, SceneFile, SceneInput } from '@safehouse/contracts';
+import type { FogRegion, FogRevealAs, FogState, Scene, SceneFile, SceneInput } from '@safehouse/contracts';
 import { apiDelete, apiGet, apiPost, apiPatch, queryClient } from '../../../api/client.js';
 import { useLiveStore } from '../../../live/store.js';
 import type { AttachmentDto, ComposedScene } from '../../grid/api.js';
@@ -61,6 +61,12 @@ export interface FogOpVars {
   op: 'reveal' | 'hide';
   /** Omit on `hide` to re-fog the whole scene (the server clears every reveal). */
   regionId?: string;
+  /**
+   * For `reveal`: live (the server's default, so it is not sent) or as seen
+   * before (`FogRevealAsSchema`, P6): the table sees the region dimmed, with
+   * nobody in it.
+   */
+  as?: FogRevealAs;
   /** Post "Revealed: <name>" to the table log (FR9.14). */
   announce?: boolean;
 }
@@ -70,6 +76,7 @@ export async function fogOp(vars: FogOpVars): Promise<FogState> {
     await apiPost<{ fog: FogState }>(`/api/scenes/${vars.sceneId}/fog`, {
       op: vars.op,
       ...(vars.regionId ? { regionId: vars.regionId } : {}),
+      ...(vars.op === 'reveal' && vars.as === 'explored' ? { as: 'explored' } : {}),
       ...(vars.announce ? { announce: true } : {}),
     })
   ).fog;

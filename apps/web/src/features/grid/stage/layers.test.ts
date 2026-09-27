@@ -13,7 +13,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Scene } from '@safehouse/contracts';
-import { cellBitsFrom, encodeCellBits, TILE_HEIGHTS } from '@safehouse/rules';
+import { cellBitsFrom, encodeCellBits, paintBrush, TILE_HEIGHTS } from '@safehouse/rules';
 import { heightRise, metricsFor, sceneWorldSize, worldFromGrid } from '../geometry.js';
 import { RecordingInk, type InkOp } from '../stage3d/floorInk.js';
 // The fog a player is sent, shared with the server's tests: what they assert
@@ -549,6 +549,25 @@ describe("drawFog for the GM on a floor the party has seen (P6)", () => {
     expect(fills).toHaveLength(1);
     expect(fills[0]).toMatchObject({ kind: 'fill', alpha: GM_FOG_ALPHA });
     expect(fills[0]!.path.holes).toHaveLength(1);
+  });
+
+  it("tints a floor the GM's brush has painted square by square too, even with no sight on it (P6)", () => {
+    // The bay is revealed live; the brush fogs one of its squares again and
+    // dims another, on the ground floor only. No sightlines at all.
+    const brush = paintBrush(undefined, 12, 8, 0, { hidden: ['2,2'], explored: ['3,2'] });
+    const painted: Scene = { ...scene(), fog: { ...scene().fog, brush } };
+    const ink = new Recorder();
+    drawFog(ink, noLabels(), painted, flat, true, 0);
+    const [, hidden, explored] = ink.paints.filter((p) => p.kind === 'fill') as [InkOp, InkOp, InkOp];
+    const c = flat.cell;
+    expect(explored.alpha).toBe(GM_EXPLORED_ALPHA);
+    expect(explored.path.shapes).toEqual([{ pts: [3 * c, 2 * c, 4 * c, 2 * c, 4 * c, 3 * c, 3 * c, 3 * c], closed: true }]);
+    // The fogged-again square is hidden with the rest: 96 squares less the bay's 16, plus the one taken back.
+    expect(squaresIn(hidden.path.shapes)).toBe(96 - 16 + 1);
+    // Upstairs nothing is painted: the regions cut from one tint, as before.
+    const upstairs = new Recorder();
+    drawFog(upstairs, noLabels(), painted, flat, true, 1);
+    expect(upstairs.paints.filter((p) => p.kind === 'fill')).toHaveLength(1);
   });
 
   it("leaves the players' drawing to the regions: their cover stamps the sight itself", () => {

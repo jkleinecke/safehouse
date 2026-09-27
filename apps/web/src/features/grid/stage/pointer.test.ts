@@ -54,6 +54,9 @@ function fakeElement(): FakeEl {
 function harness(tool: StageSceneState['tool']) {
   const onTilePaint = vi.fn<(col: number, row: number, erase: boolean) => void>();
   const onTileStrokeEnd = vi.fn<() => void>();
+  const onFogBrush = vi.fn<(col: number, row: number) => void>();
+  const onFogBrushEnd = vi.fn<() => void>();
+  const drawPaintedGhost = vi.fn<(cells: readonly string[] | null) => void>();
   const onTileRect =
     vi.fn<(c0: number, r0: number, c1: number, r1: number, mode: 'area' | 'room') => void>();
   const drawRect = vi.fn();
@@ -93,6 +96,8 @@ function harness(tool: StageSceneState['tool']) {
     onTilePaint,
     onTileStrokeEnd,
     onTileRect,
+    onFogBrush,
+    onFogBrushEnd,
   };
   const state = {
     scene: { id: 's1', geometry: { walls: [], doors: [], zones: [], pins: [] } } as unknown as Scene,
@@ -121,6 +126,8 @@ function harness(tool: StageSceneState['tool']) {
     clearRuler: () => {},
     drawRect,
     clearRect,
+    // A copy, since the stroke's own list keeps growing after the call.
+    drawPaintedGhost: (cells) => drawPaintedGhost(cells === null ? null : [...cells]),
   };
 
   const dom = fakeElement();
@@ -154,6 +161,9 @@ function harness(tool: StageSceneState['tool']) {
     onTilePaint,
     onTileStrokeEnd,
     onTileRect,
+    onFogBrush,
+    onFogBrushEnd,
+    drawPaintedGhost,
     drawRect,
     clearRect,
     onCameraPlace,
@@ -353,6 +363,40 @@ describe('a stroke that does not end with a clean pointerup', () => {
     expect(h.cells()).toEqual([[3, 3, false]]);
     h.send('pointermove', 9, 9, 2);
     expect(h.cells()).toEqual([[3, 3, false]]);
+  });
+});
+
+describe('a fog brush stroke (Prep, P6)', () => {
+  it('sends each square it crosses once, to the fog and never to the tiles, and shows them until it ends', () => {
+    const h = harness('fogbrush');
+    h.send('pointerdown', 2, 3);
+    h.send('pointermove', 4, 3); // a quick drag: the gap at (3,3) is filled
+    h.send('pointermove', 2, 3); // back over its own line: nothing new
+    expect(h.onFogBrush.mock.calls).toEqual([
+      [2, 3],
+      [3, 3],
+      [4, 3],
+    ]);
+    expect(h.onTilePaint).not.toHaveBeenCalled();
+    // The squares crossed so far, as a ghost, before anything is sent.
+    expect(h.drawPaintedGhost).toHaveBeenLastCalledWith(['2,3', '3,3', '4,3']);
+    expect(h.onFogBrushEnd).not.toHaveBeenCalled();
+
+    h.send('pointerup', 2, 3);
+    expect(h.onFogBrushEnd).toHaveBeenCalledTimes(1);
+    expect(h.onTileStrokeEnd).not.toHaveBeenCalled();
+    expect(h.drawPaintedGhost).toHaveBeenLastCalledWith(null);
+
+    // The next stroke starts afresh, and a tile stroke after it is the tiles' again.
+    h.send('pointerdown', 2, 3);
+    h.send('pointerup', 2, 3);
+    expect(h.onFogBrush).toHaveBeenCalledTimes(4);
+    h.state.tool = 'tile';
+    h.send('pointerdown', 6, 6);
+    h.send('pointerup', 6, 6);
+    expect(h.cells()).toEqual([[6, 6, false]]);
+    expect(h.onFogBrushEnd).toHaveBeenCalledTimes(2);
+    expect(h.onTileStrokeEnd).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -9,7 +9,14 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { characters, combatants, scenes as scenesTable } from '@safehouse/db';
 import { SheetV1Schema } from '@safehouse/contracts';
-import { cellBitsCount, cellBitsHas, decodeCellBits, type CellBits } from '@safehouse/rules';
+import {
+  brushReader,
+  cellBitsCount,
+  cellBitsHas,
+  cellState,
+  decodeCellBits,
+  type CellBits,
+} from '@safehouse/rules';
 import { eq } from 'drizzle-orm';
 import { ScenesService, activeSceneModifiers, computeScatter } from '../src/services/scenes.js';
 // The fog a player is sent, shared with the web's tests so the server's
@@ -926,6 +933,105 @@ describe('a fogged scene reaches players and the TV covered, and tells them noth
       expectNoGuard(v, role);
     }
   });
+
+  it('paints squares with the brush: live sends the guard, seen-before shows his ground without him, fogged again hides him inside a live room (P6)', async () => {
+    // The square-by-square reveal brush (FR9.13), in the three things it
+    // paints. The guard stands where the previous case left him, unsnapped
+    // at (25.6875, 20.3125), so he stands on four squares, and he is on the
+    // table when ANY of them is live (`tokenLive`).
+    const HIS = ['25,19', '26,19', '25,20', '26,20'];
+    const vaultRegion = { id: vaultId, name: VAULT, polygon: VAULT_POLY };
+    type Brush = { cols: number; rows: number; levels: Record<string, { live: string; explored: string; hidden: string }> };
+    const markOf = (brush: unknown, level = 0) => brushReader(brush as Brush | undefined, level)(25, 20);
+    /** Everything a brush event may say: the scene, the op, the floor, the marks, and whether the scene is fogged. */
+    const BRUSH_EVENT_KEYS = ['active', 'cols', 'level', 'levels', 'op', 'rows', 'sceneId'];
+
+    // Seen before: his squares are shown dimmed, and he is not on the table.
+    const beforeExplored = await mark();
+    const explored = await fogOp({ op: 'brush', level: 0, brush: { explored: HIS } });
+    expect(markOf(explored['brush'])).toBe('explored');
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      // The table gets the marks as the GM has them: every one is ground it is shown.
+      expect(v.fog, role).toEqual({ ...FOG_WIRE_UNREVEALED, brush: explored['brush'] });
+      expect(v.tokenIds, role).toEqual([runnerId]);
+      expectNoGuard(v, role);
+      expectNoVault(v.raw, role);
+    }
+    const told = await tableEventsSince(beforeExplored, 'fog.updated');
+    expect(told).toHaveLength(1);
+    expect(Object.keys(told[0]!).sort()).toEqual(BRUSH_EVENT_KEYS);
+    expect(told[0]).toMatchObject({ sceneId: fogSceneId, op: 'brush', level: 0, active: true });
+    expect(await tableEventsSince(beforeExplored, 'token.added')).toEqual([]);
+
+    // Painted upstairs, the same squares change nothing down here.
+    await fogOp({ op: 'brush', level: 1, brush: { live: HIS } });
+    for (const { role, token } of viewers) expectNoGuard(await view(token), role);
+
+    // Live: he arrives, where he stands, as a new token.
+    const beforeLive = await mark();
+    const live = await fogOp({ op: 'brush', level: 0, brush: { live: ['26,20'] } });
+    expect(markOf(live['brush'])).toBe('explored');
+    expect(brushReader(live['brush'] as Brush, 0)(26, 20)).toBe('live');
+    for (const { role, token } of viewers) {
+      expect((await view(token)).tokenIds, role).toEqual([guardId, runnerId].sort());
+    }
+    expect((await tableEventsSince(beforeLive, 'token.added')).map((p) => (p['token'] as { id: string }).id)).toEqual([guardId]);
+
+    // The vault revealed live is the later act over its ground: the marks
+    // under it go, on every floor, and the table hears the brush as it is now.
+    const beforeVault = await mark();
+    const vault = await fogOp({ op: 'reveal', regionId: vaultId });
+    expect(vault).not.toHaveProperty('brush');
+    expect((await tableEventsSince(beforeVault, 'fog.updated')).map((p) => [p['op'], p['levels']])).toEqual([
+      ['reveal', undefined],
+      ['brush', {}],
+    ]);
+
+    // Fogged again, inside the live vault: he leaves the table, the vault stays open round him.
+    const beforeFogged = await mark();
+    const fogged = await fogOp({ op: 'brush', level: 0, brush: { hidden: HIS } });
+    expect(markOf(fogged['brush'])).toBe('hidden');
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      expect(v.fog, role).toEqual({ ...FOG_WIRE_UNREVEALED, regions: [vaultRegion], revealed: [vaultId], brush: fogged['brush'] });
+      expect(v.tokenIds, role).toEqual([runnerId]);
+      expectNoGuard(v, role);
+    }
+    expect(await tableEventsSince(beforeFogged, 'token.removed')).toEqual([{ tokenId: guardId, sceneId: fogSceneId }]);
+
+    // Cleared (what an undo sends): the vault decides his squares again, and he is back.
+    const beforeClear = await mark();
+    const cleared = await fogOp({ op: 'brush', level: 0, brush: { clear: HIS } });
+    expect(cleared).not.toHaveProperty('brush');
+    for (const { role, token } of viewers) {
+      expect((await view(token)).tokenIds, role).toEqual([guardId, runnerId].sort());
+    }
+    expect((await tableEventsSince(beforeClear, 'token.added')).map((p) => (p['token'] as { id: string }).id)).toEqual([guardId]);
+
+    // The GM's reset takes every reveal back, every square of the brush with it.
+    await fogOp({ op: 'brush', level: 0, brush: { live: ['1,1'] } });
+    const reset = await fogOp({ op: 'hide' });
+    expect(reset).not.toHaveProperty('brush');
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      expect(v.fog, role).toEqual(FOG_WIRE_UNREVEALED);
+      expectNoGuard(v, role);
+      expectNoVault(v.raw, role);
+    }
+
+    // Hiding a region the table was never shown takes no mark from under it:
+    // marks vanishing there would trace its outline on the players' wire.
+    await fogOp({ op: 'brush', level: 0, brush: { live: ['20,20'] } });
+    const stillPainted = await fogOp({ op: 'hide', regionId: vaultId });
+    expect(brushReader(stillPainted['brush'] as Brush, 0)(20, 20)).toBe('live');
+
+    // A stroke must say what it paints.
+    const empty = await post(`/api/scenes/${fogSceneId}/fog`, fb.gmToken, { op: 'brush', level: 0 });
+    expect(empty.statusCode).toBe(400);
+    const bad = await post(`/api/scenes/${fogSceneId}/fog`, fb.gmToken, { op: 'brush', brush: { live: ['a,b'] } });
+    expect(bad.statusCode).toBe(400);
+  });
 });
 
 /**
@@ -1155,6 +1261,40 @@ describe('sightlines: the party’s pooled sight unmasks the map, and the server
     expect(heard[0]!['levels']).toEqual(v.fog.sight?.levels);
     // The guard was in sight before and is in sight still: nothing about him.
     expect(events.filter((e) => e.type === 'token.added' || e.type === 'token.removed')).toEqual([]);
+  });
+
+  it('fogs again with the brush only what the party has left: a remembered square goes dark, one in sight keeps no mark', async () => {
+    // The runner stands in the east room; the west room is remembered. The GM
+    // fogs one square of each again. What a runner is looking at stays on the
+    // table (the sight pass takes the mark straight off it); the square the
+    // party only remembers goes dark, over the memory, which is left as it was.
+    type Brush = { cols: number; rows: number; levels: Record<string, { live: string; explored: string; hidden: string }> };
+    const since = await mark();
+    await fogOp({ op: 'brush', level: 0, brush: { hidden: ['0,0', '11,0'] } });
+    for (const { role, token } of [{ role: 'gm', token: sb.gmToken }, ...viewers]) {
+      const v = await view(token);
+      const fog = v.fog as View['fog'] & { brush?: Brush };
+      const marks = brushReader(fog.brush, 0);
+      expect(marks(0, 0), role).toBe('hidden');
+      expect(marks(11, 0), role).toBeNull();
+      // The memory is the party's, and the brush did not touch it.
+      expect(cellBitsHas(squares(v.fog, 'explored'), 0, 0), role).toBe(true);
+      if (role !== 'gm') {
+        expect(cellState(fog as Parameters<typeof cellState>[0], 0, 0, 0), role).toBe('hidden');
+        expect(cellState(fog as Parameters<typeof cellState>[0], 0, 11, 0), role).toBe('live');
+        expect(cellState(fog as Parameters<typeof cellState>[0], 0, 1, 1), role).toBe('explored');
+      }
+    }
+    // The stroke, then the pass's own word on the brush: the square in sight let go.
+    const brushEvents = (await tableSince(since)).filter((e) => e.type === 'fog.updated' && e.payload['op'] === 'brush');
+    expect(brushEvents).toHaveLength(2);
+    const gmBrush = ((await view(sb.gmToken)).fog as { brush?: Brush }).brush;
+    expect(brushEvents[1]!.payload['levels']).toEqual(gmBrush?.levels);
+    expect(brushReader(brushEvents[0]!.payload as unknown as Brush, 0)(11, 0)).toBe('hidden');
+
+    // Undone: the square is remembered again, and the record is gone.
+    await fogOp({ op: 'brush', level: 0, brush: { clear: ['0,0'] } });
+    expect((await view(sb.gmToken)).fog).not.toHaveProperty('brush');
   });
 
   it('switched off, nobody is seen live any more and the memory is kept', async () => {

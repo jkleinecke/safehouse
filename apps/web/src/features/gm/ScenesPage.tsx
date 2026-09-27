@@ -222,14 +222,13 @@ export default function ScenesPage() {
             patch.mutateAsync({ sceneId: scene.id, patch: { environment } }),
           );
         }}
-        onFog={(regionId, reveal) =>
+        onFog={(regionId, to) =>
           void run(scene.id, 'save', () =>
-            fog.mutateAsync({
-              sceneId: scene.id,
-              op: reveal ? 'reveal' : 'hide',
-              regionId,
-              ...(reveal ? { announce: true } : {}),
-            }),
+            fog.mutateAsync(
+              to === 'hidden'
+                ? { sceneId: scene.id, op: 'hide', regionId }
+                : { sceneId: scene.id, op: 'reveal', regionId, as: to, announce: true },
+            ),
           )
         }
         onRefogAll={() =>

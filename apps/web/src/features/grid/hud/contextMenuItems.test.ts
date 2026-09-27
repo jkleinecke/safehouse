@@ -138,10 +138,38 @@ describe('the floor menu', () => {
     const inside = input({ grid: { x: 12, y: 12 } });
     expect(ids(contextMenuItems(inside))).toContain('fog-reveal');
     contextMenuItems(inside).find((i) => i.id === 'fog-reveal')!.run();
-    expect(inside.actions.revealRegion).toHaveBeenCalledWith('r1');
+    expect(inside.actions.revealRegion).toHaveBeenCalledWith('r1', 'live');
     const revealed = { ...scene, fog: { ...scene.fog, revealed: ['r1'] } } as Scene;
     expect(ids(contextMenuItems(input({ grid: { x: 12, y: 12 }, scene: revealed })))).toContain('fog-hide');
     expect(regionAt(scene, { x: 1, y: 1 })).toBeNull();
+  });
+
+  it('offers, for a region in any state, the two fashions it is not in (P6)', () => {
+    const fogIds = (over: Partial<Scene['fog']>) =>
+      ids(contextMenuItems(input({ grid: { x: 12, y: 12 }, scene: { ...scene, fog: { ...scene.fog, ...over } } as Scene }))).filter((id) =>
+        id.startsWith('fog-'),
+      );
+    // Hidden: reveal it live, or as seen before.
+    expect(fogIds({})).toEqual(['fog-reveal', 'fog-explored']);
+    // Live: drop it to seen before (the party has left), or fog it again.
+    expect(fogIds({ revealed: ['r1'] })).toEqual(['fog-explored', 'fog-hide']);
+    // Seen before: open it live (they are back), or fog it again.
+    expect(fogIds({ exploredRegionIds: ['r1'] })).toEqual(['fog-reveal', 'fog-hide']);
+    // Somehow in both lists: live wins, as it does everywhere else.
+    expect(fogIds({ revealed: ['r1'], exploredRegionIds: ['r1'] })).toEqual(['fog-explored', 'fog-hide']);
+
+    const remembered = { ...scene, fog: { ...scene.fog, exploredRegionIds: ['r1'] } } as Scene;
+    expect(regionAt(remembered, { x: 12, y: 12 })).toEqual({ id: 'r1', name: 'the office', revealed: false, fashion: 'explored' });
+    const inp = input({ grid: { x: 12, y: 12 }, scene: remembered });
+    const items = contextMenuItems(inp);
+    items.find((i) => i.id === 'fog-reveal')!.run();
+    expect(inp.actions.revealRegion).toHaveBeenCalledWith('r1', 'live');
+    items.find((i) => i.id === 'fog-hide')!.run();
+    expect(inp.actions.hideRegion).toHaveBeenCalledWith('r1');
+    const hidden = input({ grid: { x: 12, y: 12 } });
+    contextMenuItems(hidden).find((i) => i.id === 'fog-explored')!.run();
+    expect(hidden.actions.revealRegion).toHaveBeenCalledWith('r1', 'explored');
+    expect(contextMenuItems(hidden).find((i) => i.id === 'fog-explored')!.label).toBe('Reveal the office as seen before');
   });
 
   it('is empty for an observer or the TV', () => {

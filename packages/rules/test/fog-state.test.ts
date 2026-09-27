@@ -27,8 +27,15 @@ import {
   decodeCellBits,
   emptyCellBits,
   encodeCellBits,
+  brushOnFloor,
+  brushReader,
+  eraseBrush,
+  eraseBrushUnder,
   fogCells,
   fogRevealedAt,
+  paintBrush,
+  regionFashion,
+  sameBrush,
   tokenLive,
   type CellBits,
 } from '../src/index.js';
@@ -321,6 +328,110 @@ describe('cellState: hidden, explored or live', () => {
     // answered `active` for the whole scene already).
     const off = { ...wire, active: false };
     expect(cellState(off, 0, 6, 1, { vision: { sight: 'on' } })).toBe('live');
+  });
+});
+
+describe("the GM's brush: squares painted live, as seen before, or fogged again", () => {
+  const lab = { id: 'lab', name: 'The lab', polygon: box(0, 0, 3, 3) };
+
+  it('paints marks per floor, one mark a square, and takes them off again with clear', () => {
+    let brush = paintBrush(undefined, 10, 8, 0, { live: ['1,1', '2,1'], explored: ['5,5'], hidden: ['7,7'] });
+    brush = paintBrush(brush, 10, 8, 2, { hidden: ['4,4'] });
+    const ground = brushReader(brush, 0);
+    expect(ground(1, 1)).toBe('live');
+    expect(ground(2, 1)).toBe('live');
+    expect(ground(5, 5)).toBe('explored');
+    expect(ground(7, 7)).toBe('hidden');
+    expect(ground(4, 4)).toBeNull(); // painted upstairs, not here
+    expect(brushReader(brush, 2)(4, 4)).toBe('hidden');
+    expect(brushOnFloor(brush, 1)).toBe(false);
+
+    // A square repainted takes the new mark and loses the old one.
+    brush = paintBrush(brush, 10, 8, 0, { hidden: ['1,1'] });
+    expect(brushReader(brush, 0)(1, 1)).toBe('hidden');
+    expect(brush?.levels['0']?.live).toBe(encodeCellBits(cellBitsFrom(10, 8, [{ col: 2, row: 1 }])));
+
+    // Off the grid, or not a square at all: nothing.
+    expect(sameBrush(paintBrush(brush, 10, 8, 0, { live: ['40,40', 'x', '-1,2'] }), brush)).toBe(true);
+
+    // Cleared square by square, the floors go, and then the whole record.
+    brush = paintBrush(brush, 10, 8, 2, { clear: ['4,4'] });
+    expect(Object.keys(brush?.levels ?? {})).toEqual(['0']);
+    brush = paintBrush(brush, 10, 8, 0, { clear: ['1,1', '2,1', '5,5', '7,7'] });
+    expect(brush).toBeUndefined();
+  });
+
+  it('keeps a mark where it is when the scene has been resized since', () => {
+    const before = paintBrush(undefined, 10, 8, 0, { explored: ['3,4', '9,7'] });
+    const after = paintBrush(before, 6, 6, 0, { live: ['0,0'] });
+    expect(after?.cols).toBe(6);
+    const read = brushReader(after, 0);
+    expect(read(3, 4)).toBe('explored');
+    expect(read(0, 0)).toBe('live');
+    expect(read(9, 7)).toBeNull(); // no longer on the grid
+  });
+
+  it('beats the regions and shapes and the memory, never what a runner sees now', () => {
+    const brush = paintBrush(undefined, 10, 8, 0, {
+      hidden: ['1,1', '6,6'],
+      explored: ['2,2'],
+      live: ['8,1'],
+    });
+    const fog = fogged({
+      regions: [lab],
+      revealed: ['lab'],
+      brush,
+      sight: sight({
+        '0': {
+          live: cellBitsFrom(10, 8, [{ col: 6, row: 6 }]),
+          explored: cellBitsFrom(10, 8, [
+            { col: 6, row: 6 },
+            { col: 1, row: 1 },
+          ]),
+        },
+      }),
+    });
+    expect(cellState(fog, 0, 0, 0)).toBe('live'); // the lab, unpainted
+    expect(cellState(fog, 0, 1, 1)).toBe('hidden'); // fogged again inside the lab, over the memory too
+    expect(cellState(fog, 0, 2, 2)).toBe('explored'); // dimmed inside the live lab
+    expect(cellState(fog, 0, 8, 1)).toBe('live'); // painted open on fogged ground
+    expect(cellState(fog, 0, 6, 6)).toBe('live'); // a runner is looking at it: the mark waits
+    // The same squares upstairs are unpainted: the lab is open there as everywhere.
+    expect(cellState(fog, 1, 1, 1)).toBe('live');
+    expect(cellState(fog, 1, 8, 1)).toBe('hidden');
+    // A guard standing on each: only live ground puts him on the table.
+    expect(tokenLive(fog, { x: 1.5, y: 1.5 })).toBe(false);
+    expect(tokenLive(fog, { x: 2.5, y: 2.5 })).toBe(false);
+    expect(tokenLive(fog, { x: 8.5, y: 1.5 })).toBe(true);
+    // With the fog off, a mark changes nothing.
+    expect(cellState({ ...fog, enabled: false }, 0, 1, 1)).toBe('live');
+  });
+
+  it('takes marks off where it is told: under a region, or the hidden ones a runner sees again', () => {
+    const brush = paintBrush(paintBrush(undefined, 10, 8, 0, { hidden: ['1,1', '6,6'], live: ['2,2', '8,1'] }), 10, 8, 1, {
+      explored: ['1,2'],
+    });
+    const underLab = eraseBrushUnder(brush, lab.polygon);
+    expect(brushReader(underLab, 0)(1, 1)).toBeNull();
+    expect(brushReader(underLab, 0)(2, 2)).toBeNull();
+    expect(brushReader(underLab, 1)(1, 2)).toBeNull(); // every floor: the region has none
+    expect(brushReader(underLab, 0)(6, 6)).toBe('hidden');
+    expect(brushReader(underLab, 0)(8, 1)).toBe('live');
+    // Nothing under the area: the very same record back.
+    expect(eraseBrushUnder(brush, box(4, 4, 5, 5))).toBe(brush);
+
+    // A runner sees (6,6) and (2,2) on the ground: only the hidden mark goes.
+    const seen = eraseBrush(brush, (level, col, row) => level === 0 && ((col === 6 && row === 6) || (col === 2 && row === 2)), ['hidden']);
+    expect(brushReader(seen, 0)(6, 6)).toBeNull();
+    expect(brushReader(seen, 0)(2, 2)).toBe('live');
+    expect(brushReader(seen, 0)(1, 1)).toBe('hidden');
+  });
+
+  it("names a region's fashion off the GM's lists, live first", () => {
+    const fog = fogged({ regions: [lab], revealed: ['lab'], exploredRegionIds: ['lab', 'office'] });
+    expect(regionFashion(fog, 'lab')).toBe('live');
+    expect(regionFashion(fog, 'office')).toBe('explored');
+    expect(regionFashion(fog, 'vault')).toBe('hidden');
   });
 });
 

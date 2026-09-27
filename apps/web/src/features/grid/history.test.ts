@@ -4,7 +4,12 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Scene } from '@safehouse/contracts';
+import { paintBrush } from '@safehouse/rules';
+import { apiPost } from '../../api/client.js';
 import {
+  brushFog,
+  brushStroke,
+  describeBrush,
   describeGeometry,
   describePaint,
   describeScenePatch,
@@ -142,5 +147,51 @@ describe('the inverses', () => {
     expect(describeGeometry(g({}), g({ pins: [{ id: 'p', at: { x: 1, y: 1 }, visibility: 'gm' }, { id: 'q', at: { x: 2, y: 2 }, visibility: 'gm' }] }))).toBe('draw 2 pins');
     expect(describeGeometry(g({}), g({}))).toBe('edit the map');
     expect(describeScenePatch({ grid: {} })).toBe('calibrate the grid');
+  });
+});
+
+describe('the fog brush on the history (Prep, P6)', () => {
+  // Squares (1,1) and (2,1) painted live on the ground floor, (3,1) fogged again.
+  const fog = {
+    regions: [],
+    revealed: [],
+    revealedShapes: [],
+    brush: paintBrush(paintBrush(undefined, 10, 8, 0, { live: ['1,1', '2,1'] }), 10, 8, 0, { hidden: ['3,1'] }),
+  } as Scene['fog'];
+
+  it('sends only the squares a stroke changes, and puts each one back under the mark it had', () => {
+    const step = brushStroke({ fog }, 0, ['1,1', '3,1', '4,1', '4,1', 'x'], 'live');
+    // (1,1) was live already: left out of both.
+    expect(step).toEqual({
+      stroke: { live: ['3,1', '4,1'] },
+      undo: { hidden: ['3,1'], clear: ['4,1'] },
+      count: 2,
+    });
+    // Another floor has no marks: everything painted is cleared by the undo.
+    expect(brushStroke({ fog }, 1, ['1,1'], 'hidden')).toEqual({ stroke: { hidden: ['1,1'] }, undo: { clear: ['1,1'] }, count: 1 });
+    // Nothing to change, nothing to send.
+    expect(brushStroke({ fog }, 0, ['1,1', '2,1'], 'live')).toBeNull();
+  });
+
+  it('says what a stroke did in the GM’s words', () => {
+    expect(describeBrush('live', 12)).toBe('reveal 12 squares live');
+    expect(describeBrush('explored', 1)).toBe('reveal 1 square as seen before');
+    expect(describeBrush('hidden', 3)).toBe('fog 3 squares again');
+  });
+
+  it('records one step whose undo and redo are fog ops', async () => {
+    const post = vi.mocked(apiPost);
+    post.mockClear();
+    await brushFog({ id: 's1', fog }, 0, ['3,1', '5,5'], 'explored');
+    expect(post).toHaveBeenLastCalledWith('/api/scenes/s1/fog', { op: 'brush', level: 0, brush: { explored: ['3,1', '5,5'] } });
+    expect(historyFor('s1').undo?.label).toBe('reveal 2 squares as seen before');
+    await h().undo();
+    expect(post).toHaveBeenLastCalledWith('/api/scenes/s1/fog', { op: 'brush', level: 0, brush: { hidden: ['3,1'], clear: ['5,5'] } });
+    await h().redo();
+    expect(post).toHaveBeenLastCalledWith('/api/scenes/s1/fog', { op: 'brush', level: 0, brush: { explored: ['3,1', '5,5'] } });
+    // A stroke that changes nothing sends nothing and records nothing.
+    post.mockClear();
+    await brushFog({ id: 's1', fog }, 0, ['1,1'], 'live');
+    expect(post).not.toHaveBeenCalled();
   });
 });

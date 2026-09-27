@@ -231,6 +231,14 @@ export class PointerController {
   /** Cells already sent this stroke, so a wandering drag sends each once. */
   private readonly painted = new Set<string>();
   private paintErase = false;
+  /**
+   * The stroke is the fog brush's, not the tiles' (Prep): its squares go to
+   * `onFogBrush`, and the squares it has crossed are shown as a flat ghost
+   * (`drawPaintedGhost`) until it ends, since nothing on the map changes
+   * until the server has the whole stroke.
+   */
+  private paintFog = false;
+  private fogStroke: string[] = [];
   /** Last cell this stroke touched, so the gap to the next sample can be filled. */
   private lastCell: { col: number; row: number } | null = null;
   private readonly pointers = new Map<number, ActivePointer>();
@@ -364,6 +372,12 @@ export class PointerController {
     const key = `${col},${row}`;
     if (this.painted.has(key)) return;
     this.painted.add(key);
+    if (this.paintFog) {
+      this.fogStroke.push(key);
+      this.host.drawPaintedGhost?.(this.fogStroke);
+      this.host.callbacks.onFogBrush?.(col, row);
+      return;
+    }
     this.host.callbacks.onTilePaint?.(col, row, this.paintErase);
   }
 
@@ -377,6 +391,13 @@ export class PointerController {
   private endStroke(): void {
     this.painted.clear();
     this.lastCell = null;
+    if (this.paintFog) {
+      this.paintFog = false;
+      this.fogStroke = [];
+      this.host.drawPaintedGhost?.(null);
+      this.host.callbacks.onFogBrushEnd?.();
+      return;
+    }
     this.host.callbacks.onTileStrokeEnd?.();
   }
 
@@ -674,9 +695,24 @@ export class PointerController {
         // that crosses one cell twice still sends it once.
         this.mode = 'painting';
         this.paintErase = state.tool === 'tile-erase';
+        this.paintFog = false;
         this.painted.clear();
         // A new stroke has no previous cell: starting one across the map must
         // not draw a line from wherever the last one ended.
+        this.lastCell = null;
+        this.paintCell(grid);
+        return;
+      case 'fogbrush':
+        // The fog brush (Prep; FR9.13's square-by-square brush) is a stroke
+        // like the tile brush: every square the drag crosses, once, with the
+        // gaps between samples filled. It paints the fog, not the floor, so
+        // its squares go to their own callback and the stroke is sent whole
+        // when it ends (`endStroke`).
+        this.mode = 'painting';
+        this.paintErase = false;
+        this.paintFog = true;
+        this.fogStroke = [];
+        this.painted.clear();
         this.lastCell = null;
         this.paintCell(grid);
         return;

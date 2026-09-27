@@ -46,7 +46,10 @@
  *       Stamped whenever the sight changes (`fogSightKey`), which is after
  *       every committed runner move: from the kept region bytes, with no
  *       canvas painted and nothing read back, then uploaded once. A step on
- *       a phone costs a loop over bytes, not a repaint.
+ *       a phone costs a loop over bytes, not a repaint. The GM's square
+ *       brush (FR9.13) is stamped in the same pass, and its marks REPLACE
+ *       the region byte instead of taking the lower: a square fogged again
+ *       inside an open room is covered there, one dimmed inside it dimmed.
  *     What comes out is one byte a pixel, the texture and the CPU copy
  *     alike: 0 on live ground, `EXPLORED_ALPHA` on remembered ground, 1
  *     under the whole cover. The canvas, its scratch layer, both byte arrays
@@ -79,8 +82,8 @@
  * is the server's answer, not the canvas's, and it is the least a player
  * must see to play.
  */
-import type { FogSight, Point, Scene } from '@safehouse/contracts';
-import { cellBitsHas, decodeCellBits } from '@safehouse/rules';
+import type { FogBrush, FogSight, Point, Scene } from '@safehouse/contracts';
+import { brushOnFloor, brushReader, cellBitsHas, decodeCellBits } from '@safehouse/rules';
 import { Mesh, PlaneGeometry, type DataTexture, type Material } from 'three';
 import { metricsKey, type SceneMetrics } from '../geometry.js';
 import { GM_SHROUD_ALPHA, SHROUD_ALPHA, shroudShown } from '../plan/shroud.js';
@@ -352,26 +355,40 @@ function squaresAlong(px: number, s: number, origin: number, squares: number): I
 }
 
 /**
- * The party's sight on floor `level` stamped over the region bytes `region`
- * into `out` (both `layout.w × layout.h`, one byte a px), square by square:
+ * A stamp that REPLACES the region byte under it rather than taking the
+ * lower of the two: the GM's brush marks (below), which are painted over the
+ * regions square by square and win over them there.
+ */
+const FORCED = 0x100;
+
+/**
+ * The party's sight and the GM's brush on floor `level` stamped over the
+ * region bytes `region` into `out` (both `layout.w × layout.h`, one byte a
+ * px), square by square, in the order `fogCells` (@safehouse/rules) decides a
+ * square:
  *
- * - a square a runner sees now (`live`): 0, clear;
+ * - a square a runner sees now (`live`): 0, clear, whatever else is there;
+ * - a square the GM's brush has marked: fogged again is 255 and revealed as
+ *   seen before is `EXPLORED_BYTE`, both REPLACING the region byte, because
+ *   a mark is painted over the regions and wins over them (a square fogged
+ *   again inside an open room is covered, and one dimmed inside it is
+ *   dimmed); revealed live is 0;
  * - a square the party has seen before (`explored`): `EXPLORED_BYTE`, the
  *   map dimmed as remembered;
- * - any other square: 255, which changes nothing, because each px keeps
- *   the LOWER of the stamp and the region byte under it.
+ * - any other square: 255, which changes nothing.
  *
- * The lower of the two is the fog's rule (`fogCells` in @safehouse/rules):
- * live beats explored and explored beats hidden, whichever of the GM or the
- * party made a square so. A px keeps its region byte where no square of the
- * sight lies under it (the pad), and everywhere when the floor has no sight
- * at all, which is every floor of every scene without sightlines: then `out`
- * is the region bytes, as the fog always was.
+ * Every stamp but the brush's fogged-again and seen-before keeps the LOWER
+ * of itself and the region byte under it: live beats explored and explored
+ * beats hidden, whichever of the GM's regions or the party made a square so.
+ * A px keeps its region byte where no square of either record lies under it
+ * (the pad), and everywhere when the floor has neither, which is every floor
+ * of every scene without sightlines or a brush: then `out` is the region
+ * bytes, as the fog always was.
  *
  * A square is the one a px's centre falls in, so a square's edge is hard in
  * the bytes and soft by a texel on screen, as the GPU filters the mask.
  * Only squares on the scene's grid are stamped (`cols × rows`), and only
- * those on the grid the sight was kept for: a bit left over from a bigger
+ * those on the grid a record was kept for: a bit left over from a bigger
  * grid opens nothing in the pad.
  */
 function stampSight(
@@ -379,24 +396,37 @@ function stampSight(
   region: Uint8Array,
   layout: FogLayout,
   sight: FogSight | undefined,
+  brush: FogBrush | undefined,
   level: number,
   cols: number,
   rows: number,
 ): void {
   const floor = sight?.levels[String(level)];
-  if (sight === undefined || floor === undefined || (floor.live === '' && floor.explored === '')) {
+  const seen = sight !== undefined && floor !== undefined && (floor.live !== '' || floor.explored !== '');
+  const painted = brushOnFloor(brush, level);
+  if (!seen && !painted) {
     out.set(region);
     return;
   }
-  const across = Math.max(0, Math.min(cols, sight.cols));
-  const down = Math.max(0, Math.min(rows, sight.rows));
-  const live = decodeCellBits(floor.live, sight.cols, sight.rows);
-  const explored = decodeCellBits(floor.explored, sight.cols, sight.rows);
-  const squares = new Uint8Array(across * down).fill(255);
+  const across = Math.max(0, Math.min(cols, Math.max(seen ? sight!.cols : 0, painted ? brush!.cols : 0)));
+  const down = Math.max(0, Math.min(rows, Math.max(seen ? sight!.rows : 0, painted ? brush!.rows : 0)));
+  const live = seen ? decodeCellBits(floor!.live, sight!.cols, sight!.rows) : null;
+  const explored = seen ? decodeCellBits(floor!.explored, sight!.cols, sight!.rows) : null;
+  const mark = painted ? brushReader(brush, level) : () => null;
+  // The stamp a square, with `FORCED` set on the ones that replace the region byte.
+  const squares = new Uint16Array(across * down).fill(255);
   for (let row = 0; row < down; row += 1) {
     for (let col = 0; col < across; col += 1) {
-      if (cellBitsHas(live, col, row)) squares[row * across + col] = 0;
-      else if (cellBitsHas(explored, col, row)) squares[row * across + col] = EXPLORED_BYTE;
+      const i = row * across + col;
+      if (live !== null && cellBitsHas(live, col, row)) {
+        squares[i] = 0;
+        continue;
+      }
+      const m = mark(col, row);
+      if (m === 'hidden') squares[i] = FORCED | 255;
+      else if (m === 'explored') squares[i] = FORCED | EXPLORED_BYTE;
+      else if (m === 'live') squares[i] = 0;
+      else if (explored !== null && cellBitsHas(explored, col, row)) squares[i] = EXPLORED_BYTE;
     }
   }
   const { w, h, s } = layout;
@@ -418,7 +448,7 @@ function stampSight(
         continue;
       }
       const stamp = squares[line + col]!;
-      out[base + i] = stamp < under ? stamp : under;
+      out[base + i] = stamp & FORCED ? stamp & 0xff : stamp < under ? stamp : under;
     }
   }
 }
@@ -482,7 +512,7 @@ class FogRasteriser {
       r.width = w / s;
       r.depth = h / s;
     }
-    stampSight(r.data, regions, layout, scene.fog.sight, level, m.cols, m.rows);
+    stampSight(r.data, regions, layout, scene.fog.sight, scene.fog.brush, level, m.cols, m.rows);
     // One upload, of the regions and the sight together.
     r.texture.needsUpdate = true;
     return r;

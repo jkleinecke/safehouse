@@ -9,9 +9,18 @@
  *
  * The spoiler guard (FR12.19) runs over player-facing prose before the GM
  * publishes it, flagging GM-only names the draft leaned on.
+ *
+ * Accepting is one transaction (`Hub.atomic`): the entity written, the
+ * generation marked accepted, and whatever the table must hear about it, all
+ * or nothing. The two drafts that change a scene the table may be looking at
+ * (a fog reveal, a layout) go through the same fog path as the GM's own
+ * buttons (`tellFogOp`, services/fogOps.ts) and the same sight pass
+ * (`recomputeSight`), so the phones and the TV hear the reveal, the guards it
+ * uncovers arrive, and the party's sight is worked out against the new walls.
  */
 import { and, desc, eq } from 'drizzle-orm';
-import { FogStateSchema, PersonaSchema, SceneGeometrySchema } from '@safehouse/contracts';
+import { FogStateSchema, PersonaSchema, SceneGeometrySchema, type Scene } from '@safehouse/contracts';
+import { regionFashion } from '@safehouse/rules';
 import {
   aiGenerations,
   gameSessions,
@@ -21,8 +30,11 @@ import {
   wikiPages,
   type Db,
 } from '@safehouse/db';
+import type { EventTx } from '../hub.js';
 import { httpError } from '../services/auth.js';
-import { normalizeGeometry } from '../services/scenes.js';
+import { tellFogOp } from '../services/fogOps.js';
+import { ScenesService, normalizeFog, normalizeGeometry, serializeScene } from '../services/scenes.js';
+import { recomputeSight } from '../services/sight.js';
 import { gmOnlyNames } from './state.js';
 import type { LlmUsage } from './llm.js';
 
@@ -147,30 +159,45 @@ export interface AcceptResult {
 }
 
 /**
+ * The one thing accepting a draft needs of the hub: a transaction whose
+ * events reach the table only once it commits (`Hub.atomic`). The app's hub
+ * is one; a test can hand in the app's.
+ */
+export interface DraftHub {
+  atomic<T>(campaignId: string, body: (tx: EventTx) => Promise<T>): Promise<T>;
+}
+
+/**
  * Apply a draft and mark provenance. The generation row records what it
  * became (`target`), and the created entity carries an `aiProvenance` stamp —
  * so "who wrote this?" is answerable months later (FR12.15).
+ *
+ * All in one transaction on `hub` (see the top of this file): every read and
+ * write goes through its handle, and a draft that fails to apply leaves the
+ * generation a draft and the table untouched.
  */
 export async function acceptDraft(
-  db: Db,
+  hub: DraftHub,
   campaignId: string,
   id: string,
 ): Promise<AcceptResult> {
-  const row = await getDraft(db, id);
-  if (row.campaignId !== campaignId) throw httpError(403, 'forbidden', 'generation belongs to another campaign');
-  if (row.status !== 'draft') {
-    throw httpError(409, 'already_resolved', `generation is already ${row.status}`);
-  }
-  const applied = await applyDraft(db, row);
-  const updated = (
-    await db
-      .update(aiGenerations)
-      .set({ status: 'accepted', target: { table: applied.table, id: applied.id } })
-      .where(eq(aiGenerations.id, row.id))
-      .returning()
-  )[0];
-  if (!updated) throw httpError(500, 'internal', 'accept update returned no row');
-  return { generation: serializeDraft(updated), applied };
+  return hub.atomic(campaignId, async (tx) => {
+    const row = await getDraft(tx.db, id);
+    if (row.campaignId !== campaignId) throw httpError(403, 'forbidden', 'generation belongs to another campaign');
+    if (row.status !== 'draft') {
+      throw httpError(409, 'already_resolved', `generation is already ${row.status}`);
+    }
+    const applied = await applyDraft(tx, row);
+    const updated = (
+      await tx.db
+        .update(aiGenerations)
+        .set({ status: 'accepted', target: { table: applied.table, id: applied.id } })
+        .where(eq(aiGenerations.id, row.id))
+        .returning()
+    )[0];
+    if (!updated) throw httpError(500, 'internal', 'accept update returned no row');
+    return { generation: serializeDraft(updated), applied };
+  });
 }
 
 export async function rejectDraft(db: Db, campaignId: string, id: string): Promise<DraftDto> {
@@ -190,20 +217,20 @@ export async function rejectDraft(db: Db, campaignId: string, id: string): Promi
   return serializeDraft(updated);
 }
 
-async function applyDraft(db: Db, row: GenerationRow): Promise<AppliedRef> {
+async function applyDraft(tx: EventTx, row: GenerationRow): Promise<AppliedRef> {
   switch (row.kind) {
     case 'npc':
-      return applyNpcDraft(db, row);
+      return applyNpcDraft(tx.db, row);
     case 'wiki_page':
-      return applyWikiDraft(db, row);
+      return applyWikiDraft(tx.db, row);
     case 'fog_reveal':
-      return applyFogDraft(db, row);
+      return applyFogDraft(tx, row);
     case 'token_label':
-      return applyTokenLabelDraft(db, row);
+      return applyTokenLabelDraft(tx.db, row);
     case 'geometry':
-      return applyGeometryDraft(db, row);
+      return applyGeometryDraft(tx, row);
     case 'recap':
-      return applyRecapDraft(db, row);
+      return applyRecapDraft(tx.db, row);
     default:
       throw httpError(
         400,
@@ -267,28 +294,40 @@ async function applyWikiDraft(db: Db, row: GenerationRow): Promise<AppliedRef> {
   return { table: 'wiki_pages', id: created.id, note: `created codex page "${title}" (GM-only)` };
 }
 
-/** Fog suggestion → the named regions actually go revealed on the scene. */
-async function applyFogDraft(db: Db, row: GenerationRow): Promise<AppliedRef> {
+/**
+ * Fog suggestion → the named regions go revealed LIVE on the scene, exactly
+ * as the GM's own "Reveal live" does it: one `reveal` op a region
+ * (`tellFogOp`), each told to the table, each taking the region out of the
+ * seen-before list as it goes in the live one (a region is never in both),
+ * then ONE sight pass from the scene before the first, which runs the token
+ * diff for all of them: the guards in the rooms opened arrive on the table
+ * with the same commit. A region already live is left alone, and one the
+ * scene no longer has is skipped.
+ *
+ * It used to add the ids to `revealed` straight in the column, with no event
+ * and no diff: accepted, the room was open on the server and still black on
+ * every phone and the TV, its guards never sent, and a room the GM had
+ * revealed as seen before ended up in both lists.
+ */
+async function applyFogDraft(tx: EventTx, row: GenerationRow): Promise<AppliedRef> {
   const out = output(row);
-  const sceneId = str(out['sceneId']);
   const regionIds = Array.isArray(out['regionIds'])
     ? (out['regionIds'] as unknown[]).filter((r): r is string => typeof r === 'string')
     : [];
-  if (sceneId.length === 0) throw httpError(400, 'bad_request', 'fog draft carries no sceneId');
-  const scene = (await db.select().from(scenes).where(eq(scenes.id, sceneId)).limit(1))[0];
-  if (!scene || scene.campaignId !== row.campaignId) {
-    throw httpError(404, 'not_found', 'fog draft points at an unknown scene');
-  }
-  const fog = FogStateSchema.parse(scene.fog ?? {});
+  const scene = await draftScene(tx.db, row, 'fog draft');
+  const fog = normalizeFog(scene.fog);
   const known = new Set(fog.regions.map((r) => r.id));
-  const revealed = new Set(fog.revealed);
-  for (const id of regionIds) if (known.has(id)) revealed.add(id);
-  const next = { ...fog, revealed: [...revealed] };
-  await db.update(scenes).set({ fog: next }).where(eq(scenes.id, scene.id));
+  const opening = [...new Set(regionIds)].filter((id) => known.has(id) && regionFashion(fog, id) !== 'live');
+  let before: Scene | undefined;
+  for (const regionId of opening) {
+    const told = await tellFogOp(tx, scene.id, { op: 'reveal', regionId, as: 'live' });
+    before ??= told.before;
+  }
+  if (before !== undefined) await recomputeSight(tx, scene.id, { before });
   return {
     table: 'scenes',
     id: scene.id,
-    note: `revealed ${regionIds.length} fog region(s) on "${scene.name}"`,
+    note: `revealed ${opening.length} fog region(s) live on "${scene.name}"`,
   };
 }
 
@@ -361,9 +400,22 @@ async function applyTokenLabelDraft(db: Db, row: GenerationRow): Promise<Applied
 /**
  * Layout copilot (FR12.11) → walls/doors/zones onto the scene, plus the named
  * fog regions, which arrive UNREVEALED: drawing a room is not showing it.
+ *
+ * Told to the table as the GM's own edits are: the walls as a public
+ * `scene.updated` (every device reads the scene again, its own filtered
+ * copy), each region as a `define` fog op (`tellFogOp`: the GM's own event,
+ * and the table's one-bit word if the first region fogs a scene whose switch
+ * was never flipped), then one sight pass from the scene before, because
+ * walls and doors move the party's sight and a scene fogged by its new
+ * regions takes its guards off the table.
  */
-async function applyGeometryDraft(db: Db, row: GenerationRow): Promise<AppliedRef> {
-  const scene = await draftScene(db, row, 'geometry draft');
+async function applyGeometryDraft(tx: EventTx, row: GenerationRow): Promise<AppliedRef> {
+  const drafted = await draftScene(tx.db, row, 'geometry draft');
+  // Read again, locked, as every scene write inside a transaction is: the
+  // sight pass rewrites the fog column after every move, and the walls below
+  // are merged over the scene as it stands now.
+  const scene = await new ScenesService(tx.db).sceneRow(drafted.id, { lock: true });
+  const before = serializeScene(scene);
   const out = output(row);
   const proposed = SceneGeometrySchema.parse(out['geometry'] ?? {});
   const merge = str(out['mode'], 'merge') !== 'replace';
@@ -381,15 +433,14 @@ async function applyGeometryDraft(db: Db, row: GenerationRow): Promise<AppliedRe
     doors: merge ? [...existing.doors, ...proposed.doors] : proposed.doors,
     zones: merge ? [...existing.zones, ...proposed.zones] : proposed.zones,
   };
-  const fog = FogStateSchema.parse(scene.fog ?? {});
-  const known = new Set(fog.regions.map((r) => r.id));
+  const known = new Set(before.fog.regions.map((r) => r.id));
   const incoming = FogStateSchema.parse({ regions: out['fogRegions'] ?? [] }).regions.filter(
     (region) => !known.has(region.id),
   );
-  await db
-    .update(scenes)
-    .set({ geometry, fog: { ...fog, regions: [...fog.regions, ...incoming] } })
-    .where(eq(scenes.id, scene.id));
+  await tx.db.update(scenes).set({ geometry }).where(eq(scenes.id, scene.id));
+  await tx.emit({ type: 'scene.updated', payload: { sceneId: scene.id, changed: ['geometry'] } });
+  for (const region of incoming) await tellFogOp(tx, scene.id, { op: 'define', region });
+  await recomputeSight(tx, scene.id, { before });
   return {
     table: 'scenes',
     id: scene.id,

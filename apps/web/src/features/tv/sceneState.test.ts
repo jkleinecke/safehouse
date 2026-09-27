@@ -454,6 +454,35 @@ describe("the party's sight on the TV (P6)", () => {
       ]),
     ).toBe(base);
   });
+
+  it("takes the GM's brush an event carries, whole, draws it over the rest, and loses it to the reset (P6)", () => {
+    // The square-by-square brush (FR9.13): `fog.updated {op: 'brush'}` is the
+    // whole record, as the sight is, and a mark wins over the memory.
+    const brush = {
+      cols: COLS,
+      rows: ROWS,
+      levels: { '0': { live: bits([[12, 12]]), explored: bits([[13, 12]]), hidden: bits([[10, 10]]) } },
+    };
+    const folded = mergeSceneEvents(dark(), [
+      sightEvent({ '0': { live: [[3, 4]], explored: [[3, 4], [10, 10]] } }),
+      evt('fog.updated', { sceneId: 's1', op: 'brush', level: 0, ...brush, active: true }),
+    ]);
+    expect(folded?.scene.fog.brush).toEqual(brush);
+    expect(tvAt(folded!, 12, 12)).toBe(0);
+    expect(tvAt(folded!, 13, 12)).toBeGreaterThan(0.3);
+    expect(tvAt(folded!, 13, 12)).toBeLessThan(0.9);
+    expect(tvAt(folded!, 10, 10)).toBe(1); // remembered, fogged again
+    // Kept through events that are not about it.
+    const moved = mergeSceneEvents(folded, [sightEvent({ '0': { live: [[4, 4]], explored: [[3, 4], [4, 4], [10, 10]] } })]);
+    expect(moved?.scene.fog.brush).toEqual(brush);
+    // Gone when an event says none is left, and with the GM's reset.
+    const cleared = mergeSceneEvents(folded, [evt('fog.updated', { sceneId: 's1', op: 'brush', cols: COLS, rows: ROWS, levels: {}, active: true })]);
+    expect(cleared?.scene.fog).not.toHaveProperty('brush');
+    const reset = mergeSceneEvents(folded, [evt('fog.updated', { sceneId: 's1', op: 'hide', active: true })]);
+    expect(reset?.scene.fog).not.toHaveProperty('brush');
+    // One it cannot read changes nothing.
+    expect(mergeSceneEvents(folded, [evt('fog.updated', { sceneId: 's1', op: 'brush', cols: 1e9, rows: 1, levels: {}, active: true })])).toBe(folded);
+  });
 });
 
 describe('reconnect', () => {

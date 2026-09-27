@@ -4,7 +4,7 @@
  */
 import { create } from 'zustand';
 import type { Point } from '@safehouse/contracts';
-import { TILESETS, type VisionMode } from '@safehouse/rules';
+import { TILESETS, type BrushMark as FogBrushMark, type VisionMode } from '@safehouse/rules';
 import type { CellSet, Clipboard } from './cellSelection.js';
 import {
   PENDING_ROLL_MOD_EVENT,
@@ -186,6 +186,12 @@ export interface GridUiState {
   lookTokenId: string | null;
   /** How the Fog tool draws a region: two corners, or round the corners back to the first. */
   fogShape: 'rect' | 'polygon';
+  /**
+   * What the fog brush paints (Prep): squares revealed live, revealed as
+   * seen before, or fogged again (`FogBrushPaintSchema`, less the undo's
+   * `clear`).
+   */
+  fogBrush: FogBrushMark;
   /** Build · Prep · Play — which of the Grid's three jobs the GM is doing (hud/modes.ts). */
   mode: GridMode;
   /** GM only: view a non-active scene while staging (FR9.1). */
@@ -238,6 +244,7 @@ export interface GridUiState {
   setTokenSize: (size: number) => void;
   setLookTokenId: (id: string | null) => void;
   setFogShape: (shape: 'rect' | 'polygon') => void;
+  setFogBrush: (paint: FogBrushMark) => void;
   setViewSceneId: (id: string | null) => void;
   setPendingRollMod: (mod: PendingRollMod | null) => void;
   select: (selected: GeometrySelection | null) => void;
@@ -319,6 +326,7 @@ export const useGridStore = create<GridUiState>()((set) => ({
   tokenSize: 1,
   lookTokenId: null,
   fogShape: 'rect',
+  fogBrush: 'live',
   gmTab: 'tokens',
   mode: readStoredMode(),
   viewSceneId: initialView.viewSceneId,
@@ -427,6 +435,7 @@ export const useGridStore = create<GridUiState>()((set) => ({
   setTokenSize: (n) => set({ tokenSize: Math.max(1, Math.min(8, Math.round(n))) }),
   setLookTokenId: (lookTokenId) => set({ lookTokenId }),
   setFogShape: (fogShape) => set({ fogShape }),
+  setFogBrush: (fogBrush) => set({ fogBrush }),
   setViewSceneId: (viewSceneId) =>
     set((s) => {
       // Another scene starts on its ground floor, unless it is the one already on screen.

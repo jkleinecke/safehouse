@@ -8,7 +8,10 @@
  *    scene's own metres-per-square;
  *  - proximity prompts are GM-only and never reveal anything themselves;
  *  - both write-shaped tools land as drafts and change NOTHING until the GM
- *    accepts (Principle 8) — asserted against the rows, not the return value.
+ *    accepts (Principle 8) — asserted against the rows, not the return value;
+ *  - and once accepted, a fog reveal or a layout reaches the table the way
+ *    the GM's own fog ops do: told, with the guards it uncovers or covers
+ *    arriving and leaving in the same commit (P6).
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
@@ -27,6 +30,7 @@ import { acceptDraft, listDrafts } from '../src/fixer/drafts.js';
 import { compileLayout, layoutJsonSchema } from '../src/fixer/geometry.js';
 import {
   emitFogProximity,
+  fogProximityPrompts,
   fogProximityState,
   resetProximityMemory,
 } from '../src/fixer/proximity.js';
@@ -176,7 +180,7 @@ describe('token identification (FR12.9)', () => {
       before.map((token) => token.name).sort(),
     );
 
-    const accepted = await acceptDraft(t.db as Db, boot.campaignId, draft['generationId'] as string);
+    const accepted = await acceptDraft(t.app.hub, boot.campaignId, draft['generationId'] as string);
     expect(accepted.applied.table).toBe('tokens');
     const after = await t.db.select().from(tokens).where(eq(tokens.sceneId, fx.sceneId));
     const names = after.map((token) => token.name);
@@ -282,7 +286,7 @@ describe('layout copilot produces grid-true geometry (FR12.11)', () => {
     expect(SceneGeometrySchema.parse(before.geometry).walls).toEqual([]);
     expect(FogStateSchema.parse(before.fog).regions).toEqual([]);
 
-    const accepted = await acceptDraft(t.db as Db, boot.campaignId, draft['generationId'] as string);
+    const accepted = await acceptDraft(t.app.hub, boot.campaignId, draft['generationId'] as string);
     expect(accepted.applied.table).toBe('scenes');
     const after = (await t.db.select().from(scenes).where(eq(scenes.id, wideSceneId)).limit(1))[0]!;
     const geometry = SceneGeometrySchema.parse(after.geometry);
@@ -346,6 +350,33 @@ describe('fog proximity prompts (FR12.8)', () => {
     expect(seen).toHaveLength(1);
   });
 
+  it('suggests a live reveal of a room shown as seen before only to a token inside it, and nothing on a scene with sightlines (P6)', () => {
+    const grid = { unitM: 1, cols: 20, rows: 20, offset: { x: 0, y: 0 }, projection: 'topdown' as const };
+    const lab = { id: 'lab', name: 'the lab', polygon: [{ x: 5, y: 5 }, { x: 10, y: 5 }, { x: 10, y: 10 }, { x: 5, y: 10 }] };
+    const atTheDoor = { id: 't1', name: 'Static', x: 4.5, y: 7.5, hidden: false };
+    const inside = { id: 't2', name: 'Kestrel', x: 7.5, y: 7.5, hidden: false };
+    const fog = (over: Record<string, unknown>) => ({ regions: [lab], revealed: [], revealedShapes: [], ...over });
+    const prompts = (over: Record<string, unknown>, vision?: unknown) =>
+      fogProximityPrompts({ grid, fog: fog(over), tokens: [atTheDoor, inside], ...(vision !== undefined ? { vision } : {}) }).prompts;
+
+    // Still fogged: at the door and inside, as it always was.
+    expect(prompts({}).map((p) => [p.tokenName, p.shownAs])).toEqual([
+      ['Kestrel', 'hidden'],
+      ['Static', 'hidden'],
+    ]);
+    // Seen before: the table sees the room already, so the door says nothing;
+    // a runner inside it is the moment to open it live.
+    const remembered = prompts({ exploredRegionIds: ['lab'] });
+    expect(remembered.map((p) => [p.tokenName, p.shownAs, p.inside])).toEqual([['Kestrel', 'explored', true]]);
+    expect(remembered[0]!.message).toContain('reveal it live?');
+    // Live: nothing to suggest.
+    expect(prompts({ revealed: ['lab'] })).toEqual([]);
+    // Sightlines on: the party's eyes do the unmasking, and a region opened
+    // live would stay open behind them.
+    expect(prompts({}, { playersSeeOwnSight: false, sight: 'on' })).toEqual([]);
+    expect(prompts({}, { playersSeeOwnSight: false, sight: 'off' })).toHaveLength(2);
+  });
+
   it('reveals nothing by itself', async () => {
     const before = (await t.db.select().from(scenes).where(eq(scenes.id, fx.sceneId)).limit(1))[0]!;
     await fogProximityState(t.db as Db, boot.campaignId, { sceneId: fx.sceneId });
@@ -354,6 +385,120 @@ describe('fog proximity prompts (FR12.8)', () => {
     expect(FogStateSchema.parse(after.fog).revealed).toEqual(
       FogStateSchema.parse(before.fog).revealed,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Accepted drafts reach the table (P6)
+// ---------------------------------------------------------------------------
+
+describe('an accepted fog or layout draft reaches the table like the GM’s own fog ops (P6)', () => {
+  const box = (x0: number, y0: number, x1: number, y1: number) => [
+    { x: x0, y: y0 },
+    { x: x1, y: y0 },
+    { x: x1, y: y1 },
+    { x: x0, y: y1 },
+  ];
+
+  /** The public events a player can read back that arrived after `since`, oldest first. */
+  async function tableSince(since: number): Promise<{ type: string; payload: Record<string, unknown> }[]> {
+    const log = await t.app.inject({
+      method: 'GET',
+      url: `/api/campaigns/${boot.campaignId}/log?limit=500`,
+      headers: { authorization: `Bearer ${player.token}` },
+    });
+    expect(log.statusCode).toBe(200);
+    const events = (log.json() as { events: { id: unknown; type: string; payload: Record<string, unknown> }[] }).events;
+    return events
+      .filter((e) => Number(e.id) > since)
+      .reverse()
+      .map((e) => ({ type: e.type, payload: e.payload }));
+  }
+
+  async function mark(): Promise<number> {
+    const log = await gmGet(`/api/campaigns/${boot.campaignId}/log?limit=1`);
+    const events = (log.json() as { events: { id: unknown }[] }).events;
+    return Math.max(0, ...events.map((e) => Number(e.id)));
+  }
+
+  async function newScene(name: string, fog: Record<string, unknown>): Promise<string> {
+    const row = (
+      await t.db
+        .insert(scenes)
+        .values({
+          campaignId: boot.campaignId,
+          name,
+          state: 'draft',
+          grid: { unitM: 1, cols: 20, rows: 20, offset: { x: 0, y: 0 }, projection: 'topdown' as const },
+          geometry: { walls: [], doors: [], zones: [], pins: [] },
+          fog: { regions: [], revealed: [], revealedShapes: [], ...fog },
+        })
+        .returning()
+    )[0]!;
+    return row.id;
+  }
+
+  it('opens a region live, out of the seen-before list, and sends the guard standing in it', async () => {
+    const vault = { id: 'region-vault', name: 'vault', polygon: box(10, 10, 14, 14) };
+    const vaultSceneId = await newScene('Vault level', {
+      regions: [vault],
+      exploredRegionIds: [vault.id],
+      enabled: true,
+    });
+    const guard = (
+      await t.db
+        .insert(tokens)
+        .values({ sceneId: vaultSceneId, source: 'prop', name: 'Vault guard', x: 12.5, y: 12.5 })
+        .returning()
+    )[0]!;
+
+    const draft = await call('suggest_fog_reveal', { sceneId: vaultSceneId, regions: ['vault'], reason: 'they cracked it' });
+    const since = await mark();
+    const accepted = await acceptDraft(t.app.hub, boot.campaignId, draft['generationId'] as string);
+    expect(accepted.applied.note).toContain('revealed 1 fog region(s) live');
+
+    // In one list, the live one.
+    const row = (await t.db.select().from(scenes).where(eq(scenes.id, vaultSceneId)).limit(1))[0]!;
+    const fog = FogStateSchema.parse(row.fog);
+    expect(fog.revealed).toEqual([vault.id]);
+    expect(fog.exploredRegionIds).toBeUndefined();
+
+    // The table heard the reveal, as the GM's own button says it, then the guard arrived.
+    const events = await tableSince(since);
+    expect(events.map((e) => e.type)).toEqual(['fog.updated', 'token.added']);
+    expect(events[0]!.payload).toEqual({ sceneId: vaultSceneId, op: 'reveal', regionId: vault.id, region: vault, as: 'live', active: true });
+    expect(events[1]!.payload['token']).toMatchObject({ id: guard.id, name: 'Vault guard' });
+
+    // A region already live is left alone: a second accept says nothing.
+    const again = await call('suggest_fog_reveal', { sceneId: vaultSceneId, regions: ['vault'] });
+    const since2 = await mark();
+    await acceptDraft(t.app.hub, boot.campaignId, again['generationId'] as string);
+    expect(await tableSince(since2)).toEqual([]);
+  });
+
+  it('draws a layout and tells the table: the walls, the fog its first regions turn on, and the guard it covers', async () => {
+    const annexSceneId = await newScene('Annex', {});
+    const guard = (
+      await t.db
+        .insert(tokens)
+        .values({ sceneId: annexSceneId, source: 'prop', name: 'Annex guard', x: 2.5, y: 1.5 })
+        .returning()
+    )[0]!;
+    const draft = await call('propose_geometry', { ...OFFICE, sceneId: annexSceneId, notes: 'the annex' });
+    const since = await mark();
+    await acceptDraft(t.app.hub, boot.campaignId, draft['generationId'] as string);
+
+    const events = await tableSince(since);
+    // The walls as a public delta; the regions' own defines are the GM's and
+    // never reach a player, but the fog they switch on does, as one bit.
+    expect(events.map((e) => [e.type, e.payload['op'] ?? e.payload['changed']])).toEqual([
+      ['scene.updated', ['geometry']],
+      ['fog.updated', 'define'],
+      ['token.removed', undefined],
+    ]);
+    expect(events[1]!.payload).toEqual({ sceneId: annexSceneId, op: 'define', active: true });
+    expect(events[2]!.payload).toEqual({ tokenId: guard.id, sceneId: annexSceneId });
+    expect(JSON.stringify(events)).not.toContain('Server room');
   });
 });
 

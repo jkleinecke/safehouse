@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { VisibilitySchema, PointSchema } from './common.js';
 import { RollRequestSchema } from './roll.js';
-import { FogOpSchema, FogRegionSchema, FogRevealAsSchema } from './scene.js';
+import { FogBrushStrokeSchema, FogOpSchema, FogRegionSchema, FogRevealAsSchema } from './scene.js';
 
 /** Persisted event types (DESIGN.md §11 catalog) — the replayable campaign log. */
 export const WS_EVENT_TYPES = [
@@ -136,9 +136,9 @@ export type TokenDragCommand = z.infer<typeof TokenDragCommandSchema>;
 
 /**
  * Fog ops (FR9.13/9.14): reveal/hide a named region, define or remove one,
- * switch the scene's fog on or off, or forget what the party has seen
- * (`FogOpSchema`). The command keeps its old name, `fog.reveal`, because
- * that is what every client already sends.
+ * switch the scene's fog on or off, forget what the party has seen, or paint
+ * squares with the reveal brush (`FogOpSchema`). The command keeps its old
+ * name, `fog.reveal`, because that is what every client already sends.
  */
 export const FogRevealCommandSchema = z.object({
   cmd: z.literal('fog.reveal'),
@@ -148,7 +148,7 @@ export const FogRevealCommandSchema = z.object({
   regionId: z.string().optional(),
   /** For op 'define': the new named region. */
   region: FogRegionSchema.optional(),
-  /** For freeform brush/polygon reveals. */
+  /** For freeform polygon reveals (the square-by-square brush is `brush`). */
   shape: z.array(PointSchema).optional(),
   /**
    * For op 'reveal': the fashion (`FogRevealAsSchema`). `live` opens the
@@ -158,9 +158,12 @@ export const FogRevealCommandSchema = z.object({
   as: FogRevealAsSchema.optional(),
   /**
    * For op 'forget': the one floor whose memory goes (`Token.level`, 0 the
-   * ground). Absent forgets every floor.
+   * ground). Absent forgets every floor. For op 'brush': the floor painted
+   * (absent is the ground).
    */
   level: z.number().int().min(0).optional(),
+  /** For op 'brush': the squares painted, by what each is painted with (`FogBrushStrokeSchema`). */
+  brush: FogBrushStrokeSchema.optional(),
   /** Announce the reveal in the session log (FR9.14). */
   announce: z.boolean().optional(),
 });

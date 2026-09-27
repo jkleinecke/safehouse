@@ -18,8 +18,8 @@
  * device — the server filtered both before serializing. The `visibility` check
  * in the fold is defence in depth, not the boundary.
  */
-import type { FogRegion, FogRevealAs, FogSight, Point, Scene, Token, WsEvent } from '@safehouse/contracts';
-import { forgetSight, sightOfEvent } from '../grid/fogSight.js';
+import type { FogBrush, FogRegion, FogRevealAs, FogSight, Point, Scene, Token, WsEvent } from '@safehouse/contracts';
+import { brushOfEvent, forgetSight, sightOfEvent } from '../grid/fogSight.js';
 import { rec } from '../table/views.js';
 
 const str = (v: unknown): string | undefined =>
@@ -122,6 +122,11 @@ interface Draft {
    * floor of it. Undefined when there is none.
    */
   sight: FogSight | undefined;
+  /**
+   * The GM's reveal brush (P6): the read's, until an `op: 'brush'` event
+   * replaces it whole or the GM's reset takes it. Undefined when there is none.
+   */
+  brush: FogBrush | undefined;
   /** Whether the scene is fogged at all (`FogState.active`): kept as the snapshot said it until an event says otherwise. */
   fogActive: boolean | undefined;
   environment: Scene['environment'];
@@ -147,6 +152,18 @@ function replaceSight(draft: Draft, payload: Record<string, unknown>): void {
   const read = sightOfEvent(payload);
   if (read === null) return;
   draft.sight = read.sight;
+  draft.changed = true;
+}
+
+/**
+ * The GM's brush as an `op: 'brush'` event says it (P6): the whole record,
+ * every floor, so the TV's copy becomes exactly what a fresh read gives. One
+ * that cannot be read changes nothing, and the TV's next read puts it right.
+ */
+function replaceBrush(draft: Draft, payload: Record<string, unknown>): void {
+  const read = brushOfEvent(payload);
+  if (read === null) return;
+  draft.brush = read.brush;
   draft.changed = true;
 }
 
@@ -183,13 +200,17 @@ function hideAll(draft: Draft): void {
     draft.fogRegions.length +
     draft.revealedShapes.length +
     draft.exploredRegionIds.length +
-    draft.exploredShapes.length;
+    draft.exploredShapes.length +
+    (draft.brush === undefined ? 0 : 1);
   if (held === 0) return;
   draft.revealed = [];
   draft.fogRegions = [];
   draft.revealedShapes = [];
   draft.exploredRegionIds = [];
   draft.exploredShapes = [];
+  // The reset takes every square of the GM's brush too (the server says so
+  // again in its own `brush` event).
+  draft.brush = undefined;
   draft.changed = true;
 }
 
@@ -278,6 +299,7 @@ export function mergeSceneEvents(
     exploredRegionIds: (base.scene.fog.exploredRegionIds ?? []).slice(),
     exploredShapes: (base.scene.fog.exploredShapes ?? []).slice(),
     sight: base.scene.fog.sight,
+    brush: base.scene.fog.brush,
     fogActive: base.scene.fog.active,
     environment: base.scene.environment,
     changed: false,
@@ -352,6 +374,10 @@ export function mergeSceneEvents(
         } else if (op === 'forget') {
           // The GM wiped the party's memory of a floor, or of every floor.
           forgetFloor(draft, p['level']);
+        } else if (op === 'brush') {
+          // The GM's brush after a stroke, or after a reveal, a hide or the
+          // sight pass moved it (P6): the whole record.
+          replaceBrush(draft, p);
         }
         // Whether the scene is fogged at all: what keeps a scene with
         // nothing revealed covered rather than open (`FogState.active`).
@@ -376,6 +402,7 @@ export function mergeSceneEvents(
 
   if (!draft.changed) return base;
   const sight = draft.sight;
+  const brush = draft.brush;
   return {
     asOfEventId: base.asOfEventId,
     tokens: draft.tokens,
@@ -396,6 +423,8 @@ export function mergeSceneEvents(
         // fog without it would drop every square the party has seen at the
         // first token that moved.
         ...(sight === undefined ? {} : { sight }),
+        // The GM's brush, likewise carried through every event.
+        ...(brush === undefined ? {} : { brush }),
         ...(draft.fogActive === undefined ? {} : { active: draft.fogActive }),
       },
     },

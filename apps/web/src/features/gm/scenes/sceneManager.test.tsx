@@ -196,6 +196,24 @@ describe('the scene list is the inventory the Grid panel never gave', () => {
     expect(html).toContain('regions are painted and named on the canvas');
   });
 
+  it('shows a region revealed as seen before as its own state, and offers the two fashions it is not in (P6)', () => {
+    const html = renderPage([
+      scene({ id: 's1', fog: { regions: [REGION_A, REGION_B], revealed: [], exploredRegionIds: ['r1'], revealedShapes: [] } }),
+    ]);
+    expect(html).toContain('0/2 revealed · 1 seen before');
+    expect(html).toContain('data-region-state="explored"');
+    // The seen-before region can go live or be hidden; the fogged one can go live or seen before.
+    const rows = html.split('data-region-id=').slice(1);
+    const moves = (row: string) => [...row.matchAll(/data-fog-to="(\w+)"/g)].map((m) => m[1]);
+    expect(moves(rows[0]!)).toEqual(['live', 'hidden']);
+    expect(moves(rows[1]!)).toEqual(['live', 'explored']);
+    const summary = summarizeScene(scene({ fog: { regions: [REGION_A, REGION_B], revealed: ['r2'], exploredRegionIds: ['r1', 'r2'], revealedShapes: [] } }));
+    // Live wins over seen before, as everywhere else.
+    expect(summary.fog.map((r) => r.fashion)).toEqual(['explored', 'live']);
+    expect(summary.fogRevealed).toBe(1);
+    expect(summary.fogExplored).toBe(1);
+  });
+
   it('links every card into the Grid and says which screen owns drawing', () => {
     const html = renderPage([scene({ id: 's1' })]);
     expect(html).toContain('data-testid="open-in-grid"');
@@ -400,6 +418,7 @@ describe('create → activate → delete is one round trip a GM can complete', (
 
     await fogOp({ sceneId: 's1', op: 'reveal', regionId: 'r1', announce: true });
     await fogOp({ sceneId: 's1', op: 'hide' });
+    await fogOp({ sceneId: 's1', op: 'reveal', regionId: 'r2', as: 'explored' });
 
     expect(calls[0]).toMatchObject({
       method: 'POST',
@@ -408,6 +427,8 @@ describe('create → activate → delete is one round trip a GM can complete', (
     });
     // A bare `hide` is the server's "re-fog everything", so no regionId rides.
     expect(calls[1]?.body).toEqual({ op: 'hide' });
+    // The seen-before fashion says so; live is the server's default and is not sent.
+    expect(calls[2]?.body).toEqual({ op: 'reveal', regionId: 'r2', as: 'explored' });
   });
 
   it('duplicating copies the authoring work and none of the reveals', async () => {

@@ -28,8 +28,10 @@ import {
   type SceneLayer,
   GenTemplateSchema,
   type CombatantMonitors,
+  FOG_SIGHT_MAX_SIDE,
   FogStateSchema,
   sceneFogOn,
+  type FogBrushStroke,
   type FogOp,
   type FogRevealAs,
   SheetV1Schema,
@@ -54,7 +56,7 @@ import {
   SceneLevelSchema,
   type SceneLevel,
 } from '@safehouse/contracts';
-import { deriveCharacter, environment, fogCells, generateNpc, tokenLive } from '@safehouse/rules';
+import { deriveCharacter, environment, eraseBrushUnder, fogCells, generateNpc, paintBrush, tokenLive } from '@safehouse/rules';
 import {
   attachments,
   characters,
@@ -137,19 +139,19 @@ export function normalizeGeometry(raw: unknown): SceneGeometry {
 }
 
 /**
- * The parts of a stored fog added for sightlines (P6), each checked on its
- * own before the whole is parsed (`normalizeFog`).
+ * The parts of a stored fog added for sightlines (P6), and the GM's reveal
+ * brush, each checked on its own before the whole is parsed (`normalizeFog`).
  */
-const FOG_SIGHT_PARTS = ['exploredRegionIds', 'exploredShapes', 'sight'] as const;
+const FOG_SIGHT_PARTS = ['exploredRegionIds', 'exploredShapes', 'sight', 'brush'] as const;
 
 /**
  * A stored fog, made safe to read — all-or-nothing, like the grid, with one
  * exception for the same reason the geometry has one. The parts sightlines
- * added (the GM's explored reveals and the party's sight and memory) are
- * checked one by one first, and a part that does not fit is dropped: a sight
- * record written by some other build must cost the party's memory of the
- * map, never the GM's regions and reveals (an empty fog is what the next
- * write would then save). Those parts are in the schema, so the parse below
+ * added (the GM's explored reveals, the party's sight and memory, the GM's
+ * brush) are checked one by one first, and a part that does not fit is
+ * dropped: a sight record written by some other build must cost the party's
+ * memory of the map, never the GM's regions and reveals (an empty fog is
+ * what the next write would then save). Those parts are in the schema, so the parse below
  * keeps every one that fits; a zod parse strips any key it does not know,
  * and before they were in it, a sight record would have vanished at the
  * first read.
@@ -341,6 +343,13 @@ export function sceneForViewer(scene: Scene, gm: boolean): Scene {
         ? { exploredShapes: scene.fog.exploredShapes }
         : {}),
       ...(scene.fog.sight ? { sight: scene.fog.sight } : {}),
+      // The GM's brush (`FogBrushSchema`), sent whole, like the sight: every
+      // mark in it is the table's already. A square painted live or as seen
+      // before is ground they are shown, and one fogged again is ground they
+      // are shown as fog; the device needs that mark to cover a square inside
+      // a region they have open, and it says nothing a covered square does
+      // not. Absent on a scene the brush has never touched.
+      ...(scene.fog.brush ? { brush: scene.fog.brush } : {}),
       // Whether the scene is fogged at all. The regions above are only the
       // revealed ones (live or as explored), so a scene fogged with nothing
       // revealed yet — or just reset — would otherwise read as one with no
@@ -805,8 +814,10 @@ export interface FogOpInput {
   shape?: Point[];
   /** For `reveal`: live (the default) or as explored (`FogRevealAsSchema`). */
   as?: FogRevealAs;
-  /** For `forget`: the one floor whose memory goes; absent is every floor. */
+  /** For `forget`: the one floor whose memory goes; absent is every floor. For `brush`: the floor painted; absent is the ground. */
   level?: number;
+  /** For `brush`: the squares painted, by what each is painted with (`FogBrushStrokeSchema`). */
+  brush?: FogBrushStroke;
 }
 
 /**
@@ -1233,6 +1244,7 @@ export class ScenesService {
     const fog = normalizeFog(scene.fog);
     let exploredIds = fog.exploredRegionIds ?? [];
     let exploredShapes = fog.exploredShapes ?? [];
+    let brush = fog.brush;
     let region: FogRegion | undefined;
     if (op.op === 'define') {
       if (!op.region) throw httpError(400, 'bad_request', "op 'define' requires a region");
@@ -1250,6 +1262,11 @@ export class ScenesService {
       // into the list of its fashion; shapes are strokes, not places, and a
       // live stroke over an explored one is simply live there (`fogCells`:
       // live beats explored).
+      //
+      // Revealing is the latest act on the ground it covers, so the brush's
+      // marks under it go (`eraseBrushUnder`, every floor, by square centre):
+      // "reveal the lab" reveals the whole lab, the cupboard the GM fogged
+      // again with the brush last week included.
       const explored = op.as === 'explored';
       if (op.regionId) {
         const id = op.regionId;
@@ -1262,10 +1279,12 @@ export class ScenesService {
           if (!fog.revealed.includes(id)) fog.revealed = [...fog.revealed, id];
           exploredIds = exploredIds.filter((r) => r !== id);
         }
+        brush = eraseBrushUnder(brush, region.polygon);
       }
       if (op.shape) {
         if (explored) exploredShapes = [...exploredShapes, op.shape];
         else fog.revealedShapes = [...fog.revealedShapes, op.shape];
+        brush = eraseBrushUnder(brush, op.shape);
       }
     } else if (op.op === 'remove') {
       // The region goes, and with every reveal of it, in either fashion. What
@@ -1292,23 +1311,55 @@ export class ScenesService {
       const sight = forgetExplored(fog.sight, op.level);
       if (sight !== undefined) fog.sight = sight;
       else delete fog.sight;
+    } else if (op.op === 'brush') {
+      // The GM's reveal brush (FR9.13's square-by-square brush): the squares
+      // of one floor marked live, as seen before, fogged again, or cleared
+      // (`paintBrush`). Kept on the scene's grid as it is now, capped as the
+      // party's sight is (`FOG_SIGHT_MAX_SIDE`). Nothing else moves: not the
+      // regions, not the party's memory. A square fogged again that a runner
+      // is looking at right now stays in their sight, and the pass that
+      // follows every fog op takes the mark off it (the party has seen it
+      // again), so the brush fogs what they have left, never what they see.
+      if (!op.brush) throw httpError(400, 'bad_request', "op 'brush' needs the squares it paints");
+      const grid = normalizeGrid(scene.grid);
+      brush = paintBrush(
+        brush,
+        Math.min(grid.cols, FOG_SIGHT_MAX_SIDE),
+        Math.min(grid.rows, FOG_SIGHT_MAX_SIDE),
+        op.level ?? 0,
+        op.brush,
+      );
     } else {
       // hide: one named region, whichever fashion it was revealed in, or (no
-      // regionId) the GM's reset: every reveal of both fashions, regions and
-      // shapes, taken back at once. The party's own memory of the map
-      // (`sight`) is not the GM's reveal and is left alone; forgetting it is
-      // a separate act (`forget`, above).
+      // regionId) the GM's reset: every reveal of both fashions, regions,
+      // shapes and every square of the brush, taken back at once. The party's
+      // own memory of the map (`sight`) is not the GM's reveal and is left
+      // alone; forgetting it is a separate act (`forget`, above).
+      //
+      // A region hidden is the latest act on its ground, as a reveal is: the
+      // brush's marks under it go too, so "fog the lab again" fogs the whole
+      // lab, the squares painted open inside it included. Only for a region
+      // the table was shown, in either fashion: the brush is on every
+      // player's wire, and marks vanishing from under a region that was
+      // never revealed would trace its outline for them, which a region
+      // they had been shown already told them.
       if (op.regionId) {
+        const shown = fog.revealed.includes(op.regionId) || exploredIds.includes(op.regionId);
         fog.revealed = fog.revealed.filter((id) => id !== op.regionId);
         exploredIds = exploredIds.filter((id) => id !== op.regionId);
+        const hidden = fog.regions.find((r) => r.id === op.regionId);
+        if (hidden && shown) brush = eraseBrushUnder(brush, hidden.polygon);
       } else {
         fog.revealed = [];
         fog.revealedShapes = [];
         exploredIds = [];
         exploredShapes = [];
+        brush = undefined;
       }
     }
     setExplored(fog, exploredIds, exploredShapes);
+    if (brush !== undefined) fog.brush = brush;
+    else delete fog.brush;
     await this.db.update(scenes).set({ fog }).where(eq(scenes.id, scene.id));
     return region ? { fog, region } : { fog };
   }

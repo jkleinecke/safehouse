@@ -15,6 +15,7 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import type { Scene } from '@safehouse/contracts';
+import type { RegionFashion } from '@safehouse/rules';
 import { fileUrl } from './api.js';
 import { cssFilter, normalizeRotation, parseMapImageRef } from '../../grid/mapImage.js';
 import EnvironmentEditor from './EnvironmentEditor.js';
@@ -55,7 +56,11 @@ export interface SceneCardProps {
   onCancelDelete: () => void;
   onConfirmDelete: () => void;
   onEnvChange: (axis: EnvAxis, level: number) => void;
-  onFog: (regionId: string, reveal: boolean) => void;
+  /**
+   * Move a fog region to another fashion (P6): reveal it live, reveal it as
+   * seen before, or fog it again (`hidden`).
+   */
+  onFog: (regionId: string, to: RegionFashion) => void;
   onRefogAll: () => void;
   /** GM-only prep text (`Scene.notes`) — edited here or nowhere. */
   notesValue: string;
@@ -70,6 +75,30 @@ const inputClass =
 
 /** Disabled buttons must LOOK disabled — the theme's .btn does not do it. */
 const btn = 'btn px-3 py-1.5 disabled:cursor-not-allowed disabled:opacity-40';
+
+/**
+ * A region's chip in each fashion (P6): what the table is shown of it. The
+ * `state` is the test's handle, and "revealed" keeps meaning live, as it did
+ * before the seen-before fashion existed.
+ */
+const FASHION_CHIP: Record<RegionFashion, { word: string; tone: string; state: string }> = {
+  live: { word: 'open', tone: 'border-ok/50 text-ok', state: 'revealed' },
+  explored: { word: 'seen before', tone: 'border-warn/50 text-warn', state: 'explored' },
+  hidden: { word: 'fogged', tone: 'text-faint', state: 'hidden' },
+};
+
+/** The three things a GM can do with a region from the list, one per fashion. */
+const FOG_MOVES: ReadonlyArray<{ to: RegionFashion; label: string; title: string }> = [
+  { to: 'live', label: 'reveal', title: 'Reveal this region to players and the TV now, and everyone in it' },
+  { to: 'explored', label: 'seen before', title: 'Show players and the TV this region dimmed, as remembered, with nobody in it' },
+  { to: 'hidden', label: 'hide', title: 'Fog this region back over for players and the TV' },
+];
+
+/** "1/3 revealed", and how many are seen before when any are. */
+function fogCountText(summary: SceneSummary): string {
+  const live = `${summary.fogRevealed}/${summary.fog.length} revealed`;
+  return summary.fogExplored > 0 ? `${live} · ${summary.fogExplored} seen before` : live;
+}
 
 function Meta({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -154,9 +183,7 @@ export default function SceneCard(props: SceneCardProps) {
             </Meta>
             <Meta label="fog">
               <span data-testid="fog-count">
-                {summary.fog.length === 0
-                  ? 'no regions'
-                  : `${summary.fogRevealed}/${summary.fog.length} revealed`}
+                {summary.fog.length === 0 ? 'no regions' : fogCountText(summary)}
               </span>
             </Meta>
             <Meta label="map">
@@ -228,31 +255,32 @@ export default function SceneCard(props: SceneCardProps) {
       {summary.fog.length > 0 && (
         <details className="rounded-md border border-edge p-2" data-testid="fog-regions">
           <summary className="mono-label cursor-pointer text-cyan">
-            {`fog regions · ${summary.fogRevealed}/${summary.fog.length} revealed`}
+            {`fog regions · ${fogCountText(summary)}`}
           </summary>
           <ul className="mt-2 space-y-1">
-            {summary.fog.map(({ region, revealed }) => (
+            {summary.fog.map(({ region, fashion }) => (
               <li key={region.id} className="flex items-center gap-2" data-region-id={region.id}>
                 <span
-                  className={'chip ' + (revealed ? 'border-ok/50 text-ok' : 'text-faint')}
-                  data-region-state={revealed ? 'revealed' : 'hidden'}
+                  className={'chip ' + FASHION_CHIP[fashion].tone}
+                  data-region-state={FASHION_CHIP[fashion].state}
                 >
-                  {revealed ? 'open' : 'fogged'}
+                  {FASHION_CHIP[fashion].word}
                 </span>
                 <span className="min-w-0 flex-1 truncate text-xs text-ink">{region.name}</span>
-                <button
-                  type="button"
-                  className={btn + ' py-1'}
-                  disabled={anyBusy}
-                  onClick={() => props.onFog(region.id, !revealed)}
-                  title={
-                    revealed
-                      ? 'Fog this region back over for players and the TV'
-                      : 'Reveal this region to players and the TV now'
-                  }
-                >
-                  {revealed ? 'hide' : 'reveal'}
-                </button>
+                {/* The two fashions it is not in (P6): the one it is in is no verb. */}
+                {FOG_MOVES.filter((move) => move.to !== fashion).map((move) => (
+                  <button
+                    key={move.to}
+                    type="button"
+                    className={btn + ' py-1'}
+                    disabled={anyBusy}
+                    data-fog-to={move.to}
+                    onClick={() => props.onFog(region.id, move.to)}
+                    title={move.title}
+                  >
+                    {move.label}
+                  </button>
+                ))}
               </li>
             ))}
           </ul>

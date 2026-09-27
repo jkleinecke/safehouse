@@ -10,9 +10,15 @@
  * first; one who wanted to lay the windows out on a scene already live had
  * no way to do it without the table's map going black under them. So the
  * fog is a switch of its own, and the regions are what it lets through.
+ *
+ * Under the regions, the GM's other two fog tools (P6): the party's memory
+ * of the map, to forget for one floor or every floor, and the square-by-square
+ * brush (FR9.13), which reveals squares live, reveals them as seen before, or
+ * fogs them again, on the floor being built.
  */
 import { useState } from 'react';
 import { fogOn, sceneFogOn, sightlinesOn, type Scene } from '@safehouse/contracts';
+import { brushOnFloor, regionFashion, type BrushMark, type RegionFashion } from '@safehouse/rules';
 import { usePatchScene } from '../api.js';
 import type { GridCommands } from '../commands.js';
 import { rectPolygon } from '../geometry.js';
@@ -150,9 +156,6 @@ export function useSetSightlines(scene: Scene): {
 export function SightlinesSwitch({ scene, commands, level }: { scene: Scene; commands: GridCommands; level: number }) {
   const sight = useSetSightlines(scene);
   const on = sight.on;
-  const floors = Object.entries(scene.fog.sight?.levels ?? {});
-  const remembers = (key?: string): boolean =>
-    floors.some(([k, floor]) => (key === undefined || k === key) && floor.explored !== '');
   const option = (value: boolean, label: string) => (
     <button
       type="button"
@@ -179,29 +182,127 @@ export function SightlinesSwitch({ scene, commands, level }: { scene: Scene; com
       <p className={'text-xs ' + (on ? 'text-faint' : 'text-ink')}>{SIGHT_OFF_MEANS}</p>
       <p className={'text-xs ' + (on ? 'text-ink' : 'text-faint')}>{SIGHT_ON_MEANS}</p>
       {sight.failed && <p className="mono-label text-danger">that did not save — try again</p>}
-      {remembers() && (
-        <div className="flex gap-1" role="group" aria-label="Forget what the party has seen">
-          <button
-            type="button"
-            className="btn flex-1 px-2 py-0.5 text-xs"
-            data-testid="sightlines-forget-floor"
-            disabled={!remembers(String(level))}
-            title="The rooms the party has seen on this floor go back under the fog; what the runners see now stays"
-            onClick={() => commands.fogForget(scene.id, level)}
-          >
-            Forget this floor
-          </button>
-          <button
-            type="button"
-            className="btn flex-1 px-2 py-0.5 text-xs"
-            data-testid="sightlines-forget-all"
-            title="Every floor the party has seen goes back under the fog; what the runners see now stays"
-            onClick={() => commands.fogForget(scene.id)}
-          >
-            Forget every floor
-          </button>
-        </div>
-      )}
+      <ForgetExplored scene={scene} commands={commands} level={level} testIdPrefix="sightlines" />
+    </PanelSection>
+  );
+}
+
+/**
+ * Whether the party remembers anything of the map (`FogSight` explored), on
+ * floor `level` or, with none named, on any floor.
+ */
+export function partyRemembers(scene: Scene, level?: number): boolean {
+  return Object.entries(scene.fog.sight?.levels ?? {}).some(
+    ([key, floor]) => (level === undefined || key === String(level)) && floor.explored !== '',
+  );
+}
+
+/**
+ * "Forget explored" (P6): the GM's way to take back what the party has seen,
+ * for the floor in view (`level`) or every floor. Shown only while the party
+ * remembers something; kept whether or not the sightlines are on, since the
+ * memory is. What the runners see right now is remembered again at once
+ * (sightlines unmask automatically), so forgetting takes away the rooms they
+ * have left, never the one they stand in.
+ *
+ * In the Sightlines section (the LOS tab) and in the Fog panel, the same two
+ * buttons; `testIdPrefix` tells them apart.
+ */
+export function ForgetExplored({
+  scene,
+  commands,
+  level,
+  testIdPrefix,
+}: {
+  scene: Scene;
+  commands: GridCommands;
+  level: number;
+  testIdPrefix: string;
+}) {
+  if (!partyRemembers(scene)) return null;
+  return (
+    <div className="flex gap-1" role="group" aria-label="Forget what the party has seen">
+      <button
+        type="button"
+        className="btn flex-1 px-2 py-0.5 text-xs"
+        data-testid={`${testIdPrefix}-forget-floor`}
+        disabled={!partyRemembers(scene, level)}
+        title="The rooms the party has seen on this floor go back under the fog; what the runners see now stays"
+        onClick={() => commands.fogForget(scene.id, level)}
+      >
+        Forget this floor
+      </button>
+      <button
+        type="button"
+        className="btn flex-1 px-2 py-0.5 text-xs"
+        data-testid={`${testIdPrefix}-forget-all`}
+        title="Every floor the party has seen goes back under the fog; what the runners see now stays"
+        onClick={() => commands.fogForget(scene.id)}
+      >
+        Forget every floor
+      </button>
+    </div>
+  );
+}
+
+/**
+ * What the fog brush paints (FR9.13's square-by-square brush, P6), in the
+ * GM's words, with what each means for the table: the three marks
+ * (`FogBrushLevelSchema`). The Prep menu and the Fog panel offer the same
+ * three.
+ */
+export const FOG_BRUSH_PAINTS: ReadonlyArray<{ paint: BrushMark; label: string; hint: string }> = [
+  { paint: 'live', label: 'Reveal live', hint: 'the map and everyone on it' },
+  { paint: 'explored', label: 'Reveal as seen before', hint: 'dimmed, nobody on it' },
+  { paint: 'hidden', label: 'Fog again', hint: 'hidden, even in an open room' },
+];
+
+/** The brush's name as its button says it: what a drag will do. */
+export function fogBrushTitle(paint: BrushMark): string {
+  const label = (FOG_BRUSH_PAINTS.find((p) => p.paint === paint) ?? FOG_BRUSH_PAINTS[0]!).label;
+  return `Fog brush: ${label.toLowerCase()}`;
+}
+
+/**
+ * The fog brush in the Fog panel: pick what it paints, and it is in hand
+ * (the Prep tool `fogbrush`); pick the same again to put it down. The strokes
+ * are the map's to make (a drag over squares of the floor being built), and
+ * each is one step on the undo history.
+ */
+function FogBrushSection({ scene, level }: { scene: Scene; level: number }) {
+  const tool = useGridStore((s) => s.tool);
+  const setTool = useGridStore((s) => s.setTool);
+  const fogBrush = useGridStore((s) => s.fogBrush);
+  const setFogBrush = useGridStore((s) => s.setFogBrush);
+  const holding = tool === 'fogbrush';
+  return (
+    <PanelSection title="Fog brush" hint={holding ? FOG_BRUSH_PAINTS.find((p) => p.paint === fogBrush)?.label.toLowerCase() : undefined}>
+      <div className="flex flex-wrap gap-1" role="group" aria-label="What the fog brush paints">
+        {FOG_BRUSH_PAINTS.map(({ paint, label, hint }) => {
+          const on = holding && fogBrush === paint;
+          return (
+            <button
+              key={paint}
+              type="button"
+              aria-pressed={on}
+              title={`${label}: ${hint}`}
+              data-testid={`fog-brush-${paint}`}
+              onClick={() => {
+                setFogBrush(paint);
+                setTool(on ? 'select' : 'fogbrush');
+              }}
+              className={'btn px-2 py-0.5 text-xs ' + (on ? 'border-cyan text-cyan' : 'text-dim hover:text-ink')}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+      <Empty>
+        drag over squares of this floor; a painted square wins over the regions under it, never over what a runner
+        sees now, and Ctrl+Z takes a stroke back
+        {brushOnFloor(scene.fog.brush, level) ? ' — this floor has painted squares' : ''}
+      </Empty>
     </PanelSection>
   );
 }
@@ -209,17 +310,13 @@ export function SightlinesSwitch({ scene, commands, level }: { scene: Scene; com
 /**
  * Where a named region stands with the table (P6): revealed LIVE (the table
  * sees it, and everyone in it), revealed as EXPLORED (seen before: shown
- * dimmed, as remembered, with nobody in it), or HIDDEN. Read off the GM's
- * copy, where a region is in one reveal list or neither; should both ever
- * name it, live wins, as it does on the server.
+ * dimmed, as remembered, with nobody in it), or HIDDEN. The rule itself is
+ * the rules package's (`regionFashion`), shared with the server's Fixer and
+ * the scenes manager; it is re-exported here for the panels that list
+ * regions.
  */
-export type RegionFashion = 'live' | 'explored' | 'hidden';
-
-export function regionFashion(fog: Scene['fog'], regionId: string): RegionFashion {
-  if (fog.revealed.includes(regionId)) return 'live';
-  if ((fog.exploredRegionIds ?? []).includes(regionId)) return 'explored';
-  return 'hidden';
-}
+export { regionFashion };
+export type { RegionFashion };
 
 /** The text colour a region's name takes in each fashion: the map's outline colours (green live, amber seen before). */
 export const FASHION_TONE: Record<RegionFashion, string> = {
@@ -293,6 +390,7 @@ export function RegionRevealButtons({
 }
 
 export default function FogTab({ scene, commands }: { scene: Scene; commands: GridCommands }) {
+  const level = useGridStore((s) => s.activeLevel);
   const tool = useGridStore((s) => s.tool);
   const setTool = useGridStore((s) => s.setTool);
   const fogDraft = useGridStore((s) => s.fogDraft);
@@ -350,6 +448,18 @@ export default function FogTab({ scene, commands }: { scene: Scene; commands: Gr
           <span className="mono-label">announce reveals in the log</span>
         </label>
       </PanelSection>
+
+      <FogBrushSection scene={scene} level={level} />
+
+      {partyRemembers(scene) && (
+        <PanelSection title="Seen before" hint="the party's memory">
+          <Empty>
+            what the runners have seen stays on the table, dimmed, with nobody in it; forget it and it goes back under
+            the fog
+          </Empty>
+          <ForgetExplored scene={scene} commands={commands} level={level} testIdPrefix="fog" />
+        </PanelSection>
+      )}
 
       <PanelSection title="Define region" hint={`${points.length} pts`}>
         <button

@@ -146,9 +146,11 @@ function textHash(text: string): string {
 /**
  * The party's sight on the floor in view (sightlines, P6): the grid its
  * bitsets were written for and a hash of each of them, what the runners see
- * now (`live`) and what they have seen (`explored`). Empty when the fog
- * carries no sight for that floor, which is every scene without sightlines,
- * so their key is exactly what it always was.
+ * now (`live`) and what they have seen (`explored`). Then, after a `/`, the
+ * GM's brush on that floor (FR9.13's square brush), its grid and a hash of
+ * its three marks. Empty when the fog carries neither for that floor, which
+ * is every scene without sightlines or a brush, so their key is exactly what
+ * it always was.
  *
  * Hashed rather than spelt out because a bitset is sent whole after every
  * committed move (a 60x40 floor is 400 characters each), and the stage asks
@@ -158,7 +160,8 @@ function textHash(text: string): string {
 export function fogSightKey(state: StageSceneState): string {
   const fog = state.scene.fog;
   const sight = fog.sight;
-  if (sight === undefined) return '';
+  const brush = fog.brush;
+  if (sight === undefined && brush === undefined) return '';
   const level = state.level ?? 0;
   let floors = fogSightKeys.get(fog);
   if (floors === undefined) {
@@ -167,8 +170,14 @@ export function fogSightKey(state: StageSceneState): string {
   }
   let key = floors.get(level);
   if (key === undefined) {
-    const bits = sight.levels[String(level)];
-    key = bits === undefined ? '' : `${level}:${sight.cols}x${sight.rows}:${textHash(bits.live)}:${textHash(bits.explored)}`;
+    const bits = sight?.levels[String(level)];
+    const seen = sight === undefined || bits === undefined ? '' : `${level}:${sight.cols}x${sight.rows}:${textHash(bits.live)}:${textHash(bits.explored)}`;
+    const marks = brush?.levels[String(level)];
+    const painted =
+      brush === undefined || marks === undefined
+        ? ''
+        : `/${brush.cols}x${brush.rows}:${textHash(marks.live)}:${textHash(marks.explored)}:${textHash(marks.hidden)}`;
+    key = `${seen}${painted}`;
     floors.set(level, key);
   }
   return key;

@@ -13,7 +13,7 @@
  * roll log will say, not a second implementation of the table.
  */
 import type { FogRegion, Grid, Scene, SceneEnvironment } from '@safehouse/contracts';
-import { environment } from '@safehouse/rules';
+import { environment, regionFashion, type RegionFashion } from '@safehouse/rules';
 
 // ---------------------------------------------------------------------------
 // Environment (FR9.11)
@@ -85,7 +85,13 @@ export interface TokenCount {
 
 export interface FogRegionRow {
   region: FogRegion;
+  /** Revealed LIVE: the table sees it, and everyone in it. */
   revealed: boolean;
+  /**
+   * How the table is shown it (P6, `regionFashion`): live, seen before
+   * (dimmed, nobody in it), or hidden.
+   */
+  fashion: RegionFashion;
 }
 
 export interface SceneSummary {
@@ -101,7 +107,11 @@ export interface SceneSummary {
   /** Raw first map ref (may carry a `#rot=…` adjustment) or null. */
   mapRef: string | null;
   fog: FogRegionRow[];
+  /** Regions revealed live. */
   fogRevealed: number;
+  /** Regions revealed as seen before (P6). */
+  fogExplored: number;
+  /** Freehand reveals (polygons), in either fashion. */
   freehandReveals: number;
   walls: number;
   doors: number;
@@ -113,7 +123,10 @@ export interface SceneSummary {
 }
 
 export function summarizeScene(scene: Scene, tokens: TokenCount | null = null): SceneSummary {
-  const revealed = new Set(scene.fog.revealed);
+  const fog = scene.fog.regions.map((region) => {
+    const fashion = regionFashion(scene.fog, region.id);
+    return { region, revealed: fashion === 'live', fashion };
+  });
   const grid = scene.grid;
   return {
     id: scene.id,
@@ -125,9 +138,10 @@ export function summarizeScene(scene: Scene, tokens: TokenCount | null = null): 
     heightM: round1(grid.rows * grid.unitM),
     mapCount: scene.mapAttachmentIds.length,
     mapRef: scene.mapAttachmentIds[0] ?? null,
-    fog: scene.fog.regions.map((region) => ({ region, revealed: revealed.has(region.id) })),
-    fogRevealed: scene.fog.regions.filter((r) => revealed.has(r.id)).length,
-    freehandReveals: scene.fog.revealedShapes.length,
+    fog,
+    fogRevealed: fog.filter((r) => r.fashion === 'live').length,
+    fogExplored: fog.filter((r) => r.fashion === 'explored').length,
+    freehandReveals: scene.fog.revealedShapes.length + (scene.fog.exploredShapes ?? []).length,
     walls: scene.geometry.walls.length,
     doors: scene.geometry.doors.length,
     zones: scene.geometry.zones.length,

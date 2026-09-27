@@ -16,6 +16,7 @@ export type GridTool =
   | 'aoe' // place AoE circle template
   | 'pointer' // pointer trail broadcast
   | 'fogdef' // GM: click vertices to define a named fog region
+  | 'fogbrush' // GM: drag over squares to reveal them live, as seen before, or fog them again
   | 'focus' // GM: next click broadcasts "focus here"
   | 'door' // GM: drag to draw a door segment
   | 'zone' // GM: click vertices to draw a named zone
@@ -487,6 +488,14 @@ export interface StageCallbacks {
    * last cell of every stroke sat unsent for 140ms after the GM let go.
    */
   onTileStrokeEnd?(): void;
+  /**
+   * One square of a fog brush stroke (Prep; FR9.13's square-by-square
+   * brush), once per square per stroke. The page gathers them and sends the
+   * stroke when it ends, as one fog op.
+   */
+  onFogBrush?(col: number, row: number): void;
+  /** The fog brush stroke ended (button up, gesture abandoned). */
+  onFogBrushEnd?(): void;
   /** select-tool click on an existing pin — open it in the editor. */
   onPinSelect?(pinId: string): void;
   /** camera tool click — mount a camera at grid coords (FR9.23). */
