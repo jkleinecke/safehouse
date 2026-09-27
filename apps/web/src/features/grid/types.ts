@@ -335,10 +335,13 @@ export interface ShroudState {
    */
   heights?: ReadonlyMap<string, number> | undefined;
   /**
-   * The GM's "See as party" lens (sightlines, P6): `visible` is every square
-   * the table sees LIVE on the floor in view, and the tokens are cut to the
-   * ones the table is shown (`composeStageState`, `tokensForTable`), so the
-   * GM sees exactly what the phones and the TV show. Absent for every other
+   * The GM's "See as players" lens (the fog bar; sightlines, P6): `visible`
+   * is every square the table sees LIVE on the floor in view, the tokens are
+   * cut to the ones the table is shown (`composeStageState`,
+   * `tokensForTable`), and the map draws the table's own fog cover instead
+   * of the GM's tint and lays no scrim (`stage3d/masks.ts`
+   * `drawsTableView`), so the GM sees exactly what the phones and the TV
+   * show. Absent for every other
    * shroud: a token's or a camera's lens keeps every token on the GM's
    * screen, and a player's own sightline is theirs.
    */

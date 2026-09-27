@@ -32,8 +32,10 @@
  *   forgotten, so the map is dark again but for what the runners see now.
  *   It takes two presses (`ConfirmButton`), since nothing puts it back.
  * - **See as players** is the party lens (`PARTY_LENS`): the map exactly as
- *   the phones and the TV show it. The map says so while it is on, with a
- *   button to go back (`GridPage`).
+ *   the phones and the TV show it: their opaque fog, their dimmed ground
+ *   seen before, their tokens (`stage3d/masks.ts` `drawsTableView`). While
+ *   it is on the button reads "Back to GM view", as the mockup had it, and
+ *   the map says so too, with its own button to go back (`GridPage`).
  *
  * The named reveal areas the old toolbar drew are not here: they are kept,
  * listed and revealed from Prep's list (`PrepOutline`), where the Fixer's
@@ -47,7 +49,7 @@ import { fogOn, sightlinesOn, type Scene } from '@safehouse/contracts';
 import type { BrushMark } from '@safehouse/rules';
 import { usePatchScene } from '../api.js';
 import type { GridCommands } from '../commands.js';
-import { FOG_BRUSH_MAX, FOG_BRUSH_MIN, FOG_BRUSH_MODES, fogBarHint } from '../fogBar.js';
+import { FOG_BRUSH_MAX, FOG_BRUSH_MIN, FOG_BRUSH_MODES, fogBarHint, seeAsPlayersLabel } from '../fogBar.js';
 import ConfirmButton from '../gm/ConfirmButton.js';
 import { useGridStore } from '../store.js';
 import { PARTY_LENS } from '../useShroud.js';
@@ -74,7 +76,10 @@ export function useSetSightlines(scene: Scene): {
   };
 }
 
-/** A switch on the bar: its name, and on or off after it. */
+/**
+ * A switch on the bar: its name, and on or off after it; or, with
+ * `showState` false, a name that says itself what a press does.
+ */
 function Toggle({
   on,
   label,
@@ -83,6 +88,7 @@ function Toggle({
   disabled,
   onClick,
   icon,
+  showState = true,
 }: {
   on: boolean;
   label: string;
@@ -91,6 +97,7 @@ function Toggle({
   disabled?: boolean;
   onClick: () => void;
   icon?: string;
+  showState?: boolean;
 }) {
   return (
     <button
@@ -107,7 +114,7 @@ function Toggle({
     >
       {icon && <span aria-hidden>{icon}</span>}
       <span className="mono-label text-inherit">{label}</span>
-      <span>{on ? 'on' : 'off'}</span>
+      {showState && <span>{on ? 'on' : 'off'}</span>}
     </button>
   );
 }
@@ -254,7 +261,9 @@ export default function FogBar({ scene, commands }: { scene: Scene; commands: Gr
         />
         <Toggle
           on={asPlayers}
-          label="See as players"
+          // The mockup's words: while the lens is on, the button says how to leave it.
+          label={seeAsPlayersLabel(asPlayers)}
+          showState={false}
           icon="👁"
           testId="fog-bar-see-as-players"
           title={

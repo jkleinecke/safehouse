@@ -64,9 +64,10 @@ export function partyLensOn(inputs: Pick<ShroudInputs, 'isGm' | 'losTokenId'>): 
  * the fog with the rule the server withholds tokens by and every device
  * draws its cover by (`fogCells`): the party's pooled sight on that floor,
  * and the ground the GM revealed live, on a fogged scene; every square, on
- * an open one. Ground shown to the table only as remembered is not live, so
- * the lens darkens it with the hidden ground: nobody standing there is on a
- * phone.
+ * an open one. Ground shown to the table only as remembered is not live:
+ * nobody standing there is on a phone. (The map itself draws the lens with
+ * the table's own fog cover, live clear, remembered dimmed, the rest
+ * hidden, and no scrim: `stage3d/masks.ts` `drawsTableView`.)
  */
 export function partyLiveSquares(scene: Pick<Scene, 'fog' | 'vision' | 'grid'>, level: number): Set<string> {
   const cells = fogCells(scene.fog, { vision: scene.vision });
@@ -163,8 +164,9 @@ export function useShroud(inputs: ShroudInputs): ShroudState | null {
   const { scene, tokens, isGm } = inputs;
   const party = partyLensOn(inputs);
   const level = inputs.level ?? 0;
-  // The party's lens: the table's live squares, darkened round with the GM's
-  // light scrim, and the tokens cut to the table's (`ShroudState.party`).
+  // The party's lens: the table's live squares, the map drawn under the
+  // table's own fog cover, and the tokens cut to the table's
+  // (`ShroudState.party`).
   // Worked out again whenever the fog is (a runner's step brings a new copy
   // of it) or the floor changes: a walk over the floor's squares, reading
   // bits, with no sightline cast.

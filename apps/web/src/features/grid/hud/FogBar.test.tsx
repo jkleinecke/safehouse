@@ -93,5 +93,9 @@ describe('<FogBar>', () => {
     expect(html).toMatch(/<option value="live" selected="">Reveal<\/option>/);
     expect(html).toMatch(/data-testid="fog-bar-size"[^>]*value="3"/);
     expect(pressed(html, 'fog-bar-see-as-players')).toBe(false);
+    // The lens button names what a press does, with no "off" after it: the
+    // mockup's "See as players", and "Back to GM view" while it is on
+    // (`seeAsPlayersLabel`, fogBar.test.ts).
+    expect(html).toMatch(/data-testid="fog-bar-see-as-players"[^>]*><span[^>]*>👁<\/span><span[^>]*>See as players<\/span><\/button>/);
   });
 });

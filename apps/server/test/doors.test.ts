@@ -306,4 +306,52 @@ describe('a player’s runner must stand next to the door (the GM, 2026-09-27)',
       expect(refusal(res), `${col},${row}`).toEqual(OUT_OF_REACH);
     }
   });
+
+  it('a painted door is reached only from its own floor; a traced door from any floor', async () => {
+    // The review, 2026-09-27: a floor upstairs with a door painted in the
+    // same square as the ground floor's, so the runner standing beside the
+    // one stands right under, or over, the other. Only the rules' test
+    // asked this before; the route reads the runner's floor off its row.
+    const levels = await t.app.inject({
+      method: 'PUT',
+      url: `/api/scenes/${sceneId}/levels`,
+      headers: auth(boot.gmToken),
+      payload: { levels: [{ id: 'upstairs', name: 'Upstairs' }] },
+    });
+    expect(levels.statusCode).toBe(200);
+    const upstairs = await post(`/api/scenes/${sceneId}/tiles`, boot.gmToken, {
+      tilesetId: 'docklands',
+      level: 1,
+      paint: { '3,4': 'door' },
+    });
+    expect(upstairs.statusCode).toBe(200);
+
+    // On the ground, beside the ground floor's door: that one opens, and the
+    // one over it is out of reach, told as every door out of reach is.
+    await standAt(2, 4);
+    expect((await door(player.token, { cell: '3,4', op: 'open' })).statusCode).toBe(200);
+    await door(player.token, { cell: '3,4', op: 'close' });
+    expect(refusal(await door(player.token, { cell: '3,4', level: 1, op: 'open' }))).toEqual(OUT_OF_REACH);
+
+    // The GM takes the runner upstairs, to the same square: the upstairs
+    // door opens, the one under it is out of reach.
+    const up = await patch(`/api/tokens/${runnerId}`, boot.gmToken, { ...sq(2, 4), level: 1 });
+    expect(up.statusCode).toBe(200);
+    const opened = await door(player.token, { cell: '3,4', level: 1, op: 'open' });
+    expect(opened.statusCode).toBe(200);
+    expect(opened.json()).toEqual({ door: { cell: '3,4', level: 1, open: true } });
+    expect(refusal(await door(player.token, { cell: '3,4', op: 'open' }))).toEqual(OUT_OF_REACH);
+    const gm = await sceneAs(boot.gmToken);
+    expect(gm.levels[0]?.tiles?.doors?.['3,4']).toEqual({ open: true, locked: false });
+    expect(gm.tiles?.doors?.['3,4']?.open).toBe(false);
+
+    // A traced door is the scene's, not a floor's, as its walls are: the
+    // runner upstairs beside its line reaches it all the same.
+    await patch(`/api/tokens/${runnerId}`, boot.gmToken, { ...sq(3, 1), level: 1 });
+    expect((await door(player.token, { doorId: 'd.front', op: 'open' })).statusCode).toBe(200);
+    expect((await door(player.token, { doorId: 'd.front', op: 'close' })).statusCode).toBe(200);
+
+    // Back on the ground for anything after.
+    expect((await patch(`/api/tokens/${runnerId}`, boot.gmToken, { ...sq(3, 1), level: 0 })).statusCode).toBe(200);
+  });
 });

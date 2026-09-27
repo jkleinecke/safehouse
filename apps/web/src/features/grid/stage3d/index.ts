@@ -133,7 +133,7 @@ import { MapPlane } from './mapPlane.js';
 import { GmMarkers } from './markers.js';
 import { HIDDEN_AT, NOT_LIVE_AT, isHidden, lightTokens } from './fogEdge.js';
 import { FloorMarks } from './marks.js';
-import { CoverMasks, type FogDetail } from './masks.js';
+import { CoverMasks, drawsTableView, type FogDetail } from './masks.js';
 import { pickStanding, type StandingPick } from './picking.js';
 import { SelectionBoxes, SelectionHandles, boxTops, type BoxView } from './selection.js';
 import { TracedWalls, type TracedLine } from './tracedWalls.js';
@@ -1088,6 +1088,10 @@ class Stage3D implements StageApi, PointerHost {
     const m = topDownMetrics(scene);
     this.m = m;
     const isGm = next.role === 'gm';
+    // The map as the table sees it: everyone's but the GM's, and the GM's
+    // while she looks through the players' eyes (`drawsTableView`): their
+    // opaque fog instead of her tint, and their labels hidden under it.
+    const table = drawsTableView(next);
 
     // -- the cover: the players' fog and the sightline shroud ----------------
     // Rebuilt on the fog's and the shroud's keys, as the 2D map redrew them;
@@ -1177,11 +1181,13 @@ class Stage3D implements StageApi, PointerHost {
     // and that is the cover's fog mask (below), which hides what stands under
     // it at every height — not a sheet on the floor, which the walls would
     // stand up through. (So a player's key leaves the sight out: a runner's
-    // step has nothing to redraw here for them, only the mask to stamp.)
-    const fk = isGm ? fogKey(next) : fogRegionKey(next);
+    // step has nothing to redraw here for them, only the mask to stamp.) The
+    // GM looking through the players' eyes is drawn as they are: no tint, and
+    // no region names, only the cover.
+    const fk = table ? `table|${fogRegionKey(next)}` : fogKey(next);
     if (fk !== this.lastFogKey) {
       this.lastFogKey = fk;
-      if (isGm) drawFog(this.fogInk, this.fogLabels, scene, m, true, next.level ?? 0);
+      if (!table) drawFog(this.fogInk, this.fogLabels, scene, m, true, next.level ?? 0);
       else {
         this.fogInk.clear();
         this.fogLabels.sweep();
@@ -1190,8 +1196,8 @@ class Stage3D implements StageApi, PointerHost {
 
     // -- what the cover hides over the canvas ---------------------------------
     // A player's labels hide under the fog as the fog covered them in 2D; the
-    // GM's hide nowhere.
-    this.fogLabels.setCover(isGm ? null : this.labelCovered);
+    // GM's hide nowhere, but while she sees as the players do.
+    this.fogLabels.setCover(table ? this.labelCovered : null);
     if (covered.fog || covered.shroud) {
       // Lay the labels out again on the next frame, whether or not the view moves.
       this.laidView.fill(Number.NaN);
@@ -1261,7 +1267,7 @@ class Stage3D implements StageApi, PointerHost {
     // each drawn again only when its key changes (`markers.ts`). A player's
     // pin names hide under their fog, as their pins do.
     this.markers.update(next);
-    this.markers.setCover(isGm ? null : this.labelCovered);
+    this.markers.setCover(table ? this.labelCovered : null);
 
     // The traced walls and doors, standing on the floor in view and the ones
     // below it. Those that moved, came or went cast their shadows anew: the
@@ -1470,7 +1476,9 @@ class Stage3D implements StageApi, PointerHost {
    */
   private layoutOverlay(): void {
     if (this.inert) return;
-    const at = this.sceneState.role === 'gm' ? (id: string) => this.figures.positionOf(id) : this.plateAt;
+    // The GM's plates hang over every figure, but while she sees as the
+    // players do (`drawsTableView`): then over the figures they would see.
+    const at = drawsTableView(this.sceneState) ? this.plateAt : (id: string) => this.figures.positionOf(id);
     this.badges.layout(this.projectWorld, at);
     // The handles sit where the pointer's hit test projects them: on the floor.
     this.handles.layout((grid) => this.camera.project(grid));

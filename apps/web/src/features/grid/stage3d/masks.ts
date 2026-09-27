@@ -16,15 +16,22 @@
  *     same copy on every phone and the TV). The GM gets no fog mask: the
  *     GM's fog is the see-through tint `drawFog` draws for the GM, which the
  *     stage lays on the floor as a `FloorInk`, and the GM sees the map
- *     through it.
+ *     through it. Except while she looks through the players' eyes (the fog
+ *     bar's "See as players", `ShroudState.party`): then she gets the
+ *     table's own cover, drawn from her copy exactly as a phone draws it
+ *     from theirs (`drawsTableView`), because "see what the players can
+ *     see" is the whole of that button (the GM, 2026-09-27). It used to be
+ *     her tint with a light scrim over it: hidden ground stayed readable
+ *     and ground seen before looked much the same as hidden, which is not
+ *     what any phone shows.
  *   - The SHROUD is drawn for whoever has one (`StageSceneState.shroud`, with
- *     at least one square in sight, or the party's lens even with none:
- *     `shroudShown`): a player's own runner's sightline, or the
- *     GM's "See as" lens, the party's included ("See as party": the squares
- *     the table sees live, `useShroud`). It darkens by the 2D scrim's
- *     amounts, kept in `plan/shroud.ts` — `SHROUD_ALPHA` for a player bound
- *     by it, the lighter `GM_SHROUD_ALPHA` when the state says it is the
- *     GM's lens (`ShroudState.gm`) — and so never hides outright.
+ *     at least one square in sight): a player's own runner's sightline, or
+ *     the GM's "See as" lens on a token or a camera. It darkens by the 2D
+ *     scrim's amounts, kept in `plan/shroud.ts` — `SHROUD_ALPHA` for a
+ *     player bound by it, the lighter `GM_SHROUD_ALPHA` when the state says
+ *     it is the GM's lens (`ShroudState.gm`) — and so never hides outright.
+ *     Not the players' lens: the table's cover above is all the table sees,
+ *     and the TV lays no scrim over it.
  *
  * ## The two masks
  *
@@ -102,6 +109,22 @@ import {
   type CoverMode,
 } from './cover.js';
 import { RecordingInk, type InkShape } from './floorInk.js';
+
+/**
+ * Whether this screen draws the map as the TABLE sees it: the players'
+ * phones and laptops, the TV and observers, under the fog's opaque cover
+ * (live ground clear, ground seen before dimmed, the rest hidden), their
+ * labels and plates hiding under it. Every role but the GM's, and the GM
+ * too while she looks through the players' eyes (the fog bar's "See as
+ * players", `ShroudState.party`): the button promises the map exactly as
+ * the phones and the TV show it, and the tokens are already cut to theirs
+ * (`tokensForTable`), so the cover must be theirs as well. The GM's other
+ * lenses, a token's or a camera's, are lenses, not the table: she keeps
+ * her see-through tint under them.
+ */
+export function drawsTableView(state: Pick<StageSceneState, 'role' | 'shroud'>): boolean {
+  return state.role !== 'gm' || state.shroud?.party === true;
+}
 
 /**
  * How finely the fog is rasterised: px a square at most, and the canvas's
@@ -736,14 +759,16 @@ export class CoverMasks {
     // The GM sees the map through the fog: no fog mask at all. Everyone else
     // gets the regions (painted again only when their key moves) with the
     // party's sight on the floor in view stamped over them (again whenever
-    // the sight, or the floor, moves it: `fogSightKey`).
-    const isGm = state.role === 'gm';
-    const regionKey = isGm ? 'gm' : `${fogRegionKey(state)}|${metricsKey(m)}|${this.detail}`;
-    const fk = isGm ? 'gm' : `${regionKey}#${fogSightKey(state)}`;
+    // the sight, or the floor, moves it: `fogSightKey`); and so does the GM
+    // looking through the players' eyes (`drawsTableView`), from her own
+    // copy, which `drawFog` and the stamp read exactly as a phone's.
+    const table = drawsTableView(state);
+    const regionKey = table ? `${fogRegionKey(state)}|${metricsKey(m)}|${this.detail}` : 'gm';
+    const fk = table ? `${regionKey}#${fogSightKey(state)}` : 'gm';
     if (fk !== this.lastFogKey) {
       this.lastFogKey = fk;
       const was = this.fog;
-      this.fog = isGm ? null : this.rasteriser.draw(state.scene, m, this.detail, regionKey, state.level ?? 0);
+      this.fog = table ? this.rasteriser.draw(state.scene, m, this.detail, regionKey, state.level ?? 0) : null;
       if (was !== null && was !== this.fog && was.kept !== true) gone.push(was.texture);
       // No fog to show: the rasteriser's canvases are not kept for one.
       if (this.fog === null) this.rasteriser.release();
@@ -751,8 +776,10 @@ export class CoverMasks {
       change.fog = true;
     }
 
-    // Whoever has a sightline to be shown: the player's runner, or the GM's lens.
-    const shroud = state.shroud ?? null;
+    // Whoever has a sightline to be shown: the player's runner, or the GM's
+    // lens on a token or a camera. Not the players' lens: the table's cover
+    // above is what the table sees, and no scrim lies over it on the TV.
+    const shroud = state.shroud?.party === true ? null : (state.shroud ?? null);
     const sk = `${shroudKey(shroud)}|${m.cols}x${m.rows}`;
     if (sk !== this.lastShroudKey) {
       this.lastShroudKey = sk;

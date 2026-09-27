@@ -86,11 +86,20 @@ export default function LosTab({ scene, tokens }: LosTabProps) {
         <select
           aria-label="Sightline viewpoint"
           data-testid="los-viewpoint"
-          // The table's own lens is the fog bar's; here it reads as nobody.
-          value={losTokenId === null || losTokenId === PARTY_LENS ? '' : losTokenId}
+          // The table's own lens is the fog bar's, and is not offered here a
+          // second time; but while it is on this says so (the review,
+          // 2026-09-27: it read "Nobody — show the whole map" over a map
+          // under the players' fog, and picking Nobody did nothing), and
+          // picking Nobody or a token leaves it, as Prep's See as does.
+          value={losTokenId ?? ''}
           onChange={(e) => setLosTokenId(e.target.value === '' ? null : e.target.value)}
           className="mt-1 w-full rounded border border-edge bg-deck px-2 py-1 text-sm"
         >
+          {losTokenId === PARTY_LENS && (
+            <option value={PARTY_LENS} disabled>
+              The players — from the fog bar
+            </option>
+          )}
           <option value="">Nobody — show the whole map</option>
           {tokens.map((t) => (
             <option key={t.id} value={t.id}>

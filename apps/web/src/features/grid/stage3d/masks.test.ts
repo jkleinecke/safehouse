@@ -31,7 +31,7 @@ import { metricsFor } from '../geometry.js';
 import { EXPLORED_ALPHA } from '../stage/layers.js';
 import type { StageSceneState } from '../types.js';
 import { HIDDEN_AT, NOT_LIVE_AT, lightTokens } from './fogEdge.js';
-import { CoverMasks } from './masks.js';
+import { CoverMasks, drawsTableView } from './masks.js';
 
 // `drawFog`, counted: how often the regions are painted, so the tests can see
 // that the party's sight is stamped without painting them again (P6). It
@@ -338,6 +338,75 @@ describe("the party's sight stamped on the cover (P6)", () => {
     withMasks(state('display', fogged), (masks) => {
       expect(at(masks, 2, 1)).toBe(0);
       expect(at(masks, 0, 0)).toBe(1);
+    });
+  });
+
+  /**
+   * The fog bar's "See as players" (the GM, 2026-09-27: "at any time see what
+   * the players can see"): the GM's screen under the table's own cover. It
+   * used to be her see-through tint with a light scrim over every square not
+   * live, so hidden ground stayed readable and ground seen before looked
+   * much like hidden: not what any phone shows.
+   */
+  describe("the GM's See as players", () => {
+    /** The players' lens, as `useShroud` hands it over: the table's live squares on the floor in view. */
+    const partyLens = { visible: new Set(['1,1', '2,1']), gm: true, party: true };
+    /**
+     * The GM's own copy of the same scene: her switch rather than the wire's
+     * `active`, and a room she has not revealed, which a phone's copy never
+     * carries. Drawn as the table's, it must come out as the phone's does.
+     */
+    const vault = { id: 'r1', name: 'the vault', polygon: [{ x: 8, y: 1 }, { x: 10, y: 1 }, { x: 10, y: 3 }, { x: 8, y: 3 }] };
+    const gmCopy: Scene['fog'] = { regions: [vault], revealed: [], revealedShapes: [], enabled: true, sight: seen };
+
+    it('draws the table view for every role but the GM, and for the GM only through the players’ lens', () => {
+      for (const role of ['player', 'display', 'observer'] as const) expect(drawsTableView({ role, shroud: null }), role).toBe(true);
+      expect(drawsTableView({ role: 'gm', shroud: null })).toBe(false);
+      expect(drawsTableView({ role: 'gm', shroud: { visible: new Set(['1,1']), gm: true } })).toBe(false);
+      expect(drawsTableView({ role: 'gm', shroud: partyLens })).toBe(true);
+    });
+
+    it('covers the GM as the phones are covered: what the party sees clear, what it has seen dimmed, the rest hidden, and no scrim over it', () => {
+      withMasks({ ...state('gm', gmCopy), shroud: partyLens }, (masks) => {
+        expectCover(masks, expected([[1, 1], [2, 1]], [[5, 5], [6, 5]]));
+        // The same squares, read with the scrim counted in (`full`): nothing
+        // darkens them past the fog, as nothing does on the TV.
+        expect(masks.coveredAt({ x: 1.5, y: 1.5 })).toBe(0);
+        expect(masks.coveredAt({ x: 5.5, y: 5.5 })).toBeCloseTo(DIM, 6);
+        expect(masks.coveredAt({ x: 9.5, y: 2.5 })).toBe(1);
+      });
+      // And exactly the cover a phone draws from its own copy of the scene.
+      withMasks(state('player', fogged), (phone) => {
+        withMasks({ ...state('gm', gmCopy), shroud: partyLens }, (lens) => {
+          expect(fogOverEverySquare(lens)).toEqual(fogOverEverySquare(phone));
+        });
+      });
+    });
+
+    it('covers nothing through the lens on a scene whose fog is off, as the phones see it', () => {
+      const open: Scene['fog'] = { regions: [vault], revealed: [], revealedShapes: [], enabled: false };
+      withMasks({ ...state('gm', open), shroud: { visible: new Set(['0,0']), gm: true, party: true } }, (masks) => {
+        expect(fogOverEverySquare(masks)).toEqual(everywhere(0));
+        expect(masks.coveredAt({ x: 9.5, y: 7.5 })).toBe(0);
+      });
+    });
+
+    it('gives the cover back to the GM’s tint when she leaves the lens, and keeps her tint under a token’s lens', () => {
+      const masks = new CoverMasks('low');
+      try {
+        masks.update({ ...state('gm', gmCopy), shroud: partyLens }, m);
+        expect(at(masks, 9, 7)).toBe(1);
+        // One press back: her own view, the whole map through the tint.
+        masks.update(state('gm', gmCopy), m);
+        expect(fogOverEverySquare(masks)).toEqual(everywhere(0));
+        // A token's lens is a lens, not the table: no cover, only its light scrim.
+        masks.update({ ...state('gm', gmCopy), shroud: { visible: new Set(['1,1']), gm: true } }, m);
+        expect(fogOverEverySquare(masks)).toEqual(everywhere(0));
+        expect(masks.coveredAt({ x: 9.5, y: 7.5 })).toBeGreaterThan(0);
+        expect(masks.coveredAt({ x: 9.5, y: 7.5 })).toBeLessThan(1);
+      } finally {
+        masks.dispose();
+      }
     });
   });
 

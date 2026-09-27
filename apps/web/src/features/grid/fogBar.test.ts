@@ -16,6 +16,7 @@ import {
   FOG_BRUSH_MIN,
   FOG_BRUSH_MODES,
   fogBarHint,
+  seeAsPlayersLabel,
   type FogBarState,
 } from './fogBar.js';
 
@@ -153,10 +154,15 @@ describe('the fog bar’s sentence', () => {
     );
   });
 
-  it('says first that the GM is looking through the players’ eyes', () => {
+  it('says first that the GM is looking through the players’ eyes, and names the button that goes back', () => {
     expect(fogBarHint({ fog: true, sight: true, brush: { paint: 'live', size: 3 }, asPlayers: true })).toBe(
-      'You see the map as the players and the TV do; press See as players again to go back.',
+      'You see the map exactly as the players and the TV do; press Back to GM view to return.',
     );
+  });
+
+  it('labels the lens button as the mockup did: See as players, then Back to GM view while it is on', () => {
+    expect(seeAsPlayersLabel(false)).toBe('See as players');
+    expect(seeAsPlayersLabel(true)).toBe('Back to GM view');
   });
 
   it('is one sentence, whatever the state', () => {

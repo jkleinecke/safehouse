@@ -117,6 +117,17 @@ export function brushSizeStep(key: string): -1 | 0 | 1 {
   return 0;
 }
 
+/**
+ * The words on the bar's last button, as the GM approved them in the
+ * mockup (2026-09-27): "See as players", and, while she is looking through
+ * their eyes, "Back to GM view". The one press that leaves the lens says so
+ * on the button itself, rather than the button reading "on" and leaving her
+ * to work out that pressing it again is the way back.
+ */
+export function seeAsPlayersLabel(on: boolean): string {
+  return on ? 'Back to GM view' : 'See as players';
+}
+
 /** Everything the bar's sentence depends on. */
 export interface FogBarState {
   /** The fog is on for the table (`fogOn`, or the party's sight, which fogs a scene too: `sceneFogOn`). */
@@ -142,7 +153,7 @@ function brushArea(size: number): string {
  * what the GM is in the middle of.
  */
 export function fogBarHint(s: FogBarState): string {
-  if (s.asPlayers) return 'You see the map as the players and the TV do; press See as players again to go back.';
+  if (s.asPlayers) return `You see the map exactly as the players and the TV do; press ${seeAsPlayersLabel(true)} to return.`;
   if (s.brush) {
     if (!s.fog) return 'The fog is off, so the table sees the whole map whatever you paint.';
     const what = brushArea(s.brush.size);
