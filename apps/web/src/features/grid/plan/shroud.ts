@@ -47,6 +47,18 @@ export interface ShroudInput {
   gm: boolean;
   /** `"col,row"` → how tall that square stands, in cells. Absent is flat. */
   heights?: ReadonlyMap<string, number> | undefined;
+  /**
+   * The GM's "See as party" lens (`ShroudState.party`). Its `visible` is the
+   * table's live squares, and an EMPTY one is still a view: the table sees
+   * nothing live, so the lens darkens the whole floor, where an empty set
+   * from a pair of eyes means there is no viewpoint and darkens nothing.
+   */
+  party?: boolean | undefined;
+}
+
+/** Whether `input` darkens anything at all: a view with a square in it, or the party's view even with none. */
+export function shroudShown(input: ShroudInput | null): input is ShroudInput {
+  return input !== null && (input.visible.size > 0 || input.party === true);
 }
 
 /**
@@ -58,7 +70,7 @@ export interface ShroudInput {
  * move a player makes when checking an angle.
  */
 export function shroudKey(input: ShroudInput | null): string {
-  if (input === null || input.visible.size === 0) return 'none';
+  if (!shroudShown(input)) return 'none';
   let acc = 0;
   // Heights fold into the same accumulator: repainting a waist-high crate as a
   // full wall changed the silhouette the 2D scrim had to cover while leaving
@@ -79,5 +91,5 @@ export function shroudKey(input: ShroudInput | null): string {
     }
     acc = (acc + (h >>> 0)) >>> 0;
   }
-  return `${input.gm ? 'gm' : 'pc'}|${input.visible.size}|${acc.toString(16)}`;
+  return `${input.gm ? 'gm' : 'pc'}${input.party === true ? '+party' : ''}|${input.visible.size}|${acc.toString(16)}`;
 }

@@ -9,7 +9,7 @@
  */
 import type { GeometrySelection } from './types.js';
 import type { Encounter, Role, Scene, Token } from '@safehouse/contracts';
-import { levelTiles } from '@safehouse/rules';
+import { fogCells, levelTiles } from '@safehouse/rules';
 import { hiddenLayerTokenIds, layersOf } from './tokenLayers.js';
 import {
   actingTokenId,
@@ -186,6 +186,40 @@ export function tokensInSight(
 }
 
 /**
+ * The tokens the TABLE is shown — the players' phones and laptops, the TV,
+ * observers — and the GM under the "See as party" lens, which shows exactly
+ * what they are shown (`ShroudState.party`; P6, FR9.13):
+ *
+ * - no token the GM hides, by its own flag or on a hidden layer (FR9.26);
+ * - the party's runners (`source: 'character'`) wherever they stand, fog or
+ *   no fog, as the server sends them;
+ * - everyone else only while they stand on LIVE ground (`fogCells`
+ *   `tokenLive`: any square of the token, on its own floor, live): not on
+ *   hidden ground, and not on ground shown dimmed as remembered, where the
+ *   table sees the map but nobody on it.
+ *
+ * A SECOND guard, not the boundary: the server already withholds every one
+ * of these from a player's and the TV's copy (`tokenConcealed`), by the same
+ * rule read off the same fog. This keeps a device from drawing one it still
+ * holds a moment too long — a copy of the tokens a beat newer than its copy
+ * of the sight, a fold that has not yet heard the token leave — and it is
+ * the whole of the rule for the GM's party lens, whose copy holds everyone.
+ * On an open scene every square is live, and only the GM's hidden tokens go.
+ */
+export function tokensForTable(
+  scene: Pick<Scene, 'fog' | 'vision' | 'tokenLayers'>,
+  tokens: readonly Token[],
+): Token[] {
+  const hiddenByLayer = hiddenLayerTokenIds(layersOf(scene));
+  const cells = fogCells(scene.fog, { vision: scene.vision });
+  return tokens.filter((t) => {
+    if (t.hidden || hiddenByLayer.has(t.id)) return false;
+    if (t.source === 'character' || !cells.on) return true;
+    return cells.tokenLive({ x: t.x, y: t.y, level: t.level, size: t.size });
+  });
+}
+
+/**
  * The tokens on the floors below that can be seen from `level`: a token shows
  * where every floor between it and this one leaves its square empty —
  * nothing painted there at all, which is what an open floor is.
@@ -227,19 +261,24 @@ export function composeStageState(input: StageComposeInput): StageSceneState | n
   // A token with no level is on the ground, which is where every token was
   // before floors existed.
   const level = input.level ?? 0;
-  const onFloor = input.tokens.filter((t) => (t.level ?? 0) === level);
   const role: Role = input.viewer.role;
+  // What the table may be shown (`tokensForTable`): for everyone but the GM,
+  // and for the GM looking through the party's eyes. Nobody the fog or the
+  // party's sight withholds is drawn, even if this device still holds him.
+  const tableView = role !== 'gm' || input.shroud?.party === true;
+  const shown = tableView ? tokensForTable(scene, input.tokens) : input.tokens;
+  const onFloor = shown.filter((t) => (t.level ?? 0) === level);
   const tokens = tokensInSight(onFloor, input.viewer, input.shroud ?? null);
   // Down through the open squares: under the same sightline as this floor's
   // own tokens, so a player sees below only what they could see from here.
   const seenBelow = new Set(
     tokensInSight(
-      tokensBelow(scene, input.tokens, level).map((b) => b.token),
+      tokensBelow(scene, shown, level).map((b) => b.token),
       input.viewer,
       input.shroud ?? null,
     ).map((t) => t.id),
   );
-  const belowTokens = tokensBelow(scene, input.tokens, level).filter((b) => seenBelow.has(b.token.id));
+  const belowTokens = tokensBelow(scene, shown, level).filter((b) => seenBelow.has(b.token.id));
   return {
     scene,
     tokens,

@@ -7,8 +7,13 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Scene, Token } from '@safehouse/contracts';
+import { cellBitsFrom, encodeCellBits } from '@safehouse/rules';
+import { shroudKey } from './plan/shroud.js';
 import {
   cameraLensId,
+  PARTY_LENS,
+  partyLensOn,
+  partyLiveSquares,
   sightInputsKey,
   viewpointCameraId,
   viewpointTokenId,
@@ -116,6 +121,45 @@ describe('the camera lens (FR9.23)', () => {
     // A player's scene never carries cameras; a lens id from them means nothing.
     expect(viewpointCameraId(base({ isGm: false, losTokenId: cameraLensId('cam_1') }))).toBeNull();
     expect(viewpointCameraId(base({ isGm: true, losTokenId: 'tok_1' }))).toBeNull();
+  });
+});
+
+describe('the party lens (P6)', () => {
+  // A 6x4 floor: the runners see (1,1) and (2,1) and remember (4,3).
+  const bits = (cells: [number, number][]): string =>
+    encodeCellBits(cellBitsFrom(6, 4, cells.map(([col, row]) => ({ col, row }))));
+  const sight = { cols: 6, rows: 4, levels: { '0': { live: bits([[1, 1], [2, 1]]), explored: bits([[1, 1], [2, 1], [4, 3]]) } } };
+  const scene = (fog: Partial<Scene['fog']>, vision: Scene['vision'] = { playersSeeOwnSight: false, sight: 'on' }): Scene =>
+    ({
+      id: 's1',
+      grid: { cols: 6, rows: 4, unitM: 1 },
+      vision,
+      fog: { regions: [], revealed: [], revealedShapes: [], ...fog },
+    }) as Scene;
+
+  it('is the GM\'s alone, and is not a token or a camera', () => {
+    expect(partyLensOn(base({ isGm: true, losTokenId: PARTY_LENS }))).toBe(true);
+    expect(partyLensOn(base({ isGm: false, losTokenId: PARTY_LENS }))).toBe(false);
+    expect(viewpointTokenId(base({ isGm: true, losTokenId: PARTY_LENS }))).toBeNull();
+    expect(viewpointCameraId(base({ isGm: true, losTokenId: PARTY_LENS }))).toBeNull();
+  });
+
+  it('leaves clear exactly the squares the table sees live: the party\'s sight and the GM\'s live reveals, not what is only remembered', () => {
+    const lobby = { id: 'r1', name: 'lobby', polygon: [{ x: 4, y: 0 }, { x: 6, y: 0 }, { x: 6, y: 1 }, { x: 4, y: 1 }] };
+    const live = partyLiveSquares(scene({ sight, regions: [lobby], revealed: ['r1'] }), 0);
+    expect([...live].sort()).toEqual(['1,1', '2,1', '4,0', '5,0']);
+    // Another floor: the party has seen nothing there, only the GM's reveal is live.
+    expect([...partyLiveSquares(scene({ sight, regions: [lobby], revealed: ['r1'] }), 1)].sort()).toEqual(['4,0', '5,0']);
+  });
+
+  it('leaves every square clear on an open scene, and none on a dark one, which still darkens', () => {
+    expect(partyLiveSquares(scene({ sight }, { playersSeeOwnSight: false }), 0).size).toBe(24);
+    const none = partyLiveSquares(scene({}), 0);
+    expect(none.size).toBe(0);
+    // An empty party view is a view: it darkens the whole floor, where an
+    // empty set from a token's eyes means no viewpoint and darkens nothing.
+    expect(shroudKey({ visible: none, gm: true, party: true })).not.toBe('none');
+    expect(shroudKey({ visible: none, gm: true })).toBe('none');
   });
 });
 

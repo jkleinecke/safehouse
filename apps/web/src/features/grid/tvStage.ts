@@ -43,7 +43,7 @@
  * Grid's (D9).
  */
 import type { Role, Scene, Token } from '@safehouse/contracts';
-import { tokensBelow } from './hydration.js';
+import { tokensBelow, tokensForTable } from './hydration.js';
 import { loadStage } from './stageLoader.js';
 import type { StageApi, StageCallbacks, StageSceneState, StageStop, TokenBars } from './types.js';
 
@@ -163,6 +163,11 @@ export function tvFloor3d(
  * the ones seen below it through its open squares (`belowTokens`) — else a
  * runner on another floor than the one shown would simply vanish from the
  * screen.
+ *
+ * And, as on a player's Grid, only the tokens the table is shown
+ * (`tokensForTable`): the runners, and everyone else only on live ground. The
+ * server never sends the TV anyone else; this is the second guard, for a
+ * fold that holds a token a moment longer than the sight it stood in.
  */
 export function tvStageState(input: TvStageInput): StageSceneState {
   const base: Omit<StageSceneState, 'tokens' | 'level'> = {
@@ -179,10 +184,11 @@ export function tvStageState(input: TvStageInput): StageSceneState {
     fogDraft: null,
   };
   const level = input.level ?? tvFloor3d(input.tokens, input.actingTokenId);
+  const shown = tokensForTable(input.scene, input.tokens);
   return {
     ...base,
-    tokens: input.tokens.filter((t) => (t.level ?? 0) === level),
-    belowTokens: tokensBelow(input.scene, input.tokens, level),
+    tokens: shown.filter((t) => (t.level ?? 0) === level),
+    belowTokens: tokensBelow(input.scene, shown, level),
     level,
   };
 }

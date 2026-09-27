@@ -221,6 +221,17 @@ export class GridCommands {
     post(this.socket, { cmd: 'fog.reveal', sceneId, op: 'disable' });
   }
 
+  /**
+   * Wipe the party's memory of floor `level` (sightlines, P6), or of every
+   * floor when `level` is not given: the rooms the runners have seen and
+   * left go back under the fog. What they see right now stays, because the
+   * server's sight pass remembers it again at once. Nothing else changes:
+   * the GM's own reveals, live or as seen before, are the GM's to hide.
+   */
+  fogForget(sceneId: string, level?: number): void {
+    post(this.socket, { cmd: 'fog.reveal', sceneId, op: 'forget', ...(level === undefined ? {} : { level }) });
+  }
+
   dispose(): void {
     this.dragRelay.cancel();
     this.pointerRelay.cancel();

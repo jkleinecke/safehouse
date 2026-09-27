@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Scene, Token, Visibility, WsEvent } from '@safehouse/contracts';
+import { cellBitsFrom, encodeCellBits } from '@safehouse/rules';
 // The fog a display device is sent, shared with the server's tests (see the file for why).
 import { FOG_WIRE_UNREVEALED } from '../../../../../packages/contracts/test/fog-fixtures.js';
 import { metricsFor } from '../grid/geometry.js';
@@ -328,6 +329,130 @@ describe('the fog on the TV (FR9.13)', () => {
     } finally {
       masks.dispose();
     }
+  });
+});
+
+/**
+ * The party's sight on the TV (sightlines, P6).
+ *
+ * After every committed change that moves it — a runner's step, a door, a
+ * light — the server sends one public `fog.updated {op: 'sight', cols, rows,
+ * levels, active}` carrying the WHOLE record, and the TV folds it in place
+ * of its own. The GM's `forget` comes first as `{op: 'forget', level?}`,
+ * and the TV wipes the floor's memory back to what the runners see now, as
+ * the server does, whether or not a `sight` event follows it. Either way the
+ * sight must then survive every event that is not about it, and the TV's
+ * own stage must draw it: live clear, remembered dimmed, the rest covered.
+ */
+describe("the party's sight on the TV (P6)", () => {
+  type Cells = [number, number][];
+  const COLS = 30;
+  const ROWS = 20;
+  const bits = (cells: Cells): string => encodeCellBits(cellBitsFrom(COLS, ROWS, cells.map(([col, row]) => ({ col, row }))));
+
+  /** A scene fogged by its sightlines, as a fresh read of it gives it to the TV: nothing seen yet. */
+  const dark = (): TvSceneSnapshot =>
+    snapshot({ scene: scene({ fog: { regions: [], revealed: [], revealedShapes: [], active: true } }) });
+
+  /** The server's sight event: every floor's live and explored squares, whole. */
+  function sightEvent(floors: Record<string, { live: Cells; explored: Cells }>): WsEvent {
+    const levels: Record<string, { live: string; explored: string }> = {};
+    for (const [level, f] of Object.entries(floors)) levels[level] = { live: bits(f.live), explored: bits(f.explored) };
+    return evt('fog.updated', { sceneId: 's1', op: 'sight', cols: COLS, rows: ROWS, levels, active: true });
+  }
+
+  /** How covered one square's centre is on the TV's stage, drawn from `snap`. */
+  function tvAt(snap: TvSceneSnapshot, col: number, row: number): number {
+    const masks = new CoverMasks('low');
+    try {
+      masks.update(tvStageState({ scene: snap.scene, tokens: snap.tokens }), metricsFor(snap.scene.grid));
+      return masks.coveredAt({ x: col + 0.5, y: row + 0.5 }, 'fog');
+    } finally {
+      masks.dispose();
+    }
+  }
+
+  it('takes the sight an event carries, whole, and draws it: live clear, remembered dimmed, the rest covered', () => {
+    const seen = sightEvent({ '0': { live: [[3, 4]], explored: [[3, 4], [10, 10]] } });
+    const folded = mergeSceneEvents(dark(), [seen]);
+    expect(folded?.scene.fog.sight).toEqual({
+      cols: COLS,
+      rows: ROWS,
+      levels: { '0': { live: bits([[3, 4]]), explored: bits([[3, 4], [10, 10]]) } },
+    });
+    expect(folded?.scene.fog.active).toBe(true);
+    expect(tvAt(folded!, 3, 4)).toBe(0);
+    expect(tvAt(folded!, 10, 10)).toBeGreaterThan(0.3);
+    expect(tvAt(folded!, 10, 10)).toBeLessThan(0.9);
+    expect(tvAt(folded!, 20, 15)).toBe(1);
+
+    // The next step replaces it, not adds to it: the event is the record.
+    const stepped = mergeSceneEvents(folded, [sightEvent({ '0': { live: [[4, 4]], explored: [[3, 4], [4, 4], [10, 10]] } })]);
+    expect(stepped?.scene.fog.sight?.levels['0']).toEqual({ live: bits([[4, 4]]), explored: bits([[3, 4], [4, 4], [10, 10]]) });
+    expect(tvAt(stepped!, 3, 4)).toBeGreaterThan(0.3);
+    expect(tvAt(stepped!, 4, 4)).toBe(0);
+  });
+
+  it('keeps the sight through every event that is not about it', () => {
+    const folded = mergeSceneEvents(dark(), [
+      sightEvent({ '0': { live: [[3, 4]], explored: [[3, 4]] } }),
+      evt('token.moved', { tokenId: 'wisp', sceneId: 's1', x: 3.5, y: 4.5 }),
+      evt('fog.updated', { sceneId: 's1', op: 'hide', active: true }),
+      evt('scene.updated', { sceneId: 's1', environment: { light: 2 } }),
+    ]);
+    expect(folded?.scene.fog.sight?.levels['0']?.live).toBe(bits([[3, 4]]));
+  });
+
+  it('takes the sight away when an event says there is none left', () => {
+    const folded = mergeSceneEvents(dark(), [sightEvent({ '0': { live: [[3, 4]], explored: [[3, 4]] } })]);
+    const gone = mergeSceneEvents(folded, [evt('fog.updated', { sceneId: 's1', op: 'sight', cols: COLS, rows: ROWS, levels: {}, active: false })]);
+    expect(gone?.scene.fog).not.toHaveProperty('sight');
+    expect(gone?.scene.fog.active).toBe(false);
+  });
+
+  it('ignores a sight it cannot read, rather than guess at one', () => {
+    const base = dark();
+    // A grid past the cap, and a floor that is not a floor: refused whole.
+    const huge = evt('fog.updated', { sceneId: 's1', op: 'sight', cols: 1e9, rows: 1e9, levels: { '0': { live: '', explored: '' } }, active: true });
+    const odd = evt('fog.updated', { sceneId: 's1', op: 'sight', cols: COLS, rows: ROWS, levels: { roof: { live: '', explored: '' } }, active: true });
+    expect(mergeSceneEvents(base, [huge, odd])).toBe(base);
+  });
+
+  it("forgets one floor's memory back to what the runners see now, or every floor's", () => {
+    const folded = mergeSceneEvents(dark(), [
+      sightEvent({
+        '0': { live: [[3, 4]], explored: [[3, 4], [10, 10]] },
+        '1': { live: [], explored: [[5, 5]] },
+      }),
+    ]);
+    const groundForgotten = mergeSceneEvents(folded, [evt('fog.updated', { sceneId: 's1', op: 'forget', level: 0, active: true })]);
+    expect(groundForgotten?.scene.fog.sight?.levels).toEqual({
+      '0': { live: bits([[3, 4]]), explored: bits([[3, 4]]) },
+      '1': { live: '', explored: bits([[5, 5]]) },
+    });
+    // The room left behind goes back under the fog; the one she stands in stays.
+    expect(tvAt(groundForgotten!, 10, 10)).toBe(1);
+    expect(tvAt(groundForgotten!, 3, 4)).toBe(0);
+
+    const allForgotten = mergeSceneEvents(folded, [evt('fog.updated', { sceneId: 's1', op: 'forget', active: true })]);
+    expect(allForgotten?.scene.fog.sight?.levels).toEqual({
+      '0': { live: bits([[3, 4]]), explored: bits([[3, 4]]) },
+      '1': { live: '', explored: '' },
+    });
+
+    // Forgetting what is not remembered changes nothing at all.
+    expect(mergeSceneEvents(allForgotten, [evt('fog.updated', { sceneId: 's1', op: 'forget', active: true })])).toBe(allForgotten);
+  });
+
+  it('never folds a sight meant for the GM alone, or for another scene', () => {
+    const base = dark();
+    const levels = { '0': { live: bits([[3, 4]]), explored: bits([[3, 4]]) } };
+    expect(
+      mergeSceneEvents(base, [
+        evt('fog.updated', { sceneId: 's1', op: 'sight', cols: COLS, rows: ROWS, levels, active: true }, 'gm'),
+        evt('fog.updated', { sceneId: 's2', op: 'sight', cols: COLS, rows: ROWS, levels, active: true }),
+      ]),
+    ).toBe(base);
   });
 });
 

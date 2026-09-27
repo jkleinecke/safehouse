@@ -111,7 +111,7 @@ import {
 } from '../types.js';
 import { drawAoe, drawArcDraft, drawFogDraft, drawRectDraft, drawRuler, drawSegmentDraft } from '../stage/fx.js';
 import { C } from '../stage/colors.js';
-import { aoeKey, fogDraftKey, fogKey, geometryKey, mapImagesKey, paintedSelectionKey } from '../stage/keys.js';
+import { aoeKey, fogDraftKey, fogKey, fogRegionKey, geometryKey, mapImagesKey, paintedSelectionKey } from '../stage/keys.js';
 import { drawFog, drawGeometry, drawGrid } from '../stage/layers.js';
 import { drawLightMap } from '../stage/lightLayer.js';
 import { PointerController, type Cell, type GhostFill, type PointerHost } from '../stage/pointer.js';
@@ -1172,14 +1172,18 @@ class Stage3D implements StageApi, PointerHost {
     }
 
     // The fog regions as the GM sees them: a tint with the revealed regions
-    // cut out, outlined and named. Everyone else's fog is the opaque cover,
+    // cut out, outlined and named — or, on a floor the party has seen
+    // (sightlines, P6), the tint square by square in the state each square
+    // is in for the table, so the key carries the party's sight on the floor
+    // in view as well (`fogKey`). Everyone else's fog is the opaque cover,
     // and that is the cover's fog mask (below), which hides what stands under
     // it at every height — not a sheet on the floor, which the walls would
-    // stand up through.
-    const fk = fogKey(next);
+    // stand up through. (So a player's key leaves the sight out: a runner's
+    // step has nothing to redraw here for them, only the mask to stamp.)
+    const fk = isGm ? fogKey(next) : fogRegionKey(next);
     if (fk !== this.lastFogKey) {
       this.lastFogKey = fk;
-      if (isGm) drawFog(this.fogInk, this.fogLabels, scene, m, true);
+      if (isGm) drawFog(this.fogInk, this.fogLabels, scene, m, true, next.level ?? 0);
       else {
         this.fogInk.clear();
         this.fogLabels.sweep();

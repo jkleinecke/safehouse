@@ -16,10 +16,17 @@
  * see; it does not decide what data reaches them. Hidden tokens and unrevealed
  * fog are already stripped server-side (`sceneForViewer`), and that is where
  * secrecy lives.
+ *
+ * One of the GM's lenses is not a pair of eyes at all but the TABLE's: "See
+ * as party" (`PARTY_LENS`, sightlines, P6). The table's view is worked out
+ * on the server, pooled over every runner, and it reaches every device in
+ * the fog (`FogState.sight`), so the lens computes no sightline: it reads
+ * which squares the table sees live off the GM's own copy of the fog
+ * (`partyLiveSquares`), the same answer every phone and the TV draw.
  */
 import { useMemo } from 'react';
 import type { Scene, Token } from '@safehouse/contracts';
-import { coneCells, sightModelFor, visibleFrom, DEFAULT_SIGHT_RANGE } from '@safehouse/rules';
+import { coneCells, fogCells, sightModelFor, visibleFrom, DEFAULT_SIGHT_RANGE } from '@safehouse/rules';
 import type { ShroudState } from './types.js';
 
 /**
@@ -39,6 +46,39 @@ export function viewpointCameraId(inputs: ShroudInputs): string | null {
   return inputs.losTokenId.startsWith(CAMERA_LENS) ? inputs.losTokenId.slice(CAMERA_LENS.length) : null;
 }
 
+/**
+ * The lens id of the GM's "See as party" (sightlines, P6): the map as the
+ * phones and the TV show it. Not a token id (those are uuids) and not a
+ * camera's (`CAMERA_LENS`), so the three kinds of lens never meet.
+ */
+export const PARTY_LENS = 'party';
+
+/** Whether the GM is looking through the party's lens. A player asking for it gets nothing. */
+export function partyLensOn(inputs: Pick<ShroudInputs, 'isGm' | 'losTokenId'>): boolean {
+  return inputs.isGm && inputs.losTokenId === PARTY_LENS;
+}
+
+/**
+ * Every square the TABLE sees LIVE on floor `level`, as `"col,row"` keys:
+ * what the "See as party" lens leaves clear (`ShroudState.party`). Read off
+ * the fog with the rule the server withholds tokens by and every device
+ * draws its cover by (`fogCells`): the party's pooled sight on that floor,
+ * and the ground the GM revealed live, on a fogged scene; every square, on
+ * an open one. Ground shown to the table only as remembered is not live, so
+ * the lens darkens it with the hidden ground: nobody standing there is on a
+ * phone.
+ */
+export function partyLiveSquares(scene: Pick<Scene, 'fog' | 'vision' | 'grid'>, level: number): Set<string> {
+  const cells = fogCells(scene.fog, { vision: scene.vision });
+  const out = new Set<string>();
+  for (let row = 0; row < scene.grid.rows; row += 1) {
+    for (let col = 0; col < scene.grid.cols; col += 1) {
+      if (cells.state(level, col, row) === 'live') out.add(`${col},${row}`);
+    }
+  }
+  return out;
+}
+
 export interface ShroudInputs {
   scene: Scene | null | undefined;
   tokens: readonly Token[];
@@ -54,6 +94,12 @@ export interface ShroudInputs {
   myCharacterId: string | null;
   /** Players can be shown the whole map — the GM's switch, per scene. */
   enabledForPlayers: boolean;
+  /**
+   * The floor in view. The party lens reads the party's sight on it, since
+   * sight is kept per floor; every other lens follows its own token or
+   * camera to the floor it stands on. Absent is the ground.
+   */
+  level?: number;
 }
 
 /**
@@ -63,7 +109,7 @@ export interface ShroudInputs {
  * "what does the guard see" is the question that makes this tool worth having.
  */
 export function viewpointTokenId(inputs: ShroudInputs): string | null {
-  if (inputs.isGm) return viewpointCameraId(inputs) === null ? inputs.losTokenId : null;
+  if (inputs.isGm) return viewpointCameraId(inputs) === null && !partyLensOn(inputs) ? inputs.losTokenId : null;
   if (!inputs.enabledForPlayers || inputs.myCharacterId === null) return null;
   const mine = inputs.tokens.find(
     (t) => t.source === 'character' && t.sourceId === inputs.myCharacterId,
@@ -115,6 +161,18 @@ export function sightInputsKey(scene: Scene | null | undefined): string {
  */
 export function useShroud(inputs: ShroudInputs): ShroudState | null {
   const { scene, tokens, isGm } = inputs;
+  const party = partyLensOn(inputs);
+  const level = inputs.level ?? 0;
+  // The party's lens: the table's live squares, darkened round with the GM's
+  // light scrim, and the tokens cut to the table's (`ShroudState.party`).
+  // Worked out again whenever the fog is (a runner's step brings a new copy
+  // of it) or the floor changes: a walk over the floor's squares, reading
+  // bits, with no sightline cast.
+  const partyShroud = useMemo<ShroudState | null>(
+    () => (party && scene ? { visible: partyLiveSquares(scene, level), gm: true, party: true } : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [party, scene?.fog, scene?.vision?.sight, scene?.grid.cols, scene?.grid.rows, level],
+  );
   const tokenId = viewpointTokenId(inputs);
   const viewer = tokenId === null ? undefined : tokens.find((t) => t.id === tokenId);
   const cameraId = viewpointCameraId(inputs);
@@ -123,7 +181,7 @@ export function useShroud(inputs: ShroudInputs): ShroudState | null {
   const vx = viewer?.x;
   const vy = viewer?.y;
 
-  return useMemo(() => {
+  const lens = useMemo(() => {
     if (scene && camera !== undefined) {
       // Through the camera's eye (FR9.23): its cone, plus the square it is
       // mounted in, so the mount itself is not scrimmed out of the picture.
@@ -170,4 +228,5 @@ export function useShroud(inputs: ShroudInputs): ShroudState | null {
     // The camera lens: which camera, and where it points.
     JSON.stringify(camera ?? null),
   ]);
+  return partyShroud ?? lens;
 }

@@ -12,7 +12,8 @@
  * fog is a switch of its own, and the regions are what it lets through.
  */
 import { useState } from 'react';
-import { fogOn, type Scene } from '@safehouse/contracts';
+import { fogOn, sceneFogOn, sightlinesOn, type Scene } from '@safehouse/contracts';
+import { usePatchScene } from '../api.js';
 import type { GridCommands } from '../commands.js';
 import { rectPolygon } from '../geometry.js';
 import { useGridStore } from '../store.js';
@@ -23,6 +24,23 @@ const FOG_OFF_MEANS = 'Off: players and the TV see the whole map';
 const FOG_ON_MEANS = 'On: they see only revealed areas';
 
 /**
+ * What the fog switch cannot say by itself: the scene's SIGHTLINES fog it
+ * whatever the switch says (`sceneFogOn`, P6). Shown beside the switch while
+ * it is off and the sightlines are on, so a GM reading "Fog: off" is not
+ * surprised by a table that sees only what the runners see.
+ */
+const FOGGED_BY_SIGHT = 'Sightlines are on: the table sees only what the runners see and have seen, whatever this switch says';
+
+/**
+ * Whether the scene is fogged by its sightlines alone: the fog switch off
+ * (`fogOn` of the GM's copy) while the scene is fogged all the same
+ * (`sceneFogOn`), which only sightlines do.
+ */
+export function foggedBySight(scene: Scene): boolean {
+  return !fogOn(scene.fog) && sceneFogOn(scene);
+}
+
+/**
  * The scene's fog, on or off (`FogState.enabled`), with what each means for
  * the table.
  *
@@ -31,9 +49,15 @@ const FOG_ON_MEANS = 'On: they see only revealed areas';
  * existed (on once a region exists). So an old scene with regions reads On,
  * as it behaves, and one with none reads Off. Turning it off keeps every
  * region and reveal; turning it on again picks up where it was left.
+ *
+ * The switch is not the only thing that fogs a scene: its sightlines do too
+ * (P6). While they do and the switch is off, the section says so (its hint
+ * reads "sightlines", and a line under the switch explains), rather than
+ * reading as an open scene.
  */
 export function FogSwitch({ scene, commands }: { scene: Scene; commands: GridCommands }) {
   const on = fogOn(scene.fog);
+  const bySight = foggedBySight(scene);
   const option = (value: boolean, label: string) => (
     <button
       type="button"
@@ -53,20 +77,133 @@ export function FogSwitch({ scene, commands }: { scene: Scene; commands: GridCom
     </button>
   );
   return (
-    <PanelSection title="Fog" hint={on ? 'on' : 'off'}>
+    <PanelSection title="Fog" hint={on ? 'on' : bySight ? 'sightlines' : 'off'}>
       <div className="flex gap-1" role="group" aria-label="Fog">
         {option(false, 'Off')}
         {option(true, 'On')}
       </div>
-      <p className={'text-xs ' + (on ? 'text-faint' : 'text-ink')}>{FOG_OFF_MEANS}</p>
+      <p className={'text-xs ' + (on || bySight ? 'text-faint' : 'text-ink')}>{FOG_OFF_MEANS}</p>
       <p className={'text-xs ' + (on ? 'text-ink' : 'text-faint')}>{FOG_ON_MEANS}</p>
+      {bySight && (
+        <p className="text-xs text-cyan" data-testid="fog-by-sightlines">
+          {FOGGED_BY_SIGHT}.
+        </p>
+      )}
     </PanelSection>
   );
 }
 
-/** The switch's two meanings as one line, for a tooltip that has room for no more. */
-export function fogSwitchTitle(on: boolean): string {
-  return `Fog is ${on ? 'on' : 'off'} — ${FOG_OFF_MEANS}; ${FOG_ON_MEANS}. Click to turn it ${on ? 'off' : 'on'}.`;
+/**
+ * The switch's two meanings as one line, for a tooltip that has room for no
+ * more, and the scene's sightlines when they fog it with the switch off
+ * (`bySight`, `foggedBySight`).
+ */
+export function fogSwitchTitle(on: boolean, bySight = false): string {
+  const sight = bySight ? ` ${FOGGED_BY_SIGHT}.` : '';
+  return `Fog is ${on ? 'on' : 'off'} — ${FOG_OFF_MEANS}; ${FOG_ON_MEANS}.${sight} Click to turn it ${on ? 'off' : 'on'}.`;
+}
+
+/** What the sightlines switch means for the table, in the words the GM reads beside it. */
+const SIGHT_OFF_MEANS = 'Off: the fog switch and your reveals decide what the table sees';
+const SIGHT_ON_MEANS =
+  'On: the table sees what the runners see, live, and the rooms they have seen dimmed, with nobody in them; walls, closed doors and darkness stop their eyes';
+
+/** The sightlines switch's two meanings as one line, for a tooltip. */
+export function sightlinesTitle(on: boolean): string {
+  return `Sightlines are ${on ? 'on' : 'off'} — ${SIGHT_OFF_MEANS}; ${SIGHT_ON_MEANS}. Click to turn them ${on ? 'off' : 'on'}.`;
+}
+
+/**
+ * Switch the scene's sightlines (`SceneVision.sight`), saved on the scene so
+ * the server's sight pass and every device hear it. The patch says `sight`
+ * and nothing else: the server merges it into the scene's vision, so the
+ * players' dimming switch beside it is left as it is.
+ */
+export function useSetSightlines(scene: Scene): {
+  on: boolean;
+  set: (on: boolean) => void;
+  pending: boolean;
+  failed: boolean;
+} {
+  const patch = usePatchScene();
+  return {
+    on: sightlinesOn(scene.vision),
+    set: (on: boolean) => patch.mutate({ sceneId: scene.id, patch: { vision: { sight: on ? 'on' : 'off' } } }),
+    pending: patch.isPending,
+    failed: patch.isError,
+  };
+}
+
+/**
+ * The scene's SIGHTLINES (P6; the GM, 2026-09-27), on or off, with what each
+ * means for the table, beside the fog switch. On, the table sees what the
+ * party's runners see, pooled: every phone and the TV the same, walls and
+ * closed doors and SR5 darkness stopping their eyes, everything seen
+ * remembered, dimmed, and everything else hidden, whatever the fog switch
+ * says. The server works it out; nothing is computed on a phone.
+ *
+ * Under it, while the party remembers anything, the GM's way to take it
+ * back: forget the floor in view (`level`), or every floor. What the runners
+ * see right now is remembered again at once, so forgetting takes away the
+ * rooms they have left, never the one they stand in.
+ */
+export function SightlinesSwitch({ scene, commands, level }: { scene: Scene; commands: GridCommands; level: number }) {
+  const sight = useSetSightlines(scene);
+  const on = sight.on;
+  const floors = Object.entries(scene.fog.sight?.levels ?? {});
+  const remembers = (key?: string): boolean =>
+    floors.some(([k, floor]) => (key === undefined || k === key) && floor.explored !== '');
+  const option = (value: boolean, label: string) => (
+    <button
+      type="button"
+      aria-pressed={on === value}
+      data-testid={value ? 'sightlines-switch-on' : 'sightlines-switch-off'}
+      disabled={sight.pending}
+      onClick={() => {
+        if (on !== value) sight.set(value);
+      }}
+      className={
+        'mono-label flex-1 rounded border px-2 py-1 ' +
+        (on === value ? 'border-cyan text-cyan' : 'border-edge text-dim hover:text-ink')
+      }
+    >
+      {label}
+    </button>
+  );
+  return (
+    <PanelSection title="Sightlines" hint={on ? 'on' : 'off'}>
+      <div className="flex gap-1" role="group" aria-label="Sightlines">
+        {option(false, 'Off')}
+        {option(true, 'On')}
+      </div>
+      <p className={'text-xs ' + (on ? 'text-faint' : 'text-ink')}>{SIGHT_OFF_MEANS}</p>
+      <p className={'text-xs ' + (on ? 'text-ink' : 'text-faint')}>{SIGHT_ON_MEANS}</p>
+      {sight.failed && <p className="mono-label text-danger">that did not save — try again</p>}
+      {remembers() && (
+        <div className="flex gap-1" role="group" aria-label="Forget what the party has seen">
+          <button
+            type="button"
+            className="btn flex-1 px-2 py-0.5 text-xs"
+            data-testid="sightlines-forget-floor"
+            disabled={!remembers(String(level))}
+            title="The rooms the party has seen on this floor go back under the fog; what the runners see now stays"
+            onClick={() => commands.fogForget(scene.id, level)}
+          >
+            Forget this floor
+          </button>
+          <button
+            type="button"
+            className="btn flex-1 px-2 py-0.5 text-xs"
+            data-testid="sightlines-forget-all"
+            title="Every floor the party has seen goes back under the fog; what the runners see now stays"
+            onClick={() => commands.fogForget(scene.id)}
+          >
+            Forget every floor
+          </button>
+        </div>
+      )}
+    </PanelSection>
+  );
 }
 
 /**
@@ -185,7 +322,7 @@ export default function FogTab({ scene, commands }: { scene: Scene; commands: Gr
       <PanelSection title="Regions" hint={`${scene.fog.regions.length}`}>
         {scene.fog.regions.length === 0 && (
           <Empty>
-            {fogOn(scene.fog)
+            {sceneFogOn(scene)
               ? 'no regions yet — with the fog on and nothing revealed, the table sees no map at all'
               : 'no regions yet — a region is an area you can reveal to the table once the fog is on'}
           </Empty>

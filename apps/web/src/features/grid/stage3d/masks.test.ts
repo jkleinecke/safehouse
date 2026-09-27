@@ -23,12 +23,29 @@
  * player's and a display device's payload equals. What the server sends is
  * exactly what is covered here.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Role, Scene } from '@safehouse/contracts';
+import { cellBitsFrom, encodeCellBits } from '@safehouse/rules';
 import { FOG_WIRE_UNREVEALED } from '../../../../../../packages/contracts/test/fog-fixtures.js';
 import { metricsFor } from '../geometry.js';
+import { EXPLORED_ALPHA } from '../stage/layers.js';
 import type { StageSceneState } from '../types.js';
 import { CoverMasks } from './masks.js';
+
+// `drawFog`, counted: how often the regions are painted, so the tests can see
+// that the party's sight is stamped without painting them again (P6). It
+// still draws exactly what it always drew.
+const regionPaints = vi.hoisted(() => ({ count: 0 }));
+vi.mock('../stage/layers.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../stage/layers.js')>();
+  return {
+    ...actual,
+    drawFog: (...args: Parameters<typeof actual.drawFog>): void => {
+      regionPaints.count += 1;
+      actual.drawFog(...args);
+    },
+  };
+});
 
 const COLS = 12;
 const ROWS = 8;
@@ -49,9 +66,10 @@ function scene(fog: Scene['fog']): Scene {
   };
 }
 
-/** The stage's state for `role` looking at a scene with `fog`: nothing else on it. */
-function state(role: Role, fog: Scene['fog']): StageSceneState {
+/** The stage's state for `role` looking at floor `level` of a scene with `fog`: nothing else on it. */
+function state(role: Role, fog: Scene['fog'], level = 0): StageSceneState {
   return {
+    level,
     scene: scene(fog),
     tokens: [],
     role,
@@ -159,5 +177,140 @@ describe('CoverMasks on the copy the server sends', () => {
     } finally {
       masks.dispose();
     }
+  });
+});
+
+/**
+ * The party's sight on the cover (sightlines, P6).
+ *
+ * With a scene's sightlines on, the server sends every phone and the TV the
+ * party's pooled sight: per floor, the squares a runner sees now (`live`)
+ * and the squares the party has seen (`explored`), as bitsets. The cover
+ * stamps them square by square over the regions (`stampSight`): live clear,
+ * explored at the explored opacity, the rest left as the regions have it,
+ * keeping the lower of the two. In node the regions fail closed (the whole
+ * map covered, see the top of this file), so what shows through here is the
+ * sight alone, which is also exactly what a scene fogged by its sightlines
+ * with nothing revealed by the GM looks like in the browser.
+ */
+describe("the party's sight stamped on the cover (P6)", () => {
+  type Cells = [number, number][];
+
+  /** A sight record on this grid: each floor's `live` squares, and its `explored` ones (which take in the live, as the server keeps them). */
+  function sight(floors: Record<number, { live: Cells; explored: Cells }>): NonNullable<Scene['fog']['sight']> {
+    const bits = (cells: Cells): string => encodeCellBits(cellBitsFrom(COLS, ROWS, cells.map(([col, row]) => ({ col, row }))));
+    const levels: NonNullable<Scene['fog']['sight']>['levels'] = {};
+    for (const [level, f] of Object.entries(floors)) levels[level] = { live: bits(f.live), explored: bits([...f.live, ...f.explored]) };
+    return { cols: COLS, rows: ROWS, levels };
+  }
+
+  /** How covered one square's centre is, by the fog alone. */
+  const at = (masks: CoverMasks, col: number, row: number): number => masks.coveredAt({ x: col + 0.5, y: row + 0.5 }, 'fog');
+
+  /** The explored opacity as the one byte a square carries it in. */
+  const DIM = Math.round(EXPLORED_ALPHA * 255) / 255;
+
+  /** The fog over every square as the stamp should leave it: `live` 0, `explored` dimmed, the rest 1. */
+  function expected(live: Cells, explored: Cells): number[] {
+    const out = everywhere(1);
+    for (const [col, row] of explored) out[row * COLS + col] = DIM;
+    for (const [col, row] of live) out[row * COLS + col] = 0;
+    return out;
+  }
+
+  /** Every square's fog, to six places, so the byte's rounding is not the question. */
+  function expectCover(masks: CoverMasks, want: number[]): void {
+    const got = fogOverEverySquare(masks);
+    for (let i = 0; i < want.length; i += 1) {
+      expect(got[i], `square ${i % COLS},${Math.floor(i / COLS)}`).toBeCloseTo(want[i]!, 6);
+    }
+  }
+
+  // The runners stand in a corridor, (1,1) and (2,1), and have seen the room at (5,5) and (6,5).
+  const seen = sight({ 0: { live: [[1, 1], [2, 1]], explored: [[5, 5], [6, 5]] } });
+  const fogged = { ...FOG_WIRE_UNREVEALED, sight: seen };
+
+  for (const role of ['player', 'display', 'observer'] as const) {
+    it(`clears what the party sees, dims what it has seen, and covers the rest for ${role}`, () => {
+      withMasks(state(role, fogged), (masks) => {
+        expectCover(masks, expected([[1, 1], [2, 1]], [[5, 5], [6, 5]]));
+        // The three states, read at the stage's own thresholds: live is
+        // nothing, remembered is past "not live" (0.3) and short of
+        // "hidden" (0.9), hidden is total.
+        expect(at(masks, 1, 1)).toBe(0);
+        expect(at(masks, 5, 5)).toBeGreaterThan(0.3);
+        expect(at(masks, 5, 5)).toBeLessThan(0.9);
+        expect(at(masks, 9, 7)).toBe(1);
+      });
+    });
+  }
+
+  it('gives the GM no mask to stamp: the GM sees the whole map through the tint', () => {
+    withMasks(state('gm', fogged), (masks) => {
+      expect(fogOverEverySquare(masks)).toEqual(everywhere(0));
+    });
+  });
+
+  it('stamps nothing on an open scene: with the fog off every square is live, whatever the party remembers', () => {
+    withMasks(state('player', { ...fogged, active: false }), (masks) => {
+      expect(fogOverEverySquare(masks)).toEqual(everywhere(0));
+    });
+  });
+
+  it("stamps the floor in view only: the party's sight on the ground floor opens nothing upstairs", () => {
+    const floors = { ...FOG_WIRE_UNREVEALED, sight: sight({ 0: { live: [[1, 1]], explored: [] }, 1: { live: [[7, 3]], explored: [[8, 3]] } }) };
+    withMasks(state('player', floors, 1), (masks) => {
+      expectCover(masks, expected([[7, 3]], [[8, 3]]));
+    });
+    withMasks(state('player', floors, 0), (masks) => {
+      expectCover(masks, expected([[1, 1]], []));
+    });
+    // A floor the party has never looked at: the whole cover.
+    withMasks(state('player', floors, 2), (masks) => {
+      expect(fogOverEverySquare(masks)).toEqual(everywhere(1));
+    });
+  });
+
+  it("stamps a runner's step again without painting the regions again, and paints them when they change", () => {
+    const masks = new CoverMasks('low');
+    try {
+      const before = regionPaints.count;
+      expect(masks.update(state('player', fogged), m).fog).toBe(true);
+      expect(regionPaints.count).toBe(before + 1);
+
+      // The same sight in a new copy of the fog (the scene read again): the
+      // key is the bitsets' content, not the object, so nothing is redone.
+      expect(masks.update(state('player', { ...fogged, sight: structuredClone(seen) }), m).fog).toBe(false);
+
+      // A runner steps east: the sight moves, and the corridor square
+      // behind her is remembered. Stamped again; the regions are not
+      // painted again.
+      const stepped = sight({ 0: { live: [[2, 1], [3, 1]], explored: [[1, 1], [5, 5], [6, 5]] } });
+      expect(masks.update(state('player', { ...FOG_WIRE_UNREVEALED, sight: stepped }), m).fog).toBe(true);
+      expect(regionPaints.count).toBe(before + 1);
+      expectCover(masks, expected([[2, 1], [3, 1]], [[1, 1], [5, 5], [6, 5]]));
+
+      // Her runner takes the stairs: another floor's sight (none), and
+      // still no repaint.
+      expect(masks.update(state('player', { ...FOG_WIRE_UNREVEALED, sight: stepped }, 1), m).fog).toBe(true);
+      expect(regionPaints.count).toBe(before + 1);
+      expect(fogOverEverySquare(masks)).toEqual(everywhere(1));
+
+      // The GM reveals a region: the regions are painted again, once.
+      const vault = { id: 'r1', name: 'the vault', polygon: [{ x: 8, y: 1 }, { x: 10, y: 1 }, { x: 10, y: 3 }, { x: 8, y: 3 }] };
+      expect(masks.update(state('player', { ...FOG_WIRE_UNREVEALED, regions: [vault], revealed: [vault.id], sight: stepped }, 1), m).fog).toBe(true);
+      expect(regionPaints.count).toBe(before + 2);
+    } finally {
+      masks.dispose();
+    }
+  });
+
+  it("opens what the party sees even when the regions cannot be painted: the server's sight needs no canvas", () => {
+    // The node path, said out loud: no canvas, so the regions fail closed
+    // and cover the whole map; the stamp still opens the corridor.
+    withMasks(state('display', fogged), (masks) => {
+      expect(at(masks, 2, 1)).toBe(0);
+      expect(at(masks, 0, 0)).toBe(1);
+    });
   });
 });

@@ -18,7 +18,8 @@
  * device — the server filtered both before serializing. The `visibility` check
  * in the fold is defence in depth, not the boundary.
  */
-import type { FogRegion, FogRevealAs, Point, Scene, Token, WsEvent } from '@safehouse/contracts';
+import type { FogRegion, FogRevealAs, FogSight, Point, Scene, Token, WsEvent } from '@safehouse/contracts';
+import { forgetSight, sightOfEvent } from '../grid/fogSight.js';
 import { rec } from '../table/views.js';
 
 const str = (v: unknown): string | undefined =>
@@ -115,6 +116,12 @@ interface Draft {
    */
   exploredRegionIds: string[];
   exploredShapes: Point[][];
+  /**
+   * The party's pooled sight and memory (sightlines, P6): the read's, until
+   * an `op: 'sight'` event replaces it whole or the GM's `forget` wipes a
+   * floor of it. Undefined when there is none.
+   */
+  sight: FogSight | undefined;
   /** Whether the scene is fogged at all (`FogState.active`): kept as the snapshot said it until an event says otherwise. */
   fogActive: boolean | undefined;
   environment: Scene['environment'];
@@ -125,6 +132,35 @@ interface Draft {
 function noteFogActive(draft: Draft, v: unknown): void {
   if (typeof v !== 'boolean' || v === draft.fogActive) return;
   draft.fogActive = v;
+  draft.changed = true;
+}
+
+/**
+ * The party's sight as an `op: 'sight'` event says it (sightlines, P6): the
+ * whole record, every floor, never a delta, so the TV's copy becomes exactly
+ * the one a fresh read would give. An event that says the record is gone
+ * takes it away. One that cannot be read changes nothing: the TV keeps what
+ * it has, and its next read of the scene (it re-reads on reconnect and on a
+ * timer) puts it right.
+ */
+function replaceSight(draft: Draft, payload: Record<string, unknown>): void {
+  const read = sightOfEvent(payload);
+  if (read === null) return;
+  draft.sight = read.sight;
+  draft.changed = true;
+}
+
+/**
+ * The GM's `forget` of one floor (`level`) or of every floor (none said):
+ * the party's memory there becomes what the runners see now, which is what
+ * the server leaves it as (`forgetSight`). The sight event that may follow
+ * says the same thing again, whole.
+ */
+function forgetFloor(draft: Draft, level: unknown): void {
+  const floor = typeof level === 'number' && Number.isInteger(level) ? level : undefined;
+  const next = forgetSight(draft.sight, floor);
+  if (next === draft.sight) return;
+  draft.sight = next;
   draft.changed = true;
 }
 
@@ -241,6 +277,7 @@ export function mergeSceneEvents(
     revealedShapes: base.scene.fog.revealedShapes.slice(),
     exploredRegionIds: (base.scene.fog.exploredRegionIds ?? []).slice(),
     exploredShapes: (base.scene.fog.exploredShapes ?? []).slice(),
+    sight: base.scene.fog.sight,
     fogActive: base.scene.fog.active,
     environment: base.scene.environment,
     changed: false,
@@ -306,6 +343,15 @@ export function mergeSceneEvents(
           // The GM's own define event never arrives here; its public word
           // does when it fogs an open scene or redraws a revealed region.
           reshapeRegion(draft, asRegion(p['region']));
+        } else if (op === 'sight') {
+          // The party's sight after a committed change (sightlines, P6): a
+          // runner moved, a door opened, a light went out. It comes before
+          // the tokens it uncovers (`token.added`) and after nothing it
+          // depends on, so folding in order is enough.
+          replaceSight(draft, p);
+        } else if (op === 'forget') {
+          // The GM wiped the party's memory of a floor, or of every floor.
+          forgetFloor(draft, p['level']);
         }
         // Whether the scene is fogged at all: what keeps a scene with
         // nothing revealed covered rather than open (`FogState.active`).
@@ -329,7 +375,7 @@ export function mergeSceneEvents(
   }
 
   if (!draft.changed) return base;
-  const sight = base.scene.fog.sight;
+  const sight = draft.sight;
   return {
     asOfEventId: base.asOfEventId,
     tokens: draft.tokens,
@@ -345,9 +391,10 @@ export function mergeSceneEvents(
         // of it gives.
         ...(draft.exploredRegionIds.length > 0 ? { exploredRegionIds: draft.exploredRegionIds } : {}),
         ...(draft.exploredShapes.length > 0 ? { exploredShapes: draft.exploredShapes } : {}),
-        // The party's pooled sight and memory, as the read gave it. Nothing
-        // folded here changes it yet, but a fold that rebuilt the fog without
-        // it would drop every square the party has seen at the first event.
+        // The party's pooled sight and memory: the read's, or the latest
+        // `sight` event's, through every event, since a fold that rebuilt the
+        // fog without it would drop every square the party has seen at the
+        // first token that moved.
         ...(sight === undefined ? {} : { sight }),
         ...(draft.fogActive === undefined ? {} : { active: draft.fogActive }),
       },

@@ -9,7 +9,7 @@
  * reach a player socket at all (Principle 4).
  */
 import { useEffect, useRef } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import type {
   Encounter,
   Scene,
@@ -23,6 +23,7 @@ import type { TilePattern } from '@safehouse/rules';
 import { apiDelete, apiGet, apiPatch, apiPut, apiPost, queryClient } from '../../api/client.js';
 import { getToken } from '../../api/session.js';
 import { useLiveStore } from '../../live/store.js';
+import { sightOfEvent, withSight } from './fogSight.js';
 import { normalizeGeometry } from './geometryEdit.js';
 import { TILESETS, levelTiles, sceneLevels } from '@safehouse/rules';
 import { pendingFor } from '../gm/fixer/api.js';
@@ -168,6 +169,13 @@ export function usePatchScene() {
       if (!scene) return { before: null as Record<string, unknown> | null };
       const before: Record<string, unknown> = {};
       for (const key of Object.keys(patch)) before[key] = (scene as unknown as Record<string, unknown>)[key];
+      // The vision settings are MERGED into the scene's on the server, so an
+      // undo that leaves a setting out leaves it as the redo made it. A scene
+      // saved before sightlines existed says nothing about them (absent is
+      // off), and the undo of switching them on must say `off` out loud.
+      if (patch.vision !== undefined && 'sight' in patch.vision && scene.vision.sight === undefined) {
+        before['vision'] = { ...scene.vision, sight: 'off' };
+      }
       return { before };
     },
     onSuccess: (_data, vars, ctx) => {
@@ -452,10 +460,41 @@ function asRecord(v: unknown): Record<string, unknown> {
 }
 
 /**
+ * The party's sight from an `op: 'sight'` fog event (sightlines, P6),
+ * written into the composed scene this Grid holds for `sceneId`, in place.
+ *
+ * The server sends the whole record after every committed change that moved
+ * it — a runner's step, a door, a light — so the event is all a device needs
+ * to redraw its cover (`stage3d/masks.ts` stamps it), and reading the whole
+ * scene again for it would cost every phone a round trip for the map, its
+ * tiles and its tokens at every step anyone takes. The tokens the new sight
+ * uncovers or withholds come as their own `token.added` and `token.removed`,
+ * which do read the scene again. `active` is taken too, on a copy that
+ * carries it (a player's); the GM's copy is not given one (`withSight`).
+ *
+ * False when it cannot be folded: another scene's event, a payload that is
+ * not a sight record, or no scene held yet. The caller then reads the scene
+ * again, as for any other fog event.
+ */
+function foldSight(qc: QueryClient, sceneId: string, payload: Record<string, unknown>): boolean {
+  if (payload['sceneId'] !== sceneId) return false;
+  const read = sightOfEvent(payload);
+  if (read === null) return false;
+  const held = qc.getQueryData<ComposedScene>(['scene', sceneId]);
+  if (!held) return false;
+  qc.setQueryData<ComposedScene>(['scene', sceneId], {
+    ...held,
+    scene: { ...held.scene, fog: withSight(held.scene.fog, read.sight, payload['active']) },
+  });
+  return true;
+}
+
+/**
  * Watches the persisted-event stream and keeps this scene's queries fresh.
  * `token.moved` patches the composed-scene cache in place (no refetch churn
- * per drop); everything else invalidates. Scene and tokens share one cache
- * entry, so a token patch rewrites the `tokens` array inside it.
+ * per drop), and so does the party's sight (`foldSight`); everything else
+ * invalidates. Scene and tokens share one cache entry, so a token patch
+ * rewrites the `tokens` array inside it.
  */
 export function useGridLiveSync(sceneId: string | null | undefined): void {
   const qc = useQueryClient();
@@ -498,6 +537,11 @@ export function useGridLiveSync(sceneId: string | null | undefined): void {
         } else {
           refetchScene = true;
         }
+      } else if (event.type === 'fog.updated' && payload['op'] === 'sight' && foldSight(qc, sceneId, payload)) {
+        // Folded in place. A read of the scene already on its way may have
+        // left the server before this sight did, and would put the old one
+        // back when it lands: read again, so the last word is the newest.
+        if (qc.isFetching({ queryKey: ['scene', sceneId] }) > 0) refetchScene = true;
       } else if (SCENE_EVENTS.has(event.type)) {
         refetchScene = true;
       } else if (event.type === 'scene.activated') {

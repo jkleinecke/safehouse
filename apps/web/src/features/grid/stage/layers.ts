@@ -12,7 +12,7 @@
  */
 import { sceneFogOn, type Camera as SecurityCamera, type Point, type Scene, type SceneLight } from '@safehouse/contracts';
 import type { CameraCone, GeometrySelection } from '../types.js';
-import { TILE_HEIGHTS } from '@safehouse/rules';
+import { fogCells, TILE_HEIGHTS, type CellState } from '@safehouse/rules';
 import {
   cellCorners,
   gridOverlay,
@@ -145,6 +145,77 @@ function coverUnder(total: number, explored: number): number {
 }
 
 /**
+ * Whether the party has seen anything on floor `level` (sightlines, P6):
+ * the fog carries a sight record for it with a square in either bitset.
+ * Every floor of every scene without sightlines has none.
+ */
+function partyHasSeen(fog: Scene['fog'], level: number): boolean {
+  const floor = fog.sight?.levels[String(level)];
+  return floor !== undefined && (floor.live !== '' || floor.explored !== '');
+}
+
+/** One row's run of squares `from` … `to` − 1 on row `row`, as a flat polygon in world px. */
+function runPoly(m: SceneMetrics, from: number, to: number, row: number): number[] {
+  return flatPoly(m, [
+    { x: from, y: row },
+    { x: to, y: row },
+    { x: to, y: row + 1 },
+    { x: from, y: row + 1 },
+  ]);
+}
+
+/**
+ * The GM's fog tint SQUARE BY SQUARE, on a floor the party has seen (P6):
+ * each square in the state the table sees it in (`fogCells`, the rule the
+ * server withholds tokens by), `GM_FOG_ALPHA` over hidden squares,
+ * `GM_EXPLORED_ALPHA` over squares the table is shown as remembered, and
+ * nothing over live ones, whether the GM's reveals or the runners' eyes made
+ * them so. The margin round the map is hidden ground.
+ *
+ * Square by square rather than cut from one cover like the regions, because
+ * the party's sight IS squares, and a cover with a hole per square seen, over
+ * and beside the regions' own holes, is a mesh of overlapping holes no
+ * triangulation draws right. A region revealed along a line that crosses
+ * squares is therefore tinted to the squares here, as the server judges the
+ * tokens standing in it; its outline (drawn after, by `drawFog`) still
+ * follows the line exactly. The squares are laid in runs along each row, one
+ * shape a run, so a floor is a few hundred quads, not a quad a square.
+ */
+function tintBySquare(g: Ink, m: SceneMetrics, scene: Scene, level: number, pad: number): void {
+  const cells = fogCells(scene.fog, { vision: scene.vision });
+  const { width, height } = sceneWorldSize(m);
+  // The margin: the cover's rectangle with the grid cut out of it.
+  g.rect(-pad, -pad, width + pad * 2, height + pad * 2).fill({ color: C.ground, alpha: GM_FOG_ALPHA });
+  g.poly(
+    flatPoly(m, [
+      { x: 0, y: 0 },
+      { x: m.cols, y: 0 },
+      { x: m.cols, y: m.rows },
+      { x: 0, y: m.rows },
+    ]),
+  ).cut();
+  const runs: Record<Exclude<CellState, 'live'>, number[][]> = { hidden: [], explored: [] };
+  for (let row = 0; row < m.rows; row += 1) {
+    let from = 0;
+    let state: CellState | null = m.cols > 0 ? cells.state(level, 0, row) : null;
+    for (let col = 1; col <= m.cols; col += 1) {
+      const next = col < m.cols ? cells.state(level, col, row) : null;
+      if (next === state) continue;
+      if (state !== null && state !== 'live') runs[state].push(runPoly(m, from, col, row));
+      from = col;
+      state = next;
+    }
+  }
+  const paint = (shapes: number[][], alpha: number): void => {
+    if (shapes.length === 0) return;
+    for (const shape of shapes) g.poly(shape);
+    g.fill({ color: C.ground, alpha });
+  };
+  paint(runs.hidden, GM_FOG_ALPHA);
+  paint(runs.explored, GM_EXPLORED_ALPHA);
+}
+
+/**
  * Fog of war (FR9.13/9.14), in the three states the table sees the map in
  * (P6): LIVE ground in full, EXPLORED ground dimmed as remembered, and
  * everything else hidden. The payload is already server-filtered; this
@@ -169,6 +240,16 @@ function coverUnder(total: number, explored: number): number {
  * its sightlines), the one answer the server, the TV and this map share.
  * With the fog off the GM still sees the outlines and names of the regions,
  * and nothing else.
+ *
+ * The party's SIGHT (sightlines, P6) is per floor, and `level` is the floor
+ * in view. For the GM, on a floor the party has seen, the tint is laid
+ * square by square in the state each square is in for the table
+ * (`tintBySquare`): the three states whichever of the GM's reveals or the
+ * runners' eyes made them. For the players and the TV this draws the
+ * regions alone, and their cover stamps the sight over them square by square
+ * (`stage3d/masks.ts`), so a runner's step never repaints the regions. On
+ * every scene without sightlines, and every floor no runner has looked at,
+ * this is exactly the drawing it always was.
  */
 export function drawFog(
   g: Ink,
@@ -176,6 +257,7 @@ export function drawFog(
   scene: Scene,
   m: SceneMetrics,
   isGm: boolean,
+  level = 0,
 ): void {
   g.clear();
   const fog = scene.fog;
@@ -229,7 +311,10 @@ export function drawFog(
   const exploredShapes = (fog.exploredShapes ?? []).filter((shape) => shape.length >= 3);
   exploredAreas.push(...exploredShapes);
 
-  if (on) {
+  if (on && isGm && partyHasSeen(fog, level)) {
+    // The GM, on a floor the party has seen: the three states square by square.
+    tintBySquare(g, m, scene, level, m.cell * 2);
+  } else if (on) {
     const { width, height } = sceneWorldSize(m);
     const pad = m.cell * 2; // cover a margin so pan never peeks past the edge
     const cover = (alpha: number): void => {

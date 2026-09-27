@@ -81,13 +81,26 @@ function polygonsHash(polygons: ReadonlyArray<ReadonlyArray<{ x: number; y: numb
 }
 
 /**
- * The fog: its regions (where each lies, to the point), what is revealed and
- * in which fashion (live, or as explored: P6), whether the scene is fogged
- * at all (`sceneFogOn`: a player's or the TV's copy says it with `active`,
- * the GM's with the switch, `enabled`, or the scene's sightlines), and
- * whether it is drawn for the GM.
+ * The fog: its regions and reveals (`fogRegionKey`) and the party's sight on
+ * the floor in view (`fogSightKey`). What the GM's tint and the players'
+ * cover are both drawn from; the players' cover keeps the two apart
+ * (`stage3d/masks.ts`), so a runner's step, which moves only the sight,
+ * stamps the squares again without painting the regions again.
  */
 export function fogKey(state: StageSceneState): string {
+  return `${fogRegionKey(state)}#${fogSightKey(state)}`;
+}
+
+/**
+ * The fog's regions and reveals: its regions (where each lies, to the
+ * point), what is revealed and in which fashion (live, or as explored: P6),
+ * whether the scene is fogged at all (`sceneFogOn`: a player's or the TV's
+ * copy says it with `active`, the GM's with the switch, `enabled`, or the
+ * scene's sightlines), and whether it is drawn for the GM. Everything
+ * `drawFog` reads but the party's sight, which is the same on every floor
+ * (the GM's reveals cover every floor alike).
+ */
+export function fogRegionKey(state: StageSceneState): string {
   const fog = state.scene.fog;
   let shapes = fogShapeHashes.get(fog);
   if (shapes === undefined) {
@@ -115,6 +128,50 @@ export function fogKey(state: StageSceneState): string {
     sceneFogOn(state.scene) ? 'on' : 'off',
     shapes,
   ].join('|');
+}
+
+/** One fog's sight keys (`fogSightKey`), per floor, by the fog object they were read from. */
+const fogSightKeys = new WeakMap<object, Map<number, string>>();
+
+/** A string folded into one FNV-1a hash, character by character. */
+function textHash(text: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16);
+}
+
+/**
+ * The party's sight on the floor in view (sightlines, P6): the grid its
+ * bitsets were written for and a hash of each of them, what the runners see
+ * now (`live`) and what they have seen (`explored`). Empty when the fog
+ * carries no sight for that floor, which is every scene without sightlines,
+ * so their key is exactly what it always was.
+ *
+ * Hashed rather than spelt out because a bitset is sent whole after every
+ * committed move (a 60x40 floor is 400 characters each), and the stage asks
+ * for this key at every update, a token drag included. Worked out once per
+ * fog object and floor: a token move hands the same fog over again.
+ */
+export function fogSightKey(state: StageSceneState): string {
+  const fog = state.scene.fog;
+  const sight = fog.sight;
+  if (sight === undefined) return '';
+  const level = state.level ?? 0;
+  let floors = fogSightKeys.get(fog);
+  if (floors === undefined) {
+    floors = new Map();
+    fogSightKeys.set(fog, floors);
+  }
+  let key = floors.get(level);
+  if (key === undefined) {
+    const bits = sight.levels[String(level)];
+    key = bits === undefined ? '' : `${level}:${sight.cols}x${sight.rows}:${textHash(bits.live)}:${textHash(bits.explored)}`;
+    floors.set(level, key);
+  }
+  return key;
 }
 
 /** Walls, zones and doors: any edit to one, and a selection among them. */

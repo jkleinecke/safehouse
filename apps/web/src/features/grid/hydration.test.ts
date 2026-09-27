@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Combatant, Encounter, Scene, Token } from '@safehouse/contracts';
+import { cellBitsFrom, encodeCellBits } from '@safehouse/rules';
 import { addPin, emptyGeometry } from './geometryEdit.js';
 import {
   composeStageState,
@@ -12,6 +13,7 @@ import {
   tokensInSight,
 } from './hydration.js';
 import type { Viewer } from './projection.js';
+import { tvStageState } from './tvStage.js';
 
 // --- fixtures ---------------------------------------------------------------
 
@@ -339,6 +341,137 @@ describe('tokensInSight (FR9.16)', () => {
       shroud,
     });
     expect(state?.tokens.map((t) => t.id)).toEqual(['me']);
+  });
+});
+
+/**
+ * The second guard (sightlines, P6; FR9.13): whatever a device holds, it
+ * draws a token for the table only while it stands on LIVE ground. The
+ * server already withholds the others from a player's and the TV's copy;
+ * this is the rule again on the device, for a copy of the tokens a beat
+ * ahead of its copy of the sight, and the whole rule for the GM's "See as
+ * party" lens, whose copy holds everyone.
+ */
+describe('the table is drawn only the tokens on live ground (P6)', () => {
+  const COLS = 20;
+  const ROWS = 12;
+  type Cells = [number, number][];
+  const bits = (cells: Cells): string => encodeCellBits(cellBitsFrom(COLS, ROWS, cells.map(([col, row]) => ({ col, row }))));
+
+  // The runners see the corridor at (2,2) and (3,2), and remember the room at (8,8).
+  const sight = {
+    cols: COLS,
+    rows: ROWS,
+    levels: { '0': { live: bits([[2, 2], [3, 2]]), explored: bits([[2, 2], [3, 2], [8, 8]]) } },
+  };
+  /** A player's (and the TV's) copy: fogged by the sightlines, said with `active`. */
+  const tableCopy = scene({ fog: { regions: [], revealed: [], revealedShapes: [], sight, active: true } });
+  /** The GM's copy of the same scene: no `active`, the sightlines on. */
+  const gmCopy = scene({ fog: { regions: [], revealed: [], revealedShapes: [], sight }, vision: { playersSeeOwnSight: false, sight: 'on' } });
+
+  const me = token({ id: 'me', source: 'character', sourceId: 'ch1', x: 10.5, y: 10.5 });
+  const inCorridor = token({ id: 'g-live', source: 'npc_template', sourceId: null, x: 3.5, y: 2.5 });
+  const inRememberedRoom = token({ id: 'g-explored', source: 'npc_template', sourceId: null, x: 8.5, y: 8.5 });
+  const inTheDark = token({ id: 'g-hidden', source: 'npc_template', sourceId: null, x: 15.5, y: 5.5 });
+  // Two squares across, (3..4, 2..3): one of them is in the corridor.
+  const van = token({ id: 'van', source: 'prop', sourceId: null, x: 4, y: 3, size: 2 });
+  const everyone = [me, inCorridor, inRememberedRoom, inTheDark, van];
+
+  function drawn(copy: Scene, viewer: Viewer, over: Partial<Parameters<typeof composeStageState>[0]> = {}): string[] {
+    const state = composeStageState({
+      scene: copy,
+      tokens: everyone,
+      viewer,
+      encounter: null,
+      selectedTokenId: null,
+      tool: 'select',
+      snapEnabled: true,
+      aoe: null,
+      scatter: null,
+      fogDraft: null,
+      ...over,
+    });
+    return (state?.tokens ?? []).map((t) => t.id);
+  }
+
+  it('draws a player the runners anywhere, and everyone else only where the table sees live', () => {
+    expect(drawn(tableCopy, player)).toEqual(['me', 'g-live', 'van']);
+  });
+
+  it('draws the TV and an observer the same', () => {
+    expect(drawn(tableCopy, { role: 'display', userId: 'u_tv' })).toEqual(['me', 'g-live', 'van']);
+    expect(drawn(tableCopy, { role: 'observer', userId: 'u_o' })).toEqual(['me', 'g-live', 'van']);
+    const tv = tvStageState({ scene: tableCopy, tokens: everyone, level: 0 });
+    expect(tv.tokens.map((t) => t.id)).toEqual(['me', 'g-live', 'van']);
+  });
+
+  it('keeps every token on the GM screen', () => {
+    expect(drawn(gmCopy, gm)).toEqual(['me', 'g-live', 'g-explored', 'g-hidden', 'van']);
+  });
+
+  it('shows the GM exactly what the table is shown under the party lens, the GM-hidden tokens gone too', () => {
+    const hidden = token({ id: 'g-flagged', source: 'npc_template', sourceId: null, x: 2.5, y: 2.5, hidden: true });
+    const layered = token({ id: 'g-layered', source: 'npc_template', sourceId: null, x: 3.5, y: 2.5 });
+    const copy = { ...gmCopy, tokenLayers: [{ id: 'l1', name: 'ambush', hidden: true, tokenIds: ['g-layered'] }] };
+    const state = composeStageState({
+      scene: copy,
+      tokens: [...everyone, hidden, layered],
+      viewer: gm,
+      encounter: null,
+      selectedTokenId: null,
+      tool: 'select',
+      snapEnabled: true,
+      aoe: null,
+      scatter: null,
+      fogDraft: null,
+      shroud: { visible: new Set(['2,2', '3,2']), gm: true, party: true },
+    });
+    expect(state?.tokens.map((t) => t.id)).toEqual(['me', 'g-live', 'van']);
+    // A token's own lens is still a lens, not a limit: nobody is taken off.
+    expect(drawn(gmCopy, gm, { shroud: { visible: new Set(['2,2']), gm: true } })).toHaveLength(everyone.length);
+  });
+
+  it('draws everyone on an open scene, whatever the party remembers', () => {
+    const open = scene({ fog: { regions: [], revealed: [], revealedShapes: [], sight, active: false } });
+    expect(drawn(open, player)).toEqual(['me', 'g-live', 'g-explored', 'g-hidden', 'van']);
+    // And a scene without sightlines or fog at all is exactly as it was.
+    expect(drawn(scene(), player)).toEqual(['me', 'g-live', 'g-explored', 'g-hidden', 'van']);
+  });
+
+  it('draws the ground revealed live by the GM as live, and nobody on ground revealed as seen before', () => {
+    const square = (x: number, y: number) => [{ x, y }, { x: x + 2, y }, { x: x + 2, y: y + 2 }, { x, y: y + 2 }];
+    const copy = scene({
+      fog: {
+        regions: [
+          { id: 'r-live', name: 'lobby', polygon: square(14, 4) },
+          { id: 'r-seen', name: 'vault', polygon: square(7, 7) },
+        ],
+        revealed: ['r-live'],
+        revealedShapes: [],
+        exploredRegionIds: ['r-seen'],
+        active: true,
+      },
+    });
+    // No sight on this copy: only the lobby is live, and the guard standing
+    // in it is the one the corridor fixture calls g-hidden.
+    expect(drawn(copy, player)).toEqual(['me', 'g-hidden']);
+  });
+
+  it('applies the same rule to the tokens seen below through the open squares', () => {
+    const below = composeStageState({
+      scene: tableCopy,
+      tokens: everyone,
+      viewer: player,
+      encounter: null,
+      selectedTokenId: null,
+      tool: 'select',
+      snapEnabled: true,
+      aoe: null,
+      scatter: null,
+      fogDraft: null,
+      level: 1,
+    });
+    expect((below?.belowTokens ?? []).map((b) => b.token.id)).toEqual(['me', 'g-live', 'van']);
   });
 });
 

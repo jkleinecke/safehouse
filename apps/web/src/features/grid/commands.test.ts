@@ -176,6 +176,11 @@ describe('GridCommands', () => {
     // The second fashion (P6): seen before, dimmed with nobody in it.
     c.fogReveal('sc1', 'r1', false, 'explored');
     expect(s.sent[3]).toMatchObject({ cmd: 'fog.reveal', op: 'reveal', regionId: 'r1', as: 'explored' });
+    // Forgetting the party's memory (sightlines, P6): one floor, or all of them.
+    c.fogForget('sc1', 1);
+    c.fogForget('sc1');
+    expect(s.sent[4]).toEqual({ cmd: 'fog.reveal', sceneId: 'sc1', op: 'forget', level: 1 });
+    expect(s.sent[5]).toEqual({ cmd: 'fog.reveal', sceneId: 'sc1', op: 'forget' });
   });
 
   it('is a no-op while the socket is missing', () => {

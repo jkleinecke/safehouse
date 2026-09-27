@@ -9,36 +9,57 @@
  *     (`drawFog` with `isGm` false), for every role but the GM: the players'
  *     phones and laptops and the TV (`display`) alike. Ground revealed AS
  *     EXPLORED (P6) is not cut clean: it carries `EXPLORED_ALPHA`, short of
- *     total, so the map is drawn there dimmed, as remembered, not discarded. The GM gets no fog
- *     mask: the GM's fog is the see-through tint `drawFog` draws for the GM,
- *     which the stage lays on the floor as a `FloorInk`, and the GM sees the
- *     map through it.
+ *     total, so the map is drawn there dimmed, as remembered, not discarded.
+ *     With the scene's sightlines on, the party's pooled sight opens the
+ *     cover square by square the same two ways: live where a runner sees
+ *     now, dimmed where the party has seen before, on the floor in view (the
+ *     same copy on every phone and the TV). The GM gets no fog mask: the
+ *     GM's fog is the see-through tint `drawFog` draws for the GM, which the
+ *     stage lays on the floor as a `FloorInk`, and the GM sees the map
+ *     through it.
  *   - The SHROUD is drawn for whoever has one (`StageSceneState.shroud`, with
- *     at least one square in sight): a player's own runner's sightline, or the
- *     GM's "See as" lens. It darkens by the 2D scrim's amounts, kept in
- *     `plan/shroud.ts` — `SHROUD_ALPHA` for a player bound by it, the lighter
- *     `GM_SHROUD_ALPHA` when the state says it is the GM's lens
- *     (`ShroudState.gm`) — and so never hides outright.
+ *     at least one square in sight, or the party's lens even with none:
+ *     `shroudShown`): a player's own runner's sightline, or the
+ *     GM's "See as" lens, the party's included ("See as party": the squares
+ *     the table sees live, `useShroud`). It darkens by the 2D scrim's
+ *     amounts, kept in `plan/shroud.ts` — `SHROUD_ALPHA` for a player bound
+ *     by it, the lighter `GM_SHROUD_ALPHA` when the state says it is the
+ *     GM's lens (`ShroudState.gm`) — and so never hides outright.
  *
  * ## The two masks
  *
- *   - FOG: `drawFog` itself, handed a `CanvasInk` — an `Ink` over a Canvas2D
- *     — and top-down metrics mapped onto a canvas laid over the scene
- *     rectangle and the two-square margin `drawFog` pads its cover with, at
- *     the detail's px a square (`FOG_DETAIL`: fewer at Low, and fewer on a
- *     map too big for its longest side). The fog's shape is therefore
- *     exactly the 2D one. Only the canvas's alpha is kept, one byte a pixel,
- *     and that is both the texture and the CPU copy. The canvas, its scratch
- *     layer, the bytes and the texture are kept from one fog to the next
- *     while the size holds (`FogRasteriser`): a reveal mid-fight on a phone
- *     or the TV repaints and uploads, it does not allocate a map's worth of
- *     canvases again.
+ *   - FOG: two parts, made at two different paces (`FogRasteriser`).
+ *     - The REGIONS: `drawFog` itself, handed a `CanvasInk` — an `Ink` over
+ *       a Canvas2D — and top-down metrics mapped onto a canvas laid over the
+ *       scene rectangle and the two-square margin `drawFog` pads its cover
+ *       with, at the detail's px a square (`FOG_DETAIL`: fewer at Low, and
+ *       fewer on a map too big for its longest side). The GM's reveals are
+ *       therefore exactly the 2D shape. Only the canvas's alpha is kept, one
+ *       byte a pixel. Painted only when the regions or the reveals change
+ *       (`fogRegionKey`): a reveal, a hide, the switch.
+ *     - The party's SIGHT (sightlines, P6): the floor in view's bitsets
+ *       stamped square by square over those bytes (`stampSight`) — nothing
+ *       over hidden squares, `EXPLORED_ALPHA` over squares the party has
+ *       seen, clear over squares a runner sees now — keeping the lower of
+ *       the two, so a square the GM revealed live stays live whatever the
+ *       party sees, and one the party sees is live whatever the GM revealed.
+ *       Stamped whenever the sight changes (`fogSightKey`), which is after
+ *       every committed runner move: from the kept region bytes, with no
+ *       canvas painted and nothing read back, then uploaded once. A step on
+ *       a phone costs a loop over bytes, not a repaint.
+ *     What comes out is one byte a pixel, the texture and the CPU copy
+ *     alike: 0 on live ground, `EXPLORED_ALPHA` on remembered ground, 1
+ *     under the whole cover. The canvas, its scratch layer, both byte arrays
+ *     and the texture are kept from one fog to the next while the size holds:
+ *     a reveal mid-fight on a phone or the TV repaints and uploads, it does
+ *     not allocate a map's worth of canvases again.
  *   - SHROUD: one byte a square, 255 where the viewer can see and 0 where
  *     not, filtered linearly on the GPU (and here) so its edge is soft.
  *
  * Each is rebuilt only when its key moves, as the 2D map redrew them: the fog
- * when its key (`fogKey`) or the metrics change, the shroud when its key
- * (`shroudKey`, `plan/shroud.ts`) or the grid's size does.
+ * when its key (`fogKey`: the regions and the sight) or the metrics change,
+ * the shroud when its key (`shroudKey`, `plan/shroud.ts`) or the grid's size
+ * does.
  *
  * ## The fog lid
  *
@@ -51,16 +72,21 @@
  *
  * ## Failing closed
  *
- * A fog that cannot be rasterised (no canvas to draw on) covers the whole map
- * rather than none of it: a player then sees nothing, not everything.
+ * Regions that cannot be rasterised (no canvas to draw on, or `drawFog`
+ * failing) cover the whole map rather than none of it: a player then sees
+ * nothing the GM revealed, not everything. The party's sight needs no canvas,
+ * so it is stamped over that whole cover all the same: what the runners see
+ * is the server's answer, not the canvas's, and it is the least a player
+ * must see to play.
  */
-import type { Point, Scene } from '@safehouse/contracts';
+import type { FogSight, Point, Scene } from '@safehouse/contracts';
+import { cellBitsHas, decodeCellBits } from '@safehouse/rules';
 import { Mesh, PlaneGeometry, type DataTexture, type Material } from 'three';
 import { metricsKey, type SceneMetrics } from '../geometry.js';
-import { GM_SHROUD_ALPHA, SHROUD_ALPHA } from '../plan/shroud.js';
+import { GM_SHROUD_ALPHA, SHROUD_ALPHA, shroudShown } from '../plan/shroud.js';
 import type { LabelSink } from '../stage/ink.js';
-import { fogKey, shroudKey } from '../stage/keys.js';
-import { drawFog } from '../stage/layers.js';
+import { fogRegionKey, fogSightKey, shroudKey } from '../stage/keys.js';
+import { drawFog, EXPLORED_ALPHA } from '../stage/layers.js';
 import type { ShroudState, StageSceneState } from '../types.js';
 import {
   COVER_MARGIN,
@@ -273,81 +299,238 @@ interface Raster {
   kept?: boolean;
 }
 
-/** The whole rectangle covered: what a fog that could not be drawn stands for. */
-function coveredRect(x0: number, z0: number, width: number, depth: number): Raster {
-  const data = new Uint8Array([255]);
-  return { data, w: 1, h: 1, x0, z0, width, depth, texture: maskTexture(data, 1, 1) };
+/**
+ * The byte a square the party has seen before is stamped with (sightlines'
+ * EXPLORED, P6): the explored opacity, the same one `drawFog` dims ground
+ * the GM revealed as explored with, so remembered ground looks the same
+ * whichever way it came to be remembered.
+ */
+const EXPLORED_BYTE = Math.round(EXPLORED_ALPHA * 255);
+
+/**
+ * Where the fog's canvas lies and how fine it is, for one scene's metrics
+ * at one detail: grid point g lies at canvas px (g − (x0, z0)) × s, and the
+ * canvas is `w × h` px. The overlays draw grid point g at world px
+ * (g + offset) × cell, so world px maps onto it with k = s / cell and a
+ * shift of the pad.
+ */
+interface FogLayout {
+  x0: number;
+  z0: number;
+  /** Canvas px a square. */
+  s: number;
+  w: number;
+  h: number;
+}
+
+function fogLayout(m: SceneMetrics, detail: FogDetail): FogLayout {
+  const { pxPerSquare, maxPx } = FOG_DETAIL[detail];
+  const across = m.cols + FOG_PAD * 2;
+  const down = m.rows + FOG_PAD * 2;
+  const s = Math.max(1e-3, Math.min(pxPerSquare, maxPx / Math.max(1, across, down)));
+  return {
+    x0: -m.offset.x - FOG_PAD,
+    z0: -m.offset.y - FOG_PAD,
+    s,
+    w: Math.max(1, Math.ceil(across * s)),
+    h: Math.max(1, Math.ceil(down * s)),
+  };
 }
 
 /**
- * The players' fog cover, rasterised: `drawFog` drawn onto a canvas over the
- * scene rectangle and its pad, its alpha kept as the mask's bytes. What a
- * phone would otherwise make afresh at every reveal — the canvas, the
- * scratch layer a holed fill is painted on, the bytes, the texture — is kept
- * and written again while the size holds, and given back by `release`.
+ * For each px along one side of the fog canvas, the square of the party's
+ * sight its centre lies in, or -1 for a px over no square that has one: the
+ * pad round the map, or a square past the grid the sight was kept for.
+ */
+function squaresAlong(px: number, s: number, origin: number, squares: number): Int32Array {
+  const out = new Int32Array(px);
+  for (let i = 0; i < px; i += 1) {
+    const square = Math.floor((i + 0.5) / s + origin);
+    out[i] = square >= 0 && square < squares ? square : -1;
+  }
+  return out;
+}
+
+/**
+ * The party's sight on floor `level` stamped over the region bytes `region`
+ * into `out` (both `layout.w × layout.h`, one byte a px), square by square:
+ *
+ * - a square a runner sees now (`live`): 0, clear;
+ * - a square the party has seen before (`explored`): `EXPLORED_BYTE`, the
+ *   map dimmed as remembered;
+ * - any other square: 255, which changes nothing, because each px keeps
+ *   the LOWER of the stamp and the region byte under it.
+ *
+ * The lower of the two is the fog's rule (`fogCells` in @safehouse/rules):
+ * live beats explored and explored beats hidden, whichever of the GM or the
+ * party made a square so. A px keeps its region byte where no square of the
+ * sight lies under it (the pad), and everywhere when the floor has no sight
+ * at all, which is every floor of every scene without sightlines: then `out`
+ * is the region bytes, as the fog always was.
+ *
+ * A square is the one a px's centre falls in, so a square's edge is hard in
+ * the bytes and soft by a texel on screen, as the GPU filters the mask.
+ * Only squares on the scene's grid are stamped (`cols × rows`), and only
+ * those on the grid the sight was kept for: a bit left over from a bigger
+ * grid opens nothing in the pad.
+ */
+function stampSight(
+  out: Uint8Array,
+  region: Uint8Array,
+  layout: FogLayout,
+  sight: FogSight | undefined,
+  level: number,
+  cols: number,
+  rows: number,
+): void {
+  const floor = sight?.levels[String(level)];
+  if (sight === undefined || floor === undefined || (floor.live === '' && floor.explored === '')) {
+    out.set(region);
+    return;
+  }
+  const across = Math.max(0, Math.min(cols, sight.cols));
+  const down = Math.max(0, Math.min(rows, sight.rows));
+  const live = decodeCellBits(floor.live, sight.cols, sight.rows);
+  const explored = decodeCellBits(floor.explored, sight.cols, sight.rows);
+  const squares = new Uint8Array(across * down).fill(255);
+  for (let row = 0; row < down; row += 1) {
+    for (let col = 0; col < across; col += 1) {
+      if (cellBitsHas(live, col, row)) squares[row * across + col] = 0;
+      else if (cellBitsHas(explored, col, row)) squares[row * across + col] = EXPLORED_BYTE;
+    }
+  }
+  const { w, h, s } = layout;
+  const colOf = squaresAlong(w, s, layout.x0, across);
+  const rowOf = squaresAlong(h, s, layout.z0, down);
+  for (let j = 0; j < h; j += 1) {
+    const base = j * w;
+    const row = rowOf[j]!;
+    if (row < 0) {
+      out.set(region.subarray(base, base + w), base);
+      continue;
+    }
+    const line = row * across;
+    for (let i = 0; i < w; i += 1) {
+      const under = region[base + i]!;
+      const col = colOf[i]!;
+      if (col < 0) {
+        out[base + i] = under;
+        continue;
+      }
+      const stamp = squares[line + col]!;
+      out[base + i] = stamp < under ? stamp : under;
+    }
+  }
+}
+
+/**
+ * The players' fog cover, rasterised in two parts (see the top of this
+ * file): the REGIONS, `drawFog` drawn onto a canvas over the scene rectangle
+ * and its pad with its alpha kept as bytes, painted only when its key moves;
+ * and the party's SIGHT stamped over those bytes into the mask's own
+ * (`stampSight`) at every draw. What a phone would otherwise make afresh at
+ * every reveal or step — the canvas, the scratch layer a holed fill is
+ * painted on, both byte arrays, the texture — is kept and written again
+ * while the size holds, and given back by `release`.
  */
 class FogRasteriser {
   private readonly ink = new CanvasInk(1, 0, 0);
   private ctx: CanvasRenderingContext2D | null = null;
-  /** The last raster made from the canvas, reused for the next of its size. */
+  /** The last raster handed out, reused for the next of its size. */
   private raster: Raster | null = null;
+  /**
+   * The regions' part, kept for the next draw: one byte a px over the last
+   * layout, or `'open'` when `drawFog` drew nothing (an unfogged scene), or
+   * null when there is none yet.
+   */
+  private region: Uint8Array | 'open' | null = null;
+  /** The key the regions' part was painted for (`fogRegionKey`, the metrics and the detail). */
+  private regionKey: string | null = null;
+  /** The bytes the regions are painted into, kept while the size holds. */
+  private regionBytes: Uint8Array | null = null;
 
   /**
-   * The fog cover of `scene`, as `drawFog` draws it in top-down metrics `m`,
-   * at `detail`. Null when `drawFog` draws nothing (an unfogged scene). The
-   * raster may be the one handed out last time, its bytes and texture
-   * written again (`kept`).
+   * The fog cover of `scene` on floor `level`, as `drawFog` draws it in
+   * top-down metrics `m` at `detail`, with the party's sight on that floor
+   * stamped over it. Null when `drawFog` draws nothing (an unfogged scene,
+   * where the sight changes nothing either: the fog off, every square is
+   * live). The regions are painted again only when `regionKey` differs from
+   * the last draw's; otherwise the kept bytes are stamped again, with no
+   * canvas touched. The raster may be the one handed out last time, its
+   * bytes and texture written again (`kept`).
    */
-  draw(scene: Scene, m: SceneMetrics, detail: FogDetail): Raster | null {
-    const { pxPerSquare, maxPx } = FOG_DETAIL[detail];
-    // Grid point g lies at canvas px (g − (x0, z0)) × s; the overlays draw it
-    // at world px (g + offset) × cell, so world px maps with k = s / cell and
-    // a shift of the pad.
-    const x0 = -m.offset.x - FOG_PAD;
-    const z0 = -m.offset.y - FOG_PAD;
-    const across = m.cols + FOG_PAD * 2;
-    const down = m.rows + FOG_PAD * 2;
-    const s = Math.max(1e-3, Math.min(pxPerSquare, maxPx / Math.max(1, across, down)));
-    const w = Math.max(1, Math.ceil(across * s));
-    const h = Math.max(1, Math.ceil(down * s));
-    const whole = (): Raster => coveredRect(x0, z0, w / s, h / s);
+  draw(scene: Scene, m: SceneMetrics, detail: FogDetail, regionKey: string, level: number): Raster | null {
+    const layout = fogLayout(m, detail);
+    const { x0, z0, s, w, h } = layout;
+    const region = this.region;
+    if (regionKey !== this.regionKey || region === null || (region !== 'open' && region.length !== w * h)) {
+      this.region = this.paintRegions(scene, m, layout);
+      this.regionKey = regionKey;
+    }
+    const regions = this.region;
+    if (regions === 'open' || regions === null) return null;
 
+    let r = this.raster;
+    if (r === null || r.w !== w || r.h !== h) {
+      r?.texture.dispose();
+      const data = new Uint8Array(w * h);
+      r = { data, w, h, x0, z0, width: w / s, depth: h / s, texture: maskTexture(data, w, h), kept: true };
+      this.raster = r;
+    } else {
+      r.x0 = x0;
+      r.z0 = z0;
+      r.width = w / s;
+      r.depth = h / s;
+    }
+    stampSight(r.data, regions, layout, scene.fog.sight, level, m.cols, m.rows);
+    // One upload, of the regions and the sight together.
+    r.texture.needsUpdate = true;
+    return r;
+  }
+
+  /**
+   * The regions' part: `drawFog` painted on the kept canvas and its alpha
+   * read back into the kept bytes. `'open'` when it draws nothing. When it
+   * cannot be painted — `drawFog` fails, or there is no canvas (node, a
+   * browser out of canvas memory) — the whole rectangle, covered: the fog
+   * fails closed, and only the party's sight is stamped through it.
+   */
+  private paintRegions(scene: Scene, m: SceneMetrics, layout: FogLayout): Uint8Array | 'open' {
+    const { s, w, h } = layout;
+    const covered = (): Uint8Array => this.bytes(w * h).fill(255);
     const ink = this.ink;
     ink.place(s / m.cell, FOG_PAD * s, FOG_PAD * s);
     try {
       drawFog(ink, NO_LABELS, scene, m, false);
     } catch (err) {
       console.warn('[stage3d] the fog could not be drawn; the whole map is covered', err);
-      return whole();
+      return covered();
     }
-    if (ink.empty) return null;
+    if (ink.empty) return 'open';
     try {
       const ctx = this.context(w, h);
-      if (ctx === null) return whole();
+      if (ctx === null) return covered();
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, w, h);
       ink.paint(ctx);
       const px = ctx.getImageData(0, 0, w, h).data;
-      let r = this.raster;
-      if (r === null || r.w !== w || r.h !== h) {
-        r?.texture.dispose();
-        const data = new Uint8Array(w * h);
-        r = { data, w, h, x0, z0, width: w / s, depth: h / s, texture: maskTexture(data, w, h), kept: true };
-        this.raster = r;
-      } else {
-        r.x0 = x0;
-        r.z0 = z0;
-        r.width = w / s;
-        r.depth = h / s;
-        r.texture.needsUpdate = true;
-      }
-      const data = r.data;
-      for (let i = 0; i < data.length; i += 1) data[i] = px[i * 4 + 3]!;
-      return r;
+      const bytes = this.bytes(w * h);
+      for (let i = 0; i < bytes.length; i += 1) bytes[i] = px[i * 4 + 3]!;
+      return bytes;
     } catch (err) {
       console.warn('[stage3d] the fog could not be drawn; the whole map is covered', err);
-      return whole();
+      return covered();
     }
+  }
+
+  /** The kept region bytes, `n` long: the same array while the size holds. */
+  private bytes(n: number): Uint8Array {
+    let bytes = this.regionBytes;
+    if (bytes === null || bytes.length !== n) {
+      bytes = new Uint8Array(n);
+      this.regionBytes = bytes;
+    }
+    return bytes;
   }
 
   /** The canvas to paint on, `w × h`: the kept one, sized anew only when the size changed. */
@@ -367,7 +550,7 @@ class FogRasteriser {
     return ctx;
   }
 
-  /** Give back every canvas's memory (a phone's browser counts them all) and the kept texture. */
+  /** Give back every canvas's memory (a phone's browser counts them all), the kept bytes and the kept texture. */
   release(): void {
     this.ink.release();
     this.ink.clear();
@@ -378,16 +561,20 @@ class FogRasteriser {
     }
     this.raster?.texture.dispose();
     this.raster = null;
+    this.region = null;
+    this.regionKey = null;
+    this.regionBytes = null;
   }
 }
 
 /**
  * The shroud as one byte a square over `cols × rows`, 255 where the viewer
  * can see. Written into `reuse` (and its texture) when it is the same size.
- * Null when there is no viewpoint, which darkens nothing.
+ * Null when there is no viewpoint, which darkens nothing (`shroudShown`: the
+ * GM's party lens with no live square is a view, and darkens every square).
  */
 function rasterShroud(shroud: ShroudState | null, cols: number, rows: number, reuse: Raster | null): Raster | null {
-  if (shroud === null || shroud.visible.size === 0 || !(cols >= 1) || !(rows >= 1)) return null;
+  if (!shroudShown(shroud) || !(cols >= 1) || !(rows >= 1)) return null;
   const same = reuse !== null && reuse.w === cols && reuse.h === rows;
   const data = same ? reuse.data.fill(0) : new Uint8Array(cols * rows);
   for (const key of shroud.visible) {
@@ -511,13 +698,17 @@ export class CoverMasks {
     if (this.disposed) return change;
     const gone: DataTexture[] = [];
 
-    // The GM sees the map through the fog: no fog mask at all.
+    // The GM sees the map through the fog: no fog mask at all. Everyone else
+    // gets the regions (painted again only when their key moves) with the
+    // party's sight on the floor in view stamped over them (again whenever
+    // the sight, or the floor, moves it: `fogSightKey`).
     const isGm = state.role === 'gm';
-    const fk = isGm ? 'gm' : `${fogKey(state)}|${metricsKey(m)}|${this.detail}`;
+    const regionKey = isGm ? 'gm' : `${fogRegionKey(state)}|${metricsKey(m)}|${this.detail}`;
+    const fk = isGm ? 'gm' : `${regionKey}#${fogSightKey(state)}`;
     if (fk !== this.lastFogKey) {
       this.lastFogKey = fk;
       const was = this.fog;
-      this.fog = isGm ? null : this.rasteriser.draw(state.scene, m, this.detail);
+      this.fog = isGm ? null : this.rasteriser.draw(state.scene, m, this.detail, regionKey, state.level ?? 0);
       if (was !== null && was !== this.fog && was.kept !== true) gone.push(was.texture);
       // No fog to show: the rasteriser's canvases are not kept for one.
       if (this.fog === null) this.rasteriser.release();

@@ -299,20 +299,6 @@ export default function GridPage() {
     [store.ruler, weapon, sheet],
   );
 
-  // Whose eyes the canvas is showing. Players see their own character's
-  // sightline when the GM has switched it on for the scene; the GM sees a
-  // viewpoint they pick, and by default none at all.
-  const shroud = useShroud({
-    scene,
-    tokens,
-    isGm,
-    losTokenId: store.losTokenId,
-    myCharacterId: myCharacterId ?? null,
-    // The scene's own setting (FR9.16), so every player device hears the
-    // GM's switch the moment it flips rather than never.
-    enabledForPlayers: scene?.vision?.playersSeeOwnSight ?? false,
-  });
-
   /**
    * Taking the stairs. Offered only when the SELECTED token is standing on a
    * flight that leads somewhere real, so the button never appears for stairs
@@ -371,6 +357,23 @@ export default function GridPage() {
     const mine = tokens.find((t) => t.source === 'character' && t.sourceId === myCharacterId);
     return mine?.level ?? 0;
   }, [isGm, store.activeLevel, tokens, myCharacterId]);
+
+  // Whose eyes the canvas is showing. Players see their own character's
+  // sightline when the GM has switched it on for the scene; the GM sees a
+  // viewpoint they pick, and by default none at all — a token's, a
+  // camera's, or the whole table's ("See as party", which reads the party's
+  // sight on the floor in view, so it comes after the floor is known).
+  const shroud = useShroud({
+    scene,
+    tokens,
+    isGm,
+    losTokenId: store.losTokenId,
+    myCharacterId: myCharacterId ?? null,
+    // The scene's own setting (FR9.16), so every player device hears the
+    // GM's switch the moment it flips rather than never.
+    enabledForPlayers: scene?.vision?.playersSeeOwnSight ?? false,
+    level: viewLevel,
+  });
 
   // What the GM's cameras cover on this floor (FR9.23). Null for players,
   // whose scene carries no cameras to begin with.

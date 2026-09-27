@@ -13,7 +13,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { Scene } from '@safehouse/contracts';
-import { TILE_HEIGHTS } from '@safehouse/rules';
+import { cellBitsFrom, encodeCellBits, TILE_HEIGHTS } from '@safehouse/rules';
 import { heightRise, metricsFor, sceneWorldSize, worldFromGrid } from '../geometry.js';
 import { RecordingInk, type InkOp } from '../stage3d/floorInk.js';
 // The fog a player is sent, shared with the server's tests: what they assert
@@ -475,5 +475,88 @@ describe('drawFog on ground revealed as explored (P6)', () => {
       [lab.id, C.warn],
       [vault.id, C.cyan],
     ]);
+  });
+});
+
+/**
+ * The GM's tint on a floor the party has seen (sightlines, P6).
+ *
+ * The party's sight is squares, so on a floor where it has seen anything the
+ * GM's tint is laid square by square in the state each square is in for the
+ * table: the GM's 40% over hidden squares, the lighter tint over remembered
+ * ones, nothing over live ones, whether a reveal or a runner made them so.
+ * Everywhere else, and for the players (whose cover stamps the sight itself,
+ * `stage3d/masks.ts`), `drawFog` draws exactly what it always drew.
+ */
+describe("drawFog for the GM on a floor the party has seen (P6)", () => {
+  class Recorder extends RecordingInk {
+    protected changed(): void {
+      // Nothing to repaint: the test reads the list.
+    }
+    get paints(): readonly InkOp[] {
+      return this.ops;
+    }
+  }
+  const bits = (cells: [number, number][]): string =>
+    encodeCellBits(cellBitsFrom(12, 8, cells.map(([col, row]) => ({ col, row }))));
+  // A runner at (9,1) sees her square; she has come from (10,1).
+  const sight = { cols: 12, rows: 8, levels: { '0': { live: bits([[9, 1]]), explored: bits([[9, 1], [10, 1]]) } } };
+  const bay = scene().fog.regions[0]!;
+  /** The GM's copy: the bay revealed live, the sightlines on. */
+  const gmScene = (): Scene => ({
+    ...scene(),
+    vision: { playersSeeOwnSight: false, sight: 'on' },
+    fog: { ...scene().fog, sight },
+  });
+
+  /** How many squares a list of axis-aligned runs covers. */
+  const squaresIn = (shapes: readonly { pts: number[] }[]): number =>
+    shapes.reduce((n, s) => n + ((s.pts[2]! - s.pts[0]!) * (s.pts[5]! - s.pts[1]!)) / (flat.cell * flat.cell), 0);
+
+  it('tints each square by its state: hidden at 40%, remembered lighter, live clear, the margin hidden', () => {
+    const ink = new Recorder();
+    drawFog(ink, noLabels(), gmScene(), flat, true, 0);
+    const fills = ink.paints.filter((p) => p.kind === 'fill');
+    expect(fills).toHaveLength(3);
+    const [margin, hidden, explored] = fills as [InkOp, InkOp, InkOp];
+
+    // The margin: the cover's rectangle, the whole grid cut out of it.
+    const { width, height } = sceneWorldSize(flat);
+    const pad = flat.cell * 2;
+    expect(margin).toMatchObject({ kind: 'fill', alpha: GM_FOG_ALPHA });
+    expect(margin.path.shapes).toEqual([
+      { pts: [-pad, -pad, width + pad, -pad, width + pad, height + pad, -pad, height + pad], closed: true },
+    ]);
+    expect(margin.path.holes).toEqual([{ pts: [0, 0, width, 0, width, height, 0, height], closed: true }]);
+
+    // Every square of the 12 x 8 floor is in exactly one state: 16 of the
+    // bay and the runner's own live, the square she came from remembered,
+    // the other 78 hidden.
+    expect(hidden.alpha).toBe(GM_FOG_ALPHA);
+    expect(explored.alpha).toBe(GM_EXPLORED_ALPHA);
+    expect(squaresIn(hidden.path.shapes)).toBe(96 - 17 - 1);
+    const c = flat.cell;
+    expect(explored.path.shapes).toEqual([{ pts: [10 * c, c, 11 * c, c, 11 * c, 2 * c, 10 * c, 2 * c], closed: true }]);
+
+    // The region is still outlined in its state's colour, to the point.
+    expect(ink.paints.filter((p) => p.kind === 'stroke').map((p) => p.color)).toEqual([C.ok]);
+  });
+
+  it('draws a floor the party has not seen exactly as before: the regions cut from one tint', () => {
+    const ink = new Recorder();
+    drawFog(ink, noLabels(), gmScene(), flat, true, 1);
+    const fills = ink.paints.filter((p) => p.kind === 'fill');
+    expect(fills).toHaveLength(1);
+    expect(fills[0]).toMatchObject({ kind: 'fill', alpha: GM_FOG_ALPHA });
+    expect(fills[0]!.path.holes).toHaveLength(1);
+  });
+
+  it("leaves the players' drawing to the regions: their cover stamps the sight itself", () => {
+    const withSight = new Recorder();
+    const without = new Recorder();
+    const table = (s: Scene): Scene => ({ ...s, fog: { ...s.fog, active: true } });
+    drawFog(withSight, noLabels(), table(gmScene()), flat, false, 0);
+    drawFog(without, noLabels(), table({ ...gmScene(), fog: { ...scene().fog } }), flat, false, 0);
+    expect(withSight.paints).toEqual(without.paints);
   });
 });
