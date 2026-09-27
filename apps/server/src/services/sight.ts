@@ -78,6 +78,7 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import {
   FOG_SIGHT_MAX_SIDE,
+  SceneVisionSchema,
   sceneFogOn,
   sightlinesOn,
   type FogSight,
@@ -104,6 +105,7 @@ import type { EventTx } from '../hub.js';
 import {
   ScenesService,
   concealer,
+  normalizeFog,
   pinsForTable,
   sceneEventVisibility,
   sceneOnTable,
@@ -424,6 +426,25 @@ export interface SightPass {
  */
 export async function recomputeSight(tx: EventTx, sceneId: string, opts: SightPassOptions = {}): Promise<SightPass> {
   const row = await new ScenesService(tx.db).sceneRow(sceneId, { lock: true });
+  // The commonest call of all is a scene that has never had sightlines: a
+  // runner's step, a door, a stroke of paint on any scene run the old way.
+  // With the sightlines off, no party memory stored, and the caller asking
+  // for neither a token diff (`before`) nor an announcement, the pass below
+  // provably writes nothing and says nothing (no live squares to empty, no
+  // memory to keep, no runner's sight to spend a brush mark), so it is
+  // answered from the fog and the vision settings alone, without reading
+  // the whole scene: `serializeScene` parses every painted floor, about 5 ms
+  // on a 58x54 two-storey map, on every step of every such scene. The row is
+  // still read FOR UPDATE, so a PATCH switching the sightlines on in the
+  // same moment is waited for, and then seen.
+  if (opts.before === undefined && opts.announce !== true) {
+    const bare = normalizeFog(row.fog);
+    const geometry = isRecord(row.geometry) ? row.geometry : {};
+    const vision = SceneVisionSchema.safeParse(geometry['vision']);
+    if (bare.sight === undefined && !sightlinesOn(vision.success ? vision.data : undefined)) {
+      return { fog: bare, told: false };
+    }
+  }
   const stored = serializeScene(row);
   const prior = stored.fog.sight;
 

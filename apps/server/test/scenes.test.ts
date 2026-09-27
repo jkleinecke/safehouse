@@ -1162,6 +1162,38 @@ describe('sightlines: the party’s pooled sight unmasks the map, and the server
     guardId = (guard.json() as { token: { id: string } }).token.id;
   }, 60_000);
 
+  it('leaves a scene without sightlines as it always was: a step and a door store no sight and tell the table only themselves', async () => {
+    // Every runner's step and every door runs the sight pass, on every scene.
+    // On one whose sightlines were never switched on it must be invisible:
+    // no party memory written into the fog, no sight event, nobody arriving
+    // or leaving, only the move and the door the table always heard.
+    const since = await mark();
+    for (const x of [3.5, 2.5]) {
+      const moved = await t.app.inject({
+        method: 'PATCH',
+        url: `/api/tokens/${rookTokenId}`,
+        headers: as(phoneToken),
+        payload: { x, y: 4.5 },
+      });
+      expect(moved.statusCode).toBe(200);
+    }
+    for (const op of ['open', 'close'] as const) {
+      expect((await post(`/api/scenes/${sightSceneId}/doors`, phoneToken, { cell: '5,4', level: 0, op })).statusCode).toBe(200);
+    }
+
+    expect((await view(sb.gmToken)).fog).not.toHaveProperty('sight');
+    for (const { role, token } of viewers) {
+      const v = await view(token);
+      expect(v.fog, role).not.toHaveProperty('sight');
+      expect(v.fog.active, role).toBe(false);
+      expect(v.tokenIds, role).toEqual([guardId, rookTokenId].sort());
+    }
+    const events = await tableSince(since);
+    expect(events.filter((e) => e.type === 'fog.updated')).toEqual([]);
+    expect(events.filter((e) => e.type === 'token.added' || e.type === 'token.removed')).toEqual([]);
+    expect(events.filter((e) => e.type === 'token.moved').map((e) => e.payload['x'])).toEqual([3.5, 2.5]);
+  });
+
   it('switched on, shows the table the runner’s room and its walls, and nothing through the shut door', async () => {
     // The scene starts open (its fog switch off), so the guard is on the table until the sightlines go on.
     expect((await view(viewers[0]!.token)).tokenIds).toEqual([guardId, rookTokenId].sort());
