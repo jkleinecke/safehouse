@@ -704,15 +704,21 @@ function emitFloor(ctx: LevelCtx, f: FloorSquare, has: (col: number, row: number
 
 /**
  * A square split along an angled wall: each side's half clipped by the line
- * and drawn in the ground beside it on that side (as `drawSplitGround`
- * does). A side with nothing beside it stays open — unless the square has
- * ground of its own painted, in which case that half is its own ground: a
- * floored square is never half a hole.
+ * and drawn in the ground of that side (as `drawSplitGround` does). What a
+ * side is floored with is the caller's answer (`groundFor`): the ground
+ * `groundSplits` found beside it, else the ground of the squares beside it on
+ * that side. A side with neither stays open — outside an outer wall there is
+ * no floor, and the wall is where the floor stops.
  */
-function emitSplit(ctx: LevelCtx, cell: TileCell, split: GroundSplit): void {
-  const b = ctx.chunk(cell.col, cell.row);
+function emitSplit(
+  ctx: LevelCtx,
+  col: number,
+  row: number,
+  split: GroundSplit,
+  groundFor: (side: GroundSplit['sides'][number], nx: number, ny: number) => TileDrawDef | null,
+): void {
+  const b = ctx.chunk(col, row);
   const len = Math.hypot(split.d.x, split.d.y) || 1;
-  const own = ctx.plan.grounded.has(`${cell.col},${cell.row}`);
   const square: Array<[number, number]> = [
     [0, 0],
     [1, 0],
@@ -720,10 +726,10 @@ function emitSplit(ctx: LevelCtx, cell: TileCell, split: GroundSplit): void {
     [0, 1],
   ];
   for (const side of split.sides) {
-    if (side.id === null && !own) continue;
-    const def = (side.id === null ? undefined : ctx.plan.defs[tileDefKey(ctx.plan.tilesetId, side.id)]) ?? cell.def;
     const nx = (-split.d.y / len) * side.sign;
     const ny = (split.d.x / len) * side.sign;
+    const def = groundFor(side, nx, ny);
+    if (def === null) continue;
     const keep = (u: number, v: number) => (u - split.p.x) * nx + (v - split.p.y) * ny;
     const half: Array<[number, number]> = [];
     for (let i = 0; i < square.length; i += 1) {
@@ -738,12 +744,31 @@ function emitSplit(ctx: LevelCtx, cell: TileCell, split: GroundSplit): void {
       }
     }
     if (half.length < 3) continue;
-    const color = grained(parseColor(def.colors[0], FALLBACK_BASE), cell.col, cell.row);
-    b.polygon(half.map(([u, v]): V3 => [cell.col + u, ctx.y, cell.row + v]), color);
+    const color = grained(parseColor(def.colors[0], FALLBACK_BASE), col, row);
+    b.polygon(half.map(([u, v]): V3 => [col + u, ctx.y, row + v]), color);
     if (ctx.level > 0) {
       const yb = ctx.y - UPPER_SLAB;
-      b.polygon(half.map(([u, v]): V3 => [cell.col + u, yb, cell.row + v]), shade(color, 0.8));
+      b.polygon(half.map(([u, v]): V3 => [col + u, yb, row + v]), shade(color, 0.8));
     }
+  }
+}
+
+/**
+ * A quarter of a square: a floor piece under a bare wall or a piece of
+ * furniture, on the side that has floor beside it. Top, and the underside on
+ * an upper floor; its outer edges sit under the wall.
+ */
+function emitQuarter(ctx: LevelCtx, col: number, row: number, qx: number, qy: number, color: number): void {
+  const b = ctx.chunk(col, row);
+  const x0 = col + (qx < 0 ? 0 : 0.5);
+  const z0 = row + (qy < 0 ? 0 : 0.5);
+  const x1 = x0 + 0.5;
+  const z1 = z0 + 0.5;
+  const y = ctx.y;
+  b.quad([x0, y, z0], [x1, y, z0], [x1, y, z1], [x0, y, z1], color);
+  if (ctx.level > 0) {
+    const yb = ctx.y - UPPER_SLAB;
+    b.quad([x0, yb, z0], [x0, yb, z1], [x1, yb, z1], [x1, yb, z0], shade(color, 0.8));
   }
 }
 
@@ -1100,17 +1125,17 @@ function emitLevel(level: number, plan: TilePlan, unitM: number, storey: number,
   // --- What is floor, and what kind -------------------------------------
   // Only for squares within two of one being built (`Scope`): nothing built
   // reads further.
-  const splitCells: Array<{ cell: TileCell; split: GroundSplit }> = [];
   const waterCells: TileCell[] = [];
   const special = new Set<string>();
+  // Every square an angled wall crosses is split, whether or not the 2D
+  // map's sampling found ground on either side of it (`TilePlan.splits`).
+  for (const key of plan.splits.keys()) special.add(key);
   for (const cell of plan.cells) {
     if (cell.seg !== undefined || cell.layer !== 0) continue;
     if (!scope.near(cell.col, cell.row, 2)) continue;
     const key = `${cell.col},${cell.row}`;
-    if (cell.split !== undefined) {
-      splitCells.push({ cell, split: cell.split });
-      special.add(key);
-    } else if (cell.def.liquid !== undefined) {
+    if (cell.split !== undefined) special.add(key);
+    else if (cell.def.liquid !== undefined) {
       waterCells.push(cell);
       special.add(key);
     }
@@ -1150,20 +1175,19 @@ function emitLevel(level: number, plan: TilePlan, unitM: number, storey: number,
     } else if (scope.emit(cell.col, cell.row)) decals.push({ cell, color, kind });
   }
 
-  // Ground under a wall or a piece of furniture the GM never painted: the
-  // floor most of its neighbours have. A wall stands on a floor; drawn
-  // without one, the square was a hole down to the (shaded, nearly black)
-  // floor below — 93 of them on Sapphire's security floor, most under its
-  // diagonal walls (2026-09-26). A square with no painted ground round it at
-  // all stays open: that is outside, not a gap.
-  const neighbourGround = (col: number, row: number): TileDrawDef | null => {
+  // Ground under a wall or a piece of furniture the GM never painted, taken
+  // from the painted ground beside it — on each SIDE separately, so the
+  // floor stops at the wall where the other side is empty. A wall stands on
+  // a floor; drawn without one, the square was a hole down to the (shaded,
+  // nearly black) floor below — 93 of them on Sapphire's security floor, most
+  // under its diagonal walls (2026-09-26). Filling the whole square instead
+  // pushed floor out past the outer walls, where the building ends.
+  /** The ground most of the given neighbours of (col, row) have, or null. */
+  const groundAmong = (col: number, row: number, offsets: ReadonlyArray<readonly [number, number]>): TileDrawDef | null => {
     const count = new Map<TileDrawDef, number>();
-    for (let dr = -1; dr <= 1; dr += 1) {
-      for (let dc = -1; dc <= 1; dc += 1) {
-        if (dc === 0 && dr === 0) continue;
-        const d = groundOf.get(`${col + dc},${row + dr}`);
-        if (d !== undefined) count.set(d, (count.get(d) ?? 0) + 1);
-      }
+    for (const [dc, dr] of offsets) {
+      const d = groundOf.get(`${col + dc},${row + dr}`);
+      if (d !== undefined) count.set(d, (count.get(d) ?? 0) + 1);
     }
     let best: TileDrawDef | null = null;
     let most = 0;
@@ -1175,25 +1199,50 @@ function emitLevel(level: number, plan: TilePlan, unitM: number, storey: number,
     }
     return best;
   };
+  const RING: ReadonlyArray<readonly [number, number]> = [
+    [-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1],
+  ];
+  /** The neighbours lying on the side a unit normal (nx, ny) points to: within 60° of it. */
+  const sideOf = (nx: number, ny: number) => RING.filter(([dc, dr]) => (dc * nx + dr * ny) / Math.hypot(dc, dr) > 0.5);
+
+  // Standing squares with no ground: a quarter at a time, from the squares
+  // beside that quarter (a wall's centre line hides the joins).
+  const QUARTERS: ReadonlyArray<readonly [number, number]> = [[-1, -1], [1, -1], [-1, 1], [1, 1]];
+  const quarters: Array<{ col: number; row: number; qx: number; qy: number; color: number }> = [];
+  const partly = new Set<string>();
   for (const cell of plan.cells) {
     if (cell.seg !== undefined) continue;
     if (!scope.near(cell.col, cell.row, 1)) continue;
     const key = `${cell.col},${cell.row}`;
-    if (floors.has(key) || special.has(key) || plan.grounded.has(key)) continue;
+    if (floors.has(key) || special.has(key) || plan.grounded.has(key) || partly.has(key)) continue;
     const { def } = cell;
     const standingish = isStanding(def) || def.footprint === 'wall' || cell.span !== undefined || def.prop !== undefined;
     if (!standingish) continue;
-    const ground = neighbourGround(cell.col, cell.row);
-    if (ground === null) continue;
-    floors.set(key, { col: cell.col, row: cell.row, color: grained(tonesOf(ground).base, cell.col, cell.row), kind: 'solid' });
+    for (const [qx, qy] of QUARTERS) {
+      const ground = groundAmong(cell.col, cell.row, [[qx, 0], [0, qy], [qx, qy]]);
+      if (ground === null) continue;
+      quarters.push({ col: cell.col, row: cell.row, qx, qy, color: grained(tonesOf(ground).base, cell.col, cell.row) });
+      partly.add(key);
+    }
   }
 
   const has = (col: number, row: number) => {
     const key = `${col},${row}`;
-    return floors.has(key) || special.has(key);
+    return floors.has(key) || special.has(key) || partly.has(key);
   };
   for (const f of floors.values()) if (scope.emit(f.col, f.row)) emitFloor(ctx, f, has);
-  for (const { cell, split } of splitCells) if (scope.emit(cell.col, cell.row)) emitSplit(ctx, cell, split);
+  for (const q of quarters) if (scope.emit(q.col, q.row)) emitQuarter(ctx, q.col, q.row, q.qx, q.qy, q.color);
+  for (const [key, split] of plan.splits) {
+    const at = parseCell(key);
+    if (at === null || !scope.emit(at.col, at.row)) continue;
+    emitSplit(ctx, at.col, at.row, split, (side, nx, ny) => {
+      if (side.id !== null) {
+        const d = plan.defs[tileDefKey(plan.tilesetId, side.id)];
+        if (d !== undefined) return d;
+      }
+      return groundAmong(at.col, at.row, sideOf(nx, ny));
+    });
+  }
   for (const cell of waterCells) {
     if (scope.emit(cell.col, cell.row)) emitWater(ctx, cell, (c, r) => waterKeys.has(`${c},${r}`));
   }

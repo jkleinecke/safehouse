@@ -1957,6 +1957,13 @@ export interface TilePlan {
   /** The palette and set, for ground split under an angled wall. */
   defs: Record<string, TileDrawDef>;
   tilesetId: string;
+  /**
+   * Every square an angled or curved wall crosses, with the ground found on
+   * each side (`groundSplits`) — including the ones where neither side found
+   * any, which `cells` leaves out. The 2D map reads `cells`; the 3D world
+   * fills those sides from the squares beside them.
+   */
+  splits: ReadonlyMap<string, GroundSplit>;
 }
 
 export function planTiles(m: SceneMetrics, input: TileDrawInput): TilePlan {
@@ -2088,7 +2095,7 @@ export function planTiles(m: SceneMetrics, input: TileDrawInput): TilePlan {
   const openDoors = new Set<string>();
   for (const [key, d] of Object.entries(input.doors ?? {})) if (d.open) openDoors.add(key);
   const water = waterOf(input);
-  return { cells, walls, grounded, occupied, structure, standing, openDoors, water, defs: input.defs, tilesetId: input.tilesetId };
+  return { cells, walls, grounded, occupied, structure, standing, openDoors, water, defs: input.defs, tilesetId: input.tilesetId, splits };
 }
 
 /**
