@@ -138,6 +138,19 @@ export interface ChargenUpdatedPing {
   seq: number;
 }
 
+/**
+ * An `error` ephemeral: the server saying no to a command this socket sent
+ * (`ctx.reply` on the hub), such as a player's drop through a wall
+ * (`blocked`, plugins/scenes.ts). Only ever the sender's own, and never
+ * stored server-side. `seq` tells two refusals apart, since the second can
+ * be word for word the first.
+ */
+export interface LiveErrorFrame {
+  code: string;
+  message: string;
+  seq: number;
+}
+
 export interface LiveState {
   status: SocketStatus;
   /** Highest persisted event id seen — sent on reconnect for gap replay. */
@@ -158,6 +171,8 @@ export interface LiveState {
   buildSaved: BuildSavedPing | null;
   /** The last `chargen.updated` heard (FR3.9): the campaign's creation rules moved. */
   chargenUpdated: ChargenUpdatedPing | null;
+  /** The last command the server refused this socket (`LiveErrorFrame`), for whoever is waiting to hear. */
+  lastError: LiveErrorFrame | null;
 
   /** Live-mode readout from `GET /api/campaigns/:id/live` (FR6.2). */
   activeSessionId: string | null;
@@ -214,6 +229,7 @@ const initialState = {
   aiActivity: null as AiActivityState | null,
   buildSaved: null as BuildSavedPing | null,
   chargenUpdated: null as ChargenUpdatedPing | null,
+  lastError: null as LiveErrorFrame | null,
   activeSessionId: null as string | null,
   sessionLive: false,
   connectedCount: 0,
@@ -434,6 +450,16 @@ export const useLiveStore = create<LiveState>()((set, get) => ({
           seq: (s.chargenUpdated?.seq ?? 0) + 1,
         },
       }));
+      return;
+    }
+
+    if (msg.type === 'error') {
+      // A refusal of something this socket asked for. Kept as the last one
+      // heard, numbered, for the screen that asked (the map's drop through a
+      // wall); nothing else is done with it here.
+      const code = typeof payload['code'] === 'string' ? payload['code'] : 'error';
+      const message = typeof payload['message'] === 'string' ? payload['message'] : '';
+      set((s) => ({ lastError: { code, message, seq: (s.lastError?.seq ?? 0) + 1 } }));
       return;
     }
 

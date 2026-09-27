@@ -51,6 +51,7 @@ import {
   type PaintedObject,
 } from '../paintedObjects.js';
 import { allCells, containsCell, moveSelection, pastedSet, pasteBodies, tilesetOf } from '../cellSelection.js';
+import { walkDragTarget } from './walkDrag.js';
 
 type Mode =
   | 'idle'
@@ -264,6 +265,10 @@ export class PointerController {
   private dragTokenId: string | null = null;
   private dragGrab: Point = { x: 0, y: 0 };
   private dragSize = 1;
+  /** The floor the dragged token stands on: the one its walk is judged on (`walkDragTarget`). */
+  private dragLevel = 0;
+  /** Where the dragged token stood when the drag began: where the server walks its drop from. */
+  private dragOrigin: Point = { x: 0, y: 0 };
   private dragAt: Point = { x: 0, y: 0 };
 
   // ruler
@@ -828,8 +833,10 @@ export class PointerController {
         this.mode = 'token';
         this.dragTokenId = token.id;
         this.dragSize = token.size;
+        this.dragLevel = token.level ?? state.level ?? 0;
         this.dragGrab = { x: grid.x - token.x, y: grid.y - token.y };
         this.dragAt = { x: token.x, y: token.y };
+        this.dragOrigin = this.dragAt;
         this.host.localDrag(token.id, this.dragAt);
       } else {
         this.mode = 'pan';
@@ -1131,10 +1138,29 @@ export class PointerController {
     return { c0, r0, c1, r1 };
   }
 
+  /**
+   * One frame of a token drag: the token goes where the pointer puts it,
+   * snapped — unless the one dragging is not the GM and a wall is in the way
+   * (the GM's rule, 2026-09-27: only the GM moves tokens through walls). Then
+   * the runner walks toward the pointer from where it was last drawn and
+   * stops at the wall, or at the map's edge (`walkDragTarget`), so what is
+   * drawn is what the drop will send and what the server will accept.
+   * Asked of the scene as it stands on this frame, so a door opened mid-drag
+   * lets the runner through on the next one.
+   */
   private updateTokenDrag(grid: Point, raw: boolean): void {
     if (!this.dragTokenId) return;
     const free = { x: grid.x - this.dragGrab.x, y: grid.y - this.dragGrab.y };
-    const at = this.snapped(free, this.dragSize, raw);
+    const state = this.host.state();
+    const at = walkDragTarget({
+      role: state.role,
+      scene: state.scene,
+      level: this.dragLevel,
+      size: this.dragSize,
+      origin: this.dragOrigin,
+      from: this.dragAt,
+      want: this.snapped(free, this.dragSize, raw),
+    });
     this.dragAt = at;
     this.host.localDrag(this.dragTokenId, at);
     this.host.callbacks.onTokenDrag(this.dragTokenId, at.x, at.y);

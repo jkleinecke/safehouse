@@ -1,10 +1,11 @@
 /**
- * Live-store taps the Grid needs: remote interim drag ghosts and the ephemeral
- * ping / pointer / focus mark stream (§11 ephemeral messages).
+ * Live-store taps the Grid needs: remote interim drag ghosts, the ephemeral
+ * ping / pointer / focus mark stream (§11 ephemeral messages), and the
+ * server's refusals of this screen's own commands.
  */
 import { useEffect, useMemo, useRef } from 'react';
 import type { Encounter } from '@safehouse/contracts';
-import { useLiveStore } from '../../live/store.js';
+import { useLiveStore, type LiveErrorFrame } from '../../live/store.js';
 import { useCampaignEncounters, useEncounter } from './api.js';
 import { displayFromEvents, mergeEncounter, pickEncounterId, type DisplayState } from './hydration.js';
 import { classifyMark, focusFromEvent, type MarkKind, type MarkSample } from './projection.js';
@@ -50,6 +51,37 @@ export function useMarkStream(sceneId: string | null | undefined, handler: MarkH
       handlerRef.current(kind, sample.x, sample.y);
     });
   }, []);
+}
+
+/**
+ * Calls `handler` for every refusal with code `code` the server sends this
+ * socket AFTER mount (`LiveState.lastError`): a player's drop through a wall
+ * (`blocked`) is the map's. One that was already in the store when the page
+ * mounted belongs to whatever screen was open then, and is not repeated.
+ * Told apart by the frame itself rather than its number, because the store
+ * starts its numbering again when the campaign changes.
+ */
+export function useServerRefusals(code: string, handler: (frame: LiveErrorFrame) => void): void {
+  const handlerRef = useRef(handler);
+  handlerRef.current = handler;
+
+  useEffect(() => watchServerRefusals(code, (frame) => handlerRef.current(frame)), [code]);
+}
+
+/**
+ * The subscription behind `useServerRefusals`, outside React: `handler` is
+ * called for each refusal with code `code` that reaches the live store from
+ * now on, and not for the one already there. Returns the unsubscribe.
+ */
+export function watchServerRefusals(code: string, handler: (frame: LiveErrorFrame) => void): () => void {
+  let last = useLiveStore.getState().lastError;
+  return useLiveStore.subscribe((state) => {
+    const frame = state.lastError;
+    if (frame === last) return;
+    last = frame;
+    if (frame === null || frame.code !== code) return;
+    handler(frame);
+  });
 }
 
 /**

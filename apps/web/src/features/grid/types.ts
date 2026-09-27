@@ -593,6 +593,14 @@ export interface StageApi {
   setViewMode(mode: VisionMode): void;
   /** Interim remote drag ghosts: tokenId → grid position (+ relay timestamp). */
   setDrags(drags: Record<string, { x: number; y: number; ts?: number }>): void;
+  /**
+   * The server refused the drop of `tokenId` this screen just sent (a
+   * player's runner through a wall, `blocked`): stop holding its figure on
+   * the square it was dropped on, and send it straight back to where its
+   * token still stands, rather than leaving it there until the hold runs
+   * out. A token not held is left alone.
+   */
+  releaseDrop(tokenId: string): void;
   /** Flash a ping at grid coords (remote or local echo). */
   flashPing(x: number, y: number): void;
   /** Add a pointer-trail sample at grid coords. */

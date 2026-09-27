@@ -117,6 +117,7 @@ import {
   useHydratedEncounter,
   useMarkStream,
   useRemoteDrags,
+  useServerRefusals,
 } from './useGridLive.js';
 import { useStage } from './useStage.js';
 
@@ -130,6 +131,14 @@ const STOP_REASONS: Readonly<Record<StageStop, string>> = {
   'build-failed': 'It could not show the last change.',
   'quality-failed': 'The browser refused a new graphics context for that quality. Pick a lower one, then reload.',
 };
+
+/**
+ * What a player is told when the server refuses their drop because a wall
+ * or a shut door is in the way (`blocked`, plugins/scenes.ts). The server
+ * sends the same words; they are kept here too so the chip reads the same
+ * whatever a server says.
+ */
+const WALL_NOTICE = "Your runner can't go through walls";
 
 function EmptyState({ title, body }: { title: string; body: string }) {
   return (
@@ -474,10 +483,15 @@ export default function GridPage() {
   // callback whenever one moves.
   const tokensRef = useRef(tokens);
   tokensRef.current = tokens;
+  // The token this screen last dropped: the one a refusal of a drop is
+  // about (the server's `blocked` names no token, since it answers the
+  // sender's own last move).
+  const lastDropRef = useRef<string | null>(null);
 
   const callbacks: StageCallbacks = useMemo(
     () => ({
       onTokenMove: (id, x, y) => {
+        lastDropRef.current = id;
         // It faces the way it walked, as the figure on screen does, and the
         // server keeps that: a flashlight's beam aims where the token faces
         // (VISION.md §4.1). A drop back on its own spot keeps its facing.
@@ -1121,6 +1135,33 @@ export default function GridPage() {
   // …and the persisted route for the same gesture (FR9.15/FR9.21).
   useFocusStream(sceneId, (x, y) => apiRef.current?.centerOn(x, y));
 
+  // A player's drop the server would not take because a wall is in the way
+  // (the GM's rule, 2026-09-27: only the GM moves tokens through walls). The
+  // drag already stops at walls (`walkDragTarget`), so this is the rare race:
+  // a door shut, or a wall painted, while the runner was in the air. The
+  // runner goes straight back to where it stands rather than waiting out the
+  // hold on the drop point, and the player is told why, briefly.
+  const [wallNotice, setWallNotice] = useState<string | null>(null);
+  const wallNoticeTimer = useRef<number | null>(null);
+  useServerRefusals('blocked', () => {
+    const dropped = lastDropRef.current;
+    if (dropped !== null) apiRef.current?.releaseDrop(dropped);
+    setWallNotice(WALL_NOTICE);
+    // A second refusal while the first is still showing keeps it up for
+    // the full time again, rather than the first one's timer taking it down.
+    if (wallNoticeTimer.current !== null) window.clearTimeout(wallNoticeTimer.current);
+    wallNoticeTimer.current = window.setTimeout(() => {
+      wallNoticeTimer.current = null;
+      setWallNotice(null);
+    }, 2400);
+  });
+  useEffect(
+    () => () => {
+      if (wallNoticeTimer.current !== null) window.clearTimeout(wallNoticeTimer.current);
+    },
+    [],
+  );
+
   const onScatter = useCallback(() => {
     const s = useGridStore.getState();
     if (!s.aoe || !scene) return;
@@ -1382,6 +1423,11 @@ export default function GridPage() {
             {doorNotice && (
               <span data-testid="door-notice" className="chip bg-panel/90 text-warn">
                 {doorNotice}
+              </span>
+            )}
+            {wallNotice && (
+              <span data-testid="wall-notice" role="status" className="chip bg-panel/90 text-warn">
+                {wallNotice}
               </span>
             )}
             {isGm && stairOffer && selectedToken && (

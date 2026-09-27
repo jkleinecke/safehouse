@@ -18,7 +18,7 @@
  * small enough to fake — no jsdom, in a package that has none.
  */
 import { describe, expect, it, vi } from 'vitest';
-import type { Point, Scene } from '@safehouse/contracts';
+import type { Point, Scene, Token } from '@safehouse/contracts';
 import { metricsFor, CELL } from '../geometry.js';
 import type { StageCallbacks, StageSceneState } from '../types.js';
 import { Camera } from './camera.js';
@@ -70,10 +70,13 @@ function harness(tool: StageSceneState['tool']) {
   const onWallSelect = vi.fn<(id: string) => void>();
   const onZoneSelect = vi.fn<(id: string) => void>();
   const onSelectClear = vi.fn<() => void>();
+  const onTokenMove = vi.fn<(id: string, x: number, y: number) => void>();
+  const onTokenDrag = vi.fn<(id: string, x: number, y: number) => void>();
+  const localDrag = vi.fn<(id: string | null, grid: Point | null) => void>();
   const noop = (): void => {};
   const cb: StageCallbacks = {
-    onTokenMove: noop,
-    onTokenDrag: noop,
+    onTokenMove,
+    onTokenDrag,
     onSelectToken: noop,
     onPing: noop,
     onPointer: noop,
@@ -119,7 +122,7 @@ function harness(tool: StageSceneState['tool']) {
     metrics: () => M,
     state: () => state,
     callbacks: cb,
-    localDrag: () => {},
+    localDrag,
     echoPing: () => {},
     echoTrail: () => {},
     drawRuler: () => {},
@@ -175,6 +178,9 @@ function harness(tool: StageSceneState['tool']) {
     onWallSelect,
     onZoneSelect,
     onSelectClear,
+    onTokenMove,
+    onTokenDrag,
+    localDrag,
     state,
     controller,
     send,
@@ -609,5 +615,45 @@ describe('the inspector’s clicks (docs/UX_MAP_BUILDER.md §3.2)', () => {
     expect(h.onSelectClear).toHaveBeenCalledTimes(1);
     expect(h.onZoneSelect).not.toHaveBeenCalled();
     expect(h.onWallSelect).not.toHaveBeenCalled();
+  });
+});
+
+describe("a runner's drag stops at walls (the GM's rule, 2026-09-27)", () => {
+  // A wall painted down column 5, floor either side of it; a runner west of it.
+  const wall: Record<string, string> = {};
+  for (let row = 0; row < 20; row += 1) wall[`5,${row}`] = 'wall';
+  const runner = { id: 't1', x: 2.5, y: 3.5, size: 1, level: 0 } as unknown as Token;
+
+  /** `role` presses the runner and drags it east, across the wall, and lets go. */
+  function dragAcross(role: 'gm' | 'player') {
+    const h = harness('select');
+    (h.state as { role: string }).role = role;
+    (h.state.scene as { tiles?: unknown }).tiles = { tilesetId: 'docklands', structure: wall };
+    (h.state.scene as { grid?: unknown }).grid = { cols: 20, rows: 20 };
+    h.state.tokens = [runner];
+    h.state.draggableIds = new Set(['t1']);
+    h.send('pointerdown', 2, 3);
+    h.send('pointermove', 4, 3);
+    h.send('pointermove', 8, 3);
+    h.send('pointerup', 8, 3);
+    return h;
+  }
+
+  it("a player's runner is drawn up to the wall, never past it, and dropped there", () => {
+    const h = dragAcross('player');
+    expect(h.onTokenMove).toHaveBeenCalledTimes(1);
+    expect(h.onTokenMove).toHaveBeenCalledWith('t1', 4.5, 3.5);
+    // Neither this screen's figure nor the frames relayed to the table ever
+    // stood on the far side of the wall.
+    expect(h.onTokenDrag.mock.calls.map(([, x, y]) => [x, y])).toEqual([
+      [4.5, 3.5],
+      [4.5, 3.5],
+    ]);
+    for (const [, at] of h.localDrag.mock.calls) if (at !== null) expect(at.x).toBeLessThan(5);
+  });
+
+  it("the GM's drag goes straight through, as it always has", () => {
+    const h = dragAcross('gm');
+    expect(h.onTokenMove).toHaveBeenCalledWith('t1', 8.5, 3.5);
   });
 });

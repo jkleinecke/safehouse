@@ -62,6 +62,20 @@ describe('live store', () => {
     expect(useLiveStore.getState().drags['tok_1']).toBeUndefined();
   });
 
+  it("keeps the server's last refusal, numbered, so the same words twice are two refusals", () => {
+    const s = useLiveStore.getState();
+    const blocked = { code: 'blocked', message: "Your runner can't go through walls" };
+    s.handleEphemeral({ type: 'error', payload: blocked, ephemeral: true });
+    expect(useLiveStore.getState().lastError).toEqual({ ...blocked, seq: 1 });
+    s.handleEphemeral({ type: 'error', payload: blocked, ephemeral: true });
+    expect(useLiveStore.getState().lastError).toEqual({ ...blocked, seq: 2 });
+    // A frame with nothing readable in it is still a refusal, of no known kind.
+    s.handleEphemeral({ type: 'error', payload: null, ephemeral: true });
+    expect(useLiveStore.getState().lastError).toEqual({ code: 'error', message: '', seq: 3 });
+    s.reset();
+    expect(useLiveStore.getState().lastError).toBeNull();
+  });
+
   it('tracks presence and fixer stream buffers', () => {
     const s = useLiveStore.getState();
     s.handleEphemeral({

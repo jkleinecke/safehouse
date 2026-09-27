@@ -1362,6 +1362,19 @@ class Stage3D implements StageApi, PointerHost {
     this.applyTargets();
   }
 
+  /**
+   * A drop the server refused (`StageApi.releaseDrop`): the hold on the
+   * drop point goes, and the figure heads back to its token's own square at
+   * once, as a move that came back would have sent it on — no move is
+   * coming, and two seconds of the runner standing where it is not would
+   * read as the move having worked.
+   */
+  releaseDrop(tokenId: string): void {
+    if (this.inert) return;
+    if (!this.holds.delete(tokenId)) return;
+    this.applyTargets();
+  }
+
   flashPing(x: number, y: number): void {
     this.echoPing({ x, y });
   }
