@@ -489,6 +489,25 @@ export function buildFigure(token: Token, materials: LabMaterials, ctx: FigureCt
 }
 
 /**
+ * Where a figure down from physical damage lies in its blood: the 2D figure's
+ * pool (`figure.ts` `drawFigure`, its bleeding oval), in this figure's own
+ * world space — feet at the origin, facing +x, squares — flat on its floor:
+ * the pool's middle (`x` along the body, `z` to its right hand) and its
+ * half-lengths along the body (`rx`) and across it (`rz`). Scaled by the
+ * metatype's breadth as the body lying in it is. Null for a prop, which
+ * never bleeds.
+ */
+export function bloodPool(token: Token, ctx: Pick<FigureCtx, 'unitM'>): { x: number; z: number; rx: number; rz: number } | null {
+  const look = lookFor(token);
+  if (look.crate) return null;
+  const size = token.size > 0 ? token.size : 1;
+  const across = (HUMAN_M / (ctx.unitM > 0 ? ctx.unitM : 1)) * Math.sqrt(size) * look.build.w;
+  // Body units, as the 2D oval has them: centred a little forward and to the
+  // right of the hips, 0.3 along the body and 0.2 across.
+  return { x: 0.02 * across, z: 0.05 * across, rx: 0.3 * across, rz: 0.2 * across };
+}
+
+/**
  * Stand a figure where its token is: at the token's centre on its floor
  * (x, level × storey, y), turned to `token.rotation` — degrees, 0 facing east
  * (+x), 90 south (+z).

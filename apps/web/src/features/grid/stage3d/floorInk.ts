@@ -63,6 +63,11 @@
  * fog, and the templates, the ruler and the drafts over both. There is one
  * shared pair of materials per answer.
  *
+ * A vision mode never restyles an ink (`cover.ts` `markPlain`): the 2D map
+ * draws every one of these overlays in a container its vision filters do
+ * not reach, so a door keeps the colour that says whether it is open, and a
+ * zone the GM's, over a floor turned thermal.
+ *
  * ## The recorder
  *
  * Recording the calls under pixi's rules is `RecordingInk`, which knows
@@ -85,7 +90,7 @@ import {
 } from 'three';
 import type { SceneMetrics } from '../geometry.js';
 import type { Ink, InkFill, InkStroke } from '../stage/ink.js';
-import { applyCover, exemptFromCover, type CoverMode } from './cover.js';
+import { applyCover, exemptFromCover, markPlain, type CoverMode } from './cover.js';
 
 /** One shape as it was drawn: flat `[x0, y0, x1, y1, …]` in world px. */
 export interface InkShape {
@@ -206,7 +211,11 @@ function materials(cover: InkCover): { tris: MeshBasicMaterial; lines: LineBasic
   lines.name = `floor-ink:${cover}:hairline`;
   for (const m of [tris, lines]) {
     if (cover === 'none') exemptFromCover(m);
-    else applyCover(m, cover);
+    else {
+      applyCover(m, cover);
+      // In its own colours whatever the eyes, as the 2D map's overlays are.
+      markPlain(m);
+    }
   }
   const made = { tris, lines };
   shared.set(cover, made);

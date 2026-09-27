@@ -32,10 +32,14 @@
  *     hit test looks for them, and a drag's or a paste's ghost as
  *     translucent boxes as tall as what is on its way;
  *   - `FigurePool` stands the tokens up as figures that glide to their
- *     squares, with their rings and blob shadows; `TokenBadges` hangs a DOM
- *     plate (portrait, name, bars) over each head. The tokens seen down
- *     through the open squares (`belowTokens`) stand on their own floors
- *     under the shade, with no plate and no ring, never picked;
+ *     squares, with their rings and blob shadows, each lit as the floor
+ *     under it (the runtime's baked light, `bakedLightAt`), seen through the
+ *     walls that hide it, and lying in its blood when down from physical
+ *     damage; `TokenBadges` hangs a DOM plate (portrait, name, bars) over
+ *     each head. In the top view the portrait is the figure's own, a disc
+ *     lying on its head, and the plate is laid round it. The tokens seen
+ *     down through the open squares (`belowTokens`) stand on their own
+ *     floors under the shade, with no plate and no ring, never picked;
  *   - the flat overlays — the grid, the GM's walls, doors and zones, the
  *     GM's fog regions, the light-map wash, the AoE, the fog draft, the
  *     ruler and every Build draft but the selection and its ghost — are
@@ -83,7 +87,12 @@
  * storey tall on every floor on show (`tracedWalls.ts`), taken by a press on
  * their faces (`pickTraced`) as well as on their lines.
  *
- * Not drawn yet (P4): the vision modes, a no-op below.
+ * The vision modes (P4) are the 2D map's own colour matrices
+ * (`stage/viewModes.ts`), applied by the cover's patch to every covered
+ * material's final colour: the floor's matrix on the world, the map and the
+ * floors below, the bodies' on the figures in view, none on the overlays and
+ * markers — as the 2D map filters its layers — and the bodies' on the plates
+ * too, by an SVG filter (`setViewMode`).
  */
 import { Group, Raycaster, Vector2, Vector3, type Mesh } from 'three';
 import type { Point, Scene, Token } from '@safehouse/contracts';
@@ -108,11 +117,12 @@ import { aoeKey, fogDraftKey, fogKey, geometryKey, mapImagesKey, paintedSelectio
 import { drawFog, drawGeometry, drawGrid } from '../stage/layers.js';
 import { drawLightMap } from '../stage/lightLayer.js';
 import { PointerController, type Cell, type GhostFill, type PointerHost } from '../stage/pointer.js';
+import { viewModeLook } from '../stage/viewModes.js';
 import { createLabMaterials, type LabMaterials } from '../../lab3d/geometry3d.js';
 import { createRuntime3D, type Runtime3D, type Runtime3DOptions, type ShadowScope } from '../../lab3d/runtime3d.js';
 import { Camera3D, type Camera3DKind } from './camera3d.js';
 import { TokenBadges } from './badges.js';
-import { coverScene } from './cover.js';
+import { coverScene, setVision } from './cover.js';
 import { FigurePool, type FigureState } from './figures.js';
 import { FloorInk, type InkCover } from './floorInk.js';
 import { DomLabels } from './labels.js';
@@ -145,9 +155,10 @@ const CATALOGUE_DEFS: Record<string, TileDrawDef> = tileDefsFromSets(TILESETS);
 
 /**
  * The flat overlays' draw order among the scene's see-through things. The
- * washes, the grid and the GM's geometry lie under the figures' rings and
- * shadows (1–2); the fog tint, the templates, the drafts and the ruler lie
- * over them, as the 2D map layers them over its tokens.
+ * washes, the grid and the GM's geometry lie under the figures' rings,
+ * shadows and blood (1–2) and the top view's portrait discs (4); the fog
+ * tint, the templates, the drafts and the ruler lie over them, as the 2D map
+ * layers them over its tokens.
  */
 const ORDER = {
   lightMap: -20,
@@ -509,7 +520,15 @@ class Stage3D implements StageApi, PointerHost {
     // both, as the 2D map draws its floors below under its shroud.
     this.materials = createLabMaterials('fog');
     this.belowMaterials = createLabMaterials('full');
-    this.figures = new FigurePool(this.materials, { unitM: scene.grid.unitM, storey: rt.storey }, this.belowMaterials);
+    this.figures = new FigurePool(this.materials, { unitM: scene.grid.unitM, storey: rt.storey }, this.belowMaterials, {
+      urlFor: (id) => this.opts.urlFor(id),
+      // Each figure lit as the floor it stands on: the baked lamps there.
+      light: {
+        at: (level, x, z, out) => this.rt.bakedLightAt(level, x, z, out),
+        version: () => this.rt.lightVersion,
+      },
+      onChange: () => this.rt.requestRender(),
+    });
     this.figures.setLevel(this.level);
     rt.threeScene.add(this.figures.group);
     this.badges = new TokenBadges(overlay, (id) => this.opts.urlFor(id));
@@ -567,6 +586,10 @@ class Stage3D implements StageApi, PointerHost {
       // Everything DOM follows the frame just drawn: the view or a figure
       // may have moved.
       rt.onAfterFrame(() => this.layoutOverlay()),
+      // The lamps picked again round a camera that moved, mid-frame: the
+      // figures are lit for them before that frame is drawn
+      // (`FigurePool.relightIfStale`).
+      rt.onBeforeRender(() => this.figures.relightIfStale()),
     );
 
     // The pointer listens on the root, not the canvas: the canvas is
@@ -604,7 +627,13 @@ class Stage3D implements StageApi, PointerHost {
    */
   private warmShaders(): void {
     const samples = new Group();
-    samples.add(...this.traced.sample().all, this.markers.sample(), ...this.selBoxes.sample(), ...this.ghostBoxes.sample());
+    samples.add(
+      ...this.traced.sample().all,
+      this.markers.sample(),
+      ...this.selBoxes.sample(),
+      ...this.ghostBoxes.sample(),
+      ...this.figures.sample(),
+    );
     void this.rt.precompile(samples).then(() => {
       samples.traverse((o) => (o as Mesh).geometry?.dispose());
       samples.clear();
@@ -903,9 +932,36 @@ class Stage3D implements StageApi, PointerHost {
     this.attempt(() => this.rt.update({ defs: merged }));
   }
 
-  /** Not yet (P4): the 3D map draws every pair of eyes as normal. */
-  setViewMode(_mode: VisionMode): void {
-    // No-op until the vision modes are a material pass over the 3D scene.
+  /**
+   * Restyle the map for a pair of eyes, with the 2D map's own colour
+   * matrices (`stage/viewModes.ts`), where the 2D map puts them: the floor's
+   * on the world, the map, the floors below and the figures seen down on
+   * them; the bodies' on the figures in view and on their plates; nothing
+   * on the overlays and the GM's markers (`cover.ts` `markPlain`), on what
+   * is drawn over the fog (templates, ruler, pings), or on the markers'
+   * labels. Uniforms only (`cover.ts` `setVision`), and a CSS filter on the
+   * plates' layer (`TokenBadges.setLook`): no shader is compiled again, so
+   * a switch costs one frame. Always written, never skipped as unchanged:
+   * the uniforms are shared, and a stage that has just claimed the cover
+   * starts from plain eyes.
+   */
+  setViewMode(mode: VisionMode): void {
+    if (this.destroyed) return;
+    this.markFigures();
+    const look = viewModeLook(mode);
+    setVision(this.cover, look);
+    this.badges.setLook(look?.bodies ?? null);
+    this.rt.requestRender();
+  }
+
+  /**
+   * What draws the figures on the floor in view takes the bodies' colours
+   * in a vision mode (`FigurePool.markInView`); the figures seen below keep
+   * the floor's, as the 2D map's floors below do. Uniform flags only; run
+   * after every update, as figures come and change.
+   */
+  private markFigures(): void {
+    this.figures.markInView();
   }
 
   /** The GPU quality on this device, live: Low swaps the renderer, Medium ↔ High retiers the lighting. */
@@ -968,6 +1024,10 @@ class Stage3D implements StageApi, PointerHost {
     }
     // A new scale rebuilds the figures at their new size (a no-op otherwise).
     this.figures.setContext({ unitM: scene.grid.unitM, storey: this.rt.storey });
+    // Straight down, a token is its portrait disc, and its plate is laid round it.
+    const topView = this.camera.kind === 'top';
+    this.figures.setTopView(topView);
+    this.badges.setTopView(topView);
     const floorChanged = level !== this.level;
     if (floorChanged) {
       this.level = level;
@@ -1114,6 +1174,8 @@ class Stage3D implements StageApi, PointerHost {
     // Everything the scene now holds wears the cover before it is drawn: a
     // material made without it is covered here (and named, in a dev build).
     coverScene(this.rt.threeScene);
+    // And every figure in view made or changed takes the bodies' colours (`setViewMode`).
+    this.markFigures();
     this.rt.requestRender();
     const info = this.rt.info();
     if (info.edits !== edits) {

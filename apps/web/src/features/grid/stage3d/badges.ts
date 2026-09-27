@@ -24,12 +24,28 @@
  * plates, writing a transform where the position really changed. Plates
  * ignore the pointer: every press goes through to the map beneath, whose
  * stage asks `pick` whether it landed on a portrait.
+ *
+ * In the top view (`setTopView`) the portrait is the figure's own, a disc
+ * lying on its head (`portraits.ts`), as the 2D plan draws a token. The plate
+ * then gives its portrait up and is laid round that disc: centred on it, the
+ * same size on screen, its bars just above and its name just below, as the
+ * 2D plan lays a token's out. Its disc stays in place, unseen, for `pick`, and
+ * its selection ring goes (the figure's ring on the floor shows round the
+ * disc); the acting glow keeps breathing round it. In iso the plates stay as
+ * they are.
+ *
+ * In a vision mode the plates take the bodies' colours (`setLook`), as the
+ * 2D map's token filter restyles its badges with its tokens: in iso the
+ * plate is where a token's portrait shows, and a portrait in full colour
+ * over a figure ramped thermal amber would not be what the 2D map shows.
  */
 import { Vector3 } from 'three';
 import type { TokenBars } from '../types.js';
 import { C } from '../stage/colors.js';
 import { barColor, barsKey, monitorFill, pipCount, SOURCE_COLORS, tokenInitial } from '../stage/tokenState.js';
+import type { ColorMatrix } from '../stage/viewModes.js';
 import type { FigureState } from './figures.js';
+import { portraitRadius } from './portraits.js';
 
 /** What a plate is drawn from: a figure's state without its floor (a plate follows its figure's). */
 export type BadgeState = Pick<FigureState, 'token' | 'bars' | 'selected' | 'acting' | 'ghosted'>;
@@ -53,6 +69,9 @@ const BREATH_HALF_MS = 628;
 const FONT = 'Inter, "Segoe UI", system-ui, sans-serif';
 /** Scratch for `scaleAt`'s probes, so a layout allocates no vector. */
 const PROBE = new Vector3();
+const SVG_NS = 'http://www.w3.org/2000/svg';
+/** Numbers the plates' vision filters, so two stages' ids never meet in one document. */
+let lookSeq = 0;
 
 /** A palette number as a CSS colour. */
 function css(color: number, alpha = 1): string {
@@ -71,9 +90,11 @@ function make<K extends keyof HTMLElementTagNameMap>(tag: K, style: Partial<CSSS
 
 /** One token's plate and the parts of it that change. */
 interface Plate {
-  /** Positioned by `layout`: its bottom centre sits on the figure's head point. */
+  /** Positioned by `layout`: its bottom centre sits on the figure's head point (in the top view, its disc's centre). */
   readonly el: HTMLDivElement;
   readonly bars: HTMLDivElement;
+  /** The portrait's box: the disc and what rings it. */
+  readonly holder: HTMLDivElement;
   readonly disc: HTMLDivElement;
   readonly initial: HTMLSpanElement;
   img: HTMLImageElement | null;
@@ -88,11 +109,15 @@ interface Plate {
   /** What the plate was last drawn saying. */
   key: string;
   shown: boolean;
+  /** The token's size, as last synced: the top view's disc is sized to it. */
+  size: number;
   /** Where `layout` last put it: screen px, scale, stacking. */
   x: number;
   y: number;
   k: number;
   z: number;
+  /** The holder's size in the top view, CSS px before the scale; NaN while it is the iso plate's. */
+  d: number;
 }
 
 /**
@@ -102,7 +127,11 @@ interface Plate {
  */
 export class TokenBadges {
   private readonly layer: HTMLDivElement;
+  /** The plates' vision filter (`setLook`): an SVG colour matrix the layer points at while a vision mode is on. */
+  private readonly look: { svg: SVGSVGElement; matrix: SVGFEColorMatrixElement; id: string };
   private readonly plates = new Map<string, Plate>();
+  /** The top view: plates laid round the figures' own portrait discs (see the module note). */
+  private top = false;
   private disposed = false;
 
   constructor(
@@ -120,6 +149,47 @@ export class TokenBadges {
     });
     this.layer.dataset.layer = 'token-plates';
     overlay.appendChild(this.layer);
+
+    // The vision filter's definition, in an SVG of no size beside the layer
+    // rather than in it (the layer's filter never filters its own
+    // definition), and not `display: none`, which some browsers take to
+    // switch the filter off. sRGB: Pixi's filter works on the canvas's
+    // encoded colour, not on linear light, which is SVG's default.
+    lookSeq += 1;
+    const id = `safehouse-plate-look-${lookSeq}`;
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('width', '0');
+    svg.setAttribute('height', '0');
+    svg.setAttribute('aria-hidden', 'true');
+    Object.assign(svg.style, { position: 'absolute', pointerEvents: 'none' });
+    const filter = document.createElementNS(SVG_NS, 'filter');
+    filter.id = id;
+    filter.setAttribute('color-interpolation-filters', 'sRGB');
+    const matrix = document.createElementNS(SVG_NS, 'feColorMatrix');
+    matrix.setAttribute('type', 'matrix');
+    filter.appendChild(matrix);
+    svg.appendChild(filter);
+    overlay.appendChild(svg);
+    this.look = { svg, matrix, id };
+  }
+
+  /**
+   * Restyle the plates for a pair of eyes: `matrix` is the bodies' colour
+   * matrix (`viewModes.ts`), which the 2D map's token filter lays over its
+   * badges with the tokens. Here it is an SVG `feColorMatrix` on the whole
+   * layer, which takes the same 20 numbers in the same layout — row-major
+   * 4 × 5, on straight colour in 0 … 1, offsets in 0 … 1 — and clamps as
+   * Pixi's does. Null for eyes that see the plates as they are: no filter at
+   * all, so outside a vision mode the layer costs nothing more.
+   */
+  setLook(matrix: ColorMatrix | null): void {
+    if (this.disposed) return;
+    if (matrix === null) {
+      this.layer.style.filter = '';
+      return;
+    }
+    this.look.matrix.setAttribute('values', matrix.join(' '));
+    this.layer.style.filter = `url(#${this.look.id})`;
   }
 
   /**
@@ -137,9 +207,11 @@ export class TokenBadges {
       let p = this.plates.get(id);
       if (!p) {
         p = this.create();
+        this.arrange(p);
         this.plates.set(id, p);
         this.layer.appendChild(p.el);
       }
+      p.size = s.token.size > 0 ? s.token.size : 1;
       const t = s.token;
       const key = [t.name, t.source, t.artRef ?? '', s.selected, s.acting, s.ghosted, barsKey(s.bars)].join('|');
       if (key === p.key) continue;
@@ -162,6 +234,7 @@ export class TokenBadges {
   layout(project: (world: Vector3) => { x: number; y: number }, positionOf: (tokenId: string) => Vector3 | null): void {
     if (this.disposed) return;
     let k = -1;
+    let square = 0;
     for (const [id, p] of this.plates) {
       const at = positionOf(id);
       if (!at) {
@@ -169,7 +242,22 @@ export class TokenBadges {
         continue;
       }
       // One scale for all: the camera is orthographic, so a square is the same size everywhere on screen.
-      if (k < 0) k = scaleAt(project, at);
+      if (k < 0) {
+        square = squarePxAt(project, at);
+        k = scaleFor(square);
+      }
+      // In the top view the plate's disc is the figure's, as big on screen
+      // as it is: its size before the plate's scale.
+      if (this.top && square > 0) {
+        const d = Math.max(8, Math.round(((2 * portraitRadius(p.size) * square) / k) * 2) / 2);
+        if (d !== p.d) {
+          p.d = d;
+          p.holder.style.width = `${d}px`;
+          p.holder.style.height = `${d}px`;
+          // The bars as wide as the disc, as on the 2D plan.
+          p.bars.style.width = `${Math.max(DISC_PX, d)}px`;
+        }
+      }
       const s = project(at);
       if (!Number.isFinite(s.x) || !Number.isFinite(s.y)) {
         this.hide(p);
@@ -185,8 +273,11 @@ export class TokenBadges {
         p.x = x;
         p.y = y;
         p.k = k;
-        // The plate's bottom centre (its transform origin) lands on the point.
-        p.el.style.transform = `translate(${x}px, ${y}px) translate(-50%, -100%) scale(${k})`;
+        // The plate's bottom centre (its transform origin) lands on the
+        // point; in the top view, its disc's centre.
+        p.el.style.transform = this.top
+          ? `translate(${x}px, ${y}px) translate(-50%, -50%) scale(${k})`
+          : `translate(${x}px, ${y}px) translate(-50%, -100%) scale(${k})`;
       }
       // Lower on screen is nearer the camera, in iso and in top view alike: in front.
       const z = Math.round(y);
@@ -200,9 +291,10 @@ export class TokenBadges {
   /**
    * The token whose plate's portrait disc is under `screen` (overlay px, the
    * host px the pointer measures in), the nearest plate where two overlap;
-   * null for none. The portrait is what the eye takes for the token, and in
-   * the top view it hangs a square north of the figure it names — over
-   * whoever stands there — so a press on it has to mean its own token.
+   * null for none. The portrait is what the eye takes for the token: in iso
+   * it hangs over the head, in front of whoever stands behind, so a press on
+   * it has to mean its own token; in the top view the plate's (unseen) disc
+   * lies over the figure's own portrait disc, which the press is then on.
    * Reads the plates' laid-out boxes: call it on a press, not per move.
    */
   pick(screen: { x: number; y: number }): string | null {
@@ -234,6 +326,7 @@ export class TokenBadges {
     for (const p of this.plates.values()) this.drop(p);
     this.plates.clear();
     this.layer.remove();
+    this.look.svg.remove();
   }
 
   // --- one plate -----------------------------------------------------------
@@ -314,6 +407,7 @@ export class TokenBadges {
     return {
       el,
       bars,
+      holder,
       disc,
       initial,
       img: null,
@@ -326,11 +420,57 @@ export class TokenBadges {
       name,
       key: '',
       shown: false,
+      size: 1,
       x: Number.NaN,
       y: Number.NaN,
       k: Number.NaN,
       z: Number.NaN,
+      d: Number.NaN,
     };
+  }
+
+  /**
+   * Lay a plate out for the view (see the module note): in iso a column —
+   * bars, portrait, name — hanging from its bottom centre; in the top view
+   * just its portrait's box, the size of the figure's disc under it (set by
+   * `layout`), with the bars over it and the name under it taken out of the
+   * flow, so the box's centre is the plate's.
+   */
+  private arrange(p: Plate): void {
+    const top = this.top;
+    Object.assign(p.el.style, { paddingBottom: top ? '0' : '4px', transformOrigin: top ? '50% 50%' : '50% 100%' });
+    const aside = (e: HTMLDivElement, over: boolean): void => {
+      Object.assign(e.style, {
+        position: top ? 'absolute' : '',
+        left: top ? '50%' : '',
+        transform: top ? 'translateX(-50%)' : '',
+        bottom: top && over ? 'calc(100% + 3px)' : '',
+        top: top && !over ? 'calc(100% + 2px)' : '',
+      });
+    };
+    aside(p.bars, true);
+    aside(p.name, false);
+    p.bars.style.marginBottom = top ? '0' : '3px';
+    p.name.style.marginTop = top ? '0' : '2px';
+    // Kept in place for `pick`, unseen: the figure's disc is the portrait.
+    p.disc.style.visibility = top ? 'hidden' : '';
+    // The figure's own ring on the floor shows round its disc.
+    p.ring.style.visibility = top ? 'hidden' : '';
+    if (!top) {
+      p.holder.style.width = `${DISC_PX}px`;
+      p.holder.style.height = `${DISC_PX}px`;
+      p.bars.style.width = `${DISC_PX}px`;
+    }
+    p.d = Number.NaN;
+    // The next `layout` writes the transform for the new layout.
+    p.x = Number.NaN;
+  }
+
+  /** The top view, or not: the plates are laid out again for it (`arrange`) on the next `layout`. */
+  setTopView(on: boolean): void {
+    if (this.disposed || on === this.top) return;
+    this.top = on;
+    for (const p of this.plates.values()) this.arrange(p);
   }
 
   /** Redraw what a plate says. */
@@ -467,11 +607,11 @@ function drawBars(host: HTMLDivElement, bars: TokenBars | null): void {
 }
 
 /**
- * The plates' scale for the zoom: how many px a square spans on screen at
- * `at`, measured along whichever floor axis shows longer (in iso both lie
- * foreshortened; in top view both show whole), against `FULL_SIZE_SQUARE_PX`.
+ * How many px a square spans on screen at `at`, measured along whichever
+ * floor axis shows longer (in iso both lie foreshortened; in top view both
+ * show whole); 0 when the projection says nothing sensible.
  */
-function scaleAt(project: (world: Vector3) => { x: number; y: number }, at: Vector3): number {
+function squarePxAt(project: (world: Vector3) => { x: number; y: number }, at: Vector3): number {
   const o = project(at);
   const ox = o.x;
   const oy = o.y;
@@ -484,7 +624,12 @@ function scaleAt(project: (world: Vector3) => { x: number; y: number }, at: Vect
   const b = project(probe);
   const alongZ = Math.hypot(b.x - ox, b.y - oy);
   const px = Math.max(alongX, alongZ);
-  if (!Number.isFinite(px) || px <= 0) return 1;
+  return Number.isFinite(px) && px > 0 ? px : 0;
+}
+
+/** The plates' scale for a square `px` across on screen (`squarePxAt`), against `FULL_SIZE_SQUARE_PX`. */
+function scaleFor(px: number): number {
+  if (!(px > 0)) return 1;
   const k = Math.min(MAX_SCALE, Math.max(MIN_SCALE, px / FULL_SIZE_SQUARE_PX));
   return Math.round(k * 100) / 100;
 }

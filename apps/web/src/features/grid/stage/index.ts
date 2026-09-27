@@ -58,6 +58,7 @@ import { MapLayer } from './mapLayer.js';
 import { drawOccluders } from './occlusion.js';
 import { PointerController, type Cell, type PointerHost } from './pointer.js';
 import { TokenView } from './tokenView.js';
+import { viewModeLook } from './viewModes.js';
 
 /** How long an un-terminated remote drag ghost keeps overriding a position. */
 const GHOST_TTL_MS = 4000;
@@ -419,9 +420,10 @@ class Stage implements StageApi, PointerHost {
    * or the labels; a ColorMatrixFilter each way, so the cost is one pass
    * over the scene, not a second renderer.
    *
-   * Thermal is pixi's own "predator" matrix — a false-colour heat ramp —
-   * with warm bodies lifted to amber on the token layer. Low-light is a lift
-   * with the colour drained, ultrasound a hard grey. Normal removes it all.
+   * The two matrices each pair of eyes gets are data shared with the 3D map
+   * (`viewModes.ts`): thermal a false-colour heat ramp with warm bodies
+   * lifted to amber, low-light a lift with the colour drained, ultrasound a
+   * hard grey. Normal (and astral) removes it all.
    */
   setViewMode(mode: VisionMode): void {
     if (this.disposed || mode === this.viewMode) return;
@@ -430,45 +432,18 @@ class Stage implements StageApi, PointerHost {
     const clear = (c: Container) => {
       c.filters = [];
     };
-    if (mode === 'normal' || mode === 'astral') {
+    const look = viewModeLook(mode);
+    if (look === null) {
       for (const c of floor) clear(c);
       clear(this.tokenLayer);
       clear(this.tokenOverlay);
       return;
     }
+    // A fresh copy each: the filter keeps the array it is given as its uniform.
     const floorFilter = new ColorMatrixFilter();
+    floorFilter.matrix = [...look.floor] as typeof floorFilter.matrix;
     const tokenFilter = new ColorMatrixFilter();
-    if (mode === 'thermographic') {
-      // Heat, not light: the floor drops to a cold violet with its detail
-      // flattened (concrete, crates and water all read about the same to
-      // thermal eyes), and every body on it comes up hot amber. Per-tile
-      // heat (VISION.md §4.4) will vary the floor later; the split between
-      // cold ground and warm bodies is the part that makes thermal useful.
-      // Explicit matrices (row = [r, g, b, a, offset], offsets in 0..1): a
-      // multiply tint on a dark disc only makes a darker disc, and a body
-      // has to glow. Luminance drives both ramps; the offsets set the floor.
-      const L = [0.2126, 0.7152, 0.0722];
-      const ramp = (r: number, g: number, b: number, ro: number, go: number, bo: number) => [
-        L[0]! * r, L[1]! * r, L[2]! * r, 0, ro,
-        L[0]! * g, L[1]! * g, L[2]! * g, 0, go,
-        L[0]! * b, L[1]! * b, L[2]! * b, 0, bo,
-        0, 0, 0, 1, 0,
-      ];
-      // Floor: cold violet, detail kept.
-      floorFilter.matrix = ramp(0.35, 0.25, 0.6, 0.1, 0.05, 0.25) as typeof floorFilter.matrix;
-      // Bodies: hot amber, brighter at the core.
-      tokenFilter.matrix = ramp(0.55, 0.45, 0.15, 0.45, 0.3, 0.05) as typeof tokenFilter.matrix;
-    } else if (mode === 'lowlight') {
-      floorFilter.brightness(1.3, false);
-      floorFilter.saturate(-0.65, true);
-      floorFilter.tint(0xcfe8d5, true);
-      tokenFilter.saturate(-0.4, false);
-    } else {
-      // ultrasound: shape without colour, edges up.
-      floorFilter.desaturate();
-      floorFilter.contrast(0.45, true);
-      tokenFilter.desaturate();
-    }
+    tokenFilter.matrix = [...look.bodies] as typeof tokenFilter.matrix;
     for (const c of floor) c.filters = [floorFilter];
     this.tokenLayer.filters = [tokenFilter];
     this.tokenOverlay.filters = [tokenFilter];

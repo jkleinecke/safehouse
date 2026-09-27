@@ -210,6 +210,13 @@ export interface FrameInfo {
  * the runtime then draws another frame after this one.
  */
 export type BeforeFrameHook = (now: number, dt: number) => boolean | void;
+/**
+ * Runs in each frame just before it is drawn: after the before-frame hooks,
+ * the controls, and the real-time lamps picked again round a camera that
+ * moved — so what it reads (`Runtime3D.lightVersion`, `bakedLightAt`) is
+ * what this frame is lit with.
+ */
+export type BeforeRenderHook = () => void;
 /** Runs after each frame is drawn, with what it cost. */
 export type AfterFrameHook = (frame: FrameInfo) => void;
 
@@ -275,8 +282,26 @@ export interface Runtime3D {
    * the camera itself). Holds across renderer swaps.
    */
   setOrbitEnabled(on: boolean): void;
+  /**
+   * The baked light on the top of floor `level` at grid point (x, z), linear
+   * RGB, into `out` (`LabLighting.bakedLightAt`): what the lamps not lit in
+   * real time now put on the floor there — every lamp at Low. Black while
+   * there is no lighting. Read-only: a map stage lights its figures with it.
+   */
+  bakedLightAt(level: number, x: number, z: number, out: Color): Color;
+  /**
+   * Changes whenever `bakedLightAt` may answer differently
+   * (`LabLighting.lightVersion`), a lighting made afresh included. It can
+   * change in the middle of a frame too, after the before-frame hooks: the
+   * real-time lamps are picked again there, round a camera that moved. A
+   * before-render hook (`onBeforeRender`) sees the version the frame is
+   * drawn with.
+   */
+  readonly lightVersion: number;
   /** Add a hook run before every frame; returns its removal. */
   onBeforeFrame(hook: BeforeFrameHook): () => void;
+  /** Add a hook run in every frame just before it is drawn (`BeforeRenderHook`); returns its removal. */
+  onBeforeRender(hook: BeforeRenderHook): () => void;
   /** Add a hook run after every frame; returns its removal. */
   onAfterFrame(hook: AfterFrameHook): () => void;
   info(): Runtime3DInfo;
@@ -768,6 +793,7 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
 
   // The frame loop's state. `raf` is the pending frame, 0 when none is.
   const beforeHooks = new Set<BeforeFrameHook>();
+  const renderHooks = new Set<BeforeRenderHook>();
   const afterHooks = new Set<AfterFrameHook>();
   let raf = 0;
   let lastFrame = 0;
@@ -1421,6 +1447,8 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
     // asks for the next frame (its change event) until it settles.
     if (orbitEnabled) controls.update();
     repickLamps(now);
+    // What reads the light reads it as this frame is lit, the pick included.
+    for (const hook of renderHooks) hook();
 
     renderer.info.reset();
     renderer.render(scene3, camera);
@@ -1476,6 +1504,7 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
     if (pickTimer !== null) clearTimeout(pickTimer);
     pickTimer = null;
     beforeHooks.clear();
+    renderHooks.clear();
     afterHooks.clear();
     dropControls(controls);
     lighting?.dispose();
@@ -1721,10 +1750,26 @@ export function createRuntime3D(host: HTMLElement, initial: Runtime3DOptions, se
       if (!disposed) controls.enabled = on;
     },
 
+    bakedLightAt(level, x, z, out) {
+      if (disposed || lighting === null) return out.setRGB(0, 0, 0);
+      return lighting.bakedLightAt(level, x, z, out);
+    },
+
+    get lightVersion() {
+      return lighting?.lightVersion ?? 0;
+    },
+
     onBeforeFrame(hook) {
       beforeHooks.add(hook);
       return () => {
         beforeHooks.delete(hook);
+      };
+    },
+
+    onBeforeRender(hook) {
+      renderHooks.add(hook);
+      return () => {
+        renderHooks.delete(hook);
       };
     },
 

@@ -162,6 +162,28 @@ export interface LabLighting {
   refreshShadows(near?: ShadowScope): void;
   /** Lamps lit per pixel now, how many of those cast shadows, and how many are baked. */
   stats(): { realtime: number; shadowed: number; baked: number };
+  /**
+   * The baked light on the floor at one point: the irradiance at (x, z) on
+   * the top of floor `level` (world units, the world group's frame) from
+   * every lamp on that floor not lit in real time now — every lamp at Low —
+   * worked out exactly as a floor vertex there is baked (`bakeLamp`): the
+   * same falloff, the same walls (the lamp's polygon), the same gain. Linear
+   * RGB in the baked attributes' units, written into `out` and returned.
+   *
+   * Read-only, and cheap — a little arithmetic per lamp on the floor and one
+   * polygon test for each that reaches the point — so a map stage can light
+   * each figure as the floor it stands on is lit (`stage3d/figures.ts`),
+   * which the Low tier's unlit world would otherwise leave darker than its
+   * lamp pool.
+   */
+  bakedLightAt(level: number, x: number, z: number, out: Color): Color;
+  /**
+   * Changes whenever `bakedLightAt` may answer differently: the lamps, the
+   * tier, their gain, or which of them are real-time. Unique across every
+   * lighting ever made, so a lighting made afresh never repeats an older
+   * one's number.
+   */
+  readonly lightVersion: number;
   /** Take every light out of the scene and give the world its own materials back. */
   dispose(): void;
 }
@@ -428,6 +450,9 @@ interface WorldBake {
  * reused, never re-created, by each lighting built on that world.
  */
 const bakes = new WeakMap<BuiltWorld, WorldBake>();
+
+/** The last `LabLighting.lightVersion` handed out, by any lighting. */
+let lastLightVersion = 0;
 
 const IDENTITY = new Matrix4();
 
@@ -1208,6 +1233,14 @@ export function createLighting(ctx: {
   let boost = 1;
   let tierBoost = 1;
   let ambientGain = 1;
+  /** What `bakedLightAt` answers from, as of now (`LabLighting.lightVersion`). */
+  lastLightVersion += 1;
+  let lightVersion = lastLightVersion;
+  /** Something `bakedLightAt` reads changed: a new number for it. */
+  function bumpLight(): void {
+    lastLightVersion += 1;
+    lightVersion = lastLightVersion;
+  }
 
   // High's glow at each lamp: one soft sprite per lamp, where the lamp
   // actually hangs (not where a low lamp is lifted to for its pool). The
@@ -1541,10 +1574,14 @@ export function createLighting(ctx: {
     realtime = next;
 
     const dirty = new Set<MeshRec>();
+    let moved = false;
     for (let i = 0; i < lamps.length; i += 1) {
       if (before[i] === next[i]) continue;
+      moved = true;
       for (const part of lamps[i]!.bake?.parts ?? []) dirty.add(part.rec);
     }
+    // A lamp gone real-time is no longer baked anywhere, a floor point included.
+    if (moved) bumpLight();
     return dirty;
   }
 
@@ -1604,6 +1641,7 @@ export function createLighting(ctx: {
     realtime = new Uint8Array(lamps.length);
     pick();
     for (const rec of recs) accumulate(rec);
+    bumpLight();
   }
 
   /**
@@ -1624,6 +1662,7 @@ export function createLighting(ctx: {
     lamps = loadLamps(next, debt);
     indexLamps();
     layoutHalos();
+    bumpLight();
 
     const byId = new Map<string, number>();
     lamps.forEach((L, i) => byId.set(L.id, i));
@@ -1723,6 +1762,43 @@ export function createLighting(ctx: {
     }
   }
 
+  /**
+   * `LabLighting.bakedLightAt`: `bakeLamp`'s sum for one floor vertex at
+   * (x, z) facing up, with each lamp's colour and gain as `accumulate` adds
+   * them. A floor point is never moved toward its lamp (only walls and props
+   * are, `WALL_REACH`), and a normal straight up nudges it nowhere across the
+   * floor, so the polygon is tested at the point itself.
+   */
+  function bakedLightAt(level: number, x: number, z: number, out: Color): Color {
+    out.setRGB(0, 0, 0);
+    for (let i = 0; i < lamps.length; i += 1) {
+      if (realtime[i]) continue;
+      const L = lamps[i]!;
+      const poly = L.bake?.poly;
+      if (L.level !== level || !poly) continue;
+      const lx = L.x - x;
+      const lz = L.z - z;
+      const h2 = lx * lx + lz * lz;
+      const reach = L.radius + REACH_SLACK;
+      if (h2 > reach * reach) continue;
+      const ly = L.y - L.floorY;
+      const d2 = h2 + ly * ly;
+      const cut2 = L.cutoff * L.cutoff;
+      if (d2 >= cut2) continue;
+      const ndl = ly / Math.sqrt(d2);
+      if (!(ndl > MIN_NDL) || !inPolygon(poly, x, z)) continue;
+      const q = d2 / cut2;
+      const w = 1 - q * q;
+      const g = (ndl / Math.max(d2, 0.01)) * w * w;
+      if (g < MIN_G) continue;
+      const k = boost * g;
+      out.r += L.rgb[0] * k;
+      out.g += L.rgb[1] * k;
+      out.b += L.rgb[2] * k;
+    }
+    return out;
+  }
+
   /** `LabLighting.syncMeshes`. */
   function syncMeshes(next: readonly LabLightSource[], near?: ShadowScope): void {
     const debt = reconcile(cache, world);
@@ -1773,7 +1849,17 @@ export function createLighting(ctx: {
         boost = next;
         for (const slot of slots) if (slot.lamp >= 0) slot.light.intensity = lamps[slot.lamp]!.intensity * boost;
         for (const rec of recs) accumulate(rec);
+        bumpLight();
       }
+    },
+
+    bakedLightAt(level, x, z, out) {
+      if (disposed) return out.setRGB(0, 0, 0);
+      return bakedLightAt(level, x, z, out);
+    },
+
+    get lightVersion() {
+      return lightVersion;
     },
 
     update(f) {

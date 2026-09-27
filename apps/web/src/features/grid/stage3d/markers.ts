@@ -88,7 +88,7 @@ import { CAMERA_EYE_LIFT, lightMarkerLift } from '../stage/hit.js';
 import { cameraKey, lightKey, noteKey, pinKey, selectedOf } from '../stage/keys.js';
 import { drawCameraCone, drawLightReach, drawNotes } from '../stage/layers.js';
 import type { Lift, ViewCamera } from '../stage/viewCamera.js';
-import { applyCover } from './cover.js';
+import { applyCover, markPlain } from './cover.js';
 import type { FloorInk } from './floorInk.js';
 import { DomLabels, TAG_OUTLINE } from './labels.js';
 
@@ -307,8 +307,11 @@ function standMaterial(scale: { value: number }): MeshBasicMaterial {
   };
   // Before the cover, which keeps a key of the material's own.
   m.customProgramCacheKey = () => 'safehouse-gm-marker';
-  // Over the shroud and under the fog, as the 2D map layers its markers.
+  // Over the shroud and under the fog, as the 2D map layers its markers; and
+  // in their own colours whatever the eyes, which its vision filters never
+  // reach either.
   applyCover(m, 'fog');
+  markPlain(m);
   return m;
 }
 

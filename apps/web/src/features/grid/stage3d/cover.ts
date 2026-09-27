@@ -85,10 +85,51 @@
  *
  * One set, shared by every patched material, so a new mask is a texture swap
  * and a few numbers — a recompile only when the fog comes or goes, which
- * turns the discard on or off. One stage draws a map at a time: the
- * one that owns the cover (`claimCover`) writes it, and puts it back to
- * "nothing covered" when it goes (`releaseCover`). With nothing covered (the
- * lab, a GM with no lens) the patch skips its reads on a uniform branch.
+ * turns the discard on or off — and new eyes are two matrices. One stage
+ * draws a map at a time: the one that owns the cover (`claimCover`) writes
+ * it, and puts it back to "nothing covered", seen with plain eyes, when it
+ * goes (`releaseCover`). With nothing covered (the lab, a GM with no lens)
+ * the patch skips its reads on a uniform branch. Beside the set, each
+ * material has one uniform of its own: which of a vision mode's matrices it
+ * takes, if any.
+ *
+ * ## Vision
+ *
+ * The 2D map restyles itself for a pair of eyes (thermal, low-light,
+ * ultrasound) with two colour-matrix filters: one on its floor containers
+ * (the map images, the painted tiles, and the floors below with the tokens
+ * seen on them), one on its tokens and their badges (`stage/viewModes.ts`
+ * holds the matrices, as data both renderers read). Everything else it
+ * draws — the light-map wash, the grid, the doors and zones, the cameras'
+ * cones, the lights, pins and notes — lies in containers neither filter
+ * reaches, in its own colours. Here the same step is part of the patch: just
+ * before the cover's mix, the fragment's final colour — after tone mapping
+ * and the output colour space, so the same encoding the 2D filters see —
+ * goes through a colour matrix, clamped to 0 … 1 as the 2D filter's target
+ * keeps it. Which matrix is the material's own business, told by a uniform
+ * of its own, so marking one compiles nothing:
+ *   - the BODIES' on what draws the figures on the floor in view
+ *     (`markBody`);
+ *   - none on the overlays and the GM's markers (`markPlain`), which lie
+ *     over the restyled floor in their own colours, as the 2D map's do: an
+ *     open door stays green and a closed one red whatever the eyes;
+ *   - the FLOOR's on every other covered material: the world, the map, the
+ *     traced walls, the floors below and the figures seen down on them.
+ * The cover colour mixed in after it, and the background, are left as they
+ * are, as the 2D map's fog and shroud sheets lie unfiltered over its
+ * filtered layers; what is exempt from the cover (the templates, the ruler,
+ * the pings) is not restyled either, as the 2D fx layer is not.
+ *
+ * Premultiplied colour is unpremultiplied for the step and premultiplied
+ * again, as Pixi's filter does. Added light (a halo) takes only the
+ * matrix's linear part, with no offsets: the matrix is affine, so M(dst +
+ * src) = M(dst) + A·src — adding A·src over a floor the matrix already
+ * styled is the matrix applied to the sum, where adding M(src) would count
+ * the offsets twice.
+ *
+ * Switching eyes (`setVision`) writes the shared uniforms and nothing else:
+ * no program is compiled again. For eyes that see the scene as it is
+ * (normal, astral) the step is skipped on a uniform branch.
  *
  * ## Chaining
  *
@@ -112,6 +153,7 @@ import {
   Color,
   DataTexture,
   LinearFilter,
+  Matrix4,
   MeshBasicMaterial,
   MeshDepthMaterial,
   MeshDistanceMaterial,
@@ -128,6 +170,7 @@ import {
   type WebGLRenderer,
 } from 'three';
 import { C } from '../stage/colors.js';
+import type { ColorMatrix, ViewModeLook } from '../stage/viewModes.js';
 
 /**
  * Which masks hide a material: `full` the shroud and the fog (what the 2D map
@@ -195,6 +238,14 @@ const U = {
   labCoverShroud: { value: 0 },
   /** The cover colour, linear: the map's ground, which is also the 3D scene's background. */
   labCoverColor: { value: new Color(C.ground) },
+  /** 1 while a vision mode restyles the scene (`setVision`); 0 for eyes that see it as it is. */
+  labVisionOn: { value: 0 },
+  /** The floor's colour matrix (`viewModes.ts`): its 4 × 4 part, and its offsets. */
+  labVisionFloor: { value: new Matrix4() },
+  labVisionFloorShift: { value: new Vector4() },
+  /** The bodies' colour matrix, the same way. */
+  labVisionBodies: { value: new Matrix4() },
+  labVisionBodiesShift: { value: new Vector4() },
 };
 
 /** The stage whose masks the uniforms show; null when none does. */
@@ -243,9 +294,14 @@ function writeMask(map: { value: Texture }, rect: { value: Vector4 }, amount: { 
   amount.value = Math.min(1, mask.amount);
 }
 
-/** Make `who` the owner of the cover: from now on its `setCover` is what every covered material shows. */
+/**
+ * Make `who` the owner of the cover: from now on its `setCover` and
+ * `setVision` are what every covered material shows. It starts with plain
+ * eyes: a vision mode the last owner left on is not its to keep.
+ */
 export function claimCover(who: object): void {
   owner = who;
+  writeVision(null);
 }
 
 /**
@@ -260,11 +316,104 @@ export function setCover(who: object, fog: CoverMask | null, shroud: CoverMask |
   setDiscard(U.labCoverFog.value >= COVER_TOTAL);
 }
 
-/** `who` is done with the cover: if it still owns it, nothing is covered any more. */
+/** `who` is done with the cover: if it still owns it, nothing is covered any more, and the eyes are plain. */
 export function releaseCover(who: object): void {
   if (owner !== who) return;
   setCover(who, null, null);
+  writeVision(null);
   owner = null;
+}
+
+/** Load a 4 × 5 colour matrix into the patch's form: its 4 × 4 part (row-major in, as `Matrix4.set` takes it) and its offsets. */
+function loadVision(m: ColorMatrix, into: Matrix4, shift: Vector4): void {
+  const at = (i: number): number => m[i] ?? 0;
+  into.set(at(0), at(1), at(2), at(3), at(5), at(6), at(7), at(8), at(10), at(11), at(12), at(13), at(15), at(16), at(17), at(18));
+  shift.set(at(4), at(9), at(14), at(19));
+}
+
+/** Write a look to the shared uniforms; null for plain eyes, which skip the step (and hold identities, for good measure). */
+function writeVision(look: ViewModeLook | null): void {
+  if (look === null) {
+    U.labVisionOn.value = 0;
+    U.labVisionFloor.value.identity();
+    U.labVisionFloorShift.value.set(0, 0, 0, 0);
+    U.labVisionBodies.value.identity();
+    U.labVisionBodiesShift.value.set(0, 0, 0, 0);
+    return;
+  }
+  loadVision(look.floor, U.labVisionFloor.value, U.labVisionFloorShift.value);
+  loadVision(look.bodies, U.labVisionBodies.value, U.labVisionBodiesShift.value);
+  U.labVisionOn.value = 1;
+}
+
+/**
+ * Restyle every covered material for a pair of eyes (`viewModes.ts`
+ * `viewModeLook`; null for eyes that see the scene as it is), if `who` owns
+ * the cover: the bodies' matrix on what `markBody` marked, none on what
+ * `markPlain` marked, the floor's on everything else covered. Uniforms only
+ * — nothing is compiled again. The caller asks for a frame.
+ */
+export function setVision(who: object, look: ViewModeLook | null): void {
+  if (owner !== who) return;
+  writeVision(look);
+}
+
+/** A material's `labVisionKind`: the floor's matrix, the bodies', or none. */
+const VISION_FLOOR = 0;
+const VISION_BODY = 1;
+const VISION_PLAIN = -1;
+
+/**
+ * Per material, which matrix a vision mode gives it (`VISION_FLOOR`,
+ * `VISION_BODY`, `VISION_PLAIN`): the uniform of its own each covered
+ * program reads. Made on first ask, by a mark or by the material's compile,
+ * whichever comes first, so a mark before or after the compile is the same
+ * object the program reads.
+ */
+const visionKinds = new WeakMap<Material, { value: number }>();
+
+function visionKind(material: Material): { value: number } {
+  let kind = visionKinds.get(material);
+  if (kind === undefined) {
+    kind = { value: VISION_FLOOR };
+    visionKinds.set(material, kind);
+  }
+  return kind;
+}
+
+/**
+ * `material` draws a body: a vision mode gives it the bodies' matrix rather
+ * than the floor's. A uniform flips — no program is compiled again — so it
+ * can be said as often as convenient; a material never stops being a body.
+ *
+ * The mark goes by the material whose compile hook the patch runs in: a
+ * stand-in that runs another material's hook as that material's (the lit
+ * variants in `lighting3d.ts` call `orig.onBeforeCompile`) reads the
+ * original's mark, so a body's original is marked too, not only what its
+ * meshes wear.
+ */
+export function markBody(material: Material): void {
+  visionKind(material).value = VISION_BODY;
+}
+
+/**
+ * `material` is never restyled by a vision mode: an overlay or a marker,
+ * which the 2D map draws in its own colours over its restyled floor (see the
+ * module note). A uniform, read as `markBody`'s is; said once, where the
+ * material is made.
+ */
+export function markPlain(material: Material): void {
+  visionKind(material).value = VISION_PLAIN;
+}
+
+/** Every material under `root` draws a body (`markBody`). */
+export function markBodies(root: Object3D): void {
+  root.traverse((o) => {
+    const mat = (o as Object3D & { material?: Material | Material[] }).material;
+    if (mat === undefined) return;
+    if (Array.isArray(mat)) for (const m of mat) markBody(m);
+    else markBody(mat);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -319,6 +468,45 @@ vec2 labCoverUv( vec4 rect, vec2 p ) {
 const FRAGMENT_PARS = /* glsl */ `${COVER_PARS}varying vec2 ${MARK};
 `;
 
+/** The vision step's uniforms: the shared looks, and the material's own kind (`markBody`, `markPlain`). Colour passes only. */
+const VISION_PARS = /* glsl */ `uniform float labVisionOn;
+uniform mat4 labVisionFloor;
+uniform vec4 labVisionFloorShift;
+uniform mat4 labVisionBodies;
+uniform vec4 labVisionBodiesShift;
+uniform float labVisionKind;
+`;
+
+/**
+ * The vision step (see the module note), on the final colour before the
+ * cover's mix, on a uniform branch: skipped for plain eyes and for a plain
+ * material alike. Added light takes the matrix's linear part alone;
+ * anything else the whole matrix, on straight colour, as Pixi's filter
+ * applies it.
+ */
+function visionMain(additive: boolean): string {
+  const body = `labVisionKind > ${glf(VISION_BODY - 0.5)}`;
+  const step = additive
+    ? /* glsl */ `
+		gl_FragColor.rgb = clamp( ( labVisionM * vec4( gl_FragColor.rgb, 0.0 ) ).rgb, 0.0, 1.0 );`
+    : /* glsl */ `
+		vec4 labVisionIn = gl_FragColor;
+		#ifdef PREMULTIPLIED_ALPHA
+			if ( labVisionIn.a > 0.0 ) labVisionIn.rgb /= labVisionIn.a;
+		#endif
+		vec4 labVisionShift = ${body} ? labVisionBodiesShift : labVisionFloorShift;
+		vec4 labVisionOut = clamp( labVisionM * labVisionIn + labVisionShift, 0.0, 1.0 );
+		#ifdef PREMULTIPLIED_ALPHA
+			labVisionOut.rgb *= labVisionOut.a;
+		#endif
+		gl_FragColor = labVisionOut;`;
+  return /* glsl */ `
+	if ( labVisionOn > 0.5 && labVisionKind > ${glf(VISION_PLAIN + 0.5)} ) {
+		mat4 labVisionM = ${body} ? labVisionBodies : labVisionFloor;${step}
+	}
+`;
+}
+
 /** The fog's cover at the fragment, 0 … 1: what the patch and the lid both start from. */
 const FOG_AT = /* glsl */ `labCoverFog * labCoverIn( labCoverFogRect, ${MARK} )
 			* texture2D( labCoverFogMap, labCoverUv( labCoverFogRect, ${MARK} ) ).r`;
@@ -334,8 +522,9 @@ function discardKey(): string {
 }
 
 /**
- * The end of the fragment shader. Both textures are read inside a branch on
- * uniforms only, so the reads stay in uniform control flow.
+ * The end of the fragment shader: the vision step, then the cover. Both
+ * textures are read inside a branch on uniforms only, so the reads stay in
+ * uniform control flow.
  */
 function fragmentMain(mode: CoverMode, additive: boolean): string {
   const shroud =
@@ -355,7 +544,7 @@ function fragmentMain(mode: CoverMode, additive: boolean): string {
 			labCoverOut *= gl_FragColor.a;
 		#endif
 		gl_FragColor.rgb = mix( gl_FragColor.rgb, labCoverOut, labCover );`;
-  return /* glsl */ `
+  return /* glsl */ `${visionMain(additive)}
 	if ( labCoverFog + labCoverShroud > 0.0 ) {
 		float labCover = ${FOG_AT};${shroud}${discardLine()}${apply}
 	}
@@ -385,18 +574,26 @@ function atEndOfMain(src: string, code: string): string | null {
 /** How a shader's fragment side ends: a material's colour pass, or a shadow pass. */
 type PatchEnd = { kind: 'colour'; mode: CoverMode; additive: boolean } | { kind: 'shadow' };
 
-function patchShader(shader: WebGLProgramParametersWithUniforms, sprite: boolean, end: PatchEnd): void {
+/**
+ * Patch `shader`, the program `material` is being compiled with. A colour
+ * pass also gets the material's own vision kind (`markBody`, `markPlain`):
+ * three hands every material its own uniforms object here, even where
+ * materials share a program.
+ */
+function patchShader(shader: WebGLProgramParametersWithUniforms, sprite: boolean, end: PatchEnd, material: Material | null): void {
   // Already there: a chain that wears the cover twice compiles it once.
   if (shader.vertexShader.includes(MARK)) return;
+  const colour = end.kind === 'colour';
   const vertex = atEndOfMain(shader.vertexShader, sprite ? SPRITE_VERTEX : MESH_VERTEX);
-  const fragment = atEndOfMain(shader.fragmentShader, end.kind === 'colour' ? fragmentMain(end.mode, end.additive) : shadowMain());
+  const fragment = atEndOfMain(shader.fragmentShader, colour ? fragmentMain(end.mode, end.additive) : shadowMain());
   if (vertex === null || fragment === null) {
     console.warn('[stage3d] cover: a shader with no main to patch');
     return;
   }
   Object.assign(shader.uniforms, U);
+  if (colour && material !== null) shader.uniforms.labVisionKind = visionKind(material);
   shader.vertexShader = `varying vec2 ${MARK};\n${vertex}`;
-  shader.fragmentShader = `${FRAGMENT_PARS}${fragment}`;
+  shader.fragmentShader = `${FRAGMENT_PARS}${colour ? VISION_PARS : ''}${fragment}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -435,7 +632,7 @@ export function applyCover(material: Material, mode: CoverMode = 'full'): void {
   const ownKey = Object.prototype.hasOwnProperty.call(material, 'customProgramCacheKey') ? material.customProgramCacheKey : null;
   material.onBeforeCompile = function coverCompile(this: Material, shader: WebGLProgramParametersWithUniforms, renderer: WebGLRenderer): void {
     before.call(this, shader, renderer);
-    patchShader(shader, sprite, end);
+    patchShader(shader, sprite, end, this);
   };
   // three's own key is the hook's source text: the hook being wrapped keeps
   // standing for itself, so two materials that differed before still do.
@@ -455,7 +652,7 @@ let shadowPass: { depth: MeshDepthMaterial; distance: MeshDistanceMaterial } | n
 /** A shadow pass's material wearing the discard-only patch, noted with the wearers so a discard flip reaches it. */
 function coverShadowPass<M extends MeshDepthMaterial | MeshDistanceMaterial>(material: M, name: string): M {
   material.name = name;
-  material.onBeforeCompile = (shader) => patchShader(shader, false, { kind: 'shadow' });
+  material.onBeforeCompile = (shader) => patchShader(shader, false, { kind: 'shadow' }, null);
   material.customProgramCacheKey = () => `${TAG}:shadow${discardKey()}`;
   // The scene check never sees these (they are no mesh's `material`), and
   // they must never be covered as a colour pass would be.

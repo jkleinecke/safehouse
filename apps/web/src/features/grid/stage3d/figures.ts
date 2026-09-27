@@ -26,6 +26,32 @@
  * one pair of materials shared by every figure of its kind (below): ghosting
  * costs nothing a frame.
  *
+ * Where a wall or tall furniture stands between the camera and a figure on
+ * the floor in view, the figure shows through it as a faint silhouette, as
+ * the 2D map's see-through copy did (`tokenView.ts` `ghost`, masked to what
+ * stands in front by `occlusion.ts`): one more draw of its body, which shows
+ * only where something is in front of it (`xrayMaterial`). A figure down from
+ * physical damage lies in a small dark-red pool, as the 2D figure bleeds; one
+ * down from stun lies on the bare floor.
+ *
+ * Each figure is lit as the floor it stands on (`FigureLightProbe`). Low draws
+ * the world unlit, every lamp's light baked into its vertices, while a figure
+ * is drawn with a lit material that only the sky and the key light reach: a
+ * runner standing in a lamp's pool came out darker than the floor under them.
+ * So every body wears its own copy of its kind's material (`Shade`), with the
+ * baked light at its square added to its diffuse exactly as the world's baked
+ * light is added to the world's, read again when the figure moves to another
+ * square or the lighting changes. On Medium and High the lamps round the view
+ * are real three.js lights and light the figures themselves; the lamps
+ * further off stay baked there, and are added the same way, so a figure in a
+ * far lamp's pool is lit by it on every tier. No lamp is counted twice: the
+ * probe answers only for the lamps not lit in real time now, and says when
+ * that changes.
+ *
+ * In the top view (`setTopView`) each figure on the floor in view wears its
+ * token's portrait as a disc lying on its head (`portraits.ts`), as the 2D
+ * plan draws its tokens as discs.
+ *
  * Motion is the 2D figure's (`tokenView.ts` `tick`): a figure glides to where
  * it should be — its token's square, or a drag ghost the stage points it at
  * (`setTarget`) — at a walking pace of at least `WALK_SQUARES_PER_S`, quicker
@@ -64,7 +90,11 @@ import {
   BoxGeometry,
   BufferGeometry,
   CircleGeometry,
+  Color,
+  CustomBlending,
   DataTexture,
+  DoubleSide,
+  GreaterDepth,
   Group,
   LinearFilter,
   Mesh,
@@ -81,9 +111,10 @@ import type { TokenBars } from '../types.js';
 import { C, parseColor } from '../stage/colors.js';
 import type { FigurePose } from '../stage/figure.js';
 import { downedBy, tokenPose, WALK_SQUARES_PER_S } from '../stage/tokenState.js';
-import { buildFigure, disposeFigure, type FigureCtx } from '../../lab3d/figure3d.js';
+import { bloodPool, buildFigure, disposeFigure, type FigureCtx } from '../../lab3d/figure3d.js';
 import type { LabMaterials } from '../../lab3d/geometry3d.js';
-import { applyCover, coverModeOf, type CoverMode } from './cover.js';
+import { applyCover, coverModeOf, markBodies, markBody, type CoverMode } from './cover.js';
+import { PortraitArt, PortraitDisc, portraitGeometry, portraitRadius } from './portraits.js';
 
 /**
  * One token as the pool (and the plates, `badges.ts`) draws it: the stage's
@@ -99,6 +130,31 @@ export interface FigureState {
   ghosted: boolean;
   /** The floor it stands on — `token.level`, as the stage clamps it to the scene's floors. */
   level: number;
+}
+
+/**
+ * Where the pool reads the light a figure stands in (`Runtime3D.bakedLightAt`
+ * and `lightVersion`).
+ */
+export interface FigureLightProbe {
+  /**
+   * The baked light on the top of floor `level` at grid point (x, z), linear
+   * RGB, into `out`: what the lamps not lit in real time put on the floor
+   * there.
+   */
+  at(level: number, x: number, z: number, out: Color): Color;
+  /** Changes whenever `at` may answer differently. */
+  version(): number;
+}
+
+/** What a pool is wired to besides its materials. */
+export interface FigurePoolOptions {
+  /** Where a portrait's image comes from (`StageOptions.urlFor`); without it the top view's discs carry initials. */
+  urlFor?: (attachmentId: string) => string;
+  /** The light on the floor under each figure; without it figures are lit by the scene's lights alone. */
+  light?: FigureLightProbe;
+  /** The pool changed something with no stage update behind it (a portrait's image arrived): a frame is wanted. */
+  onChange?: () => void;
 }
 
 /** A long move goes quicker than a walk: this many times the distance left, per second (the 2D figure's). */
@@ -140,8 +196,34 @@ const PICK_PAD = 0.12;
 const PICK_MIN = 0.45;
 /** Between the crown and the point a plate hangs from, in squares. */
 const HEAD_GAP = 0.08;
+/** Between the crown and the portrait disc lying over it in the top view, in squares: under the plate's point. */
+const PORTRAIT_LIFT = 0.04;
 /** A standing human, metres: the fallback height when a figure could not be built. */
 const HUMAN_M = 1.8;
+/** The pool a figure down from physical damage lies in: the 2D figure's colour and strength, over its shadow and under its aura. */
+const POOL_COLOR = 0x5a0d12;
+const POOL_ALPHA = 0.75;
+const POOL_LIFT = 0.033;
+/** A figure seen through what hides it (`xrayMaterial`): its colour, the app's ink, and how strongly each layer of it shows. */
+const XRAY_COLOR = C.ink;
+const XRAY_ALPHA = 0.2;
+/** A band over the floor the silhouette never shows in, squares: a lying body's limbs dip a hair into its floor. */
+const XRAY_FLOOR_CLEAR = 0.02;
+/**
+ * Draw order among the opaque things, which three draws before every
+ * see-through one, each list by `renderOrder`: the world at 0, then the
+ * silhouettes, then the bodies — so a silhouette is tested against the
+ * world's depth alone (`xrayMaterial`).
+ */
+const XRAY_ORDER = 0.5;
+const BODY_ORDER = 1;
+/**
+ * The baked light added to a body's diffuse (`Shade`): the world's own baked
+ * term (`lighting3d.ts`, its lit stand-in's), with the figure's one value for
+ * the per-vertex one.
+ */
+const FIGURE_LIGHT_GLSL = /* glsl */ `
+	reflectedLight.directDiffuse += labFigureLight * BRDF_Lambert( material.diffuseColor );`;
 
 /** A ring flat on the floor (in the xz plane, facing up), centred on the origin. */
 function flatRing(inner: number, outer: number, segments = 48): BufferGeometry {
@@ -177,16 +259,96 @@ function flatMaterial(color: number, opacity: number, cover: CoverMode = 'fog'):
 
 /**
  * What one kind of figure is drawn with (see the module note): the lab's
- * materials for the body, their see-through twins for a ghost, and the blob
- * shadow's — all under one cover.
+ * materials for the body, their see-through twins for a ghost, the blob
+ * shadow's and the blood pool's — all under one cover.
  */
 interface FigureLook {
   readonly lab: LabMaterials;
   readonly ghostSolid: MeshStandardMaterial;
   readonly ghostGlow: MeshStandardMaterial;
   readonly blob: MeshBasicMaterial;
+  readonly pool: MeshBasicMaterial;
+  readonly poolGhost: MeshBasicMaterial;
   /** The cover they wear, which the aura's materials take too. */
   readonly cover: CoverMode;
+  /** Lit copies of `lab.solid` no figure wears now, kept for the next (`Shade`). */
+  readonly spare: Shade[];
+}
+
+/**
+ * One figure's own copy of its kind's body material, with the light at its
+ * square in it (see the module note). Every copy of one kind compiles to the
+ * one program — only the uniform's value is the figure's — and a copy a
+ * figure lets go of is kept for the next rather than freed, since three frees
+ * a program with the last material using it and would compile it again for
+ * the next runner to arrive.
+ */
+interface Shade {
+  readonly look: FigureLook;
+  readonly material: MeshStandardMaterial;
+  /** Linear RGB, the baked attributes' units: the light the lamps put on the floor at the figure's square. */
+  readonly light: { value: Color };
+}
+
+/**
+ * The silhouette of a figure hidden behind a wall or tall furniture, as the
+ * 2D map's see-through copy showed it: a second draw of the figure's solid
+ * mesh, flat and faint, that passes the depth test only where something is
+ * NEARER the camera than the figure (`GreaterDepth`), writing no depth.
+ *
+ * What it is tested against decides what it shows, so it is drawn after the
+ * world and BEFORE the figures: among the opaque things, with a blend of its
+ * own, between the world and the bodies (`XRAY_ORDER`, `BODY_ORDER`).
+ * Against the world's depth alone:
+ *   - a wall, a door's leaf, a tall prop or a traced wall in front: the
+ *     silhouette shows there;
+ *   - the figure's own body, or another figure, in front: nothing — neither
+ *     is drawn yet, and the figure drawn after it covers any of it the
+ *     figure itself shows;
+ *   - glass: nothing — glass writes no depth, and the figure is seen through
+ *     it anyway, as the 2D map skips glazing.
+ * The fog's cover (`cover.ts`) hides it where it hides the figure, so it
+ * never says where a fogged figure stands. Its layers add up (a limb over
+ * the body shows a little stronger): the figure's faces are drawn from both
+ * sides (`MeshBuilder`), so none can be culled, and a blend with no stencil
+ * cannot count them. The band just over the floor (`floorY`, the floor in
+ * view's top plus `XRAY_FLOOR_CLEAR`) is cut away, so a lying body's limbs,
+ * dipping a hair into the floor, do not show through it.
+ *
+ * One draw more per figure, with the plainest of shaders, whose fragments
+ * mostly fail the depth test at once: kept on every tier, Low included.
+ */
+function xrayMaterial(floorY: { value: number }): MeshBasicMaterial {
+  const m = new MeshBasicMaterial({
+    color: XRAY_COLOR,
+    opacity: XRAY_ALPHA,
+    // Opaque to three, so it is drawn among the opaque things in its order;
+    // a custom blend, so it still blends (three turns a normal blend off
+    // for an opaque material).
+    transparent: false,
+    blending: CustomBlending,
+    depthWrite: false,
+    depthFunc: GreaterDepth,
+    side: DoubleSide,
+    toneMapped: false,
+    fog: false,
+  });
+  m.name = 'stage-figure-xray';
+  m.onBeforeCompile = (shader) => {
+    shader.uniforms.labXrayFloor = floorY;
+    shader.vertexShader = `varying float vLabXrayY;\n${shader.vertexShader.replace(
+      '#include <project_vertex>',
+      '#include <project_vertex>\n\tvLabXrayY = ( modelMatrix * vec4( transformed, 1.0 ) ).y;',
+    )}`;
+    shader.fragmentShader = `uniform float labXrayFloor;\nvarying float vLabXrayY;\n${shader.fragmentShader.replace(
+      'void main() {',
+      'void main() {\n\tif ( vLabXrayY < labXrayFloor ) discard;',
+    )}`;
+  };
+  m.customProgramCacheKey = () => 'stage-figure-xray';
+  // Over the shroud and under the fog, as the figure it shows.
+  applyCover(m, 'fog');
+  return m;
 }
 
 /** A soft round shadow: black, its alpha falling off from the middle to nothing at the rim. */
@@ -236,9 +398,21 @@ interface Figure {
   /** The box the pointer hits: never drawn, sized to the body plus `PICK_PAD`. */
   readonly proxy: Mesh;
   readonly blob: Mesh;
+  /** The blood it lies in when down from physical damage; hidden otherwise. */
+  readonly pool: Mesh;
+  /** Whether `pool` is laid out for the body as built (a body down, not a prop). */
+  poolFits: boolean;
   readonly select: Mesh;
   readonly act: Mesh;
   aura: { fill: Mesh; edge: Mesh } | null;
+  /** Its body's own lit material; null while it is ghosted, or has no body. */
+  shade: Shade | null;
+  /** The square and floor its light was last read at (NaN: read it again). */
+  litCol: number;
+  litRow: number;
+  litLevel: number;
+  /** Its portrait, lying on its head in the top view; made the first time it is wanted. */
+  portrait: PortraitDisc | null;
   /**
    * Seen from the floor in view down through its open squares rather than
    * standing on it: shown on its own floor below, never ringed, plated,
@@ -271,7 +445,8 @@ interface Figure {
 
 /**
  * The tokens of a live map as 3D figures: made, rebuilt and freed by `sync`,
- * moved by `tick`, shown a floor at a time by `setLevel`, hit by `pick`.
+ * moved and lit by `tick`, shown a floor at a time by `setLevel`, wearing
+ * their portraits in the top view (`setTopView`), hit by `pick`.
  */
 export class FigurePool {
   /** Every figure, ring and shadow. The stage adds it to the runtime's scene. */
@@ -282,36 +457,58 @@ export class FigurePool {
   /** Where the stage has pointed a figure other than its token's square (a drag ghost). */
   private readonly overrides = new Map<string, Point>();
   private level = 0;
+  /** The top view: each figure on the floor in view wears its portrait on its head. */
+  private top = false;
   private disposed = false;
+  private readonly urlFor: ((attachmentId: string) => string) | null;
+  private readonly light: FigureLightProbe | null;
+  private readonly onChange: (() => void) | null;
+  /** The light's version the figures were last lit for (`relight`); NaN before the first. */
+  private litVersion = Number.NaN;
+  /** The portraits' images, each loaded once. */
+  private readonly art: PortraitArt;
 
   // Shared by every figure: one of each, freed with the pool.
   private readonly pickBox = new BoxGeometry(1, 1, 1);
   private readonly pickMaterial = new MeshBasicMaterial({ visible: false });
   private readonly blobPlane: BufferGeometry = new PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
   private readonly blobMap = blobTexture();
+  /** A disc of radius 1 lying face up: every portrait, and every blood pool scaled to its oval. */
+  private readonly unitDisc = portraitGeometry();
   private readonly selectMaterial = flatMaterial(C.cyan, RING_ALPHA);
   /** Shared by every acting ring. Steady: the plate over the head carries the breath. */
   private readonly actMaterial = flatMaterial(C.warn, RING_ALPHA);
   /** Keyed by cover and colour: an aura seen below wears the figure's cover below. */
   private readonly auraMaterials = new Map<string, { fill: MeshBasicMaterial; edge: MeshBasicMaterial }>();
+  /** Where the silhouettes stop short of the floor in view (`xrayMaterial`): its top plus `XRAY_FLOOR_CLEAR`. */
+  private readonly xrayFloor = { value: 0 };
+  /** Every silhouette's material: only the floor in view's figures show through what stands in front. */
+  private readonly xray = xrayMaterial(this.xrayFloor);
   /** What the floor in view's figures are drawn with. */
   private readonly inView: FigureLook;
   /** What the figures seen below are drawn with: `inView` itself when the stage gave one set. */
   private readonly seenBelow: FigureLook;
+  /** Every lit body material made, worn or spare, to free with the pool. */
+  private readonly shades = new Set<Shade>();
 
   /**
    * `materials` draw the floor in view's figures; `belowMaterials` the ones
    * seen below it, under the cover those wear (see the module note) — the
    * same set when not given. The stage owns both sets and frees them.
    */
-  constructor(materials: LabMaterials, ctx: FigureCtx, belowMaterials: LabMaterials = materials) {
+  constructor(materials: LabMaterials, ctx: FigureCtx, belowMaterials: LabMaterials = materials, options: FigurePoolOptions = {}) {
     this.ctx = { unitM: ctx.unitM > 0 ? ctx.unitM : 1, storey: ctx.storey };
     this.group.name = 'stage-figures';
+    this.urlFor = options.urlFor ?? null;
+    this.light = options.light ?? null;
+    this.onChange = options.onChange ?? null;
+    this.art = new PortraitArt((url) => this.artArrived(url));
     this.inView = this.lookOf(materials);
     this.seenBelow = belowMaterials === materials ? this.inView : this.lookOf(belowMaterials);
+    this.fitXrayFloor();
   }
 
-  /** The ghost and blob materials that go with a set of the lab's, under the cover that set wears. */
+  /** The ghost, blob and pool materials that go with a set of the lab's, under the cover that set wears. */
   private lookOf(lab: LabMaterials): FigureLook {
     const cover = coverModeOf(lab.solid) ?? 'fog';
     const blob = new MeshBasicMaterial({
@@ -343,7 +540,45 @@ export class FigurePool {
     ghostGlow.opacity = GHOST_ALPHA;
     ghostGlow.depthWrite = false;
     applyCover(ghostGlow, cover);
-    return { lab, ghostSolid, ghostGlow, blob, cover };
+    const pool = flatMaterial(POOL_COLOR, POOL_ALPHA, cover);
+    const poolGhost = flatMaterial(POOL_COLOR, POOL_ALPHA * GHOST_ALPHA, cover);
+    return { lab, ghostSolid, ghostGlow, blob, pool, poolGhost, cover, spare: [] };
+  }
+
+  /**
+   * A lit body material for a figure of kind `look`: a spare one, or a new
+   * copy of the kind's solid material that adds the light at the figure's
+   * square to its diffuse (`FIGURE_LIGHT_GLSL`). It runs the solid's own
+   * compile hook first — the cover with it, whose tag its key carries — so
+   * it is handed to `applyCover` only to be counted among the cover's
+   * wearers, as the lighting's lit stand-ins are.
+   */
+  private takeShade(look: FigureLook): Shade {
+    const spare = look.spare.pop();
+    if (spare) return spare;
+    const base = look.lab.solid;
+    const light = { value: new Color(0, 0, 0) };
+    const material = base.clone();
+    material.name = 'stage-figure:lit';
+    material.onBeforeCompile = (shader, renderer) => {
+      base.onBeforeCompile(shader, renderer);
+      shader.uniforms.labFigureLight = light;
+      shader.fragmentShader = `uniform vec3 labFigureLight;\n${shader.fragmentShader.replace(
+        '#include <lights_fragment_end>',
+        `#include <lights_fragment_end>\n${FIGURE_LIGHT_GLSL}`,
+      )}`;
+    };
+    material.customProgramCacheKey = () => `stage-figure-lit|${base.customProgramCacheKey()}`;
+    applyCover(material, look.cover);
+    const shade: Shade = { look, material, light };
+    this.shades.add(shade);
+    return shade;
+  }
+
+  /** A figure is done with `shade`: its kind keeps it, dark, for the next. */
+  private giveShade(shade: Shade): void {
+    shade.light.value.setRGB(0, 0, 0);
+    shade.look.spare.push(shade);
   }
 
   /** The look a figure is drawn in, by which kind it is. */
@@ -373,6 +608,12 @@ export class FigurePool {
       this.figures.delete(id);
       this.overrides.delete(id);
     }
+    // The portraits no disc shows any more are let go.
+    if (this.top) {
+      const urls = new Set<string>();
+      for (const f of this.figures.values()) if (f.portrait?.url) urls.add(f.portrait.url);
+      this.art.retain(urls);
+    }
   }
 
   /**
@@ -400,13 +641,18 @@ export class FigurePool {
   }
 
   /**
-   * Advance every figure's glide and turn by `dtMs`. True while anything is
-   * still moving or turning — the runtime then draws another frame. Nothing
-   * else here animates, so a map where nobody moves goes idle, mid-fight too.
+   * Advance every figure's glide and turn by `dtMs`, and light each one that
+   * reached another square — every one, when the lighting changed. True
+   * while anything is still moving or turning — the runtime then draws
+   * another frame. Nothing else here animates, so a map where nobody moves
+   * goes idle, mid-fight too.
    */
   tick(dtMs: number): boolean {
     if (this.disposed) return false;
     const dt = Math.max(0, Math.min(dtMs, MAX_STEP_MS));
+    const version = this.light?.version() ?? 0;
+    const relit = version !== this.litVersion;
+    this.litVersion = version;
     let busy = false;
     for (const f of this.figures.values()) {
       const t = this.targetOf(f);
@@ -437,8 +683,73 @@ export class FigurePool {
         moved = true;
       }
       if (moved) this.place(f);
+      this.relight(f, relit);
     }
     return busy;
+  }
+
+  /**
+   * Light every figure again if the lighting changed since `tick` lit them —
+   * as it does in the middle of a frame, after `tick` ran, when the runtime
+   * picks its real-time lamps again round a camera that moved. The stage
+   * runs it just before each frame is drawn (`Runtime3D.onBeforeRender`),
+   * so a figure is never drawn with the baked light of the lamps picked
+   * before: a lamp gone real-time counted twice, or one gone baked not at
+   * all.
+   */
+  relightIfStale(): void {
+    if (this.disposed || this.light === null) return;
+    const version = this.light.version();
+    if (version === this.litVersion) return;
+    this.litVersion = version;
+    for (const f of this.figures.values()) this.relight(f, true);
+  }
+
+  /**
+   * Mark what draws the floor in view's figures as bodies (`cover.ts`
+   * `markBody`), so a vision mode gives them the bodies' colours: the lab's
+   * set they are made from, which their lit bodies and the lighting's
+   * stand-ins compile through, and whatever stands under their roots now —
+   * body, ghost, silhouette, shadow, blood, rings, aura and portrait. The
+   * figures seen below are left with the floor's colours, as the 2D map
+   * draws them inside its floors below, under the floor's filter; given a
+   * set of their own, as the stage gives them, their materials are theirs
+   * alone (`seenBelow`), so marking these never reaches them. Uniform flags
+   * only: the stage runs it after every update, as figures come and change.
+   */
+  markInView(): void {
+    if (this.disposed) return;
+    const { lab } = this.inView;
+    for (const m of [lab.solid, lab.glass, lab.glow, lab.lines]) markBody(m);
+    for (const f of this.figures.values()) if (!f.below) markBodies(f.root);
+  }
+
+  /**
+   * The top view, or not: in it each figure on the floor in view wears its
+   * token's portrait on its head (`portraits.ts`); out of it none does.
+   */
+  setTopView(on: boolean): void {
+    if (this.disposed || on === this.top) return;
+    this.top = on;
+    for (const f of this.figures.values()) this.fitPortrait(f);
+  }
+
+  /**
+   * Samples of what a figure may first be drawn with mid-session — its lit
+   * body, its silhouette, the blood pool — each on a scrap of geometry never
+   * added to the scene, for the stage to have their shaders compiled ahead
+   * (`Stage3D.warmShaders`), which then frees the geometry. So the first
+   * runner to walk onto an empty map, or the first to go down bleeding,
+   * costs no compile on the frame that shows it. The body's sample wears a
+   * lit copy the pool keeps for its next figure, which keeps the compiled
+   * program alive.
+   */
+  sample(): Mesh[] {
+    if (this.disposed) return [];
+    const shade = this.takeShade(this.inView);
+    this.giveShade(shade);
+    const scrap = () => new BoxGeometry(0.01, 0.01, 0.01);
+    return [new Mesh(scrap(), shade.material), new Mesh(scrap(), this.xray), new Mesh(scrap(), this.inView.pool)];
   }
 
   /**
@@ -449,6 +760,7 @@ export class FigurePool {
   setLevel(level: number): void {
     if (this.disposed) return;
     this.level = level;
+    this.fitXrayFloor();
     for (const f of this.figures.values()) f.root.visible = this.shows(f.level, f.below);
   }
 
@@ -461,6 +773,7 @@ export class FigurePool {
     const unitM = ctx.unitM > 0 ? ctx.unitM : 1;
     if (unitM === this.ctx.unitM && ctx.storey === this.ctx.storey) return;
     this.ctx = { unitM, storey: ctx.storey };
+    this.fitXrayFloor();
     for (const f of this.figures.values()) {
       f.sig = '';
       f.auraKey = '';
@@ -514,19 +827,27 @@ export class FigurePool {
     this.pickMaterial.dispose();
     this.blobPlane.dispose();
     this.blobMap.dispose();
+    this.unitDisc.dispose();
     this.selectMaterial.dispose();
     this.actMaterial.dispose();
+    this.xray.dispose();
     for (const m of this.auraMaterials.values()) {
       m.fill.dispose();
       m.edge.dispose();
     }
     this.auraMaterials.clear();
-    // The lab's sets are the stage's; the ghosts and blobs made for them are the pool's.
+    // The lab's sets are the stage's; everything made to go with them is the pool's.
     for (const look of new Set([this.inView, this.seenBelow])) {
       look.blob.dispose();
+      look.pool.dispose();
+      look.poolGhost.dispose();
       look.ghostSolid.dispose();
       look.ghostGlow.dispose();
+      look.spare.length = 0;
     }
+    for (const shade of this.shades) shade.material.dispose();
+    this.shades.clear();
+    this.art.dispose();
     this.group.removeFromParent();
   }
 
@@ -576,6 +897,13 @@ export class FigurePool {
     blob.renderOrder = 1;
     turn.add(blob);
 
+    // Laid out and shown by `build` and `apply` when the figure is down bleeding.
+    const pool = new Mesh(this.unitDisc, (below ? this.seenBelow : this.inView).pool);
+    pool.position.y = POOL_LIFT;
+    pool.renderOrder = 1.5;
+    pool.visible = false;
+    turn.add(pool);
+
     // Empty until `fitRings` sizes them, which the first `apply` does.
     const select = new Mesh(new BufferGeometry(), this.selectMaterial);
     select.position.y = RING_LIFT;
@@ -597,9 +925,16 @@ export class FigurePool {
       body: null,
       proxy,
       blob,
+      pool,
+      poolFits: false,
       select,
       act,
       aura: null,
+      shade: null,
+      litCol: Number.NaN,
+      litRow: Number.NaN,
+      litLevel: Number.NaN,
+      portrait: null,
       below,
       state: s,
       sig: '',
@@ -620,7 +955,8 @@ export class FigurePool {
   /** Bring one figure in line with its state; its body is rebuilt only for a new look signature. */
   private apply(f: Figure, s: FigureState): void {
     const token = s.token;
-    const pose = tokenPose(token, downedBy(s.bars));
+    const down = downedBy(s.bars);
+    const pose = tokenPose(token, down);
     const size = token.size > 0 ? token.size : 1;
     // Which kind it is only matters to its body where the two kinds wear different covers.
     const part = this.seenBelow !== this.inView && f.below ? 'below' : '';
@@ -636,6 +972,10 @@ export class FigurePool {
     // Seen below, a figure is never selected or acting from here (2D's rule).
     f.select.visible = s.selected && !f.below;
     f.act.visible = s.acting && !f.below;
+    // Physical damage bleeds; stun lays a runner down on the bare floor. The
+    // pool goes with the body, so a figure that goes from one to the other
+    // keeps the body it lies in (the pose is the same) and loses or gains it.
+    f.pool.visible = f.poolFits && down === 'physical';
 
     // A token turned by hand (or by a move landing) faces its new way — once
     // it has stopped; while it glides, the way it goes wins.
@@ -653,9 +993,15 @@ export class FigurePool {
     // Its floor, or which part it plays (`take`), may have changed.
     f.root.visible = this.shows(f.level, f.below);
     this.place(f);
+    this.fitPortrait(f);
+    this.relight(f, false);
   }
 
-  /** (Re)build the body for the figure's state and pose, and fit its pick box, shadow and plate height to it. */
+  /**
+   * (Re)build the body for the figure's state and pose — in its own lit
+   * material, with its silhouette when it stands on the floor in view — and
+   * fit its pick box, shadow, blood pool and plate height to it.
+   */
   private build(f: Figure): void {
     if (f.body) {
       disposeFigure(f.body);
@@ -671,20 +1017,49 @@ export class FigurePool {
       // One token the builder cannot make sense of costs that figure, not the map.
       console.warn(`[stage3d] token ${s.token.id} could not be built as a figure`, err);
     }
+    // A ghost is see-through in its kind's shared material, lit by the scene's
+    // lights alone; any other body wears a lit copy of its kind's own.
+    if (f.shade && (s.ghosted || !body || f.shade.look !== look)) {
+      this.giveShade(f.shade);
+      f.shade = null;
+    }
+    if (!s.ghosted && body && !f.shade) {
+      f.shade = this.takeShade(look);
+      f.litCol = Number.NaN;
+    }
     f.blob.material = look.blob;
     const box = new Box3();
     if (body) {
+      const shade = f.shade;
+      const solids: Mesh[] = [];
       body.traverse((o) => {
         if (!(o instanceof Mesh)) return;
         o.castShadow = false;
-        if (s.ghosted) {
-          if (o.material === look.lab.solid) o.material = look.ghostSolid;
-          else if (o.material === look.lab.glow) o.material = look.ghostGlow;
+        // After the silhouettes among the opaque things. A ghost is drawn
+        // among the see-through things instead, before its shadow and rings
+        // as ever.
+        o.renderOrder = s.ghosted ? 0 : BODY_ORDER;
+        if (o.material === look.lab.solid) {
+          solids.push(o);
+          if (s.ghosted) o.material = look.ghostSolid;
+          else if (shade) o.material = shade.material;
+        } else if (s.ghosted && o.material === look.lab.glow) {
+          o.material = look.ghostGlow;
         }
         const g = o.geometry;
         if (!g.boundingBox) g.computeBoundingBox();
         if (g.boundingBox) box.union(g.boundingBox);
       });
+      // Seen through what hides it: the floor in view's own, and not a ghost,
+      // which is see-through already. Its solid mesh only, the whole body
+      // bar its lit seams: one draw more.
+      const hidden = solids[0];
+      if (hidden !== undefined && !f.below && !s.ghosted) {
+        const xray = new Mesh(hidden.geometry, this.xray);
+        xray.name = 'xray';
+        xray.renderOrder = XRAY_ORDER;
+        body.add(xray);
+      }
       f.turn.add(body);
       f.body = body;
     }
@@ -708,6 +1083,16 @@ export class FigurePool {
     f.blob.scale.set(Math.min(maxBlob, Math.max(minBlob, w * 1.25)), 1, Math.min(maxBlob, Math.max(minBlob, d * 1.25)));
     // A ghost casts no shadow.
     f.blob.visible = !s.ghosted;
+
+    // The blood a body lying down would lie in, under it as the 2D figure
+    // pools it; `apply` shows it for physical damage only. A prop never bleeds.
+    const pool = f.pose === 'down' && body ? bloodPool(s.token, this.ctx) : null;
+    f.poolFits = pool !== null;
+    if (pool) {
+      f.pool.position.set(pool.x, POOL_LIFT, pool.z);
+      f.pool.scale.set(pool.rx, 1, pool.rz);
+      f.pool.material = s.ghosted ? look.poolGhost : look.pool;
+    }
 
     f.crown = box.max.y;
   }
@@ -773,9 +1158,75 @@ export class FigurePool {
     f.head.set(f.x, y + f.crown + HEAD_GAP, f.y);
   }
 
+  /**
+   * Light a figure as the floor at its square is lit (`FigureLightProbe`):
+   * read again when it stands on another square or floor than it was last
+   * lit at, or — `force` — when the lighting changed. Read at the square's
+   * middle, where the rules' light is measured, not wherever along a glide
+   * the figure happens to be.
+   */
+  private relight(f: Figure, force: boolean): void {
+    const shade = f.shade;
+    if (!shade || !this.light) return;
+    const col = Math.floor(f.x);
+    const row = Math.floor(f.y);
+    if (!force && col === f.litCol && row === f.litRow && f.level === f.litLevel) return;
+    f.litCol = col;
+    f.litRow = row;
+    f.litLevel = f.level;
+    this.light.at(f.level, col + 0.5, row + 0.5, shade.light.value);
+  }
+
+  /** The silhouettes stop just over the floor in view (`xrayMaterial`). */
+  private fitXrayFloor(): void {
+    this.xrayFloor.value = this.level * this.ctx.storey + XRAY_FLOOR_CLEAR;
+  }
+
+  /**
+   * The portrait on a figure's head, in the top view and for the floor in
+   * view's own (a figure seen below carries none, as it carries no plate):
+   * made the first time it is wanted, drawn again only when what it says
+   * changed, sized to the token and laid just over the crown of the body as
+   * built. Hidden anywhere else.
+   */
+  private fitPortrait(f: Figure): void {
+    if (!this.top || f.below) {
+      if (f.portrait) f.portrait.mesh.visible = false;
+      return;
+    }
+    if (!f.portrait) {
+      f.portrait = new PortraitDisc(this.unitDisc);
+      f.root.add(f.portrait.mesh);
+    }
+    const s = f.state;
+    const ref = s.token.artRef;
+    const url = ref && this.urlFor ? this.urlFor(ref) : null;
+    f.portrait.draw(s.token, s.ghosted, url, url ? this.art.get(url) : null);
+    const r = portraitRadius(s.token.size);
+    f.portrait.mesh.scale.set(r, 1, r);
+    f.portrait.mesh.position.set(0, f.crown + PORTRAIT_LIFT, 0);
+    f.portrait.mesh.visible = true;
+  }
+
+  /** A portrait's image arrived, or will not: the discs showing it are drawn again, and a frame is wanted. */
+  private artArrived(url: string): void {
+    if (this.disposed) return;
+    let any = false;
+    for (const f of this.figures.values()) {
+      if (f.portrait?.url !== url) continue;
+      this.fitPortrait(f);
+      any = true;
+    }
+    if (any) this.onChange?.();
+  }
+
   private drop(f: Figure): void {
     if (f.body) disposeFigure(f.body);
     f.body = null;
+    if (f.shade) this.giveShade(f.shade);
+    f.shade = null;
+    f.portrait?.dispose();
+    f.portrait = null;
     f.select.geometry.dispose();
     f.act.geometry.dispose();
     if (f.aura) {
