@@ -1261,7 +1261,12 @@ export function createLighting(ctx: {
       let mat = haloMaterials[i];
       if (!sprite || !mat) {
         mat = new SpriteMaterial({ map: haloTexture, blending: AdditiveBlending, transparent: true, depthWrite: false });
-        // A lamp in a room the viewer may not see must not glow through the cover.
+        // A lamp in a room the viewer may not see must not glow through the
+        // cover. The halo is hidden whole by the square its lamp hangs over
+        // (`grid/stage3d/cover.ts`, a sprite's patch), so a hidden room's
+        // lamp shows none even where its glow would spread over revealed
+        // floor; the light it throws on that floor is the map's, and stays
+        // (`grid/stage3d/fogEdge.ts`).
         applyCover(mat, 'full');
         mat.opacity = haloOpacity;
         sprite = new Sprite(mat);

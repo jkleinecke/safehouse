@@ -28,7 +28,7 @@ import {
   type Material,
   type Object3D,
 } from 'three';
-import { applyCover, coverShadows, type CoverMode } from '../grid/stage3d/cover.js';
+import { applyCover, type CoverMode } from '../grid/stage3d/cover.js';
 
 export type V3 = readonly [number, number, number];
 
@@ -358,9 +358,10 @@ export class MeshBuilder {
     if (solid) {
       solid.castShadow = true;
       solid.receiveShadow = true;
-      // Its shadow passes wear the fog as its colour pass does: a wall the
-      // fog hides casts no shadow onto a revealed floor.
-      coverShadows(solid);
+      // Its shadow passes are three's own, with no fog in them: a wall the
+      // players' fog hides still casts, so a hidden room's walls keep its
+      // lamp's light in rather than letting it through onto revealed floor
+      // (`grid/stage3d/cover.ts`, Shadows).
       all.push(solid);
     }
     const glass = this.glass.empty ? null : new Mesh(this.glass.geometry(), materials.glass);

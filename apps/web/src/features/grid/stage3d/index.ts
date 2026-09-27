@@ -10,7 +10,8 @@
  *     their lighting — for the floor in view, with the floors below it under
  *     a shade. It builds no figures of its own; it is still handed the
  *     tokens, so the lights they carry light the rooms — for anyone but the
- *     GM, only those the fog does not cover (`lightTokens`);
+ *     GM, only those standing on ground the table sees live
+ *     (`fogEdge.ts` `lightTokens`);
  *   - `Camera3D` is the view, and the pointer's `ViewCamera`: isometric or
  *     top-down as the scene's projection says, orthographic both;
  *   - the `PointerController` the 2D map had (`stage/pointer.ts`) turns the
@@ -67,9 +68,12 @@
  * furniture, figures and overlays are hidden at every height and from every
  * angle — and, for the plates and labels over the canvas, the same masks
  * read on the CPU (`coveredAt`). The fog also reaches what no material
- * draws: the shadow maps (redrawn when it changes), the lights of the tokens
- * under it (not lit), and the storeys below the floor in view, which its lid
- * shuts off where the fog's discard would open a hole. What the 2D map
+ * draws: the lights the tokens on ground that is not live carry (not lit,
+ * `fogEdge.ts`), and the storeys below the floor in view, which its lid
+ * shuts off where the fog's discard would open a hole. It leaves the shadow
+ * maps alone: a hidden room's walls still cast, so its lamps light what
+ * they would light with the fog off and no more, and never shine through
+ * its walls onto revealed floor (`cover.ts`, Shadows). What the 2D map
  * drew above its fog (the templates, the ruler, the drafts, pings and the
  * trail) is drawn above it here too.
  *
@@ -126,6 +130,7 @@ import { FloorInk, type InkCover } from './floorInk.js';
 import { DomLabels } from './labels.js';
 import { MapPlane } from './mapPlane.js';
 import { GmMarkers } from './markers.js';
+import { HIDDEN_AT, NOT_LIVE_AT, isHidden, lightTokens } from './fogEdge.js';
 import { FloorMarks } from './marks.js';
 import { CoverMasks, type FogDetail } from './masks.js';
 import { pickStanding, type StandingPick } from './picking.js';
@@ -206,32 +211,6 @@ const COVER: Record<Exclude<keyof typeof ORDER, 'fx' | 'markers' | 'paintedSel' 
   ruler: 'none',
 };
 
-/**
- * The fog's two thresholds, read off the players' fog mask
- * (`CoverMasks.coveredAt` in 'fog' mode). The mask is 0 on LIVE ground, the
- * explored opacity (`EXPLORED_ALPHA`, 0.62) on ground shown dimmed as
- * remembered, and 1 on ground the table cannot see (P6); between them only
- * the soft rim of an edge, about a px wide.
- *
- * NOT LIVE, from this much cover up: nobody stands there as far as the table
- * knows. A player's pointer does not take a figure there, no plate hangs
- * over one, and a token there lights nothing with the light it carries. The
- * server withholds every token but the runners from such ground anyway;
- * this is the second guard, and the rule for the runners it does send
- * (another player's runner in a remembered room is drawn dimmed, and is not
- * picked or named). Low enough that remembered ground is well past it.
- */
-const NOT_LIVE_AT = 0.3;
-
-/**
- * HIDDEN, from this much cover up: the map itself is not shown there. Map
- * labels (a pin's name, which stays on remembered ground with its pin) hide,
- * and the pointer's ray passes through what stands there, which is not
- * drawn. High enough that remembered ground, drawn dimmed, is well short of
- * it; ground under the whole fog is at 1.
- */
-const HIDDEN_AT = 0.9;
-
 /** How finely a stage at `quality` rasterises the players' fog (`masks.ts` `FOG_DETAIL`). */
 function fogDetailFor(quality: StageQuality): FogDetail {
   return quality === 'low' ? 'low' : 'full';
@@ -261,50 +240,19 @@ function clampLevel(scene: Scene, level: number): number {
 }
 
 /**
- * Whether `token` is hidden from the table, by its own flag or by a hidden
- * layer: the GM's alone (the server never sends one to anyone else).
+ * The runtime's options for a first frame of `state`, whose tokens stand
+ * under as much fog as `fogAt` says (`lightTokens`).
  */
-function isHidden(token: Token, state: StageSceneState): boolean {
-  return Boolean(token.hidden) || (state.hiddenLayerTokenIds?.has(token.id) ?? false);
-}
-
-/**
- * The tokens whose carried lights the runtime lights the scene with: the
- * ones on this floor and the ones seen below it (their lights shine up
- * through the open squares). Figures are the stage's own, so this list only
- * lights.
- *
- * Everyone but the GM gets only the lights of tokens they could see. A
- * hidden token's light is the GM's alone, as the token is. And a token the
- * players' fog covers carries its light nowhere for them — baked on Low, a
- * real lamp on Medium and High, it would light the revealed rooms round it
- * and say where the guard with the flashlight stands and which way he
- * faces, which the 2D map (whose light-map wash was the GM's alone) never
- * did — except the viewer's own runner, fog or not. `fogged` says whether
- * the fog covers a token (`CoverMasks.coveredAt`): whether its ground is not
- * LIVE (`NOT_LIVE_AT`), so ground shown dimmed as remembered (P6) lights
- * nothing with the lamps of whoever stands on it either.
- */
-function lightTokens(state: StageSceneState, fogged: (token: Token) => boolean): readonly Token[] {
-  const below = state.belowTokens ?? [];
-  const all = below.length === 0 ? state.tokens : [...state.tokens, ...below.map((b) => b.token)];
-  if (state.role === 'gm') return all;
-  const lit = (t: Token): boolean =>
-    !isHidden(t, state) && (state.draggableIds.has(t.id) || !(t.light && t.light.on !== false) || !fogged(t));
-  return all.every(lit) ? all : all.filter(lit);
-}
-
-/** The runtime's options for a first frame of `state`, whose tokens the fog covers as `fogged` says. */
 function runtimeOptions(
   state: StageSceneState,
   defs: Record<string, TileDrawDef>,
   quality: StageQuality,
-  fogged: (token: Token) => boolean,
+  fogAt: (token: Token) => number,
 ): Runtime3DOptions {
   const scene = state.scene;
   return {
     scene,
-    tokens: lightTokens(state, fogged),
+    tokens: lightTokens(state, fogAt),
     defs,
     quality,
     ambient: ambientOf(scene),
@@ -1095,7 +1043,7 @@ class Stage3D implements StageApi, PointerHost {
     // -- the cover: the players' fog and the sightline shroud ----------------
     // Rebuilt on the fog's and the shroud's keys, as the 2D map redrew them;
     // first, because what follows reads it: the token lights a player is lit
-    // with, the shadow maps, the pointer's tokens, the plates and labels.
+    // with, the pointer's tokens, the plates and labels.
     const covered = this.cover.update(next, m);
 
     // -- the world, its lights, and the view ---------------------------------
@@ -1113,7 +1061,7 @@ class Stage3D implements StageApi, PointerHost {
     if (covered.fog || next.tokens !== this.litTokens || next.belowTokens !== this.litBelow) {
       this.litTokens = next.tokens;
       this.litBelow = next.belowTokens;
-      partial.tokens = lightTokens(next, this.fogged);
+      partial.tokens = lightTokens(next, this.fogAt);
     }
     // A new scene is framed afresh by the runtime; its camera kind goes in
     // with it, so it is framed once, through the right camera.
@@ -1139,10 +1087,11 @@ class Stage3D implements StageApi, PointerHost {
     }
     // The fog lid lies under the floor in view, at its height as now built.
     this.cover.setFloor(level, level * this.rt.storey);
-    // The shadow maps are drawn once, not per frame: a caster the fog now
-    // hides, or no longer hides, casts again only when they are redrawn
-    // (`cover.ts` `coverShadows`). Low has none to redraw.
-    if (covered.fog && this.rt.options.quality !== 'low') this.rt.refreshShadows();
+    // The fog has no say in the shadow maps: a wall under it casts all the
+    // same, so a hidden room's walls keep its lamp's light in (`cover.ts`,
+    // Shadows). So a runner's step, which moves the fog on every phone,
+    // draws no shadow map again at Medium or High; a carried light that
+    // came or went with it draws its own (`lighting3d.ts` `setSources`).
 
     // -- the flat overlays, each redrawn only when its key changes -----------
     const mk = metricsKey(m);
@@ -1479,8 +1428,13 @@ class Stage3D implements StageApi, PointerHost {
    */
   private readonly labelCovered = (at: Point): boolean => this.cover.coveredAt(at, 'fog') >= HIDDEN_AT;
 
-  /** Whether `token` stands on ground that is not live, for a player: its light then lights nothing (`lightTokens`). */
-  private readonly fogged = (token: Token): boolean => this.cover.coveredAt(token, 'fog') >= NOT_LIVE_AT;
+  /**
+   * How much fog, alone, covers the square `token` stands on (0 live … 1
+   * hidden): read at the not-live threshold for its carried light
+   * (`lightTokens`), which on ground that is not live lights nothing for a
+   * player or the TV.
+   */
+  private readonly fogAt = (token: Token): number => this.cover.coveredAt(token, 'fog');
 
   /**
    * Whether the view differs from the one the floor labels were last laid
@@ -1564,12 +1518,12 @@ export async function createStage(opts: StageOptions, hooks: Stage3DHooks): Prom
   const cover = new CoverMasks(fogDetailFor(hooks.quality));
   try {
     cover.update(opts.state, topDownMetrics(opts.state.scene));
-    const fogged = (token: Token): boolean => cover.coveredAt(token, 'fog') >= NOT_LIVE_AT;
+    const fogAt = (token: Token): number => cover.coveredAt(token, 'fog');
     // The quality this device starts at for this role (the TV's is Low),
     // resolved by the loader.
     // The stage is made after the runtime; the quality callbacks reach it late.
     let stage: Stage3D | null = null;
-    rt = createRuntime3D(root, runtimeOptions(opts.state, CATALOGUE_DEFS, hooks.quality, fogged), {
+    rt = createRuntime3D(root, runtimeOptions(opts.state, CATALOGUE_DEFS, hooks.quality, fogAt), {
       // The runtime's context events arrive after this function has returned,
       // so the stage is there to take them.
       onContextLost: () => stage?.contextLost(),

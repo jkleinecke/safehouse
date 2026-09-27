@@ -485,9 +485,6 @@ export class TracedWalls {
       copy.position.y = level * storey;
       for (const o of built.all) {
         const c: Object3D = o.clone();
-        // The shadow passes' cover, which a clone does not carry over.
-        c.customDepthMaterial = o.customDepthMaterial;
-        c.customDistanceMaterial = o.customDistanceMaterial;
         c.raycast = noRaycast;
         copy.add(c);
       }

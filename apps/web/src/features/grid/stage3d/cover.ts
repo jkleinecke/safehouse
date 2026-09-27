@@ -62,12 +62,32 @@
  *
  * ## Shadows
  *
- * three draws the shadow maps with depth materials of its own, which never
- * run a material's compile hook: a wall under the fog would still cast its
- * shadow onto a revealed floor at Medium and High. Every shadow caster the
- * builders make is given depth materials that wear a discard-only patch
- * (`coverShadows`), and the stage draws the shadow maps again when the fog
- * changes.
+ * The cover never reaches the shadow maps, on purpose (P6). three draws them
+ * with depth materials of its own, which never run a material's compile
+ * hook, so a wall under the fog casts its shadow at Medium and High exactly
+ * as it does with the fog off. That is what keeps light where it belongs at
+ * the fog's edge: a hidden room's walls still stand between its lamp and
+ * the revealed corridor outside, so the lamp lights the corridor only
+ * through the room's open door, as the bake at Low (cut by the rules' walls)
+ * and the dice both have it, rather than straight through its walls. And a
+ * hidden wall row between two revealed rooms still keeps one room's lamp
+ * out of the other. (A real-time lamp past the few a tier gives a shadow map
+ * is stopped by no wall at all, fog or none: that is the tiers' own
+ * approximation, `lab3d/lighting3d.ts`, and the fog neither adds to it nor
+ * takes from it.)
+ *
+ * Until P6 the shadow passes wore a discard-only patch, and a caster under
+ * total fog cast nothing: the idea was that a hidden wall should not throw
+ * its shape onto revealed floor. But the map is not the secret (the GM's
+ * decision; Roll20 shows the edges of lights too), and a wall that casts no
+ * shadow is a wall light passes through. Every caster the stage has is solid
+ * map (the painted world, the traced walls, the door leaves); figures cast
+ * none (`figures.ts`), so no token is given away by its shadow. A figure
+ * made to cast one would need the discard back, for itself alone.
+ *
+ * So the fog is never a reason to draw the shadow maps again, which spares
+ * every phone and laptop at Medium and High a redraw of all of them each
+ * time a runner's step moves the party's sight.
  *
  * ## Who wears which masks
  *
@@ -156,15 +176,11 @@ import {
   LinearFilter,
   Matrix4,
   MeshBasicMaterial,
-  MeshDepthMaterial,
-  MeshDistanceMaterial,
-  RGBADepthPacking,
   RedFormat,
   ShaderMaterial,
   UnsignedByteType,
   Vector4,
   type Material,
-  type Mesh,
   type Object3D,
   type Texture,
   type WebGLProgramParametersWithUniforms,
@@ -552,49 +568,38 @@ function fragmentMain(mode: CoverMode, additive: boolean): string {
 `;
 }
 
-/**
- * The end of a shadow pass's fragment shader (`coverShadows`): a caster under
- * total fog is not there. Nothing else — the colour is packed depth, which a
- * mix would corrupt — and nothing at all while the discard is off.
- */
-function shadowMain(): string {
-  if (!discardOn) return '';
-  return /* glsl */ `
-	if ( labCoverFog > 0.0 ) {
-		float labCover = ${FOG_AT};${discardLine()}
-	}
-`;
-}
-
 /** `code` put just before the last closing brace of `src` — the end of its `main`. */
 function atEndOfMain(src: string, code: string): string | null {
   const end = src.lastIndexOf('}');
   return end < 0 ? null : `${src.slice(0, end)}${code}${src.slice(end)}`;
 }
 
-/** How a shader's fragment side ends: a material's colour pass, or a shadow pass. */
-type PatchEnd = { kind: 'colour'; mode: CoverMode; additive: boolean } | { kind: 'shadow' };
+/** How a material's colour pass ends: which masks hide it, and whether it adds light (a halo) rather than paints. */
+interface PatchEnd {
+  mode: CoverMode;
+  additive: boolean;
+}
 
 /**
- * Patch `shader`, the program `material` is being compiled with. A colour
- * pass also gets the material's own vision kind (`markBody`, `markPlain`):
- * three hands every material its own uniforms object here, even where
- * materials share a program.
+ * Patch `shader`, the program `material` is being compiled with. It also gets
+ * the material's own vision kind (`markBody`, `markPlain`): three hands every
+ * material its own uniforms object here, even where materials share a
+ * program. Colour passes only: the shadow passes are left as three makes
+ * them (see the module note).
  */
-function patchShader(shader: WebGLProgramParametersWithUniforms, sprite: boolean, end: PatchEnd, material: Material | null): void {
+function patchShader(shader: WebGLProgramParametersWithUniforms, sprite: boolean, end: PatchEnd, material: Material): void {
   // Already there: a chain that wears the cover twice compiles it once.
   if (shader.vertexShader.includes(MARK)) return;
-  const colour = end.kind === 'colour';
   const vertex = atEndOfMain(shader.vertexShader, sprite ? SPRITE_VERTEX : MESH_VERTEX);
-  const fragment = atEndOfMain(shader.fragmentShader, colour ? fragmentMain(end.mode, end.additive) : shadowMain());
+  const fragment = atEndOfMain(shader.fragmentShader, fragmentMain(end.mode, end.additive));
   if (vertex === null || fragment === null) {
     console.warn('[stage3d] cover: a shader with no main to patch');
     return;
   }
   Object.assign(shader.uniforms, U);
-  if (colour && material !== null) shader.uniforms.labVisionKind = visionKind(material);
+  shader.uniforms.labVisionKind = visionKind(material);
   shader.vertexShader = `varying vec2 ${MARK};\n${vertex}`;
-  shader.fragmentShader = `${FRAGMENT_PARS}${colour ? VISION_PARS : ''}${fragment}`;
+  shader.fragmentShader = `${FRAGMENT_PARS}${VISION_PARS}${fragment}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -628,7 +633,7 @@ export function applyCover(material: Material, mode: CoverMode = 'full'): void {
   const sprite = (material as { isSpriteMaterial?: boolean }).isSpriteMaterial === true;
   const additive = material.blending === AdditiveBlending;
   const tag = `${TAG}:${mode}${sprite ? ':sprite' : ''}${additive ? ':add' : ''}`;
-  const end: PatchEnd = { kind: 'colour', mode, additive };
+  const end: PatchEnd = { mode, additive };
   const before = material.onBeforeCompile;
   const ownKey = Object.prototype.hasOwnProperty.call(material, 'customProgramCacheKey') ? material.customProgramCacheKey : null;
   material.onBeforeCompile = function coverCompile(this: Material, shader: WebGLProgramParametersWithUniforms, renderer: WebGLRenderer): void {
@@ -645,42 +650,6 @@ export function applyCover(material: Material, mode: CoverMode = 'full'): void {
   modes.set(material, mode);
   track(material);
   material.needsUpdate = true;
-}
-
-/** The two shadow-pass materials every caster shares (`coverShadows`); made when first asked for. */
-let shadowPass: { depth: MeshDepthMaterial; distance: MeshDistanceMaterial } | null = null;
-
-/** A shadow pass's material wearing the discard-only patch, noted with the wearers so a discard flip reaches it. */
-function coverShadowPass<M extends MeshDepthMaterial | MeshDistanceMaterial>(material: M, name: string): M {
-  material.name = name;
-  material.onBeforeCompile = (shader) => patchShader(shader, false, { kind: 'shadow' }, null);
-  material.customProgramCacheKey = () => `${TAG}:shadow${discardKey()}`;
-  // The scene check never sees these (they are no mesh's `material`), and
-  // they must never be covered as a colour pass would be.
-  exempt.add(material);
-  track(material);
-  return material;
-}
-
-/**
- * Give shadow caster `mesh` the cover in its shadow passes: three draws the
- * key light's and the spot lamps' shadow maps with a depth material and the
- * point lamps' with a distance material, never with the mesh's own, so the
- * colour pass's cover would not reach them and a wall under the fog would
- * still cast its shadow onto a revealed floor. These discard where the fog
- * is total, and do nothing else. The builders call it on every mesh they
- * make cast a shadow; it costs nothing while nothing is fogged.
- */
-export function coverShadows(mesh: Mesh): void {
-  if (shadowPass === null) {
-    shadowPass = {
-      // three's own depth material for these passes packs depth the same way.
-      depth: coverShadowPass(new MeshDepthMaterial({ depthPacking: RGBADepthPacking }), 'cover-shadow-depth'),
-      distance: coverShadowPass(new MeshDistanceMaterial(), 'cover-shadow-distance'),
-    };
-  }
-  mesh.customDepthMaterial = shadowPass.depth;
-  mesh.customDistanceMaterial = shadowPass.distance;
 }
 
 // ---------------------------------------------------------------------------

@@ -24,12 +24,13 @@
  * exactly what is covered here.
  */
 import { describe, expect, it, vi } from 'vitest';
-import type { Role, Scene } from '@safehouse/contracts';
+import type { Role, Scene, Token } from '@safehouse/contracts';
 import { cellBitsFrom, encodeCellBits } from '@safehouse/rules';
 import { FOG_WIRE_UNREVEALED } from '../../../../../../packages/contracts/test/fog-fixtures.js';
 import { metricsFor } from '../geometry.js';
 import { EXPLORED_ALPHA } from '../stage/layers.js';
 import type { StageSceneState } from '../types.js';
+import { HIDDEN_AT, NOT_LIVE_AT, lightTokens } from './fogEdge.js';
 import { CoverMasks } from './masks.js';
 
 // `drawFog`, counted: how often the regions are painted, so the tests can see
@@ -234,12 +235,12 @@ describe("the party's sight stamped on the cover (P6)", () => {
     it(`clears what the party sees, dims what it has seen, and covers the rest for ${role}`, () => {
       withMasks(state(role, fogged), (masks) => {
         expectCover(masks, expected([[1, 1], [2, 1]], [[5, 5], [6, 5]]));
-        // The three states, read at the stage's own thresholds: live is
-        // nothing, remembered is past "not live" (0.3) and short of
-        // "hidden" (0.9), hidden is total.
+        // The three states, read at the stage's own thresholds
+        // (`fogEdge.ts`): live is nothing, remembered is past "not live"
+        // and short of "hidden", hidden is total.
         expect(at(masks, 1, 1)).toBe(0);
-        expect(at(masks, 5, 5)).toBeGreaterThan(0.3);
-        expect(at(masks, 5, 5)).toBeLessThan(0.9);
+        expect(at(masks, 5, 5)).toBeGreaterThan(NOT_LIVE_AT);
+        expect(at(masks, 5, 5)).toBeLessThan(HIDDEN_AT);
         expect(at(masks, 9, 7)).toBe(1);
       });
     });
@@ -311,6 +312,119 @@ describe("the party's sight stamped on the cover (P6)", () => {
     withMasks(state('display', fogged), (masks) => {
       expect(at(masks, 2, 1)).toBe(0);
       expect(at(masks, 0, 0)).toBe(1);
+    });
+  });
+
+  /**
+   * The lights the tokens carry, at the fog's edge (P6, `fogEdge.ts`
+   * `lightTokens`).
+   *
+   * A carried light says where its token stands and which way it faces: a
+   * guard's flashlight lighting the revealed corridor round a corner gives
+   * him away as surely as his figure would. So for everyone but the GM a
+   * light goes with its token, read off this same cover at the "not live"
+   * threshold: a token on live ground lights the scene, one on ground shown
+   * as remembered or hidden lights nothing. The server already sends the
+   * table no token off live ground but the runners; this is the second
+   * guard, and the rule for the runners it does send. The scene's own lamps
+   * are not in this list at all: they light for everyone, fog or not.
+   */
+  describe('whose carried lights shine', () => {
+    /** A token with a flashlight (switched on) on square (`col`, `row`), at its centre as the map snaps it. */
+    function token(id: string, col: number, row: number, extra: Partial<Token> = {}): Token {
+      return {
+        id,
+        sceneId: 's1',
+        source: 'combatant',
+        sourceId: null,
+        name: id,
+        x: col + 0.5,
+        y: row + 0.5,
+        level: 0,
+        size: 1,
+        rotation: 0,
+        hidden: false,
+        barsVisibility: 'owner',
+        light: { radiusM: 6, rows: 2, color: '#fff2d6', on: true },
+        ...extra,
+      };
+    }
+
+    /** The stage's state for `role` on the fogged scene, with `tokens` on it and `mine` the ones this viewer may move. */
+    function withTokens(role: Role, tokens: Token[], mine: string[] = [], extra: Partial<StageSceneState> = {}): StageSceneState {
+      return { ...state(role, fogged), tokens, draggableIds: new Set(mine), ...extra };
+    }
+
+    /** The ids of the tokens whose lights shine for `s`, read off a cover brought in line with it. */
+    function lit(s: StageSceneState): string[] {
+      let ids: string[] = [];
+      withMasks(s, (masks) => {
+        ids = lightTokens(s, (t) => masks.coveredAt(t, 'fog')).map((t) => t.id);
+      });
+      return ids;
+    }
+
+    // One guard in the corridor the runners see (live), one in the room they
+    // have seen (remembered), one where nobody has looked (hidden).
+    const onLive = token('on-live', 2, 1);
+    const onRemembered = token('on-remembered', 5, 5);
+    const onHidden = token('on-hidden', 9, 7);
+
+    it('keeps the thresholds in order: remembered ground is past "not live" and short of "hidden"', () => {
+      expect(NOT_LIVE_AT).toBeGreaterThan(0);
+      expect(NOT_LIVE_AT).toBeLessThan(EXPLORED_ALPHA);
+      expect(HIDDEN_AT).toBeGreaterThan(EXPLORED_ALPHA);
+      expect(HIDDEN_AT).toBeLessThan(1);
+    });
+
+    for (const role of ['player', 'display', 'observer'] as const) {
+      it(`lights ${role}'s map with the carried lights on live ground only, never on remembered or hidden ground`, () => {
+        expect(lit(withTokens(role, [onLive, onRemembered, onHidden]))).toEqual(['on-live']);
+      });
+    }
+
+    it('lets a player\'s own runner light their way off live ground, and no other runner', () => {
+      // Their runner may be standing somewhere the fog covers (a GM's fog
+      // with sightlines off; with them on, a runner's own square is always
+      // live). It still answers their pointer, so its light still shines.
+      // Another player's runner in the remembered room is drawn dimmed, and
+      // lights nothing, as a guard there would not.
+      const mine = token('mine', 5, 5, { source: 'character', sourceId: 'c-mine' });
+      const theirs = token('theirs', 6, 5, { source: 'character', sourceId: 'c-theirs' });
+      expect(lit(withTokens('player', [mine, theirs], ['mine']))).toEqual(['mine']);
+      // The TV moves nobody: neither runner lights the remembered room.
+      expect(lit(withTokens('display', [mine, theirs]))).toEqual([]);
+    });
+
+    it('keeps tokens that carry no light, or carry one switched off, whatever the ground: they light nothing either way', () => {
+      const dark = token('dark', 9, 7, { light: null });
+      const off = token('off', 9, 7, { light: { radiusM: 6, rows: 2, color: '#fff2d6', on: false } });
+      expect(lit(withTokens('player', [dark, off, onHidden]))).toEqual(['dark', 'off']);
+    });
+
+    it("never lights with a hidden token's light for the table, even on live ground", () => {
+      // The server never sends one; should one arrive, its light stays the GM's.
+      const flagged = token('flagged', 1, 1, { hidden: true });
+      const layered = token('layered', 2, 1);
+      const s = withTokens('player', [flagged, layered, onLive], [], { hiddenLayerTokenIds: new Set(['layered']) });
+      expect(lit(s)).toEqual(['on-live']);
+    });
+
+    it('lights the tokens seen down on the floors below by the same rule', () => {
+      const below = [{ token: token('below-live', 1, 1), depth: 1 }, { token: token('below-hidden', 9, 7), depth: 1 }];
+      expect(lit(withTokens('player', [onLive], [], { belowTokens: below }))).toEqual(['on-live', 'below-live']);
+    });
+
+    it("gives the GM every token's light, hidden tokens and fogged ground alike: the GM sees through the fog", () => {
+      const flagged = token('flagged', 9, 7, { hidden: true });
+      expect(lit(withTokens('gm', [onLive, onRemembered, onHidden, flagged]))).toEqual(['on-live', 'on-remembered', 'on-hidden', 'flagged']);
+    });
+
+    it('hands the tokens back as they are when every light may shine, so the runtime has nothing to redo', () => {
+      const s = withTokens('player', [onLive, token('dark', 9, 7, { light: null })]);
+      withMasks(s, (masks) => {
+        expect(lightTokens(s, (t) => masks.coveredAt(t, 'fog'))).toBe(s.tokens);
+      });
     });
   });
 });

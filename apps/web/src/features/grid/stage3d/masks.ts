@@ -621,7 +621,11 @@ function maskOf(r: Raster | null, amount: number): CoverMask | null {
   return r === null || !(amount > 0) ? null : { map: r.texture, x0: r.x0, z0: r.z0, width: r.width, depth: r.depth, amount };
 }
 
-/** What an update changed: the fog (which also hides lights and shadows), the shroud, either, or neither. */
+/**
+ * What an update changed: the fog (which also decides whose carried lights
+ * shine, `fogEdge.ts`; never the shadows, which it leaves alone), the
+ * shroud, either, or neither.
+ */
 export interface CoverChange {
   fog: boolean;
   shroud: boolean;
@@ -691,7 +695,8 @@ export class CoverMasks {
    * metrics, the ones every flat overlay draws in. Says what changed: on any
    * change the caller asks for a frame and lays the labels out again; on a
    * fog change it also works out again what the fog hides beyond the
-   * materials — the lights the tokens under it carry, the shadow maps.
+   * materials — the lights the tokens on ground not live carry
+   * (`fogEdge.ts`). Not the shadow maps: a wall under the fog casts as ever.
    */
   update(state: StageSceneState, m: SceneMetrics): CoverChange {
     const change: CoverChange = { fog: false, shroud: false };
