@@ -280,7 +280,7 @@ describe('the paint tool’s UI state', () => {
 
   it('adopting the paint tool clears the drafts the other tools left behind', () => {
     const s = useGridStore.getState();
-    s.setTool('fogdef');
+    s.setTool('zone');
     s.addFogVertex(1, 1);
     expect(useGridStore.getState().fogDraft?.points).toHaveLength(1);
     useGridStore.getState().setTileId('floor');

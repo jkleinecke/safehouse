@@ -1529,6 +1529,28 @@ export class ScenesService {
         op.level ?? 0,
         op.brush,
       );
+    } else if (op.op === 'refog') {
+      // The GM's "Fog everything" (the fog bar, 2026-09-27): start over. The
+      // fog goes on, every reveal of both fashions goes (the regions stay,
+      // hidden, for the Prep list and the Fixer's suggestions), every square
+      // of the brush goes, and the party's memory of every floor goes. What a
+      // runner is looking at right now is not the GM's to take: the sight
+      // pass that follows every fog op remembers it again at once, so the
+      // table is left with exactly what the party can see.
+      //
+      // One op rather than a reset, a forget and the switch sent in turn:
+      // those were three commits, and between them the table's screens showed
+      // a map half fogged (the reveals gone and the memory still up, or the
+      // other way round), with a token diff for each.
+      fog.enabled = true;
+      fog.revealed = [];
+      fog.revealedShapes = [];
+      exploredIds = [];
+      exploredShapes = [];
+      brush = undefined;
+      const sight = forgetExplored(fog.sight, undefined);
+      if (sight !== undefined) fog.sight = sight;
+      else delete fog.sight;
     } else {
       // hide: one named region, whichever fashion it was revealed in, or (no
       // regionId) the GM's reset: every reveal of both fashions, regions,

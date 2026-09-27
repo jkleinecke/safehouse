@@ -33,7 +33,11 @@
  * ground it opens as live or as remembered. The GM's brush is told whole
  * (`op: 'brush'`, the record every floor, as the sight is), after a stroke and
  * after any other op that moved it (a region revealed or hidden takes the
- * marks under it; the reset takes them all).
+ * marks under it; the reset takes them all). The GM's "Fog everything"
+ * (`refog`) says only that it happened and that the scene is fogged,
+ * `{op, active}`: a device folding the events takes every reveal back and
+ * forgets the party's memory, and the brush and the sight follow in their own
+ * events, whole.
  *
  * All of that is the table's only while the scene IS the table's, the active
  * one (`sceneOnTable`). On a scene the GM is still staging, every event a
@@ -103,7 +107,9 @@ export async function tellFogOp(tx: EventTx, sceneId: string, op: FogOpInput): P
   const wasOn = sceneFogOn(before);
   const { fog, region } = await svc.applyFogOp(fresh, op);
   const isDefine = op.op === 'define';
-  const isSwitch = op.op === 'enable' || op.op === 'disable';
+  // The switch, and the GM's "Fog everything": each is told as what it did
+  // and nothing else (see below).
+  const isSwitch = op.op === 'enable' || op.op === 'disable' || op.op === 'refog';
   const isForget = op.op === 'forget';
   const isBrush = op.op === 'brush';
   // A reveal says its fashion, always: a device folding the events (the TV)
@@ -124,7 +130,9 @@ export async function tellFogOp(tx: EventTx, sceneId: string, op: FogOpInput): P
     type: 'fog.updated',
     payload: isSwitch
       ? // The switch is one bit and says nothing else: no region, no id,
-        // whatever else the body happened to carry.
+        // whatever else the body happened to carry. "Fog everything" says
+        // as little: every reveal went and the memory with it, which a
+        // folding device does from the op's name alone.
         { sceneId, op: op.op, active }
       : isForget
         ? // Which floor was forgotten, and nothing else. The memory itself

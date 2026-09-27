@@ -51,9 +51,8 @@ const TOOL_DEFS: Record<GridTool, Omit<ToolDef, 'id'>> = {
   door: { label: 'Doorway', glyph: '⌷' },
   zone: { label: 'Zone', glyph: '▱' },
   pin: { label: 'Pin', glyph: '⚑' },
-  // A fog region is an area the GM can reveal, not an area of fog (PrepPlacing).
-  fogdef: { label: 'Reveal area', glyph: '⬡' },
-  // Square by square, in the fashion picked in Prep's menu (PrepPlacing).
+  // On no toolbar: the GM's fog bar holds it, in Prep and in Play (FogBar).
+  // Named here for its tooltip there, which is this one's.
   fogbrush: { label: 'Fog brush', glyph: '▦' },
   camera: { label: 'Camera', glyph: '◉' },
   light: { label: 'Light', glyph: '✹' },
@@ -146,7 +145,8 @@ export default function Toolbar(props: ToolbarProps) {
   */
   const build = props.isGm && props.mode === 'build';
   // Prep has its own placing row (PrepPlacing): what goes on the map, each
-  // with its caret — Token, Reveal area, Camera, Light, Note.
+  // with its caret where it has one — Token, Camera, Light, Note. The fog is
+  // the fog bar's, under this row (FogBar).
   const prep = props.isGm && props.mode === 'prep' && props.placing !== undefined;
   /*
     Select, and in Build mode Erase, lead the row apart from everything else:

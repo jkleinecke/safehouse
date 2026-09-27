@@ -6,7 +6,7 @@
 import type { Point, Role, Scene, Token } from '@safehouse/contracts';
 import type { PaintDelta } from './paintedObjects.js';
 import type { CellSet, Clipboard } from './cellSelection.js';
-import type { LightMap, TileCut, TileLiquid, TilePattern, TileProp, TileShore, VisionMode } from '@safehouse/rules';
+import type { BrushMark, LightMap, TileCut, TileLiquid, TilePattern, TileProp, TileShore, VisionMode } from '@safehouse/rules';
 import { slotOf, slotUniverse, tileBySlot } from '@safehouse/rules';
 
 /** Active pointer tool on the canvas. */
@@ -15,8 +15,7 @@ export type GridTool =
   | 'ruler' // click-drag measurement
   | 'aoe' // place AoE circle template
   | 'pointer' // pointer trail broadcast
-  | 'fogdef' // GM: click vertices to define a named fog region
-  | 'fogbrush' // GM: drag over squares to reveal them live, as seen before, or fog them again
+  | 'fogbrush' // GM (the fog bar): drag a round brush to reveal squares live, as seen before, or fog them again
   | 'focus' // GM: next click broadcasts "focus here"
   | 'door' // GM: drag to draw a door segment
   | 'zone' // GM: click vertices to draw a named zone
@@ -427,6 +426,14 @@ export interface StageSceneState {
   cellSelection?: CellSet | null;
   /** Ctrl+V is waiting for a click: the copy follows the pointer. */
   pasting?: Clipboard | null;
+  /**
+   * The GM's fog brush, while it is in hand (the fog bar): how many squares
+   * across its circle is and what it paints. The pointer paints that circle
+   * (`fogBar.ts` `brushSquares`) and the map rings it under the pointer, in
+   * the paint's colour. Null or absent is a brush of one square, which is
+   * what the brush was before it had a size.
+   */
+  fogBrush?: { size: number; paint: BrushMark } | null;
 }
 
 /** Callbacks the stage raises back into React land. */
@@ -449,7 +456,7 @@ export interface StageCallbacks {
   onDoorToggle(doorId: string): void;
   /** AoE tool click (grid units). */
   onAoePlace(x: number, y: number): void;
-  /** fogdef/zone tool click — append a polygon vertex (grid units). */
+  /** zone tool click — append a polygon vertex (grid units). */
   onFogVertex(x: number, y: number): void;
   /** focus tool click — broadcast "focus here" (grid units). */
   onFocus(x: number, y: number): void;
@@ -489,9 +496,9 @@ export interface StageCallbacks {
    */
   onTileStrokeEnd?(): void;
   /**
-   * One square of a fog brush stroke (Prep; FR9.13's square-by-square
-   * brush), once per square per stroke. The page gathers them and sends the
-   * stroke when it ends, as one fog op.
+   * One square of a fog brush stroke (the fog bar; FR9.13's square-by-square
+   * brush, round since 2026-09-27), once per square per stroke. The page
+   * gathers them and sends the stroke when it ends, as one fog op.
    */
   onFogBrush?(col: number, row: number): void;
   /** The fog brush stroke ended (button up, gesture abandoned). */

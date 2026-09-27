@@ -45,8 +45,8 @@ import {
 } from './api.js';
 import { GridCommands } from './commands.js';
 import { DOOR_REACH_NOTICE, canWorkDoor, type DoorRef } from './doorReach.js';
-import { metersBetween, metricsFor, rectPolygon, rollScatter } from './geometry.js';
-import { newId } from './gm/ui.js';
+import { metersBetween, metricsFor, rollScatter } from './geometry.js';
+import FogBar from './hud/FogBar.js';
 import PrepPlacing from './hud/PrepPlacing.js';
 import PrepControls from './hud/PrepControls.js';
 import {
@@ -69,6 +69,7 @@ import MeasurePanel from './hud/MeasurePanel.js';
 import PlayRail from './hud/PlayRail.js';
 import { availableModes, clampMode } from './hud/eyes.js';
 import ModeBar from './hud/ModeBar.js';
+import { FOG_BAR_MODES } from './hud/modes.js';
 import FloorMenu from './hud/FloorMenu.js';
 import MapImageButton from './hud/MapImageButton.js';
 import TokenLayersMenu from './hud/TokenLayersMenu.js';
@@ -88,7 +89,7 @@ import { autoTileFor, topLayerAt } from './autoPlace.js';
 import { roomPlan, roomTileIds } from './roomFill.js';
 import { useCameraCones } from './useCameraCones.js';
 import { useLightMap } from './useLightMap.js';
-import { useShroud } from './useShroud.js';
+import { PARTY_LENS, useShroud } from './useShroud.js';
 import { stairAdvice, useStairOffer } from './useStairs.js';
 import { brushFog, editArcs, historyFor, useHistory } from './history.js';
 import { useGridStore } from './store.js';
@@ -281,7 +282,7 @@ export default function GridPage() {
   const strokeCovered = useRef(new Set<string>());
   // Arc walls the eraser has already taken in the stroke under way.
   const arcsErased = useRef(new Set<string>());
-  // The squares of the fog brush stroke in hand (Prep), sent whole when it ends.
+  // The squares of the fog brush stroke in hand (the fog bar), sent whole when it ends.
   const fogStroke = useRef(new Set<string>());
 
 
@@ -467,12 +468,17 @@ export default function GridPage() {
             lightMap,
             cellSelection: building ? store.cellSelection : null,
             pasting: building && store.pasting ? store.clipboard : null,
+            // The fog brush in hand (the fog bar): the circle the pointer
+            // paints and the map rings under it.
+            fogBrush: isGm && store.tool === 'fogbrush' ? { size: store.fogBrushSize, paint: store.fogBrush } : null,
           }
         : composed;
     },
     [
       isGm,
       store.mode,
+      store.fogBrush,
+      store.fogBrushSize,
       store.cellSelection,
       store.pasting,
       store.clipboard,
@@ -571,44 +577,10 @@ export default function GridPage() {
         const s = useGridStore.getState();
         s.setAoe({ center: { x, y }, radiusM: s.aoeRadiusM });
       },
-      // The Fog tool (Prep) draws and saves in one go: a rectangle on its
-      // second corner, a polygon when the GM clicks back on its first. The
-      // new region is named for its number and opened in the inspector,
-      // where it can be renamed. The zone tool drafts through the same
-      // points and saves from its own panel, as it always has.
-      onFogVertex: (x, y) => {
-        const st = useGridStore.getState();
-        if (st.tool !== 'fogdef' || !scene || !isGm) {
-          st.addFogVertex(x, y);
-          return;
-        }
-        const p = st.snapEnabled ? { x: Math.round(x), y: Math.round(y) } : { x, y };
-        const pts = st.fogDraft?.points ?? [];
-        const define = (polygon: Array<{ x: number; y: number }>) => {
-          const id = newId('fog');
-          commands.fogDefine(scene.id, { id, name: `Region ${scene.fog.regions.length + 1}`, polygon });
-          st.clearFogDraft();
-          st.selectToken(null);
-          st.select({ kind: 'fog', id });
-          st.openGmPanel();
-        };
-        if (st.fogShape === 'rect') {
-          const first = pts[0];
-          if (!first) {
-            st.addFogVertex(p.x, p.y);
-            return;
-          }
-          if (first.x === p.x || first.y === p.y) return; // no area yet
-          define(rectPolygon(first, p));
-          return;
-        }
-        const first = pts[0];
-        if (first && pts.length >= 3 && Math.hypot(p.x - first.x, p.y - first.y) < 0.6) {
-          define(pts);
-          return;
-        }
-        st.addFogVertex(p.x, p.y);
-      },
+      // The zone tool drafts a polygon click by click and saves it from its
+      // own panel. (The Fog tool drew named regions the same way until the
+      // round brush on the fog bar replaced it, 2026-09-27.)
+      onFogVertex: (x, y) => useGridStore.getState().addFogVertex(x, y),
       // The Token tool (Prep): the token picked in its menu, dropped in the
       // square clicked, on the floor on screen. A runner is placed once, so
       // the tool goes down after; NPCs and props keep coming.
@@ -757,10 +729,10 @@ export default function GridPage() {
         arcsErased.current.clear();
         strokeRef.current?.flush();
       },
-      // -- the fog brush (Prep; FR9.13's square-by-square brush) ------------
+      // -- the fog brush (the fog bar; FR9.13's brush, round) ---------------
       // A stroke is gathered square by square and sent whole when it ends, as
-      // one fog op on the floor being built, in the fashion picked in Prep's
-      // menu: revealed live, revealed as seen before, or fogged again. One
+      // one fog op on the floor in view, in the fashion picked on the bar:
+      // revealed live, revealed as seen before, or fogged again. One
       // step on the history, so Ctrl+Z puts every square's mark back
       // (`brushFog`). Nothing is drawn optimistically: the map redraws from
       // the server's answer, which is also what the table is told.
@@ -1267,8 +1239,8 @@ export default function GridPage() {
               scene && store.mode !== 'build' ? (
                 <>
                   <TokenLayersMenu scene={scene} />
-                  {/* Prep's scene-wide settings: the environment, whose eyes, the fog, the players' dimming. */}
-                  {store.mode === 'prep' && <PrepControls scene={scene} tokens={tokens} commands={commands} />}
+                  {/* Prep's scene-wide settings: the environment, whose eyes, the players' dimming. */}
+                  {store.mode === 'prep' && <PrepControls scene={scene} tokens={tokens} />}
                 </>
               ) : undefined
             }
@@ -1295,10 +1267,24 @@ export default function GridPage() {
           }
           mapImage={isGm && scene ? <MapImageButton scene={scene} /> : undefined}
         />
+        {/*
+          The GM's fog bar (2026-09-27): every fog control in one row, under
+          the tools, in Prep and in Play — the fog, the party's sight, the
+          round brush, starting over and seeing as the players do.
+        */}
+        {isGm && scene && FOG_BAR_MODES.includes(store.mode) && <FogBar scene={scene} commands={commands} />}
       </header>
       <div className="flex min-h-0 w-full flex-1 flex-col xl:flex-row">
       <div className="relative min-h-[52dvh] flex-1 overflow-hidden bg-ground">
         <div ref={hostRef} className="absolute inset-0" />
+        {/*
+          Seeing as the players (the fog bar's lens): a frame round the whole
+          map while it is on, so a GM who glances back at a darkened map
+          knows it is the lens and not the fog gone wrong. It takes no click.
+        */}
+        {isGm && store.losTokenId === PARTY_LENS && (
+          <div className="pointer-events-none absolute inset-0 z-5 ring-2 ring-inset ring-cyan/70" aria-hidden />
+        )}
 
         {(loading || !scene) && (
           <div className="pointer-events-none absolute inset-0 grid place-items-center">
@@ -1417,6 +1403,22 @@ export default function GridPage() {
                 className="chip pointer-events-auto border-cyan bg-panel/90 text-cyan disabled:opacity-50"
               >
                 put on the table →
+              </button>
+            )}
+            {/*
+              The map as the phones and the TV show it (the fog bar's "See
+              as players"): said on the map while it is on, whichever mode
+              the GM is in, with the one press that goes back.
+            */}
+            {isGm && store.losTokenId === PARTY_LENS && (
+              <button
+                type="button"
+                data-testid="see-as-players-notice"
+                title="Back to your own view of the map"
+                onClick={() => store.setLosTokenId(null)}
+                className="chip pointer-events-auto border-cyan bg-panel/95 text-cyan shadow-glow-cyan"
+              >
+                <span aria-hidden>👁</span> Seeing what the players see · back to your view
               </button>
             )}
             {focusNotice && <span className="chip bg-panel/90 text-cyan">{focusNotice}</span>}

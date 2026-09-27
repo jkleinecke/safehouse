@@ -357,6 +357,13 @@ export function mergeSceneEvents(
         } else if (op === 'hide' && str(p['regionId']) === undefined) {
           // The GM's reset: every reveal taken back, the fog left whole.
           hideAll(draft);
+        } else if (op === 'refog') {
+          // The GM's "Fog everything" (the fog bar): every reveal and brush
+          // mark taken back and the party's memory forgotten on every floor,
+          // so only what the runners see now is left; the server's brush and
+          // sight events that follow say the same again, whole.
+          hideAll(draft);
+          forgetFloor(draft, undefined);
         } else if (op === 'hide' || op === 'remove') {
           // A removed region is gone from the TV's picture the same way a
           // hidden one is; what it covered is the server's next answer.

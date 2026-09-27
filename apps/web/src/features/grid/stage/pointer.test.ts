@@ -57,6 +57,7 @@ function harness(tool: StageSceneState['tool']) {
   const onFogBrush = vi.fn<(col: number, row: number) => void>();
   const onFogBrushEnd = vi.fn<() => void>();
   const drawPaintedGhost = vi.fn<(cells: readonly string[] | null) => void>();
+  const drawBrush = vi.fn<(at: Point | null) => void>();
   const onTileRect =
     vi.fn<(c0: number, r0: number, c1: number, r1: number, mode: 'area' | 'room') => void>();
   const drawRect = vi.fn();
@@ -131,6 +132,7 @@ function harness(tool: StageSceneState['tool']) {
     clearRect,
     // A copy, since the stroke's own list keeps growing after the call.
     drawPaintedGhost: (cells) => drawPaintedGhost(cells === null ? null : [...cells]),
+    drawBrush,
   };
 
   const dom = fakeElement();
@@ -149,6 +151,7 @@ function harness(tool: StageSceneState['tool']) {
     clock += 1000;
     const p = at(col, row);
     dom.fire(type, {
+      type,
       pointerId: id,
       clientX: p.x,
       clientY: p.y,
@@ -167,6 +170,7 @@ function harness(tool: StageSceneState['tool']) {
     onFogBrush,
     onFogBrushEnd,
     drawPaintedGhost,
+    drawBrush,
     drawRect,
     clearRect,
     onCameraPlace,
@@ -403,6 +407,71 @@ describe('a fog brush stroke (Prep, P6)', () => {
     expect(h.cells()).toEqual([[6, 6, false]]);
     expect(h.onFogBrushEnd).toHaveBeenCalledTimes(2);
     expect(h.onTileStrokeEnd).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the round fog brush (the fog bar, 2026-09-27)', () => {
+  /** Every square in columns `c0..c1`, rows `r0..r1`, as `"col,row"`. */
+  const band = (c0: number, c1: number, r0: number, r1: number): string[] => {
+    const out: string[] = [];
+    for (let row = r0; row <= r1; row += 1) for (let col = c0; col <= c1; col += 1) out.push(`${col},${row}`);
+    return out;
+  };
+
+  it('paints its whole circle, fills the band between two samples, and sends each square once', () => {
+    const h = harness('fogbrush');
+    h.state.fogBrush = { size: 3, paint: 'live' };
+    const sent = () => h.onFogBrush.mock.calls.map(([col, row]) => `${col},${row}`);
+
+    h.send('pointerdown', 5, 5);
+    // A 3-square brush on the square pressed: the 3x3 block round it.
+    expect(sent()).toEqual(band(4, 6, 4, 6));
+    // A quick drag three squares on: the circle at every centre between, so no gap.
+    h.send('pointermove', 8, 5);
+    expect([...sent()].sort()).toEqual(band(4, 9, 4, 6).sort());
+    expect(new Set(sent()).size).toBe(sent().length);
+    // One ghost per sample, not per square, holding every square so far.
+    expect(h.drawPaintedGhost).toHaveBeenCalledTimes(2);
+    expect([...(h.drawPaintedGhost.mock.lastCall?.[0] ?? [])].sort()).toEqual(band(4, 9, 4, 6).sort());
+    // Back over its own band: nothing new, and no new ghost.
+    h.send('pointermove', 6, 5);
+    expect(sent()).toHaveLength(18);
+    expect(h.drawPaintedGhost).toHaveBeenCalledTimes(2);
+
+    h.send('pointerup', 6, 5);
+    expect(h.onFogBrushEnd).toHaveBeenCalledTimes(1);
+    expect(h.drawPaintedGhost).toHaveBeenLastCalledWith(null);
+  });
+
+  it('paints only squares on the map', () => {
+    const h = harness('fogbrush');
+    h.state.fogBrush = { size: 5, paint: 'hidden' };
+    h.send('pointerdown', 0, 0);
+    h.send('pointerup', 0, 0);
+    const sent = h.onFogBrush.mock.calls.map(([col, row]) => [col, row]);
+    // The quarter of the circle on the map, and nothing past its edge.
+    expect(sent.length).toBeGreaterThan(0);
+    for (const [col, row] of sent) {
+      expect(col).toBeGreaterThanOrEqual(0);
+      expect(row).toBeGreaterThanOrEqual(0);
+    }
+    expect(sent).toContainEqual([2, 1]);
+    expect(sent).not.toContainEqual([2, 2]);
+  });
+
+  it('rings the brush under a hovering pointer, paints nothing until pressed, and takes the ring away when the pointer leaves', () => {
+    const h = harness('fogbrush');
+    h.state.fogBrush = { size: 4, paint: 'explored' };
+    // No button held: a hover.
+    h.send('pointermove', 3, 7);
+    expect(h.drawBrush).toHaveBeenLastCalledWith({ x: 3.5, y: 7.5 });
+    expect(h.onFogBrush).not.toHaveBeenCalled();
+    h.send('pointerleave', 3, 7);
+    expect(h.drawBrush).toHaveBeenLastCalledWith(null);
+    // Another tool in hand: a hover rings nothing.
+    const other = harness('select');
+    other.send('pointermove', 3, 7);
+    expect(other.drawBrush).not.toHaveBeenCalled();
   });
 });
 

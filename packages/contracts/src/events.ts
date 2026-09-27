@@ -136,9 +136,10 @@ export type TokenDragCommand = z.infer<typeof TokenDragCommandSchema>;
 
 /**
  * Fog ops (FR9.13/9.14): reveal/hide a named region, define or remove one,
- * switch the scene's fog on or off, forget what the party has seen, or paint
- * squares with the reveal brush (`FogOpSchema`). The command keeps its old
- * name, `fog.reveal`, because that is what every client already sends.
+ * switch the scene's fog on or off, forget what the party has seen, paint
+ * squares with the reveal brush, or fog everything and start over
+ * (`FogOpSchema`). The command keeps its old name, `fog.reveal`, because
+ * that is what every client already sends.
  */
 export const FogRevealCommandSchema = z.object({
   cmd: z.literal('fog.reveal'),

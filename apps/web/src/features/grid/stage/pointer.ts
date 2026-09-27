@@ -1,7 +1,8 @@
 /**
  * Pointer/wheel state machine for the scene canvas: pan, wheel + pinch zoom,
- * token drag with grid snap, ruler drag, ping double-tap, pointer trail, and
- * the single-click tools (AoE, fog vertex, focus, door toggle).
+ * token drag with grid snap, ruler drag, ping double-tap, pointer trail, the
+ * single-click tools (AoE, zone vertex, focus, door toggle), and the strokes
+ * of the tile brush and the GM's round fog brush.
  *
  * All handling lives on the DOM — the renderer's own event handling is never
  * engaged (pixi's interaction tree on the 2D map was not either), so there
@@ -51,6 +52,7 @@ import {
   type PaintedObject,
 } from '../paintedObjects.js';
 import { allCells, containsCell, moveSelection, pastedSet, pasteBodies, tilesetOf } from '../cellSelection.js';
+import { brushAnchor, brushCentre, brushSquares } from '../fogBar.js';
 import { walkDragTarget } from './walkDrag.js';
 
 type Mode =
@@ -103,6 +105,15 @@ export interface PointerHost {
    * what is on its way to it. The 2D map drew the squares alone.
    */
   drawPaintedGhost?(cells: readonly string[] | null, fill?: readonly GhostFill[]): void;
+  /**
+   * The GM's fog brush, ringed on the floor under the pointer at `at` (grid
+   * units) while it is in hand, so a press is not the first she learns of
+   * how big its circle is; null takes the ring away (the pointer left the
+   * map, or points at no floor). The host reads the brush's size and paint
+   * from the state and snaps the ring as the stroke does
+   * (`fogBar.ts` `brushAnchor`). Optional: the TV never draws one.
+   */
+  drawBrush?(at: Point | null): void;
   /**
    * The token whose drawn body is under host point `screen`, when the
    * renderer can tell from what it drew — the 3D map raycasts its figures, so
@@ -233,14 +244,17 @@ export class PointerController {
   private readonly painted = new Set<string>();
   private paintErase = false;
   /**
-   * The stroke is the fog brush's, not the tiles' (Prep): its squares go to
-   * `onFogBrush`, and the squares it has crossed are shown as a flat ghost
-   * (`drawPaintedGhost`) until it ends, since nothing on the map changes
-   * until the server has the whole stroke.
+   * The stroke is the fog brush's, not the tiles' (the fog bar): its squares
+   * go to `onFogBrush`, and the squares it has crossed are shown as a flat
+   * ghost (`drawPaintedGhost`) until it ends, since nothing on the map
+   * changes until the server has the whole stroke.
    */
   private paintFog = false;
   private fogStroke: string[] = [];
-  /** Last cell this stroke touched, so the gap to the next sample can be filled. */
+  /**
+   * Last cell this stroke touched, so the gap to the next sample can be
+   * filled. For the fog brush, the last centre's anchor (`brushAnchor`).
+   */
   private lastCell: { col: number; row: number } | null = null;
   private readonly pointers = new Map<number, ActivePointer>();
   private rect: DOMRect | null = null;
@@ -379,11 +393,36 @@ export class PointerController {
     this.painted.add(key);
     if (this.paintFog) {
       this.fogStroke.push(key);
-      this.host.drawPaintedGhost?.(this.fogStroke);
       this.host.callbacks.onFogBrush?.(col, row);
       return;
     }
     this.host.callbacks.onTilePaint?.(col, row, this.paintErase);
+  }
+
+  /**
+   * The fog brush at pointer `grid` (the fog bar; round since 2026-09-27):
+   * every square of the brush's circle (`fogBar.ts` `brushSquares`) at each
+   * centre from the last sample to this one, each square once per stroke,
+   * and only squares on the map. The centres are walked as the tile brush
+   * walks squares (`cellsBetween`, over the brush's anchors), so a quick
+   * drag leaves no gaps in the band it paints. The ghost of the squares
+   * crossed so far is drawn once per sample, not once per square: a
+   * ten-square brush lays some eighty squares where it is pressed, and a
+   * ghost rebuilt for each of them was a frame's work eighty times over.
+   */
+  private brushFogAt(grid: Point): void {
+    const size = this.host.state().fogBrush?.size ?? 1;
+    const anchor = brushAnchor(grid, size);
+    const from = this.lastCell;
+    this.lastCell = anchor;
+    const m = this.host.metrics();
+    const bounds = { cols: m.cols, rows: m.rows };
+    const had = this.fogStroke.length;
+    for (const at of from === null ? [anchor] : cellsBetween(from, anchor)) {
+      for (const sq of brushSquares(brushCentre(at, size), size, bounds)) this.emitCell(sq.col, sq.row);
+    }
+    if (this.fogStroke.length !== had) this.host.drawPaintedGhost?.(this.fogStroke);
+    this.host.drawBrush?.(grid);
   }
 
   /**
@@ -633,10 +672,6 @@ export class PointerController {
         this.mode = 'idle';
         this.host.callbacks.onAoePlace(grid.x, grid.y);
         return;
-      case 'fogdef':
-        this.mode = 'idle';
-        this.host.callbacks.onFogVertex(grid.x, grid.y);
-        return;
       case 'focus':
         this.mode = 'idle';
         this.host.callbacks.onFocus(grid.x, grid.y);
@@ -661,7 +696,7 @@ export class PointerController {
         this.host.drawArc?.(this.arcA, this.arcB, 0);
         return;
       case 'zone':
-        // Zones and fog regions share one polygon draft (FR9.2 / FR9.14).
+        // A zone is a polygon drafted click by click (FR9.2).
         this.mode = 'idle';
         this.host.callbacks.onFogVertex(grid.x, grid.y);
         return;
@@ -708,18 +743,18 @@ export class PointerController {
         this.paintCell(grid);
         return;
       case 'fogbrush':
-        // The fog brush (Prep; FR9.13's square-by-square brush) is a stroke
-        // like the tile brush: every square the drag crosses, once, with the
-        // gaps between samples filled. It paints the fog, not the floor, so
-        // its squares go to their own callback and the stroke is sent whole
-        // when it ends (`endStroke`).
+        // The fog brush (the fog bar; FR9.13's brush, round) is a stroke
+        // like the tile brush: every square its circle crosses, once, with
+        // the gaps between samples filled (`brushFogAt`). It paints the fog,
+        // not the floor, so its squares go to their own callback and the
+        // stroke is sent whole when it ends (`endStroke`).
         this.mode = 'painting';
         this.paintErase = false;
         this.paintFog = true;
         this.fogStroke = [];
         this.painted.clear();
         this.lastCell = null;
-        this.paintCell(grid);
+        this.brushFogAt(grid);
         return;
       default:
         this.beginSelect(grid, screen, state, m);
@@ -1002,8 +1037,13 @@ export class PointerController {
       return;
     }
     if (!tracked) {
-      // No button held: the only thing a hover does is carry a paste around.
+      // No button held: a hover carries the fog brush's ring, or a paste,
+      // around, and does nothing else.
       const state = this.host.state();
+      if (state.role === 'gm' && state.tool === 'fogbrush') {
+        this.host.drawBrush?.(this.toGrid(this.local(e)));
+        return;
+      }
       if (state.role === 'gm' && state.paintEdit && state.pasting) {
         const grid = this.toGrid(this.local(e));
         if (!grid) return;
@@ -1045,7 +1085,8 @@ export class PointerController {
     if (grid === null) return;
 
     if (this.mode === 'painting') {
-      this.paintCell(grid);
+      if (this.paintFog) this.brushFogAt(grid);
+      else this.paintCell(grid);
       return;
     }
 
@@ -1184,6 +1225,8 @@ export class PointerController {
   // -------------------------------------------------------------------------
 
   private handleUp(e: PointerEvent): void {
+    // The pointer left the map: the fog brush's ring goes with it.
+    if (e.type === 'pointerleave') this.host.drawBrush?.(null);
     if (!this.pointers.has(e.pointerId)) return;
     this.pointers.delete(e.pointerId);
     try {

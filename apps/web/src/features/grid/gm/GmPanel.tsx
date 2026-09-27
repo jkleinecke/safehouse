@@ -17,7 +17,10 @@
  * and the mode bar taking its palette, its set and its clear; and Setup went
  * the same way, its calibration to the gear, its floors to the floor
  * dropdown and its images to the toolbar. Build's authoring is all on the
- * map now, and this panel serves Prep and Play.
+ * map now, and this panel serves Prep and Play. Fog is not here either
+ * (2026-09-27): every fog control is on the GM's fog bar, over the map in
+ * Prep and Play (`hud/FogBar.tsx`), and a named region's reveal buttons are
+ * in Prep's list and its inspector.
  */
 import { TrashButton } from './ui.js';
 import type { Scene, Token } from '@safehouse/contracts';
@@ -29,7 +32,6 @@ import { MODE_TABS } from '../hud/modes.js';
 import CamerasTab from './CamerasTab.js';
 import DisplayTab from './DisplayTab.js';
 import EnvTab from './EnvTab.js';
-import FogTab from './FogTab.js';
 import Inspector from './Inspector.js';
 import PrepOutline from './PrepOutline.js';
 import TokenInspector from './TokenInspector.js';
@@ -39,7 +41,6 @@ import TokensTab from './TokensTab.js';
 
 const TABS: Array<{ id: GmTab; label: string }> = [
   { id: 'tokens', label: 'Tokens' },
-  { id: 'fog', label: 'Fog' },
   { id: 'cameras', label: 'Cams & notes' },
   { id: 'env', label: 'Env' },
   { id: 'los', label: 'LOS' },
@@ -179,7 +180,7 @@ export default function GmPanel(props: GmPanelProps) {
       */}
       {!build && showTab && (
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {tab === 'los' && <LosTab scene={props.scene} tokens={props.tokens} commands={props.commands} />}
+        {tab === 'los' && <LosTab scene={props.scene} tokens={props.tokens} />}
         {tab === 'tokens' && (
           <TokensTab
             campaignId={props.campaignId}
@@ -189,7 +190,6 @@ export default function GmPanel(props: GmPanelProps) {
           />
         )}
         {tab === 'cameras' && <CamerasTab scene={props.scene} selected={selected} lens={lens} />}
-        {tab === 'fog' && <FogTab scene={props.scene} commands={props.commands} />}
         {tab === 'env' && <EnvTab scene={props.scene} />}
         {tab === 'tv' && <DisplayTab commands={props.commands} />}
       </div>

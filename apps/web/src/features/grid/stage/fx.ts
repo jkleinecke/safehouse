@@ -1,6 +1,7 @@
 /**
- * Ephemeral overlay effects, drawn: ruler, AoE template + scatter, fog-draft
- * polygon, wall/door/arc rubber bands, room/area drafts — pure, no three.
+ * Ephemeral overlay effects, drawn: ruler, AoE template + scatter, zone
+ * draft polygon, wall/door/arc rubber bands, room/area drafts, the fog
+ * brush's ring — pure, no three.
  *
  * Each function clears the `Ink` it is handed and draws its effect into it.
  * The 3D stage hands each effect a `FloorInk` of its own
@@ -9,7 +10,7 @@
  * `FxLayer`.) The painted selection and its drag ghost are not flat effects
  * on the 3D map but boxes standing on their squares (`stage3d/selection.ts`).
  */
-import { arcPoints } from '@safehouse/rules';
+import { arcPoints, type BrushMark } from '@safehouse/rules';
 import type { Point } from '@safehouse/contracts';
 import {
   groundRadius,
@@ -86,7 +87,25 @@ export function drawAoe(g: Ink, m: SceneMetrics, aoe: AoeTemplate | null, scatte
 }
 
 /**
- * GM fog-region draft polygon while clicking vertices (FR9.14).
+ * The GM's fog brush under the pointer (the fog bar, 2026-09-27): a ring as
+ * big as the circle a press will paint, centred where the stroke will put
+ * it (`centre`, the snapped centre: `fogBar.ts` `brushCentre`), `radius`
+ * squares round, in the colour of what it paints. The colours are the fog
+ * outlines' own: green for revealed, amber for seen before, cyan for fogged
+ * again. A faint wash inside, so the ring reads as an area rather than a
+ * line over a busy floor.
+ */
+export function drawBrushRing(g: Ink, m: SceneMetrics, centre: Point, radius: number, paint: BrushMark): void {
+  g.clear();
+  const color = paint === 'live' ? C.ok : paint === 'explored' ? C.warn : C.cyan;
+  const { rx, ry } = groundRadius(m, radius);
+  const at = worldFromGrid(m, centre);
+  g.ellipse(at.x, at.y, rx, ry).fill({ color, alpha: 0.1 }).stroke({ width: 2, color, alpha: 0.9 });
+}
+
+/**
+ * The zone tool's draft polygon while clicking vertices (FR9.2; fog regions
+ * were drafted the same way until the round brush replaced them, FR9.14).
  *
  * Two points preview the RECTANGLE they will save as, projected through the
  * grid. Drawing the bare line between them was honest in plan view and a

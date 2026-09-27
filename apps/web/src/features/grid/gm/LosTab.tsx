@@ -1,21 +1,22 @@
 /**
  * Line of sight, as a GM tool (FR9.16).
  *
- * The scene's two hiding switches come first, the fog and the SIGHTLINES
- * (P6): Play shows no Fog tab, and a GM mid-session must be able to fog the
- * table, open it, or hand what it sees to the runners' eyes without leaving
- * the fight.
+ * The fog is not here (2026-09-27). The fog switch, the party's sightlines,
+ * forgetting what the party has seen and looking through the table's eyes
+ * ("See as players") are on the GM's fog bar over the map, in Play as in
+ * Prep (`hud/FogBar.tsx`); they used to be here as well, and a GM had two
+ * places to look for each.
  *
- * Then two separate switches, because they answer different needs and
+ * Two separate switches, because they answer different needs and
  * conflating them would break one of them:
  *
  *  - **"Show me what X sees"** is a lens the GM picks up while planning. It
  *    defaults to off and to nobody, because a GM permanently limited to one
  *    token's view cannot run the rest of the map. Their scrim is deliberately
- *    lighter than a player's — it informs, it does not restrict. One of the
- *    lenses is the whole table's, "the party": exactly what the phones and
- *    the TV show, the squares they see live left clear and only the tokens
- *    they are shown left on the map.
+ *    lighter than a player's — it informs, it does not restrict. The whole
+ *    table's lens is the fog bar's "See as players", not one of these: while
+ *    it is on, this list shows nobody picked, and picking a token here puts
+ *    it down.
  *  - **"Dim outside own sight"** changes the feel of a scene, so it is the
  *    GM's call per session: illuminating for a careful infiltration, unwanted
  *    noise in a brawl in one room. It DARKENS and never hides: the map under
@@ -32,15 +33,12 @@
 import type { Scene, Token } from '@safehouse/contracts';
 import { coverCall, lineOfSightBetween, type CoverLevel } from '@safehouse/rules';
 import { usePatchScene } from '../api.js';
-import type { GridCommands } from '../commands.js';
 import { useGridStore } from '../store.js';
 import { cameraLensId, PARTY_LENS } from '../useShroud.js';
-import { FogSwitch, SightlinesSwitch } from './FogTab.js';
 
 export interface LosTabProps {
   scene: Scene;
   tokens: readonly Token[];
-  commands: GridCommands;
 }
 
 const COVER_CHOICES: readonly { value: CoverLevel | 'auto'; label: string }[] = [
@@ -50,11 +48,8 @@ const COVER_CHOICES: readonly { value: CoverLevel | 'auto'; label: string }[] = 
   { value: 'full', label: 'Full — no shot' },
 ];
 
-export default function LosTab({ scene, tokens, commands }: LosTabProps) {
+export default function LosTab({ scene, tokens }: LosTabProps) {
   const losTokenId = useGridStore((s) => s.losTokenId);
-  // The floor in view: the one the party lens reads, and the one "Forget
-  // this floor" forgets.
-  const level = useGridStore((s) => s.activeLevel);
   const setLosTokenId = useGridStore((s) => s.setLosTokenId);
   // The players' switch is a fact about the SCENE, saved and broadcast, so
   // their devices hear it; it used to live in this browser's store and never
@@ -86,24 +81,17 @@ export default function LosTab({ scene, tokens, commands }: LosTabProps) {
 
   return (
     <div className="flex flex-col gap-3 p-3" data-testid="los-tab">
-      {/*
-        The fog switch, here as well as on Prep's mode row: Play shows no Fog
-        tab, and a GM mid-session must be able to fog the table or open it
-        without leaving the fight (2026-09-27).
-      */}
-      <FogSwitch scene={scene} commands={commands} />
-      <SightlinesSwitch scene={scene} commands={commands} level={level} />
       <div>
         <div className="mono-label text-dim">Show me what this token sees</div>
         <select
           aria-label="Sightline viewpoint"
           data-testid="los-viewpoint"
-          value={losTokenId ?? ''}
+          // The table's own lens is the fog bar's; here it reads as nobody.
+          value={losTokenId === null || losTokenId === PARTY_LENS ? '' : losTokenId}
           onChange={(e) => setLosTokenId(e.target.value === '' ? null : e.target.value)}
           className="mt-1 w-full rounded border border-edge bg-deck px-2 py-1 text-sm"
         >
           <option value="">Nobody — show the whole map</option>
-          <option value={PARTY_LENS}>The party — what the phones and the TV show</option>
           {tokens.map((t) => (
             <option key={t.id} value={t.id}>
               {t.name}
@@ -122,8 +110,7 @@ export default function LosTab({ scene, tokens, commands }: LosTabProps) {
         </select>
         <p className="mt-1 text-xs text-faint">
           A lens, not a limit — your scrim stays light so you can still run the rest of the map.
-          The party lens shows exactly what the table sees: what it sees live is clear, and only
-          the tokens it is shown stay on the map.
+          To see exactly what the table sees, use See as players on the fog bar.
         </p>
       </div>
 
@@ -147,7 +134,7 @@ export default function LosTab({ scene, tokens, commands }: LosTabProps) {
           outside it — walls, closed doors, columns and full-height props all cut the sightline.
           It only darkens: the floor plan is still sent and still readable under it, and a player
           with no token of their own on the scene is not dimmed at all. To hide ground from the
-          table, use Fog.
+          table, use the fog bar.
         </p>
         {patchScene.isError && (
           <p className="mono-label mt-1 text-danger">that did not save — try again</p>

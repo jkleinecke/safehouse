@@ -483,6 +483,49 @@ describe("the party's sight on the TV (P6)", () => {
     // One it cannot read changes nothing.
     expect(mergeSceneEvents(folded, [evt('fog.updated', { sceneId: 's1', op: 'brush', cols: 1e9, rows: 1, levels: {}, active: true })])).toBe(folded);
   });
+
+  it('starts over on the GM’s "Fog everything": every reveal, the brush and the memory go, and only what the runners see stays', () => {
+    // A TV that had the lab revealed, a painted shape, the brush and the
+    // party's memory, before the GM pressed "Fog everything" (`refog`, the
+    // fog bar): the op's own event is bare, `{op, active}`, and must be
+    // enough on its own, whatever else follows it.
+    const lab = { id: 'lab', name: 'the lab', polygon: square(5) };
+    const folded = mergeSceneEvents(dark(), [
+      evt('fog.updated', { sceneId: 's1', op: 'reveal', regionId: 'lab', region: lab, active: true }),
+      evt('fog.updated', { sceneId: 's1', op: 'reveal', shape: square(15), as: 'explored', active: true }),
+      sightEvent({ '0': { live: [[3, 4]], explored: [[3, 4], [10, 10]] } }),
+      evt('fog.updated', {
+        sceneId: 's1',
+        op: 'brush',
+        level: 0,
+        cols: COLS,
+        rows: ROWS,
+        levels: { '0': { live: bits([[12, 12]]), explored: '', hidden: '' } },
+        active: true,
+      }),
+    ]);
+    // (The regions and shapes are drawn on a canvas, which node has none of,
+    // so their holes are checked in the fog itself below; the squares the
+    // brush and the party's sight decide are stamped without one.)
+    expect(folded!.scene.fog.revealed).toEqual(['lab']);
+    expect(folded!.scene.fog.exploredShapes).toHaveLength(1);
+    expect(tvAt(folded!, 12, 12)).toBe(0);
+    expect(tvAt(folded!, 10, 10)).toBeGreaterThan(0.3);
+    expect(tvAt(folded!, 10, 10)).toBeLessThan(0.9);
+
+    const refogged = mergeSceneEvents(folded, [evt('fog.updated', { sceneId: 's1', op: 'refog', active: true })]);
+    const fog = refogged!.scene.fog;
+    expect(fog.regions).toEqual([]);
+    expect(fog.revealed).toEqual([]);
+    expect(fog.revealedShapes).toEqual([]);
+    expect(fog.exploredShapes ?? []).toEqual([]);
+    expect(fog).not.toHaveProperty('brush');
+    expect(fog.sight?.levels['0']).toEqual({ live: bits([[3, 4]]), explored: bits([[3, 4]]) });
+    expect(fog.active).toBe(true);
+    // Covered everywhere but where the runner looks now.
+    expect(tvAt(refogged!, 3, 4)).toBe(0);
+    for (const [col, row] of [[12, 12], [10, 10]] as const) expect(tvAt(refogged!, col, row), `${col},${row}`).toBe(1);
+  });
 });
 
 describe('reconnect', () => {

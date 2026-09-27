@@ -232,6 +232,17 @@ export class GridCommands {
     post(this.socket, { cmd: 'fog.reveal', sceneId, op: 'forget', ...(level === undefined ? {} : { level }) });
   }
 
+  /**
+   * "Fog everything" (the fog bar, 2026-09-27): start over, as one op on the
+   * server (`refog`). The fog goes on, every reveal is hidden, the brush's
+   * marks are cleared and the party's memory is forgotten, so the table is
+   * left with only what the runners can see right now. The regions stay,
+   * hidden, for the GM to reveal again from Prep's list.
+   */
+  fogRefog(sceneId: string): void {
+    post(this.socket, { cmd: 'fog.reveal', sceneId, op: 'refog' });
+  }
+
   dispose(): void {
     this.dragRelay.cancel();
     this.pointerRelay.cancel();

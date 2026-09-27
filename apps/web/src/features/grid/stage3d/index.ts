@@ -113,7 +113,8 @@ import {
   type TileDrawDef,
   type TileRectMode,
 } from '../types.js';
-import { drawAoe, drawArcDraft, drawFogDraft, drawRectDraft, drawRuler, drawSegmentDraft } from '../stage/fx.js';
+import { drawAoe, drawArcDraft, drawBrushRing, drawFogDraft, drawRectDraft, drawRuler, drawSegmentDraft } from '../stage/fx.js';
+import { brushAnchor, brushCentre, brushRadius } from '../fogBar.js';
 import { C } from '../stage/colors.js';
 import { aoeKey, fogDraftKey, fogKey, fogRegionKey, geometryKey, mapImagesKey, paintedSelectionKey } from '../stage/keys.js';
 import { drawFog, drawGeometry, drawGrid } from '../stage/layers.js';
@@ -181,6 +182,8 @@ const ORDER = {
   segment: 14,
   rect: 15,
   ghost: 16,
+  // The fog brush's ring (the fog bar): over the ghost of the stroke it is painting.
+  brush: 16.5,
   ruler: 17,
   fx: 18,
 } as const;
@@ -208,6 +211,7 @@ const COVER: Record<Exclude<keyof typeof ORDER, 'fx' | 'markers' | 'paintedSel' 
   fogDraft: 'none',
   segment: 'none',
   rect: 'none',
+  brush: 'none',
   ruler: 'none',
 };
 
@@ -372,6 +376,10 @@ class Stage3D implements StageApi, PointerHost {
   private readonly segmentInk: FloorInk;
   private readonly rectInk: FloorInk;
   private readonly rulerInk: FloorInk;
+  /** The fog brush's ring under the pointer (`drawBrush`), and where the pointer last put it. */
+  private readonly brushInk: FloorInk;
+  private brushAt: Point | null = null;
+  private lastBrushKey = '';
   /** The painted selection in Build, standing (`selection.ts`): boxes as tall as what it holds. */
   private readonly selBoxes: SelectionBoxes;
   /** Where a dragged or pasted object will land: translucent boxes as tall as what is on its way. */
@@ -531,6 +539,7 @@ class Stage3D implements StageApi, PointerHost {
     this.segmentInk = this.ink('segment');
     this.rectInk = this.ink('rect');
     this.rulerInk = this.ink('ruler');
+    this.brushInk = this.ink('brush');
     const floorY = () => this.rt.floor * this.rt.storey;
     this.selBoxes = new SelectionBoxes({ floorY, renderOrder: ORDER.paintedSel, style: SELECTION_STYLE });
     this.ghostBoxes = new SelectionBoxes({ floorY, renderOrder: ORDER.ghost, style: GHOST_STYLE });
@@ -929,6 +938,46 @@ class Stage3D implements StageApi, PointerHost {
   }
 
   /**
+   * The GM's fog brush ringed under the pointer, at `at` (grid units), or
+   * taken away (null). Kept, so a size or a paint changed from the bar or
+   * with `[` and `]` redraws the ring where the pointer rests, without
+   * waiting for it to move (`update` asks again).
+   */
+  drawBrush(at: Point | null): void {
+    if (this.inert) return;
+    this.brushAt = at === null ? null : { x: at.x, y: at.y };
+    this.paintBrush();
+  }
+
+  /**
+   * The ring as the state and the pointer have it now: while the brush is
+   * in the GM's hand and the pointer is on the floor, a circle as big as
+   * the one a press paints, centred where the stroke will centre it
+   * (`fogBar.ts`: snapped as the brush snaps) and coloured by what it
+   * paints; otherwise nothing. Drawn again only when one of those changed,
+   * so a hover inside one square costs nothing.
+   */
+  private paintBrush(): void {
+    if (this.inert) return;
+    const s = this.sceneState;
+    const brush = s.role === 'gm' && s.tool === 'fogbrush' ? (s.fogBrush ?? { size: 1, paint: 'live' as const }) : null;
+    const at = this.brushAt;
+    if (brush === null || at === null) {
+      if (this.lastBrushKey !== '') {
+        this.lastBrushKey = '';
+        this.wipe(this.brushInk);
+      }
+      return;
+    }
+    const centre = brushCentre(brushAnchor(at, brush.size), brush.size);
+    const key = `${centre.x},${centre.y}|${brush.size}|${brush.paint}|${this.lastMetricsKey}`;
+    if (key === this.lastBrushKey) return;
+    this.lastBrushKey = key;
+    drawBrushRing(this.brushInk, this.m, centre, brushRadius(brush.size), brush.paint);
+    this.rt.requestRender();
+  }
+
+  /**
    * Where a dragged or pasted object will land, as translucent boxes as tall
    * as what `fill` says will stand on each square (`boxTops`); flat, as the
    * 2D map drew it, where nothing says.
@@ -1171,6 +1220,10 @@ class Stage3D implements StageApi, PointerHost {
       this.lastFogDraftKey = dk;
       drawFogDraft(this.fogDraftInk, m, next.fogDraft);
     }
+
+    // The fog brush's ring: put down with the brush, resized or recoloured
+    // where the pointer rests when the bar changes it (`paintBrush`).
+    this.paintBrush();
 
     // A paste that was waiting and no longer is takes its ghost with it.
     const pasting = Boolean(next.pasting);

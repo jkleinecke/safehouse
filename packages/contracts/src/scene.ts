@@ -409,8 +409,17 @@ export type FogRegion = z.infer<typeof FogRegionSchema>;
  *   (`FogBrushStrokeSchema`, stored as `FogState.brush`): revealed live,
  *   revealed as seen before, fogged again, or handed back to whatever else
  *   decides them (`clear`, which is how a stroke is undone).
+ * - `refog` is the GM's "Fog everything" (the fog bar, 2026-09-27): start
+ *   over, in one op. The fog goes on (`enabled`), every reveal of both
+ *   fashions is taken back (the regions stay, hidden), every square of the
+ *   brush is cleared and the party's memory of every floor is forgotten. What
+ *   the runners can see RIGHT NOW is all the table is left with, because the
+ *   sight pass that follows every fog op remembers it again at once. It is
+ *   one op, not a hide, a forget and a switch sent one after the other, so the
+ *   table never sees the map half fogged in between, and the tokens the old
+ *   reveals showed leave in the same commit.
  */
-export const FogOpSchema = z.enum(['reveal', 'hide', 'define', 'remove', 'enable', 'disable', 'forget', 'brush']);
+export const FogOpSchema = z.enum(['reveal', 'hide', 'define', 'remove', 'enable', 'disable', 'forget', 'brush', 'refog']);
 export type FogOp = z.infer<typeof FogOpSchema>;
 
 /**

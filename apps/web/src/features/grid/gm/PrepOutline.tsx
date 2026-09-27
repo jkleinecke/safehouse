@@ -7,6 +7,11 @@
  * a corner, a lamp switched off, a note under a crate. One list, five kinds, each row a click
  * that picks the thing up and brings the map to it. It replaces the Tokens,
  * Fog and Cams & notes tabs' lists — the same rows, in one place.
+ *
+ * The fog regions are the one place left to reveal and hide a named region
+ * (live, seen before, hidden) since the GM's fog bar took the rest of the
+ * fog (2026-09-27): no tool draws new ones, but older scenes have them and
+ * the Fixer's layouts and reveal suggestions bring them.
  */
 import type { Scene, Token } from '@safehouse/contracts';
 import type { GridCommands } from '../commands.js';
@@ -68,7 +73,7 @@ export default function PrepOutline({
     <div data-testid="prep-outline">
       {nothing && (
         <div className="p-3">
-          <Empty>nothing placed on this floor yet — pick Token, Reveal area, Camera, Light or Note on the toolbar</Empty>
+          <Empty>nothing placed on this floor yet — pick Token, Camera, Light or Note on the toolbar</Empty>
         </div>
       )}
       {here.length > 0 && (

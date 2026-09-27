@@ -28,7 +28,9 @@ describe('<Toolbar>', () => {
 
     const prep = render(true, 'prep');
     expect(prep).toContain('data-testid="tool-camera"');
-    expect(prep).toContain('data-testid="tool-fogdef"');
+    // The fog is the fog bar's (2026-09-27): no Reveal area, no brush, here.
+    expect(prep).not.toContain('data-testid="tool-fogdef"');
+    expect(prep).not.toContain('data-testid="tool-fogbrush"');
     expect(prep).not.toContain('data-testid="tool-arc"');
 
     // Select and Erase lead the Build row, apart from the tools.

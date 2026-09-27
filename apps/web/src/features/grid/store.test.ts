@@ -23,7 +23,7 @@ describe('grid modes in the store', () => {
   });
 
   it('follows a tab into its mode, and keeps the mode when the tab is shared', () => {
-    s().setGmTab('fog');
+    s().setGmTab('env');
     expect(s().mode).toBe('prep');
     // Tokens is in prep and play both, so it keeps the mode it is asked from.
     s().setGmTab('tokens');
@@ -45,6 +45,29 @@ describe('grid modes in the store', () => {
     // LOS is in prep too, so the mode change keeps it.
     s().setMode('prep');
     expect(s().gmTab).toBe('los');
+  });
+
+  it('keeps the fog brush in hand between Prep and Play, where the fog bar is, and puts it down in Build', () => {
+    s().setMode('play');
+    s().setTool('fogbrush');
+    // Picked up in Play, it stays in Play.
+    expect(s().mode).toBe('play');
+    s().setMode('prep');
+    expect(s().tool).toBe('fogbrush');
+    s().setMode('build');
+    expect(s().tool).toBe('select');
+    // Picked up in Build (its key), it takes the GM to Prep.
+    s().setTool('fogbrush');
+    expect(s().mode).toBe('prep');
+  });
+
+  it('holds the brush between one and ten squares across', () => {
+    s().setFogBrushSize(4);
+    expect(s().fogBrushSize).toBe(4);
+    s().setFogBrushSize(0);
+    expect(s().fogBrushSize).toBe(1);
+    s().setFogBrushSize(99);
+    expect(s().fogBrushSize).toBe(10);
   });
 });
 

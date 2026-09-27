@@ -181,6 +181,9 @@ describe('GridCommands', () => {
     c.fogForget('sc1');
     expect(s.sent[4]).toEqual({ cmd: 'fog.reveal', sceneId: 'sc1', op: 'forget', level: 1 });
     expect(s.sent[5]).toEqual({ cmd: 'fog.reveal', sceneId: 'sc1', op: 'forget' });
+    // "Fog everything" (the fog bar): one op, nothing else in it.
+    c.fogRefog('sc1');
+    expect(s.sent[6]).toEqual({ cmd: 'fog.reveal', sceneId: 'sc1', op: 'refog' });
   });
 
   it('is a no-op while the socket is missing', () => {

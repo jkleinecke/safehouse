@@ -34,18 +34,49 @@ export const MODES: ReadonlyArray<{ id: GridMode; label: string; hint: string }>
  */
 export const MODE_TABS: Record<GridMode, readonly GmTab[]> = {
   build: [],
-  prep: ['tokens', 'fog', 'cameras', 'env', 'los'],
+  prep: ['tokens', 'cameras', 'env', 'los'],
   play: ['tokens', 'los', 'tv'],
 };
 
-/** Which tools each mode's toolbar offers a GM, in order. */
+/**
+ * Which tools each mode's toolbar offers a GM, in order.
+ *
+ * The fog tools are on none of them (2026-09-27). The fog brush is the fog
+ * bar's (`FOG_BAR_TOOLS`), which is in Prep and in Play alike, and the old
+ * "Reveal area" tool, which drew a named region to reveal later, is gone: a
+ * GM who wanted part of the map hidden drew the one place that could be
+ * shown, and the round brush does what it was for. Named regions are still
+ * kept, listed and revealed from Prep's list, and the Fixer still suggests
+ * them.
+ */
 export const MODE_TOOLS: Record<GridMode, readonly GridTool[]> = {
   // The arc wall took the old traced "wall line"'s place: the same drag, a real
   // wall on its own floor, straight at any angle or curved.
   build: ['select', 'tile-room', 'tile-area', 'tile', 'arc', 'tile-erase', 'door', 'zone', 'pin'],
-  prep: ['select', 'token', 'fogdef', 'fogbrush', 'camera', 'light', 'note'],
+  prep: ['select', 'token', 'camera', 'light', 'note'],
   play: ['select', 'ruler', 'aoe', 'pointer', 'focus'],
 };
+
+/**
+ * The modes the GM's fog bar shows in (`FogBar`): Prep, to lay the fog out
+ * before the session, and Play, to reveal a room the moment the runners kick
+ * its door in. Not Build: a floor being laid has no table to hide it from.
+ */
+export const FOG_BAR_MODES: readonly GridMode[] = ['prep', 'play'];
+
+/** The tools the fog bar holds rather than a toolbar: the fog brush. */
+export const FOG_BAR_TOOLS: readonly GridTool[] = ['fogbrush'];
+
+/**
+ * Whether `tool` can stay in hand in `mode`: Select everywhere, the fog
+ * bar's tools wherever the bar is, and every other tool in the one mode
+ * whose toolbar offers it.
+ */
+export function toolFitsMode(tool: GridTool, mode: GridMode): boolean {
+  if (tool === 'select') return true;
+  if (FOG_BAR_TOOLS.includes(tool)) return FOG_BAR_MODES.includes(mode);
+  return MODE_TOOLS[mode].includes(tool);
+}
 
 /**
  * Build mode's tools: the ways of putting something on the map, in one run.
@@ -78,9 +109,15 @@ export const BUILD_TOOLS: readonly GridTool[] = [
 /** The tools a player has — the same in every mode, because players have no modes. */
 export const PLAYER_TOOLS: readonly GridTool[] = ['select', 'ruler', 'aoe', 'pointer'];
 
-/** The mode a tool lives in, or null for tools every mode has (select). */
+/**
+ * The mode a tool lives in, or null for tools every mode has (select). A fog
+ * bar tool lives in Prep first (`FOG_BAR_MODES`), but it is as at home in
+ * Play: which mode it moves the GM to is asked only when the one she is in
+ * cannot hold it (`toolFitsMode`).
+ */
 export function modeOfTool(tool: GridTool): GridMode | null {
   if (tool === 'select') return null;
+  if (FOG_BAR_TOOLS.includes(tool)) return FOG_BAR_MODES[0] ?? null;
   for (const mode of ['build', 'prep', 'play'] as const) {
     if (MODE_TOOLS[mode].includes(tool)) return mode;
   }
@@ -110,7 +147,11 @@ export const SHORTCUTS: ReadonlyArray<{ key: string; tool: GridTool; gmOnly: boo
   { key: 'd', tool: 'door', gmOnly: true },
   { key: 'z', tool: 'zone', gmOnly: true },
   { key: 'p', tool: 'pin', gmOnly: true },
-  { key: 'f', tool: 'fogdef', gmOnly: true },
+  // F picks up the fog brush, the fog bar's tool (it picked the old "Reveal
+  // area" tool, which is gone). `[` and `]` size it while it is in hand;
+  // that is the page's to do, since it is not picking a tool
+  // (`useGridShortcuts`).
+  { key: 'f', tool: 'fogbrush', gmOnly: true },
   { key: 'c', tool: 'camera', gmOnly: true },
   { key: 'l', tool: 'light', gmOnly: true },
   { key: 'n', tool: 'note', gmOnly: true },

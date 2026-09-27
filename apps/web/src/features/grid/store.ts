@@ -23,7 +23,8 @@ import {
   type ScatterResult,
   type ViewProjection,
 } from './types.js';
-import { MODE_TABS, modeOfTab, modeOfTool, type GridMode } from './hud/modes.js';
+import { MODE_TABS, modeOfTab, modeOfTool, toolFitsMode, type GridMode } from './hud/modes.js';
+import { clampBrushSize, FOG_BRUSH_DEFAULT } from './fogBar.js';
 
 /** The last mode used on this device — a GM mid-prep comes back to Prep. */
 const MODE_KEY = 'safehouse.grid.mode';
@@ -88,7 +89,7 @@ export {
 };
 
 /** GM authoring side-panel tabs; which show depends on the mode (hud/modes.ts). */
-export type GmTab = 'tokens' | 'cameras' | 'fog' | 'env' | 'los' | 'tv';
+export type GmTab = 'tokens' | 'cameras' | 'env' | 'los' | 'tv';
 
 /** GM steering of the table display (FR9.21) — mirrors the TV's `TvControls`. */
 export interface DisplayControls {
@@ -184,14 +185,18 @@ export interface GridUiState {
   tokenSize: number;
   /** The token whose look is being edited in the floating editor (the right-click menu's "Customise look"). */
   lookTokenId: string | null;
-  /** How the Fog tool draws a region: two corners, or round the corners back to the first. */
-  fogShape: 'rect' | 'polygon';
   /**
-   * What the fog brush paints (Prep): squares revealed live, revealed as
-   * seen before, or fogged again (`FogBrushPaintSchema`, less the undo's
-   * `clear`).
+   * What the fog brush paints (the fog bar, in Prep and Play): squares
+   * revealed live, revealed as seen before, or fogged again
+   * (`FogBrushPaintSchema`, less the undo's `clear`).
    */
   fogBrush: FogBrushMark;
+  /**
+   * How big the fog brush is, in squares across (`fogBar.ts`: a circle of
+   * squares, 1 to 10). The bar's slider sets it, and `[` and `]` while the
+   * brush is in hand.
+   */
+  fogBrushSize: number;
   /** Build · Prep · Play — which of the Grid's three jobs the GM is doing (hud/modes.ts). */
   mode: GridMode;
   /** GM only: view a non-active scene while staging (FR9.1). */
@@ -243,8 +248,8 @@ export interface GridUiState {
   setTokenStamp: (stamp: TokenStamp | null) => void;
   setTokenSize: (size: number) => void;
   setLookTokenId: (id: string | null) => void;
-  setFogShape: (shape: 'rect' | 'polygon') => void;
   setFogBrush: (paint: FogBrushMark) => void;
+  setFogBrushSize: (size: number) => void;
   setViewSceneId: (id: string | null) => void;
   setPendingRollMod: (mod: PendingRollMod | null) => void;
   select: (selected: GeometrySelection | null) => void;
@@ -280,9 +285,9 @@ function toolPatch(
 ): Pick<GridUiState, 'tool' | 'fogDraft' | 'ruler' | 'selected'> {
   return {
     tool,
-    // Leaving a polygon tool abandons its in-progress draft; fog and zones
-    // share one draft, so staying inside that pair keeps the vertices.
-    fogDraft: tool === 'fogdef' || tool === 'zone' ? s.fogDraft : null,
+    // Leaving the zone tool abandons its in-progress draft (`fogDraft`, the
+    // name it kept from when fog regions were drawn the same way).
+    fogDraft: tool === 'zone' ? s.fogDraft : null,
     ruler: tool === 'ruler' ? s.ruler : null,
     // Leaving authoring entirely closes the inspector and takes the ring off
     // the canvas; the select tool keeps it, because that is how a thing opens.
@@ -325,8 +330,8 @@ export const useGridStore = create<GridUiState>()((set) => ({
   tokenStamp: null,
   tokenSize: 1,
   lookTokenId: null,
-  fogShape: 'rect',
   fogBrush: 'live',
+  fogBrushSize: FOG_BRUSH_DEFAULT,
   gmTab: 'tokens',
   mode: readStoredMode(),
   viewSceneId: initialView.viewSceneId,
@@ -339,16 +344,17 @@ export const useGridStore = create<GridUiState>()((set) => ({
   toggleSnap: () => set((s) => ({ snapEnabled: !s.snapEnabled })),
   // A tab reached from anywhere (a pin just dropped opens Pins) brings its
   // mode with it; a mode switch keeps the tab if the mode has it, else opens
-  // the mode's first section, and puts down a tool the mode does not offer.
+  // the mode's first section, and puts down a tool the mode does not offer
+  // (the fog brush stays in hand between Prep and Play, where the fog bar
+  // is, and goes down in Build, where it is not: `toolFitsMode`).
   setGmTab: (gmTab) => set((s) => ({ gmTab, mode: modeOfTab(gmTab, s.mode) })),
   setMode: (mode) =>
     set((s) => {
       storeMode(mode);
-      const owner = modeOfTool(s.tool);
       return {
         mode,
         gmTab: MODE_TABS[mode].includes(s.gmTab) ? s.gmTab : (MODE_TABS[mode][0] ?? s.gmTab),
-        ...(owner !== null && owner !== mode ? toolPatch(s, 'select') : {}),
+        ...(toolFitsMode(s.tool, mode) ? {} : toolPatch(s, 'select')),
         // A new job: whatever was open in the inspector belonged to the old one.
         selected: null,
       };
@@ -402,9 +408,11 @@ export const useGridStore = create<GridUiState>()((set) => ({
           : 'tile',
       ),
     })),
+  // A tool the mode in hand cannot hold takes the GM to the mode that can;
+  // the fog brush, picked up in Play, stays in Play.
   setTool: (tool) =>
     set((s) => {
-      const mode = modeOfTool(tool) ?? s.mode;
+      const mode = toolFitsMode(tool, s.mode) ? s.mode : (modeOfTool(tool) ?? s.mode);
       if (mode !== s.mode) storeMode(mode);
       return { ...toolPatch(s, tool), mode };
     }),
@@ -434,8 +442,8 @@ export const useGridStore = create<GridUiState>()((set) => ({
   setTokenStamp: (tokenStamp) => set({ tokenStamp }),
   setTokenSize: (n) => set({ tokenSize: Math.max(1, Math.min(8, Math.round(n))) }),
   setLookTokenId: (lookTokenId) => set({ lookTokenId }),
-  setFogShape: (fogShape) => set({ fogShape }),
   setFogBrush: (fogBrush) => set({ fogBrush }),
+  setFogBrushSize: (n) => set({ fogBrushSize: clampBrushSize(n) }),
   setViewSceneId: (viewSceneId) =>
     set((s) => {
       // Another scene starts on its ground floor, unless it is the one already on screen.

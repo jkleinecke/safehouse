@@ -7,6 +7,7 @@ import { useEffect } from 'react';
 import type { Scene } from '@safehouse/contracts';
 import { useDeleteToken, usePaintBatch, usePaintTiles, usePatchGeometry } from '../api.js';
 import { copySet, eraseBodies, setOfObject } from '../cellSelection.js';
+import { brushSizeStep } from '../fogBar.js';
 import { objectForSelection } from '../paintedObjects.js';
 import { removeSelection } from '../geometryEdit.js';
 import { historyFor, useHistory } from '../history.js';
@@ -28,8 +29,23 @@ export function useGridShortcuts(
   const deleteToken = useDeleteToken(sceneId).mutate;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.repeat) return;
-      if (isTypingTarget(e.target)) return;
+      if (e.defaultPrevented) return;
+      // `[` and `]` size the fog brush while it is in hand (the fog bar),
+      // the keys every paint program taught, and held down they keep going,
+      // so they come before the repeat is turned away. The bar's own size
+      // slider is an input, but nobody types in it: a GM who has just
+      // dragged it and reaches for `]` gets a bigger brush.
+      const onSlider = (e.target as { type?: unknown } | null)?.type === 'range';
+      if (isGm && !e.ctrlKey && !e.metaKey && !e.altKey && (onSlider || !isTypingTarget(e.target))) {
+        const s = useGridStore.getState();
+        const step = s.tool === 'fogbrush' ? brushSizeStep(e.key) : 0;
+        if (step !== 0) {
+          s.setFogBrushSize(s.fogBrushSize + step);
+          e.preventDefault();
+          return;
+        }
+      }
+      if (e.repeat || isTypingTarget(e.target)) return;
       // Delete (or Backspace) removes what is selected — a token, a fog
       // region, a wall, door, zone, pin, camera, light or note — with no confirmation: it is one undo step, and
       // a "sure?" on something undo can fix is a tax (docs/UX_MAP_BUILDER.md §3.6).

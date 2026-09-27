@@ -3,28 +3,24 @@
  *
  * The things a GM sets for the whole scene rather than for a square: the
  * environment (light, visibility, glare, wind — the modifier they compose to),
- * whose eyes the GM is looking through, whether the scene's fog is on,
- * whether its sightlines are, and whether each player's map is dimmed
- * outside their own runner's sightline — and one lens of the GM's own, the
- * light map. They were panel tabs — Env, Fog and LOS — each a page for one or
+ * whose eyes the GM is looking through, and whether each player's map is
+ * dimmed outside their own runner's sightline — and one lens of the GM's own,
+ * the light map. They were panel tabs — Env and LOS — each a page for one or
  * two controls; up here they are one click away from any tool, and the panel
  * is left for the thing that is picked.
  *
- * The fog and the dimming sit side by side and are worded apart on purpose.
- * Only the fog HIDES: while it is on, the players and the TV see nothing but
- * the revealed areas. The dimming only darkens — the map under it stays
- * readable — and a GM who flipped it expecting it to hide the map watched the
- * table go on seeing everything. The sightlines sit between them, because
- * they hide too (P6): with them on, the table sees what the party's runners
- * see and have seen, whatever the fog switch says, and the fog switch says so.
+ * The fog is not here (2026-09-27): its switch, the party's sightlines and
+ * "See as players" are on the GM's fog bar, under the tools in Prep and in
+ * Play (`FogBar`), one place for each. The dimming stays, and is worded
+ * apart from the fog on purpose: only the fog HIDES. The dimming only
+ * darkens — the map under it stays readable — and a GM who flipped it
+ * expecting it to hide the map watched the table go on seeing everything.
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { fogOn, type Scene, type Token } from '@safehouse/contracts';
+import type { Scene, Token } from '@safehouse/contracts';
 import { environment } from '@safehouse/rules';
 import { usePatchScene } from '../api.js';
-import type { GridCommands } from '../commands.js';
 import EnvTab from '../gm/EnvTab.js';
-import { foggedBySight, fogSwitchTitle, sightlinesTitle, useSetSightlines } from '../gm/FogTab.js';
 import { useGridStore } from '../store.js';
 import { cameraLensId, PARTY_LENS } from '../useShroud.js';
 
@@ -109,10 +105,10 @@ function EnvironmentMenu({ scene }: { scene: Scene }) {
 }
 
 /**
- * Whose eyes the GM is looking through — a lens, not a limit. The party's
- * (P6) is the table's own view: the squares every phone and the TV see live
- * on this floor, and only the tokens they are shown (`useShroud`
- * `PARTY_LENS`).
+ * Whose eyes the GM is looking through — a lens, not a limit: a token's or a
+ * camera's. The table's own view is the fog bar's "See as players"
+ * (`useShroud` `PARTY_LENS`); while it is on this button says so, and
+ * "Everything" here puts it down, but it is not offered here a second time.
  */
 function SeeAsMenu({ scene, tokens }: { scene: Scene; tokens: readonly Token[] }) {
   const lens = useGridStore((s) => s.losTokenId);
@@ -121,7 +117,7 @@ function SeeAsMenu({ scene, tokens }: { scene: Scene; tokens: readonly Token[] }
   const cameras = (scene.geometry.cameras ?? []).filter((c) => (c.level ?? 0) === level);
   const here = tokens.filter((t) => (t.level ?? 0) === level);
   const current =
-    (lens === PARTY_LENS ? 'The party' : undefined) ??
+    (lens === PARTY_LENS ? 'The players' : undefined) ??
     here.find((t) => t.id === lens)?.name ??
     cameras.find((c) => cameraLensId(c.id) === lens)?.label ??
     (lens ? 'someone' : null);
@@ -158,7 +154,6 @@ function SeeAsMenu({ scene, tokens }: { scene: Scene; tokens: readonly Token[] }
       {(close) => (
         <div className="max-h-80 overflow-y-auto py-1">
           {row(null, 'Everything — no lens', close)}
-          {row(PARTY_LENS, 'The party — what the table sees', close)}
           {here.length > 0 && <div className="mono-label px-3 pb-0.5 pt-1.5 text-faint">Tokens</div>}
           {here.map((t) => row(t.id, t.name, close, t.hidden ? 'hidden' : undefined))}
           {cameras.length > 0 && <div className="mono-label px-3 pb-0.5 pt-1.5 text-faint">Cameras</div>}
@@ -166,65 +161,6 @@ function SeeAsMenu({ scene, tokens }: { scene: Scene; tokens: readonly Token[] }
         </div>
       )}
     </RowMenu>
-  );
-}
-
-/**
- * The scene's fog switch (`FogState.enabled`): on, the players and the TV see
- * only the revealed areas; off, they see the whole map, and every region and
- * reveal is kept for when it goes on again. What it shows is `fogOn` of the
- * GM's copy, so a scene whose switch was never flipped reads as it behaves.
- * The Fog tab has the same switch with its two meanings spelt out
- * (`FogSwitch`); here they are the tooltip.
- *
- * With the switch off and the scene's sightlines on, the scene is fogged all
- * the same (`sceneFogOn`), and the button says so: "off · sightlines", in the
- * fog's colour, with the reason in its tooltip. The switch itself still
- * reads off, because it is.
- */
-function FogToggle({ scene, commands }: { scene: Scene; commands: GridCommands }) {
-  const on = fogOn(scene.fog);
-  const bySight = foggedBySight(scene);
-  return (
-    <button
-      type="button"
-      aria-pressed={on}
-      data-testid="prep-fog"
-      data-fogged-by={bySight ? 'sightlines' : undefined}
-      title={fogSwitchTitle(on, bySight)}
-      onClick={() => (on ? commands.fogDisable(scene.id) : commands.fogEnable(scene.id))}
-      className={'btn min-h-9 gap-1 px-2 py-1 text-xs ' + (on ? 'border-cyan text-cyan' : bySight ? 'text-cyan' : 'text-dim')}
-    >
-      <span className="mono-label">Fog</span>
-      <span>{on ? 'on' : bySight ? 'off · sightlines' : 'off'}</span>
-    </button>
-  );
-}
-
-/**
- * The scene's sightlines (`SceneVision.sight`, P6), next to the fog switch:
- * on, the table sees what the party's runners see, pooled, and remembers
- * what they have seen, whatever the fog switch says. Saved on the scene, so
- * the server's sight pass and every device hear it. The LOS tab has the same
- * switch with its meanings spelt out and the way to forget
- * (`SightlinesSwitch`); here they are the tooltip.
- */
-function SightlinesToggle({ scene }: { scene: Scene }) {
-  const sight = useSetSightlines(scene);
-  const on = sight.on;
-  return (
-    <button
-      type="button"
-      aria-pressed={on}
-      data-testid="prep-sightlines"
-      disabled={sight.pending}
-      title={sightlinesTitle(on)}
-      onClick={() => sight.set(!on)}
-      className={'btn min-h-9 gap-1 px-2 py-1 text-xs ' + (on ? 'border-cyan text-cyan' : 'text-dim')}
-    >
-      <span className="mono-label">Sightlines</span>
-      <span>{on ? 'on' : 'off'}</span>
-    </button>
   );
 }
 
@@ -249,8 +185,8 @@ function PlayerSightToggle({ scene }: { scene: Scene }) {
       disabled={patch.isPending}
       title={
         on
-          ? "Each player's map is dimmed outside their own runner's sightline — darkens only; use Fog to hide. Click to stop dimming."
-          : "Dim each player's map outside their own runner's sightline — darkens only; use Fog to hide."
+          ? "Each player's map is dimmed outside their own runner's sightline — darkens only; the fog bar hides. Click to stop dimming."
+          : "Dim each player's map outside their own runner's sightline — darkens only; the fog bar hides."
       }
       onClick={() => patch.mutate({ sceneId: scene.id, patch: { vision: { playersSeeOwnSight: !on } } })}
       className={'btn min-h-9 gap-1 px-2 py-1 text-xs ' + (on ? 'border-cyan text-cyan' : 'text-dim')}
@@ -284,21 +220,11 @@ function LightMapToggle() {
   );
 }
 
-export default function PrepControls({
-  scene,
-  tokens,
-  commands,
-}: {
-  scene: Scene;
-  tokens: readonly Token[];
-  commands: GridCommands;
-}) {
+export default function PrepControls({ scene, tokens }: { scene: Scene; tokens: readonly Token[] }) {
   return (
     <div className="flex items-center gap-1.5" role="group" aria-label="Scene settings">
       <EnvironmentMenu scene={scene} />
       <SeeAsMenu scene={scene} tokens={tokens} />
-      <FogToggle scene={scene} commands={commands} />
-      <SightlinesToggle scene={scene} />
       <PlayerSightToggle scene={scene} />
       <LightMapToggle />
     </div>

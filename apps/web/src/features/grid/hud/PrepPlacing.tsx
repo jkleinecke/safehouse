@@ -4,34 +4,24 @@
  * pick the tool up, press the caret to say which one.
  *
  *   Token ▾         which runner, NPC or prop, and how big — then click the map
- *   Reveal area ▾   a rectangle (two clicks) or a polygon (click round, back on the first)
- *   Fog brush ▾     drag over squares: reveal them live, as seen before, or fog them again
  *   Camera          click to mount one
  *   Light           click to put a lamp down on a square
  *   Note            click to drop one
  *
- * The Tokens tab's placement form (pick, size, "place at centre") and the Fog
- * tab's drafting section (click, name, save polygon / save rect / clear) were
- * the same questions asked in the panel, a long way from the map they were
- * about; here the answer is where the click lands.
+ * The Tokens tab's placement form (pick, size, "place at centre") was the
+ * same question asked in the panel, a long way from the map it was about;
+ * here the answer is where the click lands.
  *
- * The fog tool is called "Reveal area" because that is what it draws: a fog
- * region is a window the GM can later open to the table, not a patch of fog.
- * Labelled "Fog: rectangle", it read as the way to fog part of a map, and a
- * GM who drew one over the ground they wanted hidden had drawn the one place
- * that could be revealed. Whether the scene is fogged at all is the Fog
- * switch on the mode row (`PrepControls`).
- *
- * The fog brush is the other way to shape what the table sees (FR9.13's
- * square-by-square brush, P6): a drag over squares of the floor being built,
- * which reveals them live, reveals them as seen before (dimmed, nobody on
- * them), or fogs them again, even inside a region the table has open. Its
- * menu says which. It paints the fog, not the floor; the fog must be on (the
- * switch, or the scene's sightlines) for the table to see any of it.
+ * The fog is not placed from here (2026-09-27). The fog brush, which was a
+ * split button here, is on the GM's fog bar with everything else about the
+ * fog, in Prep and in Play (`FogBar`). The "Reveal area" tool, which drew a
+ * named region to reveal later, is gone: a GM who drew one over the ground
+ * they wanted hidden had drawn the one place that could be revealed, and the
+ * round brush reveals and hides ground directly. Named regions the Fixer
+ * suggests, or an older scene has, are still in Prep's list.
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useCharacters, useNpcTemplates } from '../api.js';
-import { FOG_BRUSH_PAINTS, fogBrushTitle } from '../gm/FogTab.js';
 import { useGridStore, type TokenStamp } from '../store.js';
 import type { GridTool } from '../types.js';
 import HudButton, { HudIcon } from './HudButton.js';
@@ -251,11 +241,6 @@ const PLAIN_GLYPHS = { camera: '◉', light: '✹', note: '🗒' } as const;
 export default function PrepPlacing({ campaignId }: { campaignId: string }) {
   const stamp = useGridStore((s) => s.tokenStamp);
   const setTool = useGridStore((s) => s.setTool);
-  const fogShape = useGridStore((s) => s.fogShape);
-  const setFogShape = useGridStore((s) => s.setFogShape);
-  const clearFogDraft = useGridStore((s) => s.clearFogDraft);
-  const fogBrush = useGridStore((s) => s.fogBrush);
-  const setFogBrush = useGridStore((s) => s.setFogBrush);
   const current = useGridStore((s) => s.tool);
   return (
     <div className="flex items-center gap-1.5" role="group" aria-label="Placing">
@@ -269,61 +254,6 @@ export default function PrepPlacing({ campaignId }: { campaignId: string }) {
         {(close) => <TokenMenu campaignId={campaignId} close={close} />}
       </Split>
       <SizeMenu />
-      <Split
-        tool="fogdef"
-        glyph="⬡"
-        label={fogShape === 'rect' ? 'Reveal area: rectangle' : 'Reveal area: polygon'}
-        menuLabel="Reveal area shape"
-      >
-        {(close) => (
-          <>
-            <Item
-              on={fogShape === 'rect'}
-              onClick={() => {
-                setFogShape('rect');
-                clearFogDraft();
-                setTool('fogdef');
-                close();
-              }}
-            >
-              <span className="flex-1">Rectangle</span>
-              <span className="mono-label text-faint">two corners</span>
-            </Item>
-            <Item
-              on={fogShape === 'polygon'}
-              onClick={() => {
-                setFogShape('polygon');
-                clearFogDraft();
-                setTool('fogdef');
-                close();
-              }}
-            >
-              <span className="flex-1">Polygon</span>
-              <span className="mono-label text-faint">back on the first to close</span>
-            </Item>
-          </>
-        )}
-      </Split>
-      <Split tool="fogbrush" glyph="▦" label={fogBrushTitle(fogBrush)} menuLabel="What the fog brush paints">
-        {(close) => (
-          <>
-            {FOG_BRUSH_PAINTS.map(({ paint, label, hint }) => (
-              <Item
-                key={paint}
-                on={fogBrush === paint}
-                onClick={() => {
-                  setFogBrush(paint);
-                  setTool('fogbrush');
-                  close();
-                }}
-              >
-                <span className="flex-1">{label}</span>
-                <span className="mono-label text-faint">{hint}</span>
-              </Item>
-            ))}
-          </>
-        )}
-      </Split>
       {(['camera', 'light', 'note'] as const).map((t) => (
         <HudButton
           key={t}
