@@ -9,9 +9,10 @@
  * both block until opened; a slanted painted wall cannot be slipped through
  * diagonally; and none of it applies to the GM.
  */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { characters, tokens } from '@safehouse/db';
 import { eq } from 'drizzle-orm';
+import { ScenesService } from '../src/services/scenes.js';
 import {
   bootstrapCampaign,
   joinAs,
@@ -300,5 +301,63 @@ describe('drag frames', () => {
     gmWs.send({ cmd: 'token.drag', tokenId, ...sq(5, 5) });
     const frame = await nextAfter(playerWs, mark, (f) => f.type === 'token.dragging');
     expect(frame.payload).toMatchObject({ tokenId, ...sq(5, 5) });
+  });
+});
+
+describe('a GM’s move that lands while the player’s is in flight', () => {
+  /*
+   * The GM drops the runner into the shut painted room while the player is
+   * still dragging it about outside. The player's request read the token
+   * where it stood BEFORE the GM's move; the move has to be judged from where
+   * it stands now, inside the room, or the player's drop walks the runner
+   * back out through the room's wall. PGlite runs one transaction at a time,
+   * so the GM's move is put in between the request's read and its
+   * transaction by hand: the read is answered, and then the row is moved.
+   */
+  function gmMovesItMeanwhile(to: { x: number; y: number }) {
+    const real = ScenesService.prototype.tokenWithScene;
+    return vi.spyOn(ScenesService.prototype, 'tokenWithScene').mockImplementationOnce(async function (
+      this: ScenesService,
+      id: string,
+    ) {
+      const read = await real.call(this, id);
+      await t.db.update(tokens).set(to).where(eq(tokens.id, id));
+      return read;
+    });
+  }
+
+  it('judges the player’s drop from the cell the GM put the runner in', async () => {
+    await place(sq(5, 0));
+    const spy = gmMovesItMeanwhile(sq(5, 5));
+    try {
+      const gmMark = gmWs.frames.length;
+      // Outside, from where the request read it; through the wall, from the cell.
+      const answer = await drop(playerWs, sq(12, 1));
+      expect(spy).toHaveBeenCalled();
+      expect(answer.type).toBe('error');
+      expect(answer.payload).toMatchObject({ code: 'blocked' });
+      expect(await stored()).toEqual(sq(5, 5));
+      // The ghost goes home to the cell, where the runner is.
+      const home = await nextAfter(gmWs, gmMark, (f) => f.type === 'token.dragging');
+      expect(home.payload).toMatchObject({ tokenId, ...sq(5, 5) });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('and a PATCH the same way', async () => {
+    await place(sq(5, 0));
+    const spy = gmMovesItMeanwhile(sq(5, 5));
+    try {
+      const res = await patch(`/api/tokens/${tokenId}`, player.token, sq(12, 1));
+      expect(spy).toHaveBeenCalled();
+      expect(res.statusCode).toBe(403);
+      expect(code(res)).toBe('blocked');
+      expect(await stored()).toEqual(sq(5, 5));
+      // Inside the cell the runner still walks about.
+      expect((await patch(`/api/tokens/${tokenId}`, player.token, sq(6, 6))).statusCode).toBe(200);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

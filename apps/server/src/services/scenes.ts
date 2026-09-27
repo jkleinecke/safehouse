@@ -1251,6 +1251,28 @@ export class ScenesService {
     return row;
   }
 
+  /**
+   * One token row, as it stands. `lock` takes it `FOR UPDATE`, for a read
+   * that decides a write to the same token in the same transaction: a
+   * player's move, judged from where the runner stands NOW (`playerMayWalk`,
+   * plugins/scenes.ts), not from where it stood when the request was read. A
+   * GM's move of the same runner still in flight is waited for, and its new
+   * square and floor are what the player's move is judged from.
+   *
+   * Taken BEFORE the scene's lock (`sceneRow(..., { lock: true })`), which is
+   * the order every token write takes them in: the row by its UPDATE, then
+   * the scene when its event is judged. Scene first and token second, beside
+   * a GM's move of the same token going token first and scene second, is two
+   * transactions each holding what the other waits for.
+   */
+  async tokenRow(tokenId: string, opts: { lock?: boolean } = {}): Promise<TokenRow> {
+    const query = this.db.select().from(tokens).where(eq(tokens.id, tokenId)).limit(1);
+    const rows = opts.lock ? await query.for('update') : await query;
+    const row = rows[0];
+    if (!row) throw httpError(404, 'not_found', 'unknown token');
+    return row;
+  }
+
   /** Create a token; name/art default from the character / NPC template (FR9.4). */
   async createToken(scene: SceneRow, input: TokenCreateInput): Promise<TokenDto> {
     let name = input.name;

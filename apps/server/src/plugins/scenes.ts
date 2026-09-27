@@ -417,10 +417,41 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
    * `here` is the scene as the caller read it: locked, inside the move's own
    * transaction, for a move that is stored, so a door shut a moment ago is
    * shut to it; as read for the frame, for a drag frame that is only relayed.
+   * And `token` is where the runner stands: for a move that is stored, read
+   * locked inside that same transaction too (`playerMoveJudged`).
    */
   function playerMayWalk(here: Scene, token: TokenRow, to: { x: number; y: number }): boolean {
     return canWalk(here, token.level, { x: token.x, y: token.y }, to, { size: token.size });
   }
+
+  /**
+   * `playerMayWalk` for a player's move about to be STORED, inside its own
+   * transaction: judged from where the token stands now and against the
+   * walls as they stand now, both read locked, the token first and then the
+   * scene (the order every token write takes them in: `tokenRow`).
+   *
+   * Not from the row the request read before its transaction opened. That
+   * row can be a move out of date: the GM drops the runner into the cell (or
+   * sends them upstairs) while the player is still dragging, and the
+   * player's drop, judged from the square the runner was in BEFORE the GM's
+   * move, walked it straight back out through the cell's wall — or onto a
+   * square of the new floor judged by the old floor's walls. And taking the
+   * scene's lock before the token's, as a GM's move of the same token takes
+   * them the other way round, was two transactions each waiting on the
+   * other. A missing axis (`to.x` or `to.y`) stays where the token stands.
+   * Answers the token as it stands, and whether the move may be stored.
+   */
+  async function playerMoveJudged(
+    tx: EventTx,
+    sceneId: string,
+    tokenId: string,
+    to: { x?: number | undefined; y?: number | undefined },
+  ): Promise<{ stood: TokenRow; walkable: boolean }> {
+    const stood = await svc.withDb(tx.db).tokenRow(tokenId, { lock: true });
+    const here = serializeScene(await lockedScene(tx, sceneId));
+    return { stood, walkable: playerMayWalk(here, stood, { x: to.x ?? stood.x, y: to.y ?? stood.y }) };
+  }
+
   /** What a player is told when a wall is in the way. */
   const BLOCKED = { code: 'blocked', message: "Your runner can't go through walls" } as const;
 
@@ -802,11 +833,11 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     const movesSight = sightKeys.some((k) => body[k] !== undefined);
     const after = await app.hub.atomic(scene.campaignId, async (tx) => {
       // A player's move must be one their runner could walk (`playerMayWalk`),
-      // judged against the scene as it stands inside this transaction.
+      // judged from where the token stands and against the scene as it
+      // stands, both inside this transaction (`playerMoveJudged`).
       if (auth.role !== 'gm' && (body.x !== undefined || body.y !== undefined)) {
-        const here = serializeScene(await lockedScene(tx, scene.id));
-        const to = { x: body.x ?? before.x, y: body.y ?? before.y };
-        if (!playerMayWalk(here, before, to)) throw httpError(403, BLOCKED.code, BLOCKED.message);
+        const { walkable } = await playerMoveJudged(tx, scene.id, id, body);
+        if (!walkable) throw httpError(403, BLOCKED.code, BLOCKED.message);
       }
       const written = await svc.withDb(tx.db).patchToken(id, body);
       await emitTokenChange(tx, scene, before, written, { positional, nonPositional });
@@ -1487,13 +1518,17 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     // for where a token IS (FR9.5), so a stored move nobody was told about
     // leaves every other screen — including the TV — drawing it in the old
     // square until someone reloads.
-    const moved = await app.hub.atomic(ctx.campaignId, async (tx) => {
+    // Null once the move is stored; the token as it stands when a wall
+    // refused the move.
+    const refused = await app.hub.atomic(ctx.campaignId, async (tx): Promise<TokenRow | null> => {
       // A player's drop must be one their runner could walk (`playerMayWalk`),
-      // judged against the scene as it stands inside this transaction: a door
-      // shut while the drag was in the air is shut to the drop.
+      // judged from where the token stands and against the scene as it
+      // stands, both inside this transaction (`playerMoveJudged`): a door
+      // shut while the drag was in the air is shut to the drop, and a GM's
+      // move of the runner that landed meanwhile is where it is judged from.
       if (ctx.auth.role !== 'gm') {
-        const here = serializeScene(await lockedScene(tx, scene.id));
-        if (!playerMayWalk(here, token, parsed.data)) return false;
+        const { stood, walkable } = await playerMoveJudged(tx, scene.id, token.id, parsed.data);
+        if (!walkable) return stood;
       }
       const after = await svc.withDb(tx.db).patchToken(token.id, {
         x: parsed.data.x,
@@ -1508,20 +1543,21 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       // did it; a guard walked with a flashlight moves the light he casts.
       // A guard with no light moves nobody's sight (`affectsSight`).
       if (affectsSight(token) || affectsSight(after)) await recomputeSight(tx, scene.id);
-      return true;
+      return null;
     });
-    if (!moved) {
+    if (refused !== null) {
       // Refused: the token stays where it is, and the player is told why.
       ctx.reply({ type: 'error', payload: { ...BLOCKED }, ephemeral: true });
       // The drag's frames put a ghost of the runner on every other screen,
       // and only a `token.moved` takes it away. No move is coming, so one
-      // last frame sends the ghost home to the square the token never left,
-      // told to whoever the frames went to.
+      // last frame sends the ghost home to the square the token never left
+      // (where it stands now, read in the refusal), told to whoever the
+      // frames went to.
       const current = serializeScene(scene);
-      const concealed = !sceneOnTable(current) || tokenConcealed(token, current);
+      const concealed = !sceneOnTable(current) || tokenConcealed(refused, current);
       app.hub.emitEphemeral(ctx.campaignId, {
         type: 'token.dragging',
-        payload: { tokenId: token.id, sceneId: scene.id, x: token.x, y: token.y, by: ctx.auth.userId },
+        payload: { tokenId: token.id, sceneId: scene.id, x: refused.x, y: refused.y, by: ctx.auth.userId },
         visibility: concealed ? 'gm' : 'public',
       });
       return;
