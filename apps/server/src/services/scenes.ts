@@ -456,10 +456,15 @@ export function tokenFogged(token: ConcealableToken, fog: FogState, vision?: Par
  * Before this, fog was only ever a cover the client drew. Every guard behind
  * it was on every player's wire, positions, moves and drags included, and
  * one look at the network tab was a look behind the fog.
+ *
+ * The scene's `vision` is required, not optional, because leaving it out is
+ * a leak that compiles: sightlines fog a scene whose fog switch is off, and
+ * only `vision` says they are on. A caller that handed in the fog and the
+ * layers alone would be told every guard on such a scene is in the open.
  */
 export function tokenConcealed(
   token: ConcealableToken,
-  scene: Pick<Scene, 'tokenLayers' | 'fog'> & Partial<Pick<Scene, 'vision'>>,
+  scene: Pick<Scene, 'tokenLayers' | 'fog' | 'vision'>,
 ): boolean {
   return tokenHidden(token, scene) || tokenFogged(token, scene.fog, scene.vision);
 }

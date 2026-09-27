@@ -746,8 +746,9 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
   async function emitConcealmentChanges(
     tx: EventTx,
     sceneId: string,
-    before: Pick<Scene, 'tokenLayers' | 'fog'>,
-    after: Pick<Scene, 'tokenLayers' | 'fog'>,
+    // With `vision`: sightlines move the edge as much as the fog does (`tokenConcealed`).
+    before: Pick<Scene, 'tokenLayers' | 'fog' | 'vision'>,
+    after: Pick<Scene, 'tokenLayers' | 'fog' | 'vision'>,
   ): Promise<void> {
     for (const row of await svc.withDb(tx.db).tokensOf(sceneId)) {
       const was = tokenConcealed(row, before);

@@ -38,6 +38,15 @@
  *   of it is; its own light row is not asked, because the light map is built
  *   by the same centre rays and has the same grazing gap on wall squares.
  *
+ *   The face is also the ONLY way a square that blocks sight is seen: no ray
+ *   is cast to one on its own light row. A wall square has one light row
+ *   for both of its faces, and a lamp in the room behind it lights that row
+ *   as well as one in front of it would. Asked on its own, a wall between a
+ *   pitch-black corridor and a lit office read as lit, and a runner standing
+ *   in the dark saw the office wall's squares glowing from the far side:
+ *   the far side of a wall, told to the table. Through its face, the wall is
+ *   seen exactly when the floor in front of it is, on the viewer's side.
+ *
  * ## How far a runner sees
  *
  * `visibleFrom`'s default radius (`DEFAULT_SIGHT_RANGE`, 24) was chosen to
@@ -170,10 +179,11 @@ const AROUND: ReadonlyArray<readonly [number, number]> = [
 
 /**
  * The squares one runner standing in square `viewer` sees on its floor:
- * every square a ray reaches through `model`'s walls and closed doors
+ * every open square a ray reaches through `model`'s walls and closed doors
  * (`visibleFrom`) that is not in total darkness for its `modes` under
  * `lightMap` (strict SR5; ultrasound within 50 m in any light), plus the face
- * of every wall touching a square it sees (see the top of this file).
+ * of every wall touching an open square it sees, which is the only way a
+ * wall is seen (see the top of this file).
  *
  * The viewer's own square is always seen, lit or not: a runner knows where
  * they are standing. It lends its sight to the walls around it only when it
@@ -211,16 +221,25 @@ export function sightFor(
     return rule(lightRowAt(lightMap, col, row), distanceM);
   };
 
-  // Rays only to squares the viewer could make out if nothing stood in the
-  // way; `visibleFrom` adds the viewer's own square whatever `lit` says.
-  const reached = visibleFrom(viewer, model, { range, cols, rows, where: lit });
+  const blocks = (col: number, row: number) => model.cells.get(visibleKey(col, row))?.blocksSight === true;
+
+  // Rays only to OPEN squares the viewer could make out if nothing stood in
+  // the way; `visibleFrom` adds the viewer's own square whatever this says.
+  // A square that blocks sight gets no ray of its own: its light row cannot
+  // say which of its faces is lit, so it is seen by its face alone, below
+  // (see "WALL FACES" at the top of this file).
+  const reached = visibleFrom(viewer, model, {
+    range,
+    cols,
+    rows,
+    where: (col, row) => !blocks(col, row) && lit(col, row),
+  });
 
   const out = new Map<string, SeenCell>();
   for (const [key, cell] of reached) {
     if (onGrid(cell.col, cell.row)) out.set(key, { col: cell.col, row: cell.row });
   }
 
-  const blocks = (col: number, row: number) => model.cells.get(visibleKey(col, row))?.blocksSight === true;
   // A traced wall or closed door on the grid line between a seen square and
   // a painted block beside it still stands between them: that block's face
   // is behind it and is not seen (a painted rack on the far side of a traced

@@ -214,6 +214,21 @@ describe('sightFor: darkness is strict SR5', () => {
     expect(thermo.size).toBeGreaterThan(normal.size);
   });
 
+  it('does not see a wall lit only from its far side', () => {
+    // A pitch-black corridor (row 1) and a lamp-lit office (rows 3-5), one
+    // painted wall between them (row 2). The lamp lights the office side of
+    // that wall; the corridor side is as dark as the corridor. A runner in
+    // the corridor sees nothing of it: the office's light is on the far side.
+    const floor = model(['##########', '..........', '##########', '..........', '..........', '..........']);
+    const office = lightMapFor(DARK, 0, { model: floor, sources: [lamp(5.5, 4.5, { radius: 4 })], cols: 10, rows: 6 });
+    const corridor = sightFor(at(5, 1), floor, office, NORMAL, { cols: 10, rows: 6 });
+    expect([...corridor.keys()]).toEqual(['5,1']);
+    // A runner in the office sees that wall's face, lit on the office side.
+    const inside = sightFor(at(5, 4), floor, office, NORMAL, { cols: 10, rows: 6 });
+    expect(inside.has('5,2')).toBe(true);
+    expect(inside.has('5,1')).toBe(false);
+  });
+
   it('does not map the walls of a dark corridor for a runner standing in it', () => {
     const corridor = model(['#####', '.....', '#####']);
     const dark = lightMapFor(DARK, 0, { model: corridor, sources: [], cols: 5, rows: 3 });
