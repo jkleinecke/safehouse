@@ -25,9 +25,10 @@
  * A 3D view has no such plane, so every test here now projects through the
  * `ViewCamera` (`viewCamera.ts`) and measures in screen px. Nothing changes
  * in 2D: its projection is world px × scale + pan, a uniform scaling, so the
- * same world-px sizes (`tokenRadiusPx`, `pinHeadRise`, `noteFrame`, and every
- * world-px floor) are multiplied by `worldPxScale` — which IS the 2D camera
- * scale — and every comparison comes out as it did.
+ * same world-px sizes (`tokenRadiusPx`, `pinHeadRise`, and every world-px
+ * floor) are multiplied by `worldPxScale` — which IS the 2D camera scale —
+ * and every comparison comes out as it did. A GM note is the exception: it
+ * is a box drawn flat, and is tested in the px it is drawn in (`hitNote`).
  *
  * `at` is still the GRID point the pointer picked: projected back at floor
  * height it is where the pointer is, in any view.
@@ -39,6 +40,7 @@ import {
   pinHeadRise,
   tokenHitLift,
   tokenRadiusPx,
+  worldFromGrid,
   type SceneMetrics,
 } from '../geometry.js';
 import { inNoteFrame, noteFrame } from './notes.js';
@@ -222,18 +224,24 @@ export function hitPin(
 }
 
 /**
- * GM note whose box contains `at` (FR9.25), the box measured on the screen:
- * `noteFrame`'s world-px box, hung from the note's projected anchor and
- * scaled by `worldPxScale`. Later notes draw on top, so the last hit wins.
+ * GM note whose box contains `at` (FR9.25): `noteFrame`'s box, tested in the
+ * world px it is drawn in. Later notes draw on top, so the last hit wins.
+ *
+ * The one test here not taken through the view, because a note is not a
+ * point: it is a box drawn in its metrics' world px, and `at` turned back
+ * into those px is the pointer on the drawing itself. On the 2D map world px
+ * are the screen scaled, so this is the box on the screen, as it always was.
+ * The 3D map draws with plan metrics and lays the note flat on its floor
+ * (`stage3d/floorInk.ts`), where the same test is the box on the floor —
+ * skewed with the floor in isometric, as the note is drawn there. A box
+ * stood upright on the screen from its projected corner would miss most of
+ * that note, and take clicks beside it.
  */
-export function hitNote(view: ViewCamera, m: SceneMetrics, scene: Scene, at: Point): string | null {
-  const p = view.project(at);
-  const k = worldPxScale(view, m, at);
+export function hitNote(_view: ViewCamera, m: SceneMetrics, scene: Scene, at: Point): string | null {
+  const p = worldFromGrid(m, at);
   let best: string | null = null;
   for (const note of scene.geometry.gmNotes ?? []) {
-    const f = noteFrame(m, note);
-    const anchor = view.project(note.at);
-    if (inNoteFrame({ ...f, x: anchor.x, y: anchor.y, w: f.w * k, h: f.h * k }, p)) best = note.id;
+    if (inNoteFrame(noteFrame(m, note), p)) best = note.id;
   }
   return best;
 }

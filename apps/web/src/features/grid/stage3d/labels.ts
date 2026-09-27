@@ -60,9 +60,10 @@ const GROUND = hex(C.ground);
 /**
  * The 2D tag's 3px ground-coloured stroke, as an outline of text shadows:
  * `-webkit-text-stroke` draws over the glyph (it would thin the letters), and
- * a stroke painted under the fill is not supported everywhere.
+ * a stroke painted under the fill is not supported everywhere. The markers'
+ * labels (`markers.ts`) wear it too.
  */
-const TAG_OUTLINE = [
+export const TAG_OUTLINE = [
   [-1.5, 0],
   [1.5, 0],
   [0, -1.5],

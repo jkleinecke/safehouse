@@ -36,6 +36,12 @@
  * hidden) or a new lighting is made on the same world, only the lamps that
  * actually changed are baked again.
  *
+ * Each lamp's bake is kept per mesh, so when the world swaps some of its
+ * meshes for new ones (`BuiltWorld.applyTiles`: a brush stroke builds a chunk
+ * again) the gone meshes' share of every bake is dropped and each lamp is
+ * baked onto the new meshes its light reaches, and nothing else
+ * (`syncMeshes`).
+ *
  * Nothing that comes and goes with the scene changes the number of three.js
  * lights, or the materials the world is drawn with: the real-time pool is the
  * tier's full size whatever the scene holds (parked slots for lamps it does
@@ -123,6 +129,24 @@ export interface LabLighting {
    * drawn: the real-time lamps are picked from the highest floor on show.
    */
   setSources(sources: readonly LabLightSource[]): void;
+  /**
+   * The world swapped some of its meshes for new ones
+   * (`BuiltWorld.applyTiles`), and these are the lamps now: `setSources`,
+   * after bringing the lighting in line with the world's meshes as they
+   * stand. Every lamp's light on the gone meshes is dropped; each lamp still
+   * lit the same is baked onto the new meshes its light reaches, and only
+   * those (a lamp that changed is baked whole, as ever); the new meshes are
+   * dressed for the tier and their baked light written; and only the shadow
+   * maps that can have changed are drawn again — the key light's, and those
+   * of the lamps whose light reaches `near` (as `refreshShadows` takes it:
+   * where what casts a shadow changed), or, without it, a gone or a new mesh.
+   * A new mesh is a whole chunk, or all of a floor's door leaves, so `near`
+   * is the tighter: pass it whenever the change is known square by square.
+   *
+   * Call it after the new meshes are shown or hidden with their floor, as
+   * `setSources` asks.
+   */
+  syncMeshes(sources: readonly LabLightSource[], near?: ShadowScope): void;
   /**
    * Draw every shadow map again on the next frame. Shadows are drawn once
    * where their lamp lands, not every frame, so call this when something
@@ -368,13 +392,23 @@ interface MeshRec {
 
 /** One lamp's light on one mesh: which vertices, and how much (before intensity and colour). */
 interface BakePart {
-  rec: number;
+  rec: MeshRec;
   idx: Uint32Array;
   /** Irradiance per unit intensity; positive on the normal's side, negative on the other. */
   g: Float32Array;
 }
 
+/** One lamp's light on every mesh it reaches, one part per mesh. */
 interface LampBake {
+  /** The lamp's cache key (`Lamp.key`). */
+  key: string;
+  /**
+   * What it was baked from — a lamp with this key, and its area prepared —
+   * so a mesh the world adds later can be baked for it too (`reconcile`).
+   * Any lamp with the same key bakes the same.
+   */
+  lamp: Lamp;
+  poly: Poly | null;
   parts: BakePart[];
   entries: number;
   /** The generation that last used it. */
@@ -382,6 +416,7 @@ interface LampBake {
 }
 
 interface WorldBake {
+  /** The world's solid and glass meshes, as last reconciled with it (`reconcile`). */
   recs: MeshRec[];
   lamps: Map<string, LampBake>;
   gen: number;
@@ -497,25 +532,91 @@ function makeRec(mesh: Mesh, level: number, toGroup: Matrix4): MeshRec | null {
   };
 }
 
-/** The world's bake cache, made (with its attributes) the first time a lighting is built on it. */
-function worldBakeFor(world: BuiltWorld): WorldBake {
-  const known = bakes.get(world);
-  if (known) return known;
-  world.group.updateWorldMatrix(true, true);
-  const toGroup = world.group.matrixWorld.clone().invert();
-  const recs: MeshRec[] = [];
+/**
+ * What `reconcile` found changed in the world's meshes: records made for the
+ * new ones (`fresh`, their baked light still zero), the gone ones' records
+ * dropped (`gone`) with every lamp's light on them, and the cached lamps
+ * whose light reaches a new mesh (`owed`): each owes it a bake, paid when
+ * the lamp is next loaded (`loadLamps`) or dropped from the cache if it is
+ * not.
+ */
+interface Reconciled {
+  fresh: MeshRec[];
+  gone: MeshRec[];
+  owed: Set<LampBake>;
+}
+
+/** Does `lamp`'s light (its reach on the floor, a little over) take in any of `rec`'s bounds? */
+function reaches(lamp: Lamp, rec: MeshRec): boolean {
+  if (rec.level !== lamp.level) return false;
+  const reach = lamp.radius + REACH_SLACK;
+  return !(rec.maxX < lamp.x - reach || rec.minX > lamp.x + reach || rec.maxZ < lamp.z - reach || rec.minZ > lamp.z + reach);
+}
+
+/**
+ * Bring the cache's records in line with the world's solid and glass meshes
+ * as they stand (`Reconciled`). Cheap when nothing changed: a walk over the
+ * world's few hundred meshes.
+ */
+function reconcile(cache: WorldBake, world: BuiltWorld): Reconciled {
+  const live = new Map<Mesh, number>();
   for (const lv of world.levels) {
     for (const b of lv.built) {
-      for (const mesh of [b.solid, b.glass]) {
-        if (!mesh) continue;
-        const rec = makeRec(mesh, lv.level, toGroup);
-        if (rec) recs.push(rec);
+      for (const mesh of [b.solid, b.glass]) if (mesh) live.set(mesh, lv.level);
+    }
+  }
+  const recs = cache.recs;
+  const gone: MeshRec[] = [];
+  const known = new Set<Mesh>();
+  let w = 0;
+  for (const rec of recs) {
+    if (live.has(rec.mesh)) {
+      known.add(rec.mesh);
+      recs[w++] = rec;
+    } else {
+      gone.push(rec);
+    }
+  }
+  recs.length = w;
+  const fresh: MeshRec[] = [];
+  if (live.size > known.size) {
+    world.group.updateWorldMatrix(true, true);
+    const toGroup = world.group.matrixWorld.clone().invert();
+    for (const [mesh, level] of live) {
+      if (known.has(mesh)) continue;
+      const rec = makeRec(mesh, level, toGroup);
+      if (rec) {
+        recs.push(rec);
+        fresh.push(rec);
       }
     }
   }
-  const made: WorldBake = { recs, lamps: new Map(), gen: 0 };
+  const owed = new Set<LampBake>();
+  if (gone.length === 0 && fresh.length === 0) return { fresh, gone, owed };
+  const dropped = new Set(gone);
+  for (const b of cache.lamps.values()) {
+    if (dropped.size > 0 && b.parts.some((p) => dropped.has(p.rec))) {
+      b.parts = b.parts.filter((p) => !dropped.has(p.rec));
+      b.entries = b.parts.reduce((n, p) => n + p.idx.length, 0);
+    }
+    if (b.poly !== null && fresh.some((rec) => reaches(b.lamp, rec))) owed.add(b);
+  }
+  return { fresh, gone, owed };
+}
+
+/**
+ * The world's bake cache, made (with its attributes) the first time a
+ * lighting is built on it; on a world met before, brought in line with the
+ * meshes it has now (`reconcile`: it may have swapped some while no lighting
+ * was watching). `debt` is null for a new cache.
+ */
+function worldBakeFor(world: BuiltWorld): { cache: WorldBake; debt: Reconciled | null } {
+  const known = bakes.get(world);
+  if (known) return { cache: known, debt: reconcile(known, world) };
+  const made: WorldBake = { recs: [], lamps: new Map(), gen: 0 };
   bakes.set(world, made);
-  return made;
+  reconcile(made, world);
+  return { cache: made, debt: null };
 }
 
 /** A light polygon made quick to test: its edges filed by horizontal band. */
@@ -595,8 +696,12 @@ function inPolygon(p: Poly, x: number, y: number): boolean {
  * normals point either way, so the light is filed by side: on the side the
  * normal faces (positive) or the other (negative). A lamp lights one side of
  * a surface, never both.
+ *
+ * `recs` is every mesh to bake onto: the world's all, or only the meshes it
+ * has just added (`reconcile`); a mesh out of the lamp's reach is skipped by
+ * its bounds.
  */
-function bakeLamp(lamp: Lamp, poly: Poly, recs: readonly MeshRec[]): LampBake {
+function bakeLamp(lamp: Lamp, poly: Poly, recs: readonly MeshRec[]): { parts: BakePart[]; entries: number } {
   const parts: BakePart[] = [];
   let entries = 0;
   const reach = lamp.radius + REACH_SLACK;
@@ -606,10 +711,8 @@ function bakeLamp(lamp: Lamp, poly: Poly, recs: readonly MeshRec[]): LampBake {
   const ay = lamp.y;
   const az = lamp.z;
   const floorTop = lamp.floorY + FLOOR_EPS;
-  for (let r = 0; r < recs.length; r += 1) {
-    const rec = recs[r]!;
-    if (rec.level !== lamp.level) continue;
-    if (rec.maxX < ax - reach || rec.minX > ax + reach || rec.maxZ < az - reach || rec.minZ > az + reach) continue;
+  for (const rec of recs) {
+    if (!reaches(lamp, rec)) continue;
     const P = rec.pos;
     const N = rec.nor;
     const idx: number[] = [];
@@ -664,11 +767,11 @@ function bakeLamp(lamp: Lamp, poly: Poly, recs: readonly MeshRec[]): LampBake {
       gs.push(side * g);
     }
     if (idx.length > 0) {
-      parts.push({ rec: r, idx: Uint32Array.from(idx), g: Float32Array.from(gs) });
+      parts.push({ rec, idx: Uint32Array.from(idx), g: Float32Array.from(gs) });
       entries += idx.length;
     }
   }
-  return { parts, entries, used: 0 };
+  return { parts, entries };
 }
 
 // ---------------------------------------------------------------------------
@@ -1021,7 +1124,8 @@ export function createLighting(ctx: {
 
   // --- lamps and their bake ------------------------------------------------
 
-  const cache = worldBakeFor(world);
+  const { cache, debt: startDebt } = worldBakeFor(world);
+  /** The world's meshes the bake writes into, kept in line with the world (`reconcile`); the same array for the lighting's life. */
   const recs = cache.recs;
   const floorYs = new Map<number, number>(world.levels.map((l) => [l.level, l.y]));
   /**
@@ -1031,12 +1135,16 @@ export function createLighting(ctx: {
    * (and the bake key each spells out of its polygon) are not made again.
    */
   const lampOf = new WeakMap<LabLightSource, Lamp | null>();
+  /** The first load says what it baked out loud; the loads after it, on every door and brush stroke, only at debug level. */
+  let loaded = false;
 
   /**
    * Lamps for these sources, each with its bake: from the world's cache when
    * a lamp with the same place and area was baked before, baked now when not.
+   * A cached lamp that owes the world's new meshes a bake (`debt`) is baked
+   * onto them alone; one no source asks for any more is dropped instead.
    */
-  function loadLamps(sources: readonly LabLightSource[]): Lamp[] {
+  function loadLamps(sources: readonly LabLightSource[], debt: Reconciled | null): Lamp[] {
     const out: Lamp[] = [];
     for (const s of sources) {
       let lamp = lampOf.get(s);
@@ -1049,32 +1157,49 @@ export function createLighting(ctx: {
     cache.gen += 1;
     const t0 = performance.now();
     let fresh = 0;
+    let topped = 0;
     let scanned = 0;
     for (const lamp of out) {
       let b = cache.lamps.get(lamp.key);
       if (!b) {
         const poly = preparePolygon(lamp.src.polygon);
-        b = poly ? bakeLamp(lamp, poly, recs) : { parts: [], entries: 0, used: 0 };
+        const baked = poly ? bakeLamp(lamp, poly, recs) : { parts: [], entries: 0 };
+        b = { key: lamp.key, lamp, poly, parts: baked.parts, entries: baked.entries, used: 0 };
         cache.lamps.set(lamp.key, b);
         fresh += 1;
         scanned += b.entries;
+      } else if (debt !== null && b.poly !== null && debt.owed.delete(b)) {
+        const more = bakeLamp(b.lamp, b.poly, debt.fresh);
+        for (const part of more.parts) b.parts.push(part);
+        b.entries += more.entries;
+        topped += 1;
+        scanned += more.entries;
       }
       b.used = cache.gen;
       lamp.bake = b;
     }
+    // Owed and not wanted: missing the new meshes, it would light them dark
+    // if it were ever wanted again, so it goes, to be baked whole if it is.
+    if (debt !== null) {
+      for (const b of debt.owed) cache.lamps.delete(b.key);
+      debt.owed.clear();
+    }
     for (const [key, b] of cache.lamps) if (b.used < cache.gen - KEEP_GENERATIONS) cache.lamps.delete(key);
-    if (fresh > 0) {
+    if (fresh > 0 || topped > 0) {
       let verts = 0;
       for (const rec of recs) verts += rec.count;
-      console.info(
-        `[lab3d] light bake: ${fresh} of ${out.length} lamps baked (${out.length - fresh} cached), ` +
+      const log = loaded ? console.debug : console.info;
+      log(
+        `[lab3d] light bake: ${fresh} of ${out.length} lamps baked (${out.length - fresh} cached` +
+          `${topped > 0 ? `, ${topped} baked onto ${debt?.fresh.length ?? 0} new meshes` : ''}), ` +
           `${scanned} lit vertices of ${verts}, ${(performance.now() - t0).toFixed(1)} ms`,
       );
     }
+    loaded = true;
     return out;
   }
 
-  let lamps: Lamp[] = loadLamps(ctx.sources);
+  let lamps: Lamp[] = loadLamps(ctx.sources, startDebt);
   /**
    * The multiplier on every lamp: the tier's (`HIGH_BOOST`) times the
    * ambient row's (`LAMP_GAIN`). Set by `applyQuality` and `applyAmbient`
@@ -1123,12 +1248,12 @@ export function createLighting(ctx: {
   }
   layoutHalos();
 
-  /** Per mesh, the lamps whose light falls on it. */
-  let recLamps: Array<Array<{ lamp: number; part: BakePart }>> = [];
+  /** Per mesh the world has now, the lamps whose light falls on it. */
+  let recLamps = new Map<MeshRec, Array<{ lamp: number; part: BakePart }>>();
   function indexLamps(): void {
-    recLamps = recs.map(() => []);
+    recLamps = new Map(recs.map((rec) => [rec, []]));
     lamps.forEach((lamp, i) => {
-      for (const part of lamp.bake?.parts ?? []) recLamps[part.rec]!.push({ lamp: i, part });
+      for (const part of lamp.bake?.parts ?? []) recLamps.get(part.rec)?.push({ lamp: i, part });
     });
   }
   indexLamps();
@@ -1136,14 +1261,18 @@ export function createLighting(ctx: {
   /** 1 where a lamp is real-time now (and so left out of the bake). */
   let realtime = new Uint8Array(lamps.length);
 
-  /** Rewrite one mesh's baked attributes from every lamp on it that is not real-time. */
-  function accumulate(r: number): void {
-    const rec = recs[r]!;
+  /**
+   * Rewrite one mesh's baked attributes from every lamp on it that is not
+   * real-time. A mesh the world no longer has is left alone.
+   */
+  function accumulate(rec: MeshRec): void {
+    const on = recLamps.get(rec);
+    if (on === undefined) return;
     const F = rec.front;
     const B = rec.back;
     F.fill(0);
     B.fill(0);
-    for (const { lamp, part } of recLamps[r]!) {
+    for (const { lamp, part } of on) {
       if (realtime[lamp]) continue;
       const [lr, lg, lb] = lamps[lamp]!.rgb;
       const cr = lr * boost;
@@ -1173,19 +1302,31 @@ export function createLighting(ctx: {
 
   const originals = new Map<Mesh, Material | Material[]>();
   const variants = new Map<Material, Variants>();
-  for (const rec of recs) {
+  /** The ambient uniforms of every stand-in this world wears, written together (`applyAmbient`). */
+  const lowUs: LowUniforms[] = [];
+  /**
+   * Take a mesh on: remember its own material, to give back, and have its
+   * stand-ins ready. True when that brought a stand-in this lighting had not
+   * worn before, whose ambient uniforms then want writing.
+   */
+  function adopt(rec: MeshRec): boolean {
     const orig = rec.mesh.material;
     originals.set(rec.mesh, orig);
-    if (orig instanceof MeshStandardMaterial && !variants.has(orig)) variants.set(orig, variantsOf(orig));
+    if (!(orig instanceof MeshStandardMaterial) || variants.has(orig)) return false;
+    const v = variantsOf(orig);
+    variants.set(orig, v);
+    lowUs.push(v.lowU);
+    return true;
   }
-  /** The ambient uniforms of every stand-in this world wears, written together (`applyAmbient`). */
-  const lowUs: LowUniforms[] = [...variants.values()].map((v) => v.lowU);
+  for (const rec of recs) adopt(rec);
+  /** Put one mesh in its stand-in for the tier: Low's unlit one, or the lit one. */
+  function dress(rec: MeshRec, low: boolean): void {
+    const orig = originals.get(rec.mesh);
+    const v = orig instanceof MeshStandardMaterial ? variants.get(orig) : undefined;
+    if (v) rec.mesh.material = low ? v.low : v.lit;
+  }
   function dressWorld(low: boolean): void {
-    for (const rec of recs) {
-      const orig = originals.get(rec.mesh);
-      const v = orig instanceof MeshStandardMaterial ? variants.get(orig) : undefined;
-      if (v) rec.mesh.material = low ? v.low : v.lit;
-    }
+    for (const rec of recs) dress(rec, low);
   }
 
   // --- ambient -------------------------------------------------------------
@@ -1198,31 +1339,37 @@ export function createLighting(ctx: {
   key.shadow.normalBias = KEY_NORMAL_BIAS;
   root.add(hemi, key, key.target);
 
-  // The key's shadow covers the whole world: its bounds, as a sphere.
-  let bx0 = Infinity;
-  let bx1 = -Infinity;
-  let by0 = Infinity;
-  let by1 = -Infinity;
-  let bz0 = Infinity;
-  let bz1 = -Infinity;
-  for (const rec of recs) {
-    bx0 = Math.min(bx0, rec.minX);
-    bx1 = Math.max(bx1, rec.maxX);
-    by0 = Math.min(by0, rec.minY);
-    by1 = Math.max(by1, rec.maxY);
-    bz0 = Math.min(bz0, rec.minZ);
-    bz1 = Math.max(bz1, rec.maxZ);
-  }
-  if (!Number.isFinite(bx0)) {
-    bx0 = by0 = bz0 = 0;
-    bx1 = bz1 = 1;
-    by1 = storey;
-  }
-  const center = new Vector3((bx0 + bx1) / 2, (by0 + by1) / 2, (bz0 + bz1) / 2);
-  const span = Math.max(1, 0.5 * Math.hypot(bx1 - bx0, by1 - by0, bz1 - bz0));
-  key.target.position.copy(center);
-  key.position.copy(center).addScaledVector(KEY_DIR, span + 10);
-  {
+  /** The middle of the world's bounds, as last framed (`frameKey`). */
+  const center = new Vector3();
+  /**
+   * The key's shadow covers the whole world: its bounds, as a sphere. Framed
+   * when the lighting is made and again when the world swaps meshes (a room
+   * painted past the old edge of the map).
+   */
+  function frameKey(): void {
+    let bx0 = Infinity;
+    let bx1 = -Infinity;
+    let by0 = Infinity;
+    let by1 = -Infinity;
+    let bz0 = Infinity;
+    let bz1 = -Infinity;
+    for (const rec of recs) {
+      bx0 = Math.min(bx0, rec.minX);
+      bx1 = Math.max(bx1, rec.maxX);
+      by0 = Math.min(by0, rec.minY);
+      by1 = Math.max(by1, rec.maxY);
+      bz0 = Math.min(bz0, rec.minZ);
+      bz1 = Math.max(bz1, rec.maxZ);
+    }
+    if (!Number.isFinite(bx0)) {
+      bx0 = by0 = bz0 = 0;
+      bx1 = bz1 = 1;
+      by1 = storey;
+    }
+    center.set((bx0 + bx1) / 2, (by0 + by1) / 2, (bz0 + bz1) / 2);
+    const span = Math.max(1, 0.5 * Math.hypot(bx1 - bx0, by1 - by0, bz1 - bz0));
+    key.target.position.copy(center);
+    key.position.copy(center).addScaledVector(KEY_DIR, span + 10);
     const cam = key.shadow.camera;
     cam.left = -span;
     cam.right = span;
@@ -1232,8 +1379,16 @@ export function createLighting(ctx: {
     cam.far = 2 * span + 20;
     cam.updateProjectionMatrix();
   }
+  frameKey();
 
   let ambientRow: LightRow = ctx.ambientRow;
+  /** Low's copy of the ambient, into one stand-in's uniforms. */
+  function writeLowU(u: LowUniforms): void {
+    u.sky.value.copy(hemi.color).multiplyScalar(hemi.intensity);
+    u.ground.value.copy(hemi.groundColor).multiplyScalar(hemi.intensity);
+    u.keyColor.value.copy(key.color).multiplyScalar(key.intensity);
+    u.keyDir.value.copy(KEY_DIR).transformDirection(root.matrix);
+  }
   function applyAmbient(): void {
     const row = Math.min(3, Math.max(0, Math.round(Number.isFinite(ambientRow) ? ambientRow : 0))) as LightRow;
     const a = AMBIENT[row];
@@ -1243,12 +1398,7 @@ export function createLighting(ctx: {
     hemi.intensity = Math.PI * HEMI_SHARE * a.level;
     key.color.setHex(a.key);
     key.intensity = Math.PI * KEY_SHARE * a.level;
-    for (const u of lowUs) {
-      u.sky.value.copy(hemi.color).multiplyScalar(hemi.intensity);
-      u.ground.value.copy(hemi.groundColor).multiplyScalar(hemi.intensity);
-      u.keyColor.value.copy(key.color).multiplyScalar(key.intensity);
-      u.keyDir.value.copy(KEY_DIR).transformDirection(root.matrix);
-    }
+    for (const u of lowUs) writeLowU(u);
     haloOpacity = HALO_OPACITY[row];
     for (const m of haloMaterials) m.opacity = haloOpacity;
   }
@@ -1350,7 +1500,7 @@ export function createLighting(ctx: {
    * never grows or shrinks — three recompiles every lit shader when the
    * number of lights changes. Returns the meshes whose bake must change.
    */
-  function pick(): Set<number> {
+  function pick(): Set<MeshRec> {
     const before = realtime;
     const next = new Uint8Array(lamps.length);
     if (slots.length > 0) {
@@ -1390,7 +1540,7 @@ export function createLighting(ctx: {
     }
     realtime = next;
 
-    const dirty = new Set<number>();
+    const dirty = new Set<MeshRec>();
     for (let i = 0; i < lamps.length; i += 1) {
       if (before[i] === next[i]) continue;
       for (const part of lamps[i]!.bake?.parts ?? []) dirty.add(part.rec);
@@ -1453,7 +1603,7 @@ export function createLighting(ctx: {
     dressWorld(q === 'low');
     realtime = new Uint8Array(lamps.length);
     pick();
-    for (let r = 0; r < recs.length; r += 1) accumulate(r);
+    for (const rec of recs) accumulate(rec);
   }
 
   /**
@@ -1464,11 +1614,14 @@ export function createLighting(ctx: {
    * rewritten only if a lamp that falls on it (before or after) changed what
    * it adds: appeared, went, was baked again, changed colour or strength, or
    * moved between real-time and baked.
+   *
+   * `debt` is what `reconcile` found when the world swapped meshes just
+   * before (`syncMeshes`): its new meshes are lit in full, whatever changed.
    */
-  function replaceSources(next: readonly LabLightSource[]): void {
+  function replaceSources(next: readonly LabLightSource[], debt: Reconciled | null = null): void {
     const oldLamps = lamps;
     const oldRealtime = realtime;
-    lamps = loadLamps(next);
+    lamps = loadLamps(next, debt);
     indexLamps();
     layoutHalos();
 
@@ -1497,9 +1650,10 @@ export function createLighting(ctx: {
     const dirty = pick();
 
     if (!matched) {
-      for (let r = 0; r < recs.length; r += 1) accumulate(r);
+      for (const rec of recs) accumulate(rec);
       return;
     }
+    for (const rec of debt?.fresh ?? []) dirty.add(rec);
     const ids = new Set<string>([...oldById.keys(), ...byId.keys()]);
     for (const id of ids) {
       const o = oldById.get(id);
@@ -1520,7 +1674,69 @@ export function createLighting(ctx: {
       for (const part of before?.bake?.parts ?? []) dirty.add(part.rec);
       for (const part of after?.bake?.parts ?? []) dirty.add(part.rec);
     }
-    for (const r of dirty) accumulate(r);
+    for (const rec of dirty) accumulate(rec);
+  }
+
+  /** How far (squared) a lamp is from a mesh's bounds, in world units. */
+  function distance2(L: Lamp, rec: MeshRec): number {
+    const dx = Math.max(rec.minX - L.x, 0, L.x - rec.maxX);
+    const dy = Math.max(rec.minY - L.y, 0, L.y - rec.maxY);
+    const dz = Math.max(rec.minZ - L.z, 0, L.z - rec.maxZ);
+    return dx * dx + dy * dy + dz * dz;
+  }
+
+  /**
+   * Draw again the shadow maps that meshes `where` fall in: the key light's
+   * (it covers the whole world) and those of the real-time lamps whose light
+   * — as far as three's `distance`, where a shadow map ends — reaches their
+   * bounds.
+   */
+  function refreshNear(where: readonly MeshRec[]): void {
+    if (key.castShadow) key.shadow.needsUpdate = true;
+    for (const slot of slots) {
+      if (!slot.shadow || slot.lamp < 0) continue;
+      const L = lamps[slot.lamp];
+      if (L === undefined) continue;
+      const r2 = L.cutoff * L.cutoff;
+      if (where.some((rec) => distance2(L, rec) <= r2)) slot.light.shadow.needsUpdate = true;
+    }
+  }
+
+  /**
+   * Draw again the shadow maps that anything within `near` falls in
+   * (`LabLighting.refreshShadows`): the key light's, and those of the
+   * real-time lamps whose light reaches within `near.radius` of one of its
+   * points; every one of them without it.
+   */
+  function refreshScope(near?: ShadowScope): void {
+    if (key.castShadow) key.shadow.needsUpdate = true;
+    for (const slot of slots) {
+      if (!slot.shadow || slot.lamp < 0) continue;
+      const L = lamps[slot.lamp];
+      if (near && L) {
+        // A shadow map reaches as far as its lamp's light (three's `distance`).
+        const r = L.cutoff + near.radius;
+        const hit = near.points.some((p) => (p.x - L.x) ** 2 + (p.y - L.y) ** 2 + (p.z - L.z) ** 2 <= r * r);
+        if (!hit) continue;
+      }
+      slot.light.shadow.needsUpdate = true;
+    }
+  }
+
+  /** `LabLighting.syncMeshes`. */
+  function syncMeshes(next: readonly LabLightSource[], near?: ShadowScope): void {
+    const debt = reconcile(cache, world);
+    for (const rec of debt.gone) originals.delete(rec.mesh);
+    const low = quality === 'low';
+    for (const rec of debt.fresh) {
+      if (adopt(rec)) writeLowU(lowUs[lowUs.length - 1]!);
+      dress(rec, low);
+    }
+    replaceSources(next, debt);
+    if (debt.gone.length === 0 && debt.fresh.length === 0) return;
+    frameKey();
+    if (near) refreshScope(near);
+    else refreshNear([...debt.gone, ...debt.fresh]);
   }
 
   applyQuality(ctx.quality ?? (renderer.shadowMap.enabled ? 'medium' : 'low'));
@@ -1536,20 +1752,14 @@ export function createLighting(ctx: {
       replaceSources(next);
     },
 
+    syncMeshes(next, near) {
+      if (disposed) return;
+      syncMeshes(next, near);
+    },
+
     refreshShadows(near) {
       if (disposed) return;
-      if (key.castShadow) key.shadow.needsUpdate = true;
-      for (const slot of slots) {
-        if (!slot.shadow || slot.lamp < 0) continue;
-        const L = lamps[slot.lamp];
-        if (near && L) {
-          // A shadow map reaches as far as its lamp's light (three's `distance`).
-          const r = L.cutoff + near.radius;
-          const hit = near.points.some((p) => (p.x - L.x) ** 2 + (p.y - L.y) ** 2 + (p.z - L.z) ** 2 <= r * r);
-          if (!hit) continue;
-        }
-        slot.light.shadow.needsUpdate = true;
-      }
+      refreshScope(near);
     },
 
     setAmbient(row) {
@@ -1562,7 +1772,7 @@ export function createLighting(ctx: {
       if (next !== boost && quality !== null) {
         boost = next;
         for (const slot of slots) if (slot.lamp >= 0) slot.light.intensity = lamps[slot.lamp]!.intensity * boost;
-        for (let r = 0; r < recs.length; r += 1) accumulate(r);
+        for (const rec of recs) accumulate(rec);
       }
     },
 

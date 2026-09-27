@@ -2483,8 +2483,13 @@ export function drawLights(g: Graphics, m: SceneMetrics, lights: readonly Pendin
  */
 export const CHUNK = 8;
 
-export function chunkKey(col: number, row: number): string {
-  return `${Math.floor(col / CHUNK)},${Math.floor(row / CHUNK)}`;
+/**
+ * The chunk a cell belongs to, as `"cx,cy"`. `size` is the chunk's side in
+ * cells: the 2D map's `CHUNK` unless the caller builds chunks of its own size
+ * (the 3D world's are 16 squares a side, `lab3d/world3d.ts`).
+ */
+export function chunkKey(col: number, row: number, size: number = CHUNK): string {
+  return `${Math.floor(col / size)},${Math.floor(row / size)}`;
 }
 
 /** Chunk draw order for standing things: nearer chunks later, like cells. */
@@ -2574,8 +2579,11 @@ function waterOf(input: TileDrawInput): WaterMap {
  * the four beside it and close up with the four diagonal to it, and a shadow
  * or an ambient ring reaches into them — so a change on a chunk's edge or
  * corner dirties the chunks next door as well.
+ *
+ * `size` is the chunk's side in cells, as `chunkKey` takes it: the 2D map's
+ * `CHUNK` by default, the 3D world's own size when it asks.
  */
-export function dirtyChunks(changed: Iterable<string>): Set<string> {
+export function dirtyChunks(changed: Iterable<string>, size: number = CHUNK): Set<string> {
   const out = new Set<string>();
   for (const key of changed) {
     const at = parseKey(key);
@@ -2591,7 +2599,7 @@ export function dirtyChunks(changed: Iterable<string>): Set<string> {
       [-1, 1],
       [-1, -1],
     ] as const) {
-      out.add(chunkKey(at.col + dc, at.row + dr));
+      out.add(chunkKey(at.col + dc, at.row + dr, size));
     }
   }
   return out;

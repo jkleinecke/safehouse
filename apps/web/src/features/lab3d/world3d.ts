@@ -22,18 +22,33 @@
  * than by building its floor again — and a floor's doors cost a draw call
  * or two, not one per leaf, in every frame and every shadow pass.
  *
+ * A painted floor changes a few squares at a time — a brush stroke, an
+ * erase, an arc bent, a flight of stairs put in — and only the chunks those
+ * squares' look reaches are built again (`BuiltWorld.applyTiles`): the 2D
+ * map's own rules for what changed (`cellSignatures`, `changedCells`,
+ * `expandCutRuns`), and this world's own for which squares' builds read
+ * them (`reachOf`: a floor's edges, a wall's joins, water's banks, borrowed
+ * ground — not the 2D map's every neighbour, whose shadows fall on them).
+ * The floor is planned whole every time (`planTiles` is cheap), but only
+ * the dirty chunks' squares are looked at and built, and their meshes are
+ * swapped for the old ones in the floor's group.
+ *
  * This is lab code: honest, not finished. What it approximates is said where
  * it does it.
  */
-import { BufferAttribute, DynamicDrawUsage, Group, type Mesh, type Raycaster } from 'three';
+import { BufferAttribute, DynamicDrawUsage, Group, type Intersection } from 'three';
 import type { Scene, TileLayer } from '@safehouse/contracts';
 import { levelTiles, sceneLevels, WALL_THICKNESS, type TileCut } from '@safehouse/rules';
-import { metricsFor } from '../grid/geometry.js';
+import { metricsFor, type SceneMetrics } from '../grid/geometry.js';
 import { parseColor, shade } from '../grid/stage/colors.js';
 import type { CutRun } from '../grid/stage/cuts.js';
 import {
+  cellSignatures,
+  changedCells,
+  chunkKey,
   cutOf,
   cutRunFor,
+  expandCutRuns,
   isStanding,
   planTiles,
   tileDrawInput,
@@ -41,6 +56,7 @@ import {
   wallDiagonals,
   type GroundSplit,
   type TileCell,
+  type TileDrawInput,
   type TilePlan,
   type WallJoins,
 } from '../grid/stage/tileLayer.js';
@@ -95,7 +111,11 @@ export interface BuiltDoor {
   readonly open: ReadonlySet<string>;
 }
 
-/** One built floor: where it stands and the meshes it is made of. */
+/**
+ * One built floor: where it stands and the meshes it is made of. The same
+ * object for the world's life; its lists are replaced when the floor's tiles
+ * are (`BuiltWorld.applyTiles`), so read them afresh rather than keeping them.
+ */
 export interface BuiltLevel {
   level: number;
   /** World y of the floor's top surface. */
@@ -118,6 +138,34 @@ export interface BuiltLevel {
   doorMeshes: BuiltMeshes | null;
 }
 
+/**
+ * What `BuiltWorld.applyTiles` did to one floor: the meshes it took out
+ * (detached, their geometry freed) and the ones it put in (in the floor's
+ * group, visible), for the lighting to swap (`LabLighting.syncMeshes`), and
+ * the squares whose look changed, for the lights.
+ */
+export interface WorldPatch {
+  level: number;
+  /**
+   * The chunks built again, as `"cx,cy"` (16 squares a side), `"lights:cx,cy"`
+   * for a chunk's lights, and `"doors"` when the floor's door leaves were
+   * merged again. A chunk emptied by the change is in here too.
+   */
+  rebuilt: string[];
+  removed: BuiltMeshes[];
+  added: BuiltMeshes[];
+  /**
+   * The squares that changed (`"col,row"`), widened to what the rules may
+   * read as changed with them: an opening's whole run, a piece of
+   * furniture's whole footprint. Null when the whole floor was built again
+   * (its tileset changed, or it gained or lost its tiles). A light whose
+   * reach takes in none of them lights exactly as it did.
+   */
+  cells: ReadonlySet<string> | null;
+  /** How long the change took here, in ms. */
+  ms: number;
+}
+
 /** The whole built world, ready to add to a three.js scene. */
 export interface BuiltWorld {
   /** Holds one child group per floor, named `level-${L}`, holding that floor's chunk meshes. */
@@ -125,7 +173,26 @@ export interface BuiltWorld {
   /** Squares per storey, as built. */
   storey: number;
   levels: BuiltLevel[];
+  /** The world's size now (kept up to date by `applyTiles`), and how long its whole build took. */
   stats: { triangles: number; buildMs: number };
+  /**
+   * Bring floor `level` up to date with its painted tiles `tiles` (undefined:
+   * the floor has none), building again only the chunks whose look the
+   * change reaches — the squares that changed, the neighbours a wall's joins
+   * and a floor's edges read, and the whole run of any opening they touch —
+   * and swapping their meshes for the old ones. The floor's door leaves are
+   * merged again only when a leaf itself changed; doors that opened or shut
+   * are shown so, as `setDoorOpen` would.
+   *
+   * For a change of tiles alone: the grid, the storey, the palette's
+   * content and the walls option must be what the world was built with (a
+   * change of any of those is a new world). A floor whose tileset changed is
+   * built again whole. Null for a floor this world was not built with.
+   *
+   * The lighting does not know: the owner hands the patch's meshes to it
+   * (`LabLighting.syncMeshes`), with the floor's lights worked out again.
+   */
+  applyTiles(level: number, tiles: TileLayer | undefined, defs: Readonly<Record<string, TileDrawDef>>): WorldPatch | null;
   /**
    * Open or shut the painted door in cell `cell` (`"col,row"`) on floor
    * `level`, as `tiles.doors[cell].open` now says, by leaving its leaves
@@ -142,20 +209,27 @@ export interface BuiltWorld {
    */
   setDoorOpen(level: number, cell: string, open: boolean): boolean;
   /**
-   * The painted door whose shut leaf `raycaster` meets first on floor
-   * `level`, as the cell of it the ray meets (`"col,row"`): the pointer's
-   * way to a door drawn standing over the squares behind its own. Only the
-   * leaves are tested, not what may stand in front of them. Null for none,
-   * or when that floor's leaves are not on show.
+   * The painted door whose shut leaf a ray met at `hit` on floor `level`, as
+   * the cell of it the ray met (`"col,row"`): the pointer's way to a door
+   * drawn standing over the squares behind its own. The caller casts the
+   * ray at everything standing on the floor, so a leaf behind a wall is
+   * never the first hit (`grid/stage3d/picking.ts`). Null when `hit` is on
+   * no leaf of that floor (a chunk, a lamp's fixture, another floor's).
    */
-  pickDoor(level: number, raycaster: Raycaster): string | null;
+  doorOfHit(level: number, hit: Intersection): string | null;
   /** Free every geometry and detach the groups. Materials are the lab's and stay. */
   dispose(): void;
 }
 
 type Kind = 'solid' | 'glass' | 'glow';
 
-/** Squares per chunk side: 16x16 is ~12 chunks a floor on the test scene. */
+/**
+ * Squares per chunk side: 16x16 is ~12 chunks a floor on the test scene. It
+ * is also the unit a painted change builds again (`applyTiles`): a one-square
+ * stroke builds its own chunk, and the chunk beside it only when a square
+ * there reads the change (`reachOf`) — a wall joining it across the edge, a
+ * floor's edge against it.
+ */
 const CHUNK = 16;
 /** A ground-floor slab: a surface to stand on, not a thing with depth. */
 const GROUND_SLAB = 0.02;
@@ -561,6 +635,12 @@ interface LevelCtx {
   unitM: number;
   opts: WorldOptions;
   plan: TilePlan;
+  /**
+   * The chunk (`chunkOf`) of the square whose standing things are being
+   * built now: a door leaf asked for (`doorLeaf`) belongs to that chunk's
+   * build, and goes when that chunk is built again.
+   */
+  at: string;
   chunk(col: number, row: number): MeshBuilder;
   /**
    * The builder for one door leaf (`BuiltDoor`), keyed by the cells it
@@ -882,30 +962,113 @@ function buildStanding(ctx: LevelCtx, cell: TileCell): void {
   else buildBlock(at, cell);
 }
 
-function buildLevel(
-  scene: Scene,
-  level: number,
-  defs: Readonly<Record<string, TileDrawDef>>,
-  materials: LabMaterials,
-  opts: WorldOptions,
-  storey: number,
-): { built: BuiltMeshes[]; leaves: LeafLayer | null; chunkKeys: string[]; propFailures: number } {
-  const tiles = levelTiles(scene, level) as TileLayer | undefined;
-  if (tiles === undefined) return { built: [], leaves: null, chunkKeys: [], propFailures: 0 };
-  const m = metricsFor(scene.grid);
-  const plan = planTiles(m, tileDrawInput(tiles, defs as Record<string, TileDrawDef>));
+// ---------------------------------------------------------------------------
+// Which squares a build looks at
+// ---------------------------------------------------------------------------
+
+/** `"col,row"` as numbers; null for anything else. */
+function parseCell(key: string): { col: number; row: number } | null {
+  const m = /^(-?\d+),(-?\d+)$/.exec(key);
+  return m === null ? null : { col: Number(m[1]), row: Number(m[2]) };
+}
+
+/** The chunk a square is built into, as `"cx,cy"`: the 2D map's own key (`chunkKey`) at this world's size. */
+function chunkOf(col: number, row: number): string {
+  return chunkKey(col, row, CHUNK);
+}
+
+/** How a chunk's lights (`LevelCtx.emitterChunk`) are keyed among a floor's chunks: this, then the chunk's key. */
+const LIGHTS = 'lights:';
+/** What `WorldPatch.rebuilt` calls a floor's door leaves, merged again. */
+const DOORS = 'doors';
+const NO_CELLS: ReadonlySet<string> = new Set<string>();
+
+/**
+ * Which squares one pass over a floor builds (`emit`), and which it has to
+ * look at round them (`near`). A whole build builds every square. A rebuild
+ * of some chunks (`applyTiles`) builds only their squares and looks no
+ * further than two squares out from them: a floor's edge reads the four
+ * squares beside it, and a wall with no ground painted under it borrows the
+ * ground of the eight round it (`neighbourGround`), so what is built reads
+ * the squares two out at most.
+ */
+interface Scope {
+  emit(col: number, row: number): boolean;
+  /** Is any square within `r` (under a chunk's side) of this one built by this pass? */
+  near(col: number, row: number, r: number): boolean;
+}
+
+const EVERYWHERE: Scope = { emit: () => true, near: () => true };
+
+/** A chunk as one number; `cy` is shifted by one so the row of chunks just north of the map cannot collide. */
+function chunkId(cx: number, cy: number): number {
+  return cx * 65536 + (cy + 1);
+}
+
+/** The squares of the chunks `keys` (`"cx,cy"`). */
+function scopeOf(keys: ReadonlySet<string>): Scope {
+  const ids = new Set<number>();
+  for (const key of keys) {
+    const at = parseCell(key);
+    if (at !== null) ids.add(chunkId(at.col, at.row));
+  }
+  const cf = (v: number) => Math.floor(v / CHUNK);
+  return {
+    emit: (col, row) => ids.has(chunkId(cf(col), cf(row))),
+    near(col, row, r) {
+      const cx1 = cf(col + r);
+      const cy1 = cf(row + r);
+      for (let cx = cf(col - r); cx <= cx1; cx += 1) {
+        for (let cy = cf(row - r); cy <= cy1; cy += 1) if (ids.has(chunkId(cx, cy))) return true;
+      }
+      return false;
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// One pass over a floor
+// ---------------------------------------------------------------------------
+
+/**
+ * A door leaf as built, kept as its builder so a floor's leaves can be
+ * merged again (`mergeLeaves`) when some of them are built again, without
+ * building the rest.
+ */
+interface LeafSrc {
+  cells: string[];
+  b: MeshBuilder;
+  /** The chunk whose build made it (`LevelCtx.at`: the square it was built from, a run's last cell). */
+  chunk: string;
+}
+
+/** What one pass over a floor built: a builder per chunk, a builder per chunk for its lights, and its door leaves. */
+interface Emitted {
+  chunks: Map<string, MeshBuilder>;
+  emitters: Map<string, MeshBuilder>;
+  leaves: Map<string, LeafSrc>;
+  propFailures: number;
+}
+
+/**
+ * Build the squares of `plan` that `scope` emits, each into its chunk's
+ * builder. Nothing is finished into meshes here (`finishChunks`,
+ * `mergeLeaves`).
+ */
+function emitLevel(level: number, plan: TilePlan, unitM: number, storey: number, opts: WorldOptions, scope: Scope): Emitted {
   const builders = new Map<string, MeshBuilder>();
   const emitters = new Map<string, MeshBuilder>();
-  const leaves = new Map<string, { cells: string[]; b: MeshBuilder }>();
+  const leaves = new Map<string, LeafSrc>();
   const ctx: LevelCtx = {
     level,
     y: level * storey,
     storey,
-    unitM: m.unitM,
+    unitM,
     opts,
     plan,
+    at: '',
     chunk(col, row) {
-      const key = `${Math.floor(col / CHUNK)},${Math.floor(row / CHUNK)}`;
+      const key = chunkOf(col, row);
       let b = builders.get(key);
       if (b === undefined) {
         b = new MeshBuilder();
@@ -914,7 +1077,7 @@ function buildLevel(
       return b;
     },
     emitterChunk(col, row) {
-      const key = `${Math.floor(col / CHUNK)},${Math.floor(row / CHUNK)}`;
+      const key = chunkOf(col, row);
       let b = emitters.get(key);
       if (b === undefined) {
         b = new MeshBuilder();
@@ -926,7 +1089,7 @@ function buildLevel(
       const key = cells.join('+');
       let leaf = leaves.get(key);
       if (leaf === undefined) {
-        leaf = { cells: [...cells], b: new MeshBuilder() };
+        leaf = { cells: [...cells], b: new MeshBuilder(), chunk: ctx.at };
         leaves.set(key, leaf);
       }
       return leaf.b;
@@ -935,11 +1098,14 @@ function buildLevel(
   };
 
   // --- What is floor, and what kind -------------------------------------
+  // Only for squares within two of one being built (`Scope`): nothing built
+  // reads further.
   const splitCells: Array<{ cell: TileCell; split: GroundSplit }> = [];
   const waterCells: TileCell[] = [];
   const special = new Set<string>();
   for (const cell of plan.cells) {
     if (cell.seg !== undefined || cell.layer !== 0) continue;
+    if (!scope.near(cell.col, cell.row, 2)) continue;
     const key = `${cell.col},${cell.row}`;
     if (cell.split !== undefined) {
       splitCells.push({ cell, split: cell.split });
@@ -963,6 +1129,7 @@ function buildLevel(
   };
   for (const cell of plan.cells) {
     if (cell.seg !== undefined) continue;
+    if (!scope.near(cell.col, cell.row, 2)) continue;
     const key = `${cell.col},${cell.row}`;
     if (cell.layer === 0 && special.has(key)) continue;
     const { def } = cell;
@@ -980,7 +1147,7 @@ function buildLevel(
     if (cell.layer === 0) {
       floors.set(key, { col: cell.col, row: cell.row, color, kind });
       if (glow === null) groundOf.set(key, def);
-    } else decals.push({ cell, color, kind });
+    } else if (scope.emit(cell.col, cell.row)) decals.push({ cell, color, kind });
   }
 
   // Ground under a wall or a piece of furniture the GM never painted: the
@@ -1010,6 +1177,7 @@ function buildLevel(
   };
   for (const cell of plan.cells) {
     if (cell.seg !== undefined) continue;
+    if (!scope.near(cell.col, cell.row, 1)) continue;
     const key = `${cell.col},${cell.row}`;
     if (floors.has(key) || special.has(key) || plan.grounded.has(key)) continue;
     const { def } = cell;
@@ -1024,9 +1192,11 @@ function buildLevel(
     const key = `${col},${row}`;
     return floors.has(key) || special.has(key);
   };
-  for (const f of floors.values()) emitFloor(ctx, f, has);
-  for (const { cell, split } of splitCells) emitSplit(ctx, cell, split);
-  for (const cell of waterCells) emitWater(ctx, cell, (c, r) => waterKeys.has(`${c},${r}`));
+  for (const f of floors.values()) if (scope.emit(f.col, f.row)) emitFloor(ctx, f, has);
+  for (const { cell, split } of splitCells) if (scope.emit(cell.col, cell.row)) emitSplit(ctx, cell, split);
+  for (const cell of waterCells) {
+    if (scope.emit(cell.col, cell.row)) emitWater(ctx, cell, (c, r) => waterKeys.has(`${c},${r}`));
+  }
   for (const { cell, color, kind } of decals) {
     const y = ctx.y + cell.layer * DECAL_LIFT;
     const x0 = cell.col;
@@ -1036,56 +1206,305 @@ function buildLevel(
 
   // --- Everything standing ----------------------------------------------
   for (const cell of plan.cells) {
+    if (!scope.emit(cell.col, cell.row)) continue;
+    ctx.at = chunkOf(cell.col, cell.row);
     if (cell.seg !== undefined) buildArcPiece(ctx, cell, cell.seg);
     else buildStanding(ctx, cell);
   }
+  return { chunks: builders, emitters, leaves, propFailures: ctx.propFailures };
+}
 
-  const built: BuiltMeshes[] = [];
-  const chunkKeys: string[] = [];
-  for (const [key, b] of builders) {
+/** A pass's chunk builders as meshes, keyed as a floor keeps them (`LevelState.chunks`); empty chunks left out. */
+function finishChunks(level: number, out: Emitted, materials: LabMaterials): Map<string, BuiltMeshes> {
+  const made = new Map<string, BuiltMeshes>();
+  for (const [key, b] of out.chunks) {
     if (b.empty) continue;
     const meshes = b.finish(materials);
     for (const o of meshes.all) o.name = `level-${level}:chunk-${key}`;
-    built.push(meshes);
-    chunkKeys.push(key);
+    made.set(key, meshes);
   }
-  for (const [key, b] of emitters) {
+  for (const [key, b] of out.emitters) {
     if (b.empty) continue;
     const meshes = b.finish(materials);
     if (meshes.solid) meshes.solid.castShadow = false;
     for (const o of meshes.all) o.name = `level-${level}:lights-${key}`;
-    built.push(meshes);
-    chunkKeys.push(`lights:${key}`);
+    made.set(`${LIGHTS}${key}`, meshes);
   }
-  // Every door leaf in one mesh per material, each leaf's span of it kept,
-  // drawing the shut ones as the painted doors say.
+  return made;
+}
+
+/**
+ * Every door leaf of a floor in one mesh per material, each leaf's span of
+ * it kept, drawing the shut ones as `openDoors` says. Null for a floor
+ * without a leaf.
+ */
+function mergeLeaves(
+  level: number,
+  leaves: Iterable<LeafSrc>,
+  openDoors: ReadonlySet<string>,
+  materials: LabMaterials,
+): LeafLayer | null {
   const merged = new MeshBuilder();
   const doors: DoorRec[] = [];
-  for (const leaf of leaves.values()) {
+  for (const leaf of leaves) {
     if (leaf.b.empty) continue;
+    // `absorb` copies: the leaf's own builder stays whole for the next merge.
     const spans = merged.absorb(leaf.b);
-    const open = new Set(leaf.cells.filter((c) => plan.openDoors.has(c)));
+    const open = new Set(leaf.cells.filter((c) => openDoors.has(c)));
     doors.push({ level, cells: leaf.cells, open, spans });
   }
-  let layer: LeafLayer | null = null;
-  if (!merged.empty) {
-    const meshes = merged.finish(materials);
-    for (const o of meshes.all) o.name = `level-${level}:doors`;
-    for (const part of LEAF_PARTS) {
-      const geometry = meshes[part]?.geometry;
-      if (!geometry) continue;
-      const count = geometry.getAttribute('position').count;
-      geometry.setIndex(new BufferAttribute(new Uint32Array(count), 1).setUsage(DynamicDrawUsage));
-      // Still a triangle soup — vertex i belongs to triangle ⌊i/3⌋ alone —
-      // whose index only leaves whole leaves out; the lighting's bake reads
-      // this to treat it as the soup it is (`lighting3d.ts`).
-      geometry.userData.soup = true;
-    }
-    layer = { meshes, doors };
-    drawShutLeaves(layer);
+  if (merged.empty) return null;
+  const meshes = merged.finish(materials);
+  for (const o of meshes.all) o.name = `level-${level}:doors`;
+  for (const part of LEAF_PARTS) {
+    const geometry = meshes[part]?.geometry;
+    if (!geometry) continue;
+    const count = geometry.getAttribute('position').count;
+    geometry.setIndex(new BufferAttribute(new Uint32Array(count), 1).setUsage(DynamicDrawUsage));
+    // Still a triangle soup — vertex i belongs to triangle ⌊i/3⌋ alone —
+    // whose index only leaves whole leaves out; the lighting's bake reads
+    // this to treat it as the soup it is (`lighting3d.ts`).
+    geometry.userData.soup = true;
   }
-  return { built, leaves: layer, chunkKeys, propFailures: ctx.propFailures };
+  const layer: LeafLayer = { meshes, doors };
+  drawShutLeaves(layer);
+  return layer;
 }
+
+/** Bring every leaf's open cells in line with `openDoors`, and draw the shut ones again if any changed. */
+function showOpen(layer: LeafLayer, openDoors: ReadonlySet<string>): void {
+  let changed = false;
+  for (const d of layer.doors) {
+    for (const cell of d.cells) {
+      const open = openDoors.has(cell);
+      if (d.open.has(cell) === open) continue;
+      if (open) d.open.add(cell);
+      else d.open.delete(cell);
+      changed = true;
+    }
+  }
+  if (changed) drawShutLeaves(layer);
+}
+
+// ---------------------------------------------------------------------------
+// What a floor is built from, and what a change to it reaches
+// ---------------------------------------------------------------------------
+
+// What `emitLevel` makes of a square, as far as its neighbours' builds read
+// it (`LevelSource.flags`, `reachOf`), one bit each.
+
+/** Plain ground of its own, which a bare wall beside it may borrow (`neighbourGround`'s `groundOf`). */
+const F_PLAIN = 1;
+/** Flat ground of its own (plain or glowing): a floor. */
+const F_FLAT = 2;
+/** Ground split under an angled wall, or water: a floor of its own kind (`emitLevel`'s `special`). */
+const F_SPECIAL = 4;
+/** Water, whose banks the water beside it draws (`emitWater`). */
+const F_WATER = 8;
+/** Something standing, or a partly-footed flat tile, that lays its tile's underlay as its floor. */
+const F_UNDERLAID = 16;
+/** Something standing, which borrows its neighbours' ground when it has none (`neighbourGround`). */
+const F_STANDING = 32;
+
+/**
+ * What a floor was built from: its tiles as the 2D map reads them, less the
+ * doors' state; each square's signature (`cellSignatures`); the plan; the
+ * doors standing open; and what `emitLevel` makes of each square as its
+ * neighbours read it (`F_PLAIN` … `F_STANDING`).
+ */
+interface LevelSource {
+  input: TileDrawInput;
+  sigs: Map<string, string>;
+  plan: TilePlan;
+  openDoors: Set<string>;
+  flags: Map<string, number>;
+}
+
+function sourceOf(tiles: TileLayer, defs: Readonly<Record<string, TileDrawDef>>, m: SceneMetrics): LevelSource {
+  // Without the doors' state: a door opening or shutting changes no chunk
+  // (its leaf is left out of the draw or put back), so it must not read as a
+  // change to its square. One input for the signatures and the plan, so the
+  // floor's water is resolved once (`tileLayer.ts` caches it per input).
+  const input: TileDrawInput = { ...tileDrawInput(tiles, defs as Record<string, TileDrawDef>), doors: undefined };
+  const plan = planTiles(m, input);
+  const openDoors = new Set<string>();
+  for (const [cell, d] of Object.entries(tiles.doors ?? {})) if (d?.open === true) openDoors.add(cell);
+  // The same reading of each square as `emitLevel`'s floor pass.
+  const flags = new Map<string, number>();
+  for (const cell of plan.cells) {
+    if (cell.seg !== undefined) continue;
+    const { def } = cell;
+    const standingish = isStanding(def) || def.footprint === 'wall' || cell.span !== undefined || def.prop !== undefined;
+    let f = 0;
+    if (cell.layer === 0 && cell.split !== undefined) f |= F_SPECIAL;
+    else if (cell.layer === 0 && def.liquid !== undefined) f |= F_SPECIAL | F_WATER;
+    else if (cell.layer === 0 && !standingish) f |= def.emissive === undefined ? F_FLAT | F_PLAIN : F_FLAT;
+    if (standingish) f |= F_STANDING;
+    if (def.underlay !== undefined && (standingish || (def.footprint !== undefined && def.footprint !== 'fill'))) f |= F_UNDERLAID;
+    if (f === 0) continue;
+    const key = `${cell.col},${cell.row}`;
+    flags.set(key, (flags.get(key) ?? 0) | f);
+  }
+  return { input, sigs: cellSignatures(input), plan, openDoors, flags };
+}
+
+/** Whether square (`col`, `row`) of `src` has plain ground a bare neighbour may borrow. */
+function plainAt(src: LevelSource, col: number, row: number): boolean {
+  return ((src.flags.get(`${col},${row}`) ?? 0) & F_PLAIN) !== 0;
+}
+
+/**
+ * Whether `emitLevel` gives square `key` a floor — its `has`, which the
+ * squares beside it draw their floor's edges against: flat ground or a
+ * split or water square of its own; else, with no ground of its own, its
+ * tile's underlay, or ground borrowed from the plain ground round it.
+ */
+function floored(src: LevelSource, key: string, col: number, row: number): boolean {
+  const f = src.flags.get(key) ?? 0;
+  if ((f & (F_FLAT | F_SPECIAL)) !== 0) return true;
+  if (src.plan.grounded.has(key)) return false;
+  if ((f & F_UNDERLAID) !== 0) return true;
+  if ((f & F_STANDING) === 0) return false;
+  return AROUND.some(([dc, dr]) => plainAt(src, col + dc, row + dr));
+}
+
+const AROUND: ReadonlyArray<readonly [number, number]> = [
+  [-1, -1],
+  [0, -1],
+  [1, -1],
+  [-1, 0],
+  [1, 0],
+  [-1, 1],
+  [0, 1],
+  [1, 1],
+];
+
+/**
+ * A change reaches two squares out through a square with no ground painted
+ * under it: such a square borrows its neighbours' ground (`neighbourGround`)
+ * and has a floor only while one of them has plain ground, and the squares
+ * beside it draw a floor edge against it by whether it has one. So a square
+ * next to a change whose borrowing came or went counts as changed too, and
+ * the squares whose builds read it (`reachOf`) are built again with it.
+ */
+function borrowGround(cells: Set<string>, before: LevelSource, after: LevelSource): void {
+  const borrows = (src: LevelSource, col: number, row: number) => AROUND.some(([dc, dr]) => plainAt(src, col + dc, row + dr));
+  for (const key of [...cells]) {
+    const at = parseCell(key);
+    if (at === null) continue;
+    for (const [dc, dr] of AROUND) {
+      const col = at.col + dc;
+      const row = at.row + dr;
+      const k = `${col},${row}`;
+      if (cells.has(k)) continue;
+      const bare = (src: LevelSource) => src.plan.occupied.has(k) && !src.plan.grounded.has(k);
+      if (!bare(before) && !bare(after)) continue;
+      if (borrows(before, col, row) !== borrows(after, col, row)) cells.add(k);
+    }
+  }
+}
+
+/** The four squares beside a square, for what reads only those: a floor's edges, water's banks. */
+const BESIDE: ReadonlyArray<readonly [number, number]> = [
+  [0, -1],
+  [0, 1],
+  [-1, 0],
+  [1, 0],
+];
+
+/**
+ * The changed squares, with every square whose build reads one of them —
+ * the squares to build again, whose chunks are the dirty ones.
+ *
+ * The 2D map builds again all eight neighbours of a changed square (its
+ * `dirtyChunks`): its shadows and ambient rings fall on them. Here a
+ * square's build reads the squares round it in four ways only, and a change
+ * reaches a neighbour only through one of them:
+ *   - a floor's edges (`emitFloor`) are drawn by whether the four squares
+ *     beside it have a floor (`floored`): when a changed square gained or
+ *     lost its floor, those four are built again;
+ *   - water's banks (`emitWater`) are drawn by whether the four beside it
+ *     are water: likewise when a changed square became or stopped being
+ *     water;
+ *   - a wall's slabs (`buildWallCell`) are laid by which of the eight round
+ *     it are walls: when a changed square became or stopped being a wall,
+ *     the walls round it are built again (an opening's whole run is already
+ *     changed, `expandCutRuns`);
+ *   - a bare standing square borrows the plain ground round it
+ *     (`neighbourGround`): the bare squares round a changed square with
+ *     plain ground are built again, as the ground they borrow may be its
+ *     (the ones whose borrowing came or went are changed already,
+ *     `borrowGround`).
+ * Everything else a square builds is its own: its ground and decals, what
+ * stands on it (a piece of furniture from its anchor, a door's leaf from
+ * its run's last square), and the pieces of an arc, which is changed in
+ * every square it crosses (`cellSignatures`). So a ground square repainted
+ * beside plain floor builds its own chunk alone, even on a chunk's edge.
+ */
+function reachOf(changed: ReadonlySet<string>, before: LevelSource, after: LevelSource): Set<string> {
+  const out = new Set(changed);
+  const bare = (src: LevelSource, k: string) => src.plan.occupied.has(k) && !src.plan.grounded.has(k);
+  for (const key of changed) {
+    const at = parseCell(key);
+    if (at === null) continue;
+    const { col, row } = at;
+    const fb = before.flags.get(key) ?? 0;
+    const fa = after.flags.get(key) ?? 0;
+    if (floored(before, key, col, row) !== floored(after, key, col, row) || ((fb ^ fa) & F_WATER) !== 0) {
+      for (const [dc, dr] of BESIDE) out.add(`${col + dc},${row + dr}`);
+    }
+    const wall = before.plan.walls.has(key) !== after.plan.walls.has(key);
+    const plain = ((fb | fa) & F_PLAIN) !== 0;
+    if (!wall && !plain) continue;
+    for (const [dc, dr] of AROUND) {
+      const k = `${col + dc},${row + dr}`;
+      if (wall && (before.plan.walls.has(k) || after.plan.walls.has(k))) out.add(k);
+      else if (plain && (bare(before, k) || bare(after, k))) out.add(k);
+    }
+  }
+  return out;
+}
+
+/** The chunks (`chunkOf`) the squares `keys` are built into. */
+function chunksOf(keys: Iterable<string>): Set<string> {
+  const out = new Set<string>();
+  for (const key of keys) {
+    const at = parseCell(key);
+    if (at !== null) out.add(chunkOf(at.col, at.row));
+  }
+  return out;
+}
+
+/**
+ * The changed squares, with every square of a piece of furniture standing
+ * on one: the rules' sight stands it on all of them (`WorldPatch.cells`).
+ */
+function withFootprints(cells: ReadonlySet<string>, sources: readonly LevelSource[]): Set<string> {
+  const out = new Set(cells);
+  for (const src of sources) {
+    for (const cell of src.plan.cells) {
+      const span = cell.span;
+      if (span === undefined || !cells.has(`${cell.col},${cell.row}`)) continue;
+      for (let dr = 0; dr < span[1]; dr += 1) for (let dc = 0; dc < span[0]; dc += 1) out.add(`${cell.col + dc},${cell.row + dr}`);
+    }
+  }
+  return out;
+}
+
+/** Is any of `cells` beside (or on) a square of `changed`? */
+function besideAny(cells: readonly string[], changed: ReadonlySet<string>): boolean {
+  for (const key of cells) {
+    if (changed.has(key)) return true;
+    const at = parseCell(key);
+    if (at === null) continue;
+    for (const [dc, dr] of AROUND) if (changed.has(`${at.col + dc},${at.row + dr}`)) return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// A floor as the world keeps it
+// ---------------------------------------------------------------------------
 
 /** A door leaf as the world keeps it: `BuiltDoor`, with its open cells writable and its spans in the floor's leaf meshes. */
 interface DoorRec extends BuiltDoor {
@@ -1134,6 +1553,49 @@ function trianglesOf(built: BuiltMeshes): number {
   return n;
 }
 
+/** One floor as the world keeps it, to build again in part (`applyTiles`). */
+interface LevelState {
+  /** What `BuiltWorld.levels` shows of it (`settle` keeps it current). */
+  view: BuiltLevel;
+  group: Group;
+  /** What it was last built from; null for a floor with no tiles. */
+  source: LevelSource | null;
+  /** Its chunks' meshes, by chunk key (`"cx,cy"`, and `"lights:cx,cy"` for a chunk's lights). */
+  chunks: Map<string, BuiltMeshes>;
+  /** Its door leaves as built, by the cells each follows (`LevelCtx.doorLeaf`'s key). */
+  leaves: Map<string, LeafSrc>;
+  /** The leaves merged and drawn; null for a floor without a door. */
+  layer: LeafLayer | null;
+  /** Each door cell's leaves (a cell of a wide door and a leaf of its own share one). */
+  doorIndex: Map<string, DoorRec[]>;
+}
+
+/** Point a floor's view and door index at what it now holds. */
+function settle(st: LevelState): void {
+  const built = [...st.chunks.values()];
+  if (st.layer !== null) built.push(st.layer.meshes);
+  st.view.built = built;
+  st.view.doors = st.layer?.doors ?? [];
+  st.view.doorMeshes = st.layer?.meshes ?? null;
+  const index = new Map<string, DoorRec[]>();
+  for (const d of st.layer?.doors ?? []) {
+    for (const cell of d.cells) {
+      const list = index.get(cell);
+      if (list) list.push(d);
+      else index.set(cell, [d]);
+    }
+  }
+  st.doorIndex = index;
+}
+
+/** What building some of a floor again did (`rebuild`). */
+interface Rebuilt {
+  removed: BuiltMeshes[];
+  added: BuiltMeshes[];
+  rebuilt: string[];
+  propFailures: number;
+}
+
 /**
  * Build the requested floors of a scene from its painted tiles.
  *
@@ -1150,77 +1612,175 @@ export function buildWorld(
 ): BuiltWorld {
   const started = performance.now();
   const storey = storeyUnits(scene.grid.unitM, opts.storeyM);
+  const m = metricsFor(scene.grid);
   const group = new Group();
   group.name = 'lab-world';
   const floorCount = sceneLevels(scene).length;
   const wanted = [...new Set(opts.levels)].filter((l) => Number.isInteger(l) && l >= 0 && l < floorCount).sort((a, b) => a - b);
 
   const levels: BuiltLevel[] = [];
-  /** Per floor built, each door cell's leaves (a cell of a wide door and a leaf of its own share one). */
-  const doorIndex = new Map<number, Map<string, DoorRec[]>>();
-  /** Per floor built, its leaf meshes; null for a floor without a door. */
-  const leafLayers = new Map<number, LeafLayer | null>();
-  let triangles = 0;
+  const states = new Map<number, LevelState>();
+  const stats = { triangles: 0, buildMs: 0 };
+
+  /**
+   * Build floor `st` again from `source`: the chunks `dirty` names (every
+   * chunk when null), swapping their new meshes in for the old. `changed` is
+   * the squares that changed (null: all of them): a door leaf built from a
+   * dirty chunk is kept as it was unless one of its squares is beside one of
+   * those, and the floor's leaves are merged again only when a leaf came,
+   * went or changed.
+   */
+  function rebuild(
+    st: LevelState,
+    source: LevelSource | null,
+    dirty: ReadonlySet<string> | null,
+    changed: ReadonlySet<string> | null,
+  ): Rebuilt {
+    const level = st.view.level;
+    const out =
+      source === null || (dirty !== null && dirty.size === 0)
+        ? null
+        : emitLevel(level, source.plan, m.unitM, storey, opts, dirty === null ? EVERYWHERE : scopeOf(dirty));
+    const removed: BuiltMeshes[] = [];
+    const added: BuiltMeshes[] = [];
+    const rebuilt = new Set<string>();
+
+    // The dirty chunks' meshes go, their lights' with them, and what was
+    // built for them comes.
+    for (const [key, meshes] of [...st.chunks]) {
+      const chunk = key.startsWith(LIGHTS) ? key.slice(LIGHTS.length) : key;
+      if (dirty !== null && !dirty.has(chunk)) continue;
+      st.chunks.delete(key);
+      removed.push(meshes);
+      rebuilt.add(key);
+    }
+    if (out !== null) {
+      for (const [key, meshes] of finishChunks(level, out, materials)) {
+        for (const o of meshes.all) st.group.add(o);
+        st.chunks.set(key, meshes);
+        added.push(meshes);
+        rebuilt.add(key);
+      }
+    }
+
+    // The door leaves: the dirty chunks' go unless built again the same, and
+    // the new ones come. A leaf is the same when nothing beside any of its
+    // squares changed: its run, its frame and its joins are all read from
+    // those (`expandCutRuns` has already widened `changed` to whole runs).
+    let merge = false;
+    for (const [key, leaf] of [...st.leaves]) {
+      if (dirty !== null && !dirty.has(leaf.chunk)) continue;
+      const again = out?.leaves.get(key);
+      const same = again !== undefined && !again.b.empty && again.chunk === leaf.chunk && changed !== null && !besideAny(leaf.cells, changed);
+      if (same) continue;
+      st.leaves.delete(key);
+      merge = true;
+    }
+    for (const [key, leaf] of out?.leaves ?? []) {
+      if (leaf.b.empty || st.leaves.has(key)) continue;
+      st.leaves.set(key, leaf);
+      merge = true;
+    }
+    const openDoors = source?.openDoors ?? NO_CELLS;
+    if (merge) {
+      if (st.layer !== null) removed.push(st.layer.meshes);
+      st.layer = mergeLeaves(level, st.leaves.values(), openDoors, materials);
+      if (st.layer !== null) {
+        for (const o of st.layer.meshes.all) st.group.add(o);
+        added.push(st.layer.meshes);
+      }
+      rebuilt.add(DOORS);
+    } else if (st.layer !== null) {
+      showOpen(st.layer, openDoors);
+    }
+
+    for (const b of removed) disposeBuilt(b);
+    st.source = source;
+    settle(st);
+    return { removed, added, rebuilt: [...rebuilt], propFailures: out?.propFailures ?? 0 };
+  }
+
   let propFailures = 0;
   for (const level of wanted) {
     const levelGroup = new Group();
     levelGroup.name = `level-${level}`;
     levelGroup.userData = { level };
-    const out = buildLevel(scene, level, defs, materials, opts, storey);
+    const st: LevelState = {
+      view: { level, y: level * storey, built: [], doors: [], doorMeshes: null },
+      group: levelGroup,
+      source: null,
+      chunks: new Map(),
+      leaves: new Map(),
+      layer: null,
+      doorIndex: new Map(),
+    };
+    const tiles = levelTiles(scene, level) as TileLayer | undefined;
+    const done = rebuild(st, tiles === undefined ? null : sourceOf(tiles, defs, m), null, null);
     // Counted open or shut: every leaf is on the GPU either way.
-    const built = out.leaves ? [...out.built, out.leaves.meshes] : out.built;
-    for (const b of built) {
-      for (const o of b.all) levelGroup.add(o);
-      triangles += trianglesOf(b);
-    }
-    const index = new Map<string, DoorRec[]>();
-    for (const d of out.leaves?.doors ?? []) {
-      for (const cell of d.cells) {
-        const list = index.get(cell);
-        if (list) list.push(d);
-        else index.set(cell, [d]);
-      }
-    }
-    doorIndex.set(level, index);
-    leafLayers.set(level, out.leaves);
-    propFailures += out.propFailures;
+    for (const b of done.added) stats.triangles += trianglesOf(b);
+    propFailures += done.propFailures;
+    states.set(level, st);
     group.add(levelGroup);
-    levels.push({ level, y: level * storey, built, doors: out.leaves?.doors ?? [], doorMeshes: out.leaves?.meshes ?? null });
+    levels.push(st.view);
   }
   if (propFailures > 0) console.warn(`[lab3d] ${propFailures} prop(s) failed to build and were left out`);
+  stats.triangles = Math.round(stats.triangles);
+  stats.buildMs = performance.now() - started;
 
   return {
     group,
     storey,
     levels,
-    stats: { triangles: Math.round(triangles), buildMs: performance.now() - started },
+    stats,
+    applyTiles(level, tiles, tileDefs) {
+      const st = states.get(level);
+      if (st === undefined) return null;
+      const t0 = performance.now();
+      const before = st.source;
+      const after = tiles === undefined ? null : sourceOf(tiles, tileDefs, m);
+      // What changed, by the 2D map's rules, and the chunks of the squares
+      // whose builds read it (`reachOf`); a floor whose tileset changed, or
+      // that gained or lost its tiles, is built again whole.
+      let dirty: Set<string> | null = null;
+      let changed: Set<string> | null = null;
+      if (before !== null && after !== null && before.input.tilesetId === after.input.tilesetId) {
+        changed = expandCutRuns(changedCells(before.sigs, after.sigs), [before.input, after.input]);
+        borrowGround(changed, before, after);
+        dirty = chunksOf(reachOf(changed, before, after));
+      }
+      const done = rebuild(st, after, dirty, changed);
+      for (const b of done.removed) stats.triangles -= trianglesOf(b);
+      for (const b of done.added) stats.triangles += trianglesOf(b);
+      stats.triangles = Math.round(stats.triangles);
+      if (done.propFailures > 0) console.warn(`[lab3d] ${done.propFailures} prop(s) failed to build and were left out`);
+      return {
+        level,
+        rebuilt: done.rebuilt,
+        removed: done.removed,
+        added: done.added,
+        cells: changed === null || before === null || after === null ? null : withFootprints(changed, [before, after]),
+        ms: performance.now() - t0,
+      };
+    },
     setDoorOpen(level, cell, open) {
-      const index = doorIndex.get(level);
-      if (index === undefined) return false;
+      const st = states.get(level);
+      if (st === undefined) return false;
       let changed = false;
-      for (const d of index.get(cell) ?? []) {
+      for (const d of st.doorIndex.get(cell) ?? []) {
         if (d.open.has(cell) === open) continue;
         if (open) d.open.add(cell);
         else d.open.delete(cell);
         changed = true;
       }
-      const layer = leafLayers.get(level);
-      if (changed && layer) drawShutLeaves(layer);
+      if (changed && st.layer) drawShutLeaves(st.layer);
       return true;
     },
-    pickDoor(level, raycaster) {
-      const layer = leafLayers.get(level);
+    doorOfHit(level, hit) {
+      const layer = states.get(level)?.layer;
       if (!layer) return null;
-      const targets: Mesh[] = [];
-      for (const part of LEAF_SURFACES) {
-        const mesh = layer.meshes[part];
-        if (mesh?.visible) targets.push(mesh);
-      }
-      if (targets.length === 0) return null;
-      const hit = raycaster.intersectObjects(targets, false)[0];
-      const part = LEAF_SURFACES.find((p) => layer.meshes[p] === hit?.object);
-      const vertex = hit?.face?.a;
-      if (hit === undefined || part === undefined || vertex === undefined) return null;
+      const part = LEAF_SURFACES.find((p) => layer.meshes[p] === hit.object);
+      const vertex = hit.face?.a;
+      if (part === undefined || vertex === undefined) return null;
       for (const d of layer.doors) {
         const span = d.spans[part];
         if (d.open.size > 0 || vertex < span.start || vertex >= span.start + span.count) continue;

@@ -6,7 +6,7 @@
  * `LabelSink` (`ink.ts`). The 2D stage hands over a Graphics and its pooled
  * Text; a 3D stage can hand over floor meshes and DOM labels.
  */
-import type { Point, Scene } from '@safehouse/contracts';
+import type { Camera as SecurityCamera, Point, Scene, SceneLight } from '@safehouse/contracts';
 import type { CameraCone, GeometrySelection } from '../types.js';
 import { TILE_HEIGHTS } from '@safehouse/rules';
 import {
@@ -387,6 +387,36 @@ function edgeReach(cells: ReadonlySet<string>, at: Point, bearing: number, range
   return Math.max(reach, Math.min(range, 1));
 }
 
+/**
+ * One camera's cone: every cell `cone` covers as a flat wash on the floor,
+ * and the two edges of its field of view drawn out from its mount as far as
+ * the cone reaches along them. What `drawCameras` lays under each switched-on
+ * eye; the 3D map lays it on its floor under an eye it hangs at the ceiling
+ * (`stage3d/markers.ts`).
+ */
+export function drawCameraCone(g: Ink, m: SceneMetrics, cam: SecurityCamera, cone: CameraCone): void {
+  const color = cam.active ? C.warn : C.faint;
+  for (const key of cone.cells) {
+    const [col, row] = key.split(',').map(Number);
+    if (col === undefined || row === undefined || Number.isNaN(col) || Number.isNaN(row)) continue;
+    g.poly(cellCorners(m, col, row).flatMap((p) => [p.x, p.y])).fill({
+      color,
+      alpha: CAMERA_CONE_ALPHA,
+    });
+  }
+  // The edges of the field of view, as far as the cone itself reaches
+  // along them — a wall that cuts the cone cuts its edge too. A dome has
+  // none.
+  if (cam.fov < 360) {
+    const eye = worldFromGrid(m, cam.at);
+    for (const side of [-1, 1]) {
+      const bearing = cam.facing + (side * cam.fov) / 2;
+      const far = worldFromGrid(m, alongBearing(cam.at, bearing, edgeReach(cone.cells, cam.at, bearing, cam.range)));
+      g.moveTo(eye.x, eye.y).lineTo(far.x, far.y).stroke({ width: 1, color, alpha: 0.55 });
+    }
+  }
+}
+
 export function drawCameras(
   g: Ink,
   labels: LabelSink,
@@ -406,27 +436,7 @@ export function drawCameras(
       const color = cam.active ? C.warn : C.faint;
       const cone = cam.active ? cones?.find((c) => c.id === cam.id) : undefined;
 
-      if (cone) {
-        for (const key of cone.cells) {
-          const [col, row] = key.split(',').map(Number);
-          if (col === undefined || row === undefined || Number.isNaN(col) || Number.isNaN(row)) continue;
-          g.poly(cellCorners(m, col, row).flatMap((p) => [p.x, p.y])).fill({
-            color,
-            alpha: CAMERA_CONE_ALPHA,
-          });
-        }
-        // The edges of the field of view, as far as the cone itself reaches
-        // along them — a wall that cuts the cone cuts its edge too. A dome
-        // has none.
-        if (cam.fov < 360) {
-          const eye = worldFromGrid(m, cam.at);
-          for (const side of [-1, 1]) {
-            const bearing = cam.facing + (side * cam.fov) / 2;
-            const far = worldFromGrid(m, alongBearing(cam.at, bearing, edgeReach(cone.cells, cam.at, bearing, cam.range)));
-            g.moveTo(eye.x, eye.y).lineTo(far.x, far.y).stroke({ width: 1, color, alpha: 0.55 });
-          }
-        }
-      }
+      if (cone) drawCameraCone(g, m, cam, cone);
 
       // The eye: a wedge along the facing, a dot at the mount. Built in grid
       // space and projected, so it foreshortens with the floor in isometric.
@@ -451,6 +461,32 @@ export function drawCameras(
   }
 
   labels.sweep();
+}
+
+/**
+ * How far one light reaches, drawn out round it on the floor — a wedge for a
+ * spotlight — in its own colour, `unitM` metres a square: what `drawLights`
+ * draws round the selected light, and the 3D map lays on its floor under the
+ * lamp it hangs at its height (`stage3d/markers.ts`).
+ */
+export function drawLightReach(g: Ink, m: SceneMetrics, light: SceneLight, unitM: number): void {
+  const on = light.on !== false;
+  const color = parseColor(light.color, C.warn);
+  const at = worldFromGrid(m, light.at);
+  const spot = light.fov !== undefined && light.fov < 360;
+  // In grid space and projected, so it lies on the floor.
+  const reach = light.radiusM / Math.max(0.01, unitM);
+  const from = spot ? (light.facing ?? 0) - (light.fov ?? 360) / 2 : 0;
+  const sweep = spot ? (light.fov ?? 360) : 360;
+  const steps = Math.max(8, Math.ceil(sweep / 7.5));
+  const outline: number[] = spot ? [at.x, at.y] : [];
+  for (let i = 0; i <= steps; i += 1) {
+    const p = worldFromGrid(m, alongBearing(light.at, from + (sweep * i) / steps, reach));
+    outline.push(p.x, p.y);
+  }
+  g.poly(outline, true)
+    .fill({ color, alpha: on ? 0.06 : 0.02 })
+    .stroke({ width: 1, color, alpha: on ? 0.6 : 0.3 });
 }
 
 /**
@@ -485,19 +521,7 @@ export function drawLights(
       const spot = light.fov !== undefined && light.fov < 360;
 
       if (light.id === selectedLightId) {
-        // Its reach, in grid space and projected, so it lies on the floor.
-        const reach = light.radiusM / Math.max(0.01, scene.grid.unitM);
-        const from = spot ? (light.facing ?? 0) - (light.fov ?? 360) / 2 : 0;
-        const sweep = spot ? (light.fov ?? 360) : 360;
-        const steps = Math.max(8, Math.ceil(sweep / 7.5));
-        const outline: number[] = spot ? [at.x, at.y] : [];
-        for (let i = 0; i <= steps; i += 1) {
-          const p = worldFromGrid(m, alongBearing(light.at, from + (sweep * i) / steps, reach));
-          outline.push(p.x, p.y);
-        }
-        g.poly(outline, true)
-          .fill({ color, alpha: on ? 0.06 : 0.02 })
-          .stroke({ width: 1, color, alpha: on ? 0.6 : 0.3 });
+        drawLightReach(g, m, light, scene.grid.unitM);
         g.circle(at.x, at.y, r * 2.4).stroke({ width: 2, color: C.magenta, alpha: 0.95 });
       }
 

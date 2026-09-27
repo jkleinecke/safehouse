@@ -12,8 +12,15 @@
  *   1. Is there a 3D stage at all (`STAGE3D_BUILT`)? Yes, since P1.
  *   2. Does this role get 3D in this phase (`roleMay3d`)? Every role, since
  *      P2: the GM, the players, the observers and the TV.
- *   3. Has this device been set to Classic (`getRendererPreference`)?
+ *   3. Has this device been set to Classic (`getRendererPreference`)? Only
+ *      a device someone set to Classic draws it; one never set draws 3D.
  *   4. Can this browser run it (`supportsWebGL2`)? three.js needs WebGL2.
+ *
+ * So since P3, which made Build and Prep on the 3D map as cheap as on the
+ * classic one (a brush stroke or a door builds again only the chunks it
+ * reaches), 3D is everyone's map by default wherever WebGL2 is: the GM's
+ * laptop in every mode, the players' phones and the TV. Classic stays as the
+ * per-device switch and the fallback.
  *
  * The 3D map's quality is this device's too (`getQualityPreference`): Low on
  * the TV, always; for anyone else what the device was set to, else Low on a

@@ -1,5 +1,6 @@
 /**
- * The three.js map stage (the move to 3D: P1 for the GM, P2 for the table):
+ * The three.js map stage (the move to 3D: P1 for the GM, P2 for the table,
+ * P3 for Build and Prep, and everyone's map by default since):
  * the `StageApi` the 2D Pixi stage (`../stage/index.ts`) implements, drawn by
  * the 3D runtime (`lab3d/runtime3d.ts`) and behaving the same from the page's
  * side. It is a lazy chunk, reached only through `stageLoader.ts`'s dynamic
@@ -17,8 +18,19 @@
  *     top-down as the scene's projection says, orthographic both;
  *   - the same `PointerController` as the 2D map turns the DOM's pointer
  *     events into the same callbacks, through that camera, with a raycast of
- *     the figures (`pickToken`) ahead of its disc test for tokens, and of the
- *     painted doors' leaves (`pickTileDoor`) ahead of its cell test;
+ *     the figures (`pickToken`) ahead of its disc test for tokens, and ONE
+ *     raycast of everything standing on the floor in view — the world's
+ *     walls, props, stairs and door leaves, and the GM's traced walls and
+ *     doors (`standing`, `picking.ts`) — for the painted door a press opens
+ *     (`pickTileDoor`), the traced one (`pickTraced`), and the square of the
+ *     painted thing it picks (`pickCell`): so a press on a wall's upper half
+ *     is the wall, not the square behind it, and never takes a door, a wall
+ *     or a note standing or lying behind what it is on;
+ *   - the Build selection stands up (`selection.ts`): a selected wall run,
+ *     opening or prop, or a marquee's squares, as a box outline as tall as
+ *     what it holds, its handles as discs over the canvas where the pointer's
+ *     hit test looks for them, and a drag's or a paste's ghost as
+ *     translucent boxes as tall as what is on its way;
  *   - `FigurePool` stands the tokens up as figures that glide to their
  *     squares, with their rings and blob shadows; `TokenBadges` hangs a DOM
  *     plate (portrait, name, bars) over each head. The tokens seen down
@@ -26,7 +38,8 @@
  *     under the shade, with no plate and no ring, never picked;
  *   - the flat overlays — the grid, the GM's walls, doors and zones, the
  *     GM's fog regions, the light-map wash, the AoE, the fog draft, the
- *     ruler and every Build draft — are the 2D map's own draw functions,
+ *     ruler and every Build draft but the selection and its ghost — are
+ *     the 2D map's own draw functions,
  *     handed a `FloorInk` that lays them on the floor in view, each redrawn
  *     only when its key (`../stage/keys.ts`) changes, as the 2D stage
  *     redraws its Graphics;
@@ -59,15 +72,24 @@
  * draws above its fog (the templates, the ruler, the drafts, pings and the
  * trail) is drawn above it here too.
  *
- * Not drawn yet, and not hit either (they come in P3/P4): pins, GM notes,
- * security cameras and their cones, the GM's light markers, and the vision
- * modes. Each is a commented no-op below.
+ * The GM's markers (`markers.ts`, P3) are drawn where the pointer's hit
+ * tests look for them, and so are given back to the pointer: pins standing
+ * up the screen from their point by the hit test's own lift, security
+ * cameras hung at `CAMERA_EYE_LIFT` over their cones, the GM's lights at
+ * their lamps' height over the selected one's reach, GM notes lying on the
+ * floor, and the zones' names. The lights' marks hang over the figures, so a
+ * press on one takes the light before the token under it
+ * (`lightsOverTokens`). The GM's traced walls and doors stand up as walls a
+ * storey tall on every floor on show (`tracedWalls.ts`), taken by a press on
+ * their faces (`pickTraced`) as well as on their lines.
+ *
+ * Not drawn yet (P4): the vision modes, a no-op below.
  */
-import { Raycaster, Vector2, Vector3 } from 'three';
+import { Group, Raycaster, Vector2, Vector3, type Mesh } from 'three';
 import type { Point, Scene, Token } from '@safehouse/contracts';
-import { TILESETS, sceneLevels, type LightMap, type LightRow, type VisionMode } from '@safehouse/rules';
-import { allCells } from '../cellSelection.js';
-import { metricsFor, metricsKey, worldFromGrid, type SceneMetrics } from '../geometry.js';
+import { TILESETS, WALL_THICKNESS, levelTiles, sceneLevels, type LightMap, type LightRow, type VisionMode } from '@safehouse/rules';
+import { LAYERS, allCells, type CellSet } from '../cellSelection.js';
+import { metricsFor, metricsKey, type SceneMetrics } from '../geometry.js';
 import { handlesOf, objectForSelection } from '../paintedObjects.js';
 import type { Stage3DHooks } from '../stageLoader.js';
 import {
@@ -80,22 +102,14 @@ import {
   type TileDrawDef,
   type TileRectMode,
 } from '../types.js';
-import {
-  drawAoe,
-  drawArcDraft,
-  drawFogDraft,
-  drawPaintedGhost,
-  drawPaintedSelection,
-  drawRectDraft,
-  drawRuler,
-  drawSegmentDraft,
-} from '../stage/fx.js';
+import { drawAoe, drawArcDraft, drawFogDraft, drawRectDraft, drawRuler, drawSegmentDraft } from '../stage/fx.js';
+import { C } from '../stage/colors.js';
 import { aoeKey, fogDraftKey, fogKey, geometryKey, mapImagesKey, paintedSelectionKey } from '../stage/keys.js';
 import { drawFog, drawGeometry, drawGrid } from '../stage/layers.js';
 import { drawLightMap } from '../stage/lightLayer.js';
-import { PointerController, type Cell, type PointerHost } from '../stage/pointer.js';
+import { PointerController, type Cell, type GhostFill, type PointerHost } from '../stage/pointer.js';
 import { createLabMaterials, type LabMaterials } from '../../lab3d/geometry3d.js';
-import { createRuntime3D, type Runtime3D, type Runtime3DOptions } from '../../lab3d/runtime3d.js';
+import { createRuntime3D, type Runtime3D, type Runtime3DOptions, type ShadowScope } from '../../lab3d/runtime3d.js';
 import { Camera3D, type Camera3DKind } from './camera3d.js';
 import { TokenBadges } from './badges.js';
 import { coverScene } from './cover.js';
@@ -103,8 +117,12 @@ import { FigurePool, type FigureState } from './figures.js';
 import { FloorInk, type InkCover } from './floorInk.js';
 import { DomLabels } from './labels.js';
 import { MapPlane } from './mapPlane.js';
+import { GmMarkers } from './markers.js';
 import { FloorMarks } from './marks.js';
 import { CoverMasks, type FogDetail } from './masks.js';
+import { pickStanding, type StandingPick } from './picking.js';
+import { SelectionBoxes, SelectionHandles, boxTops, type BoxView } from './selection.js';
+import { TracedWalls, type TracedLine } from './tracedWalls.js';
 
 /** How long an un-terminated remote drag ghost keeps overriding a position (the 2D stage's rule). */
 const GHOST_TTL_MS = 4000;
@@ -135,6 +153,13 @@ const ORDER = {
   lightMap: -20,
   grid: -19,
   geometry: -18,
+  // The GM's markers' flat parts, over the geometry as the 2D map layers
+  // them; the standing marks (`markers.ts`) after the figures' rings, under
+  // the fog tint — cameras at `markers`, lights and pins just after.
+  cameraCones: -17,
+  lightReach: -16,
+  notes: -15,
+  markers: 5,
   fog: 10,
   aoe: 11,
   fogDraft: 12,
@@ -149,22 +174,26 @@ const ORDER = {
 /**
  * Which of a viewer's masks hide each flat overlay (`cover.ts`), after the 2D
  * layer it sits in there: the light-map wash lies under the shroud and the
- * fog; the grid and the doors over the shroud and under the fog; the GM's fog
+ * fog; the grid, the doors, the cameras' cones, a light's reach and the GM's
+ * notes over the shroud and under the fog; the GM's fog
  * tint (which is the fog), the templates, the drafts and the ruler over both,
  * as the 2D map's fx layer lies over its fog. Pings and the trail
- * (`FloorMarks`) are over both as well.
+ * (`FloorMarks`) are over both as well, and so are the Build selection and
+ * its ghost (`selection.ts`), which are no inks: their places in `ORDER` are
+ * their draw order alone.
  */
-const COVER: Record<Exclude<keyof typeof ORDER, 'fx'>, InkCover> = {
+const COVER: Record<Exclude<keyof typeof ORDER, 'fx' | 'markers' | 'paintedSel' | 'ghost'>, InkCover> = {
   lightMap: 'full',
   grid: 'fog',
   geometry: 'fog',
+  cameraCones: 'fog',
+  lightReach: 'fog',
+  notes: 'fog',
   fog: 'none',
   aoe: 'none',
   fogDraft: 'none',
-  paintedSel: 'none',
   segment: 'none',
   rect: 'none',
-  ghost: 'none',
   ruler: 'none',
 };
 
@@ -253,6 +282,49 @@ function runtimeOptions(
   };
 }
 
+/** A number per tiles object seen (`tilesVersion`). */
+const tileVersions = new WeakMap<object, number>();
+let nextTileVersion = 1;
+
+/**
+ * Which version of floor `level`'s tiles `scene` holds: a new number
+ * whenever they are a new object, which a paint makes them. The selection's
+ * boxes are as tall as what stands on its squares, and a selection can land
+ * on its new squares a moment before the paint that fills them does.
+ */
+function tilesVersion(scene: Scene, level: number): number {
+  const tiles = levelTiles(scene, level);
+  if (tiles === undefined) return 0;
+  let v = tileVersions.get(tiles);
+  if (v === undefined) {
+    v = nextTileVersion;
+    nextTileVersion += 1;
+    tileVersions.set(tiles, v);
+  }
+  return v;
+}
+
+/** What a multi-selection's squares hold, layer by layer, as the selection's boxes read heights from (`boxTops`). */
+function fillsOfSet(scene: Scene, sel: CellSet): GhostFill[] {
+  const tiles = levelTiles(scene, sel.level);
+  if (tiles === undefined) return [];
+  return LAYERS.map((layer) => {
+    const stored = tiles[layer] ?? {};
+    const slots: Record<string, string> = {};
+    for (const k of sel.cells[layer]) {
+      const slot = stored[k];
+      if (slot !== undefined) slots[k] = slot;
+    }
+    return { tilesetId: tiles.tilesetId, slots };
+  });
+}
+
+/** The 2D map's selection rings and ghost (`stage/fx.ts`), as boxes: magenta outline over a magenta floor; translucent cyan. */
+const SELECTION_STYLE = { color: C.magenta, floorAlpha: 0.12, faceAlpha: 0, lineAlpha: 0.85, hiddenAlpha: 0.3 } as const;
+const GHOST_STYLE = { color: C.cyan, floorAlpha: 0.18, faceAlpha: 0.14, lineAlpha: 0.9, hiddenAlpha: 0.35 } as const;
+/** The 2D map's selection and ghost stroke, in its world px (`drawPaintedSelection`, `drawPaintedGhost`). */
+const BOX_STROKE_PX = 2;
+
 /** A figure held where it was dropped (`DROP_HOLD_MS`): there, until its token leaves `from` or `until` passes (`Date.now()`). */
 interface Hold {
   at: Point;
@@ -263,11 +335,33 @@ interface Hold {
 /** The numbers `Stage3D.viewMoved` compares: the camera's two matrices, the view's size, the floor, the metrics' square. */
 const VIEW_SIGNATURE_LENGTH = 36;
 
+/**
+ * Where traced walls and doors that changed stand (`TracedWalls.update`),
+ * for the shadow refresh (`Runtime3D.refreshShadows`): points along each
+ * line a square apart, half a storey up on every floor from the ground to
+ * `floor` (they stand on each), reaching the line's half-square between
+ * points, a wall's thickness and a storey's half round them.
+ */
+function lineScope(lines: readonly TracedLine[], floor: number, storey: number): ShadowScope {
+  const points: Array<{ x: number; y: number; z: number }> = [];
+  for (const { a, b } of lines) {
+    const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y)));
+    for (let i = 0; i <= n; i += 1) {
+      const x = a.x + ((b.x - a.x) * i) / n;
+      const z = a.y + ((b.y - a.y) * i) / n;
+      for (let level = 0; level <= floor; level += 1) points.push({ x, y: (level + 0.5) * storey, z });
+    }
+  }
+  return { points, radius: Math.hypot(0.5 + WALL_THICKNESS, storey / 2) + 0.05 };
+}
+
 class Stage3D implements StageApi, PointerHost {
   readonly renderer = '3d' as const;
   readonly callbacks: StageOptions['callbacks'];
   /** The view, and the pointer's `ViewCamera`. */
   readonly camera: Camera3D;
+  /** The GM's lights' marks hang at their lamps' height over everything (`markers.ts`): a press on one is the light's, not the figure's under it. */
+  readonly lightsOverTokens = true;
 
   private readonly rt: Runtime3D;
   /** The runtime's host and the pointer's element: fills the page's host, holds the canvas and the overlay. */
@@ -297,13 +391,32 @@ class Stage3D implements StageApi, PointerHost {
   private readonly fogLabels: DomLabels;
   private readonly aoeInk: FloorInk;
   private readonly fogDraftInk: FloorInk;
-  private readonly paintedSelInk: FloorInk;
   private readonly segmentInk: FloorInk;
   private readonly rectInk: FloorInk;
-  private readonly ghostInk: FloorInk;
   private readonly rulerInk: FloorInk;
+  /** The painted selection in Build, standing (`selection.ts`): boxes as tall as what it holds. */
+  private readonly selBoxes: SelectionBoxes;
+  /** Where a dragged or pasted object will land: translucent boxes as tall as what is on its way. */
+  private readonly ghostBoxes: SelectionBoxes;
+  /** The selected object's handles, over the canvas where the pointer's hit test looks for them. */
+  private readonly handles: SelectionHandles;
+  /** Bumped whenever the palette changes: the boxes' heights are read from it. */
+  private defsVersion = 0;
+  /** The camera's forward direction, for the boxes' edges (`boxView`). */
+  private readonly viewDir = new Vector3();
+  /**
+   * The last `standing` pick, for the rest of the task that asked: one press
+   * asks for the same point several times (a door, a wall, a note, a Shift
+   * toggle, a group, a body), and a raycast of a whole floor is worth doing
+   * once.
+   */
+  private standingPick: { x: number; y: number; pick: StandingPick | null } | null = null;
   /** Pings and the pointer trail, faded frame by frame while any are on the floor. */
   private readonly marks: FloorMarks;
+  /** The GM's markers (`markers.ts`): pins, cameras and their cones, lights and their reach, notes, zone names. */
+  private readonly markers: GmMarkers;
+  /** The GM's traced walls and doors, standing (`tracedWalls.ts`). */
+  private readonly traced: TracedWalls;
 
   private sceneState: StageSceneState;
   /** The state as the pointer sees it (`state`), made once per state. */
@@ -410,11 +523,14 @@ class Stage3D implements StageApi, PointerHost {
     this.fogInk = this.ink('fog');
     this.aoeInk = this.ink('aoe');
     this.fogDraftInk = this.ink('fogDraft');
-    this.paintedSelInk = this.ink('paintedSel');
     this.segmentInk = this.ink('segment');
     this.rectInk = this.ink('rect');
-    this.ghostInk = this.ink('ghost');
     this.rulerInk = this.ink('ruler');
+    const floorY = () => this.rt.floor * this.rt.storey;
+    this.selBoxes = new SelectionBoxes({ floorY, renderOrder: ORDER.paintedSel, style: SELECTION_STYLE });
+    this.ghostBoxes = new SelectionBoxes({ floorY, renderOrder: ORDER.ghost, style: GHOST_STYLE });
+    rt.threeScene.add(this.selBoxes.group, this.ghostBoxes.group);
+    this.handles = new SelectionHandles(overlay);
     this.marks = new FloorMarks({
       cell: () => this.m.cell,
       floorY: () => this.rt.floor * this.rt.storey,
@@ -422,6 +538,26 @@ class Stage3D implements StageApi, PointerHost {
     });
     rt.threeScene.add(this.marks.group);
     this.fogLabels = new DomLabels(overlay, () => this.m);
+    this.markers = new GmMarkers(
+      overlay,
+      {
+        metrics: () => this.m,
+        floorY: () => this.rt.floor * this.rt.storey,
+        storey: () => this.rt.storey,
+        camera: this.camera,
+        three: rt.camera,
+        height: () => this.height,
+        kind: () => this.camera.kind,
+      },
+      { cones: this.ink('cameraCones'), reach: this.ink('lightReach'), notes: this.ink('notes') },
+      ORDER.markers,
+    );
+    rt.threeScene.add(this.markers.group);
+    this.traced = new TracedWalls();
+    rt.threeScene.add(this.traced.group);
+    // The standing marks' size on the screen follows the camera: one number,
+    // set before every frame (`GmMarkers.tick`).
+    this.unhook.push(rt.onBeforeFrame(() => this.markers.tick()));
 
     // Figures glide and turn, and pings fade, frame by frame: each hook
     // says whether it needs another.
@@ -453,6 +589,26 @@ class Stage3D implements StageApi, PointerHost {
     this.resizeObserver?.observe(root);
 
     this.update(opts.state);
+    this.warmShaders();
+  }
+
+  /**
+   * Have the shaders of what may first be drawn mid-session compiled now —
+   * the traced walls' lit material, the GM's marks', the selection's and
+   * the ghost's — so the first wall the GM traces, or the first marker or
+   * box drawn, does not stall the frame that shows it while its shader is
+   * compiled (a good part of a second for a lit one, on the laptop, the TV
+   * and every phone alike). Samples of each, never added to the scene,
+   * freed once compiled. What is on screen from the first frame is compiled
+   * with it anyway.
+   */
+  private warmShaders(): void {
+    const samples = new Group();
+    samples.add(...this.traced.sample().all, this.markers.sample(), ...this.selBoxes.sample(), ...this.ghostBoxes.sample());
+    void this.rt.precompile(samples).then(() => {
+      samples.traverse((o) => (o as Mesh).geometry?.dispose());
+      samples.clear();
+    });
   }
 
   /** The floor ink for overlay `layer`, in the scene: at its draw order (`ORDER`), under its cover (`COVER`). */
@@ -500,28 +656,35 @@ class Stage3D implements StageApi, PointerHost {
   }
 
   /**
-   * The state as the pointer resolves clicks against it: the page's, with
-   * the pins, notes, security cameras and light markers taken out of the
-   * scene. The 3D map does not draw those yet (P3), and a click must not land
-   * on something the GM cannot see — an invisible pin next to a runner would
-   * take the click meant for the runner. Placing them with their tools still
-   * works; selecting them goes through the GM panel until they are drawn.
+   * The state as the pointer resolves clicks against it: the page's, less
+   * what is not drawn, since a click must not land on something the viewer
+   * cannot see — an invisible marker next to a runner would take the click
+   * meant for the runner.
    *
-   * For the same reason a player's pointer never lands on a token the fog
-   * covers (`CoverMasks.coveredAt`) — it is not drawn, and selecting it
-   * would say who stands there — unless it is one they may move: their own
-   * runner still comes when called, fog or not, as on the 2D map.
+   * The GM's markers are drawn where their hit tests look for them
+   * (`markers.ts`) and are all there to take, but for the security cameras
+   * of other floors: only the floor in view's are drawn, as on the 2D map.
+   *
+   * And a player's pointer never lands on a token the fog covers
+   * (`CoverMasks.coveredAt`) — it is not drawn, and selecting it would say
+   * who stands there — unless it is one they may move: their own runner
+   * still comes when called, fog or not, as on the 2D map.
    */
   state(): StageSceneState {
     const s = this.sceneState;
     if (this.pointerStateOf !== s) {
       this.pointerStateOf = s;
-      const geometry = { ...s.scene.geometry, pins: [], cameras: [], lights: [], gmNotes: [] };
+      const level = s.level ?? 0;
+      const cameras = s.scene.geometry.cameras ?? [];
+      const onFloor = (c: { level?: number }): boolean => (c.level ?? 0) === level;
+      const scene = cameras.every(onFloor)
+        ? s.scene
+        : { ...s.scene, geometry: { ...s.scene.geometry, cameras: cameras.filter(onFloor) } };
       const tokens =
         s.role === 'gm'
           ? s.tokens
           : s.tokens.filter((t) => s.draggableIds.has(t.id) || this.cover.coveredAt(t, 'fog') < HIDDEN_AT);
-      this.pointerState = { ...s, tokens, scene: { ...s.scene, geometry } };
+      this.pointerState = scene === s.scene && tokens === s.tokens ? s : { ...s, tokens, scene };
     }
     return this.pointerState;
   }
@@ -544,14 +707,78 @@ class Stage3D implements StageApi, PointerHost {
   }
 
   /**
-   * The painted door whose shut leaf is under host point `screen` on the
-   * floor in view (its `"col,row"` cell), from a raycast of the leaves as
-   * drawn: in iso a leaf stands over the squares behind its own.
+   * The first thing standing under host point `screen` on the floor in view
+   * — a painted wall, a prop, stairs, a door's leaf or lintel, a traced wall
+   * or door — from one raycast of all of them as drawn (`picking.ts`); null
+   * where the floor shows first. A player's ray passes through what their
+   * fog hides (nothing is drawn there), as their pointer passes over the
+   * tokens it hides (`state`).
+   */
+  private standing(screen: Point): StandingPick | null {
+    if (this.destroyed) return null;
+    const known = this.standingPick;
+    if (known !== null && known.x === screen.x && known.y === screen.y) return known.pick;
+    this.aim(screen);
+    const pick = pickStanding(this.rt.threeScene, this.rt.floor, this.raycaster, {
+      floorY: this.rt.floor * this.rt.storey,
+      hidden: this.sceneState.role === 'gm' ? undefined : this.fogHides,
+      extra: this.traced.targets(),
+    });
+    // Good for the rest of this task — the press that asked — and no longer:
+    // the next press may come after the view or the world has moved.
+    if (this.standingPick === null) {
+      queueMicrotask(() => {
+        this.standingPick = null;
+      });
+    }
+    this.standingPick = { x: screen.x, y: screen.y, pick };
+    return pick;
+  }
+
+  /**
+   * The painted door whose shut leaf is the first thing standing under host
+   * point `screen` (its `"col,row"` cell): in iso a leaf stands over the
+   * squares behind its own. Not a leaf behind a wall, a prop or a traced
+   * wall in front of it, nor one under a player's fog.
    */
   pickTileDoor(screen: Point): string | null {
-    if (this.destroyed) return null;
-    this.aim(screen);
-    return this.rt.pickDoor(this.raycaster);
+    const pick = this.standing(screen);
+    return pick === null || pick.extra ? null : this.rt.doorOfHit(pick.hit);
+  }
+
+  /**
+   * The GM's traced wall or door that is the first thing standing under host
+   * point `screen` (`TracedWalls.pieceAt`): a press on a wall's face or a
+   * door's leaf takes it, where the floor point under it is the square
+   * behind — but not through a painted wall or a prop standing in front.
+   */
+  pickTraced(screen: Point): { kind: 'wall' | 'door'; id: string } | null {
+    const pick = this.standing(screen);
+    return pick !== null && pick.extra ? this.traced.pieceAt(pick.hit.point) : null;
+  }
+
+  /**
+   * The square of the first thing standing under host point `screen` on the
+   * floor in view — a wall's upper half, a tall prop, stairs, a door's
+   * lintel, or a traced wall (`pickTraced` says when it is one) — and null
+   * where the floor shows, and the pointer takes the floor's square.
+   */
+  pickCell(screen: Point): Cell | null {
+    return this.standing(screen)?.cell ?? null;
+  }
+
+  /** Whether a player's fog hides what stands at world point (x, z): nothing is drawn there. */
+  private readonly fogHides = (x: number, z: number): boolean => this.cover.coveredAt({ x, y: z }, 'fog') >= HIDDEN_AT;
+
+  /**
+   * The view the selection's boxes are drawn for: which way the camera looks
+   * (it never turns, so an edge is laid across it once), and the 2D stroke's
+   * width in squares.
+   */
+  private boxView(): BoxView {
+    this.rt.camera.updateMatrixWorld();
+    this.rt.camera.getWorldDirection(this.viewDir);
+    return { dir: this.viewDir, width: BOX_STROKE_PX / Math.max(1e-6, this.m.cell) };
   }
 
   /** Point the raycaster through host point `screen`, from the camera as it now stands. */
@@ -635,11 +862,20 @@ class Stage3D implements StageApi, PointerHost {
     this.wipe(this.rectInk);
   }
 
-  drawPaintedGhost(cells: readonly string[] | null): void {
+  /**
+   * Where a dragged or pasted object will land, as translucent boxes as tall
+   * as what `fill` says will stand on each square (`boxTops`); flat, as the
+   * 2D map draws it, where nothing says.
+   */
+  drawPaintedGhost(cells: readonly string[] | null, fill?: readonly GhostFill[]): void {
     if (this.destroyed) return;
-    if (cells === null) this.ghostInk.clear();
-    else drawPaintedGhost(this.ghostInk, this.m, cells);
-    this.rt.requestRender();
+    // A paste's ghost is drawn again on every move of the pointer, most of
+    // them inside the same square: a frame only when it moved.
+    const changed =
+      cells === null
+        ? this.ghostBoxes.clear()
+        : this.ghostBoxes.draw(boxTops(cells, fill ?? [], this.defs, this.rt.storey), this.boxView());
+    if (changed) this.rt.requestRender();
   }
 
   /** Clear one overlay and show that it is gone. */
@@ -662,6 +898,7 @@ class Stage3D implements StageApi, PointerHost {
     if (signature === this.lastDefsSignature) return;
     this.lastDefsSignature = signature;
     this.defs = { ...CATALOGUE_DEFS, ...defs };
+    this.defsVersion += 1;
     const merged = this.defs;
     this.attempt(() => this.rt.update({ defs: merged }));
   }
@@ -685,6 +922,10 @@ class Stage3D implements StageApi, PointerHost {
     // A stage that has been torn down draws nothing: the page's update effect
     // can fire once more with the old stage while the host is remounted.
     if (this.destroyed) return;
+    // An edit is timed whole here (`[stage3d] edit`, below): the runtime's
+    // part of it and everything the stage then draws again.
+    const started = performance.now();
+    const edits = this.rt.info().edits;
     this.sceneState = next;
     const scene = next.scene;
     const m = topDownMetrics(scene);
@@ -816,43 +1057,71 @@ class Stage3D implements StageApi, PointerHost {
 
     // A paste that was waiting and no longer is takes its ghost with it.
     const pasting = Boolean(next.pasting);
-    if (this.wasPasting && !pasting) this.ghostInk.clear();
+    if (this.wasPasting && !pasting) this.ghostBoxes.clear();
     this.wasPasting = pasting;
 
-    // The painted object selected in Build, or a multi-selection: rings on
-    // its cells, and the object's handles (the 2D stage's rule).
+    // The painted object selected in Build, or a multi-selection: a box on
+    // its squares as tall as what stands there, and the object's handles
+    // (the 2D stage's rule: a multi-selection has none). Drawn again when
+    // the selection, the floor's tiles, the palette or the camera changes.
     const psel =
       next.selection?.kind === 'painted' && next.paintEdit ? objectForSelection(scene, level, next.selection.id) : null;
-    const multi =
-      next.paintEdit && next.cellSelection && next.cellSelection.level === level ? allCells(next.cellSelection) : null;
+    const multiSet = next.paintEdit && next.cellSelection && next.cellSelection.level === level ? next.cellSelection : null;
+    const multi = multiSet ? allCells(multiSet) : null;
     const pselKey = paintedSelectionKey(level, multi, psel ? (psel.covers ?? psel.cells) : null, m);
-    if (pselKey !== this.lastPaintedSelKey) {
-      this.lastPaintedSelKey = pselKey;
-      if (multi) drawPaintedSelection(this.paintedSelInk, m, multi, []);
-      else if (psel)
-        drawPaintedSelection(
-          this.paintedSelInk,
-          m,
-          psel.covers ?? psel.cells,
-          handlesOf(psel).map((h) => worldFromGrid(m, h.at)),
-        );
-      else this.paintedSelInk.clear();
+    const selKey =
+      pselKey === '' ? '' : `${pselKey}|${kind}|${this.rt.storey}|${this.defsVersion}|${tilesVersion(scene, level)}`;
+    if (selKey !== this.lastPaintedSelKey) {
+      this.lastPaintedSelKey = selKey;
+      if (multiSet && multi) {
+        this.selBoxes.draw(boxTops(multi, fillsOfSet(scene, multiSet), this.defs, this.rt.storey), this.boxView());
+        this.handles.set([]);
+      } else if (psel) {
+        const fill: GhostFill[] = [{ tilesetId: psel.tilesetId, slots: psel.slots }];
+        this.selBoxes.draw(boxTops(psel.covers ?? psel.cells, fill, this.defs, this.rt.storey), this.boxView());
+        this.handles.set(handlesOf(psel).map((h) => h.at));
+      } else {
+        this.selBoxes.clear();
+        this.handles.set([]);
+      }
     }
 
-    // Not drawn in 3D yet — each a no-op until its phase: pins and zone names
-    // (`drawPins`), GM notes (`drawNotes`), security cameras and their cones
-    // (`drawCameras`), the GM's light markers (`drawLights`): P3, as DOM
-    // markers and floor inks.
+    // The GM's markers — pins and the zones' names, security cameras and
+    // their cones, the GM's lights and the selected one's reach, GM notes —
+    // each drawn again only when its key changes (`markers.ts`). A player's
+    // pin names hide under their fog, as their pins do.
+    this.markers.update(next);
+    this.markers.setCover(isGm ? null : this.labelCovered);
+
+    // The traced walls and doors, standing on the floor in view and the ones
+    // below it. Those that moved, came or went cast their shadows anew: the
+    // maps are drawn once, not per frame — only the ones the changed lines
+    // fall in (a selection changes none) — and Low has none.
+    const moved = this.traced.update(scene, this.rt.floor, this.rt.storey, next.selection ?? null);
+    if (moved !== null && this.rt.options.quality !== 'low') {
+      this.rt.refreshShadows(moved === 'all' ? undefined : lineScope(moved, this.rt.floor, this.rt.storey));
+    }
 
     // A new floor in view: every overlay that did not redraw above is laid on
     // the new floor's height.
-    if (floorChanged) for (const ink of this.inks) ink.flush();
+    if (floorChanged) {
+      for (const ink of this.inks) ink.flush();
+      this.selBoxes.place();
+      this.ghostBoxes.place();
+    }
 
     this.syncTokens(next);
     // Everything the scene now holds wears the cover before it is drawn: a
     // material made without it is covered here (and named, in a dev build).
     coverScene(this.rt.threeScene);
     this.rt.requestRender();
+    const info = this.rt.info();
+    if (info.edits !== edits) {
+      console.debug(
+        `[stage3d] edit: ${(performance.now() - started).toFixed(1)} ms in all, ` +
+          `${info.lastEditMs.toFixed(1)} ms of it the runtime's (its frame is logged apart)`,
+      );
+    }
   }
 
   /**
@@ -1018,7 +1287,12 @@ class Stage3D implements StageApi, PointerHost {
     if (this.destroyed) return;
     const at = this.sceneState.role === 'gm' ? (id: string) => this.figures.positionOf(id) : this.plateAt;
     this.badges.layout(this.projectWorld, at);
-    if (this.viewMoved()) this.fogLabels.layout((grid) => this.camera.project(grid), true);
+    // The handles sit where the pointer's hit test projects them: on the floor.
+    this.handles.layout((grid) => this.camera.project(grid));
+    const moved = this.viewMoved();
+    if (moved) this.fogLabels.layout((grid) => this.camera.project(grid), true);
+    // The markers' names: the zones' and notes' with the floor, the rest with their marks.
+    this.markers.layout(moved);
   }
 
   /** Where a player's plate for a token hangs, or null — no plate — while the fog covers its figure's square. */
@@ -1076,7 +1350,12 @@ class Stage3D implements StageApi, PointerHost {
     this.badges.dispose();
     this.fogLabels.dispose();
     this.marks.dispose();
+    this.markers.dispose();
+    this.traced.dispose();
     for (const ink of this.inks) ink.dispose();
+    this.selBoxes.dispose();
+    this.ghostBoxes.dispose();
+    this.handles.dispose();
     this.mapPlane.dispose();
     this.materials.dispose();
     this.belowMaterials.dispose();

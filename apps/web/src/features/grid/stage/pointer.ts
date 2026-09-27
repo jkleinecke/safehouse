@@ -48,7 +48,7 @@ import {
   type EditResult,
   type PaintedObject,
 } from '../paintedObjects.js';
-import { allCells, containsCell, moveSelection, pastedSet } from '../cellSelection.js';
+import { allCells, containsCell, moveSelection, pastedSet, pasteBodies, tilesetOf } from '../cellSelection.js';
 
 type Mode =
   | 'idle'
@@ -93,8 +93,13 @@ export interface PointerHost {
   /** The cell rectangle a room/area drag is about to fill (FR9.2). */
   drawRect?(mode: TileRectMode, from: Cell, to: Cell): void;
   clearRect?(): void;
-  /** Where a painted object will land while it is being dragged (Build). */
-  drawPaintedGhost?(cells: readonly string[] | null): void;
+  /**
+   * Where a painted object will land while it is being dragged or pasted
+   * (Build) — and, for a renderer that stands the ghost up, what the drag or
+   * paste will paint there (`fill`), so each square's ghost is as tall as
+   * what is on its way to it. The 2D map draws the squares alone.
+   */
+  drawPaintedGhost?(cells: readonly string[] | null, fill?: readonly GhostFill[]): void;
   /**
    * The token whose drawn body is under host point `screen`, when the
    * renderer can tell from what it drew — the 3D map raycasts its figures, so
@@ -104,15 +109,62 @@ export interface PointerHost {
    */
   pickToken?(screen: Point): string | null;
   /**
-   * The painted door (its `"col,row"` cell) whose drawn, shut leaf is under
-   * host point `screen` on the floor in view, when the renderer can tell
-   * from what it drew. The 3D map raycasts its leaves: a leaf stands a
-   * storey tall, so in its iso view most of it covers the squares behind its
-   * own, and the floor point under a press on it is rarely its cell. Asked
+   * The painted door (its `"col,row"` cell) whose drawn, shut leaf is the
+   * first thing standing under host point `screen` on the floor in view, when
+   * the renderer can tell from what it drew — never a leaf behind a wall in
+   * front of it. The 3D map raycasts its leaves with everything else standing
+   * there: a leaf stands a storey tall, so in its iso view most of it covers
+   * the squares behind its own, and the floor point under a press on it is
+   * rarely its cell. Asked
    * before the cell test (`hitTileDoor`), which stays the fallback (an open
    * door has no leaf; its doorway is its cell). Absent on the 2D map.
    */
   pickTileDoor?(screen: Point): string | null;
+  /**
+   * The square of the thing whose drawn body is the first standing under
+   * host point `screen` on the floor in view — a wall, an opening, a prop,
+   * stairs, or a traced wall or door (`pickTraced` says when it is one) —
+   * when the renderer can tell from what it drew; null where the floor
+   * itself shows there. The 3D map raycasts its world: in its iso view a wall
+   * a storey tall covers the squares behind its own, so the floor point under
+   * a press on its upper half is a square or two behind it. Asked where a
+   * press picks a THING by its square (a painted object in Build, a painted
+   * door, the context menu's target), never where it marks a place on the
+   * floor (painting, a rectangle's corner, where a token or a pin goes, how
+   * far a drag has come), which stays the floor point — and asked whether
+   * anything stands in front of that floor point at all: what lies on the
+   * floor behind a wall (a note, a traced line's foot) is hidden there, and
+   * not what the press is on. Absent on the 2D map, where the square under
+   * the pointer IS what is drawn there.
+   */
+  pickCell?(screen: Point): Cell | null;
+  /**
+   * The GM's traced wall or door (`scene.geometry.walls`, `doors`) whose
+   * drawn body is the first standing under host point `screen`, when the
+   * renderer stands them up: the 3D map raycasts them with everything else
+   * standing there, so a press on a wall's face or a door's leaf takes it,
+   * where the line test (`hitDoor`, `hitWall`) measures from the line on the
+   * floor at its foot — and a press on a painted wall in front of one does
+   * not. Asked before the line test, which stays the fallback where nothing
+   * stands. Absent on the 2D map, where the line IS what is drawn.
+   */
+  pickTraced?(screen: Point): { kind: 'wall' | 'door'; id: string } | null;
+  /**
+   * Whether the GM's light markers are drawn over the tokens: the 3D map
+   * hangs each at its lamp's height, over everything, so a press on one is
+   * the light's before it is the token's under it. Absent (the 2D map) they
+   * lie under the tokens, and a token standing on a lamp takes the press.
+   */
+  readonly lightsOverTokens?: boolean;
+}
+
+/**
+ * What a paint ghost's squares will hold (`PointerHost.drawPaintedGhost`):
+ * stored slots by `"col,row"`, in the tileset they are painted in.
+ */
+export interface GhostFill {
+  tilesetId: string;
+  slots: Readonly<Record<string, string>>;
 }
 
 interface ActivePointer {
@@ -366,7 +418,9 @@ export class PointerController {
    * The painted door under the pointer on floor `level`: the one whose leaf
    * the renderer says is under `screen` (`PointerHost.pickTileDoor`), as
    * long as the scene still has a door painted there, else the door painted
-   * in the cell under `grid` (`hitTileDoor`).
+   * in the cell of the thing under `screen` (`thingCell`: a door frame's
+   * lintel, never the door behind a tall wall), else in the cell under
+   * `grid` (`hitTileDoor`).
    */
   private tileDoorAt(screen: Point, grid: Point, level: number): string | null {
     const scene = this.host.state().scene;
@@ -378,7 +432,69 @@ export class PointerController {
         if (cell !== null) return cell;
       }
     }
-    return hitTileDoor(scene, grid, level);
+    const at = this.thingCell(screen, grid);
+    if (at === null) return null;
+    return hitTileDoor(scene, { x: at.col + 0.5, y: at.row + 0.5 }, level);
+  }
+
+  /**
+   * The cell a press at `screen` means when it picks a painted thing by its
+   * square: the square of whatever the renderer drew standing there
+   * (`PointerHost.pickCell`), else the square under the floor point `grid`.
+   * Null when what stands there is a traced wall or door (`pickTraced`): no
+   * painted thing is under the press then, whatever stands behind it or at
+   * its foot. Only for picking: where a drag starts or ends is always
+   * `cellAt(grid)`, so it moves by what the pointer moved across the floor.
+   */
+  private thingCell(screen: Point, grid: Point): Cell | null {
+    if ((this.host.pickTraced?.(screen) ?? null) !== null) return null;
+    return this.host.pickCell?.(screen) ?? this.cellAt(grid);
+  }
+
+  /**
+   * Whether the renderer drew something standing under `screen` in front of
+   * the floor point under it (`PointerHost.pickCell`): a painted wall, a
+   * prop, a door's leaf, a traced wall. What lies on the floor behind it — a
+   * note, a traced line's foot — is hidden there, and is not what the press
+   * is on. Never on the 2D map, where nothing stands.
+   */
+  private standsInFront(screen: Point): boolean {
+    return (this.host.pickCell?.(screen) ?? null) !== null;
+  }
+
+  /**
+   * The traced door under the pointer: the one whose standing leaf or lintel
+   * the renderer says is under `screen` (`PointerHost.pickTraced`), else the
+   * one whose line passes within `tol` screen px of `grid` (`hitDoor`) where
+   * nothing else stands in front of that point. A traced wall standing
+   * there, or a painted one, is what the press lands on: no door, then.
+   */
+  private doorAt(screen: Point, grid: Point, tol: number): string | null {
+    const scene = this.host.state().scene;
+    const picked = this.host.pickTraced?.(screen) ?? null;
+    if (picked?.kind === 'door' && scene.geometry.doors.some((d) => d.id === picked.id)) return picked.id;
+    if (picked?.kind === 'wall' || this.standsInFront(screen)) return null;
+    return hitDoor(this.host.camera, this.host.metrics(), scene, grid, tol);
+  }
+
+  /** The traced wall under the pointer, as `doorAt` finds a door: a standing door there, or a painted thing, is no wall. */
+  private wallAt(screen: Point, grid: Point, tol: number): string | null {
+    const scene = this.host.state().scene;
+    const picked = this.host.pickTraced?.(screen) ?? null;
+    if (picked?.kind === 'wall' && scene.geometry.walls.some((w) => w.id === picked.id)) return picked.id;
+    if (picked?.kind === 'door' || this.standsInFront(screen)) return null;
+    return hitWall(this.host.camera, this.host.metrics(), scene, grid, tol);
+  }
+
+  /** A GM light's marker under `grid` (the GM's own lamps, on this floor), selected: true when there was one. */
+  private selectLight(grid: Point, state: StageSceneState, m: SceneMetrics): boolean {
+    if (state.role !== 'gm' || !this.host.callbacks.onLightSelect) return false;
+    const lightTol = this.tolerance(14, grid);
+    const lightId = hitLight(this.host.camera, m, state.scene, grid, state.level ?? 0, lightTol);
+    if (!lightId) return false;
+    this.mode = 'idle';
+    this.host.callbacks.onLightSelect(lightId);
+    return true;
   }
 
   private snapped(p: Point, size: number, raw: boolean): Point {
@@ -610,21 +726,23 @@ export class PointerController {
     // meant it rather than the token standing next to the wall.
     if (state.role === 'gm' && state.paintEdit && this.beginPaintedHandle(grid, state)) return;
 
-    if (state.role === 'gm' && state.paintEdit) {
-      const cell = this.cellAt(grid);
+    // No painted thing is under a press on a traced wall (`thingCell`).
+    const pressed = state.role === 'gm' && state.paintEdit ? this.thingCell(screen, grid) : null;
+    if (pressed !== null) {
       // Shift+click puts an object in or takes it out of the multi-selection.
       if (this.shiftDown) {
-        const obj = pickPainted(state.scene, state.level ?? 0, cell);
+        const obj = pickPainted(state.scene, state.level ?? 0, pressed);
         if (obj) {
           this.mode = 'idle';
-          this.host.callbacks.onPaintedToggle?.(paintedId(obj.layer, cell));
+          this.host.callbacks.onPaintedToggle?.(paintedId(obj.layer, pressed));
           return;
         }
       }
-      // A press inside the multi-selection picks the whole of it up.
-      if (!this.shiftDown && containsCell(state.cellSelection ?? null, cell)) {
+      // A press inside the multi-selection picks the whole of it up. The
+      // move is measured on the floor, from the floor square pressed.
+      if (!this.shiftDown && containsCell(state.cellSelection ?? null, pressed)) {
         this.mode = 'group';
-        this.boxFrom = cell;
+        this.boxFrom = this.cellAt(grid);
         this.groupDelta = { col: 0, row: 0 };
         return;
       }
@@ -655,6 +773,11 @@ export class PointerController {
       }
     }
 
+    // A light's marker, where the renderer draws it over the tokens (the 3D
+    // map hangs it at its lamp's height): what is seen on top takes the press.
+    const lightsFirst = this.host.lightsOverTokens === true;
+    if (lightsFirst && this.selectLight(grid, state, m)) return;
+
     // A finger gets a bigger target than a mouse, and both grow as the map
     // zooms out (B6: a phone's default fit left tokens four pixels wide).
     const token = this.tokenAt(screen, grid, this.hitSlop(this.pointerType, grid));
@@ -674,23 +797,17 @@ export class PointerController {
     }
 
     // A light's marker: the GM's own lamps, on this floor. Under the tokens,
-    // as it is drawn — a lamp sits on a square's centre, which is where a
-    // guard stands, and a click on the guard is a click on the guard.
-    if (state.role === 'gm' && this.host.callbacks.onLightSelect) {
-      const lightTol = this.tolerance(14, grid);
-      const lightId = hitLight(this.host.camera, m, state.scene, grid, state.level ?? 0, lightTol);
-      if (lightId) {
-        this.mode = 'idle';
-        this.host.callbacks.onLightSelect(lightId);
-        return;
-      }
-    }
+    // as the 2D map draws it — a lamp sits on a square's centre, which is
+    // where a guard stands, and a click on the guard is a click on the guard.
+    if (!lightsFirst && this.selectLight(grid, state, m)) return;
 
     // A GM note's box (FR9.25) — under the tokens, so a runner standing on
     // a note is still the runner. The GM's payload is the only one with notes.
+    // It lies on the floor, where a wall or a table standing in front hides
+    // it: a press there is on what hides it.
     if (state.role === 'gm' && this.host.callbacks.onNoteSelect) {
       const noteId = hitNote(this.host.camera, m, state.scene, grid);
-      if (noteId) {
+      if (noteId && !this.standsInFront(screen)) {
         this.mode = 'idle';
         this.host.callbacks.onNoteSelect(noteId);
         return;
@@ -702,7 +819,7 @@ export class PointerController {
     // at a locked one; a painted door is its whole cell.
     if (state.role === 'gm' || state.role === 'player') {
       const tol = this.tolerance(12, grid);
-      const doorId = hitDoor(this.host.camera, m, state.scene, grid, tol);
+      const doorId = this.doorAt(screen, grid, tol);
       if (doorId) {
         this.mode = 'idle';
         this.host.callbacks.onDoorToggle(doorId);
@@ -724,7 +841,7 @@ export class PointerController {
     // doors: a door's knob sits on the same line as the walls either side of
     // it, and the knob is the smaller target.
     if (state.role === 'gm' && this.host.callbacks.onWallSelect) {
-      const wallId = hitWall(this.host.camera, m, state.scene, grid, this.tolerance(12, grid));
+      const wallId = this.wallAt(screen, grid, this.tolerance(12, grid));
       if (wallId) {
         this.mode = 'idle';
         this.host.callbacks.onWallSelect(wallId);
@@ -733,7 +850,7 @@ export class PointerController {
     }
     // A painted wall, door or piece of furniture (Build). Last, because it is
     // a whole square: every thinner target above it had to miss first.
-    if (state.role === 'gm' && state.paintEdit && this.beginPaintedBody(grid, state)) return;
+    if (state.role === 'gm' && state.paintEdit && this.beginPaintedBody(grid, screen, state)) return;
     // Open floor while building: a drag draws a selection box. Right- and
     // middle-drag still pan, and a click without a drag still clears.
     if (state.role === 'gm' && state.paintEdit) {
@@ -773,12 +890,16 @@ export class PointerController {
     return false;
   }
 
-  /** Pick up the painted object under the pointer, if there is one. */
-  private beginPaintedBody(grid: Point, state: StageSceneState): boolean {
+  /**
+   * Pick up the painted object under the pointer, if there is one: the one
+   * drawn under `screen` (`thingCell`), dragged from the floor square under
+   * `grid`.
+   */
+  private beginPaintedBody(grid: Point, screen: Point, state: StageSceneState): boolean {
     const level = state.level ?? 0;
-    const cell = this.cellAt(grid);
-    const obj = pickPainted(state.scene, level, cell);
-    if (!obj) return false;
+    const cell = this.thingCell(screen, grid);
+    const obj = cell === null ? null : pickPainted(state.scene, level, cell);
+    if (!obj || cell === null) return false;
     this.host.callbacks.onPaintedSelect?.(paintedId(obj.layer, cell));
     // A door's body does not move — a door lives where its wall is. Its
     // handles widen it; pressing it only selects it.
@@ -786,7 +907,8 @@ export class PointerController {
       this.mode = 'idle';
       return true;
     }
-    this.startPaintedDrag(obj, obj.role === 'wall' ? { kind: 'slide' } : { kind: 'move' }, cell);
+    // The drag is measured on the floor: the moves are floor squares too.
+    this.startPaintedDrag(obj, obj.role === 'wall' ? { kind: 'slide' } : { kind: 'move' }, this.cellAt(grid));
     return true;
   }
 
@@ -838,7 +960,14 @@ export class PointerController {
         const grid = this.toGrid(this.local(e));
         if (!grid) return;
         const at = this.cellAt(grid);
-        this.host.drawPaintedGhost?.(allCells(pastedSet(state.pasting, at, state.level ?? 0)));
+        const level = state.level ?? 0;
+        // What the paste will lay down, in the floor's own tileset (`pasteBodies`).
+        const tilesetId = tilesetOf(state.scene, level);
+        const fill =
+          tilesetId === null
+            ? undefined
+            : pasteBodies(state.pasting, at, level, tilesetId).map((b) => ({ tilesetId: b.tilesetId, slots: b.paint }));
+        this.host.drawPaintedGhost?.(allCells(pastedSet(state.pasting, at, level)), fill);
       }
       return;
     }
@@ -913,8 +1042,15 @@ export class PointerController {
         const { col, row } = this.groupDelta;
         // The ghost is what the move will paint — the stretched walls
         // included, not just the selection slid along.
-        const ghost = col === 0 && row === 0 ? null : moveSelection(this.host.state().scene, sel, col, row).ghost;
-        this.host.drawPaintedGhost?.(ghost);
+        if (col === 0 && row === 0) {
+          this.host.drawPaintedGhost?.(null);
+          return;
+        }
+        const move = moveSelection(this.host.state().scene, sel, col, row);
+        this.host.drawPaintedGhost?.(
+          move.ghost,
+          move.bodies.map((b) => ({ tilesetId: b.tilesetId, slots: b.paint })),
+        );
         return;
       }
       case 'painted': {
@@ -929,7 +1065,12 @@ export class PointerController {
           this.cellAt(grid),
         );
         this.paintedResult = result;
-        this.host.drawPaintedGhost?.(result.noop ? null : result.cells);
+        if (result.noop) this.host.drawPaintedGhost?.(null);
+        else {
+          this.host.drawPaintedGhost?.(result.cells, [
+            { tilesetId: this.paintedObj.tilesetId, slots: result.delta.paint },
+          ]);
+        }
         return;
       }
       default:
@@ -1082,26 +1223,23 @@ export class PointerController {
    */
   private contextTarget(screen: Point, grid: Point): ContextTarget {
     const state = this.host.state();
-    const m = this.host.metrics();
     const token = this.tokenAt(screen, grid, this.hitSlop(this.pointerType, grid));
     if (token) return { kind: 'token', id: token.id };
     const tol = this.tolerance(12, grid);
-    const doorId = hitDoor(this.host.camera, m, state.scene, grid, tol);
+    const doorId = this.doorAt(screen, grid, tol);
     if (doorId) return { kind: 'door', id: doorId };
     const level = state.level ?? 0;
     const cell = this.tileDoorAt(screen, grid, level);
     if (cell) return { kind: 'tileDoor', cell, level };
     if (state.role === 'gm') {
-      const wallId = hitWall(this.host.camera, m, state.scene, grid, tol);
+      const wallId = this.wallAt(screen, grid, tol);
       if (wallId) return { kind: 'wall', id: wallId };
       // A painted wall's square, while building — last, because it is a
       // whole cell and every thinner target above had to miss first.
       if (state.paintEdit) {
-        const obj = pickPainted(state.scene, level, this.cellAt(grid), 'structure');
-        if (obj?.role === 'wall') {
-          const c = this.cellAt(grid);
-          return { kind: 'paintedWall', cell: `${c.col},${c.row}`, level };
-        }
+        const c = this.thingCell(screen, grid);
+        const obj = c === null ? null : pickPainted(state.scene, level, c, 'structure');
+        if (c !== null && obj?.role === 'wall') return { kind: 'paintedWall', cell: `${c.col},${c.row}`, level };
       }
     }
     return { kind: 'floor' };
