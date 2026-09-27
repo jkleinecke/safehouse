@@ -1,13 +1,13 @@
 /**
  * Ephemeral overlay effects, drawn: ruler, AoE template + scatter, fog-draft
- * polygon, wall/door/arc rubber bands, room/area drafts, the painted
- * selection and its drag ghost — pure, no three.
+ * polygon, wall/door/arc rubber bands, room/area drafts — pure, no three.
  *
  * Each function clears the `Ink` it is handed and draws its effect into it.
  * The 3D stage hands each effect a `FloorInk` of its own
  * (`stage3d/floorInk.ts`), which lays it on the floor in view. (Until P5 the
  * 2D map kept one Graphics per effect, with its ping and trail pools, in its
- * `FxLayer`.)
+ * `FxLayer`.) The painted selection and its drag ghost are not flat effects
+ * on the 3D map but boxes standing on their squares (`stage3d/selection.ts`).
  */
 import { arcPoints } from '@safehouse/rules';
 import type { Point } from '@safehouse/contracts';
@@ -17,7 +17,8 @@ import {
   rectPolygon,
   rulerSegments,
   worldFromGrid,
-  type SceneMetrics, cellCorners } from '../geometry.js';
+  type SceneMetrics,
+} from '../geometry.js';
 import type {
   AoeTemplate,
   FogDraft,
@@ -179,40 +180,4 @@ export function drawRectDraft(
     color: C.cyan,
     alpha: 0.9,
   });
-}
-
-/**
- * Ring every cell of a selected painted object, and draw its handles.
- * Per cell rather than one bounding box: a wall run is a line and a prop
- * can be an L, and a box around either would claim squares it does not
- * hold. Handles are world points — the ends of a run, a prop's corner.
- */
-export function drawPaintedSelection(
-  g: Ink,
-  m: SceneMetrics,
-  cells: readonly string[],
-  handles: readonly Point[],
-): void {
-  g.clear();
-  for (const k of cells) {
-    const [c, r] = k.split(',').map(Number) as [number, number];
-    const corners = cellCorners(m, c, r).flatMap((p) => [p.x, p.y]);
-    g.poly(corners).fill({ color: C.magenta, alpha: 0.12 });
-    g.poly(corners).stroke({ width: 2, color: C.magenta, alpha: 0.85 });
-  }
-  for (const h of handles) {
-    g.circle(h.x, h.y, 6).fill({ color: C.ground, alpha: 0.95 });
-    g.circle(h.x, h.y, 6).stroke({ width: 2, color: C.magenta, alpha: 1 });
-  }
-}
-
-/** Where the dragged object will land — dashed-looking by being faint. */
-export function drawPaintedGhost(g: Ink, m: SceneMetrics, cells: readonly string[]): void {
-  g.clear();
-  for (const k of cells) {
-    const [c, r] = k.split(',').map(Number) as [number, number];
-    const corners = cellCorners(m, c, r).flatMap((p) => [p.x, p.y]);
-    g.poly(corners).fill({ color: C.cyan, alpha: 0.18 });
-    g.poly(corners).stroke({ width: 2, color: C.cyan, alpha: 0.9 });
-  }
 }

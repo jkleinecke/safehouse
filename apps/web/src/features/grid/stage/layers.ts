@@ -1,11 +1,14 @@
 /**
  * Static scene layers: 1m grid overlay, fog of war, GM geometry (walls,
- * zones, doors). Redrawn only when the scene object changes — never per frame.
+ * zones, doors), GM notes — and the floor half of two GM markers, a camera's
+ * cone and a light's reach. Redrawn only when the scene object changes —
+ * never per frame.
  *
  * No renderer: each layer draws into an `Ink` and puts its text through a
  * `LabelSink` (`ink.ts`). The 3D stage hands over floor meshes (`FloorInk`)
  * and DOM labels; until P5 the 2D stage handed over a pixi Graphics and its
- * pooled Text.
+ * pooled Text. Pins, cameras and lights themselves stand up off the floor on
+ * the 3D map, and are built there (`stage3d/markers.ts`).
  */
 import type { Camera as SecurityCamera, Point, Scene, SceneLight } from '@safehouse/contracts';
 import type { CameraCone, GeometrySelection } from '../types.js';
@@ -298,69 +301,7 @@ export function drawNotes(
   labels.sweep();
 }
 
-/**
- * Map pins (FR9.3): a teardrop head at the pin point with its label beside it.
- *
- * Principle 4 — GM-only pins never reach a player payload (the scenes service
- * filters `geometry.pins` by visibility), so this draws everything it is given.
- * The GM's own view marks private pins with a hollow head so they can tell at
- * a glance what the table can already see.
- */
-export function drawPins(
-  g: Ink,
-  labels: LabelSink,
-  scene: Scene,
-  m: SceneMetrics,
-  selectedPinId: string | null,
-  isGm = false,
-): void {
-  g.clear();
-  const r = Math.max(6, m.cell * 0.16);
-
-  // Zone names double as the GM's map labels (FR9.2 "…, labels").
-  if (isGm) {
-    for (const zone of scene.geometry.zones) {
-      const at = worldFromGrid(m, polygonCenter(zone.polygon));
-      labels.put(`zone:${zone.id}`, tag(zone.name, at.x, at.y, 0.5, parseColor(zone.color, C.cyanDim)));
-    }
-  }
-
-  for (const pin of scene.geometry.pins) {
-    const at = worldFromGrid(m, pin.at);
-    const isPublic = pin.visibility === 'public';
-    const color = isPublic ? C.warn : C.cyan;
-
-    // Stem down to the exact point, head above it — the point is the anchor.
-    g.moveTo(at.x, at.y)
-      .lineTo(at.x, at.y - r * 1.9)
-      .stroke({ width: 2, color, alpha: 0.9 });
-    const head = g.circle(at.x, at.y - r * 2.4, r);
-    if (isPublic) head.fill({ color, alpha: 0.95 });
-    else head.fill({ color: C.ground, alpha: 0.9 });
-    head.stroke({ width: 2, color, alpha: 1 });
-    g.circle(at.x, at.y, 2).fill({ color, alpha: 1 });
-
-    if (pin.id === selectedPinId) {
-      g.circle(at.x, at.y - r * 2.4, r * 1.9).stroke({ width: 2, color: C.magenta, alpha: 0.95 });
-    }
-
-    if (!pin.label) continue;
-    labels.put(pin.id, tag(pin.label, at.x + r * 1.6, at.y - r * 2.4, 0, color));
-  }
-
-  labels.sweep();
-}
-
-/**
- * Security cameras (FR9.23): the GM's, and only the GM's.
- *
- * Each camera on the floor being drawn gets its eye — a wedge pointing the
- * way it looks, a dot at the mount — and, while it is switched on, its cone:
- * every cell it covers as a flat amber wash on the floor, with the two edges
- * of its field of view drawn out to its reach. A player's scene carries no
- * cameras at all (`sceneForViewer`), so for anyone else this clears the
- * layer and draws nothing, whatever it was handed.
- */
+/** How strongly a security camera's cone (FR9.23) washes each square it covers. */
 const CAMERA_CONE_ALPHA = 0.16;
 
 /** A point `dist` cells from `at` along a plan bearing in degrees. */
@@ -389,11 +330,13 @@ function edgeReach(cells: ReadonlySet<string>, at: Point, bearing: number, range
 }
 
 /**
- * One camera's cone: every cell `cone` covers as a flat wash on the floor,
- * and the two edges of its field of view drawn out from its mount as far as
- * the cone reaches along them. What `drawCameras` lays under each switched-on
- * eye; the 3D map lays it on its floor under an eye it hangs at the ceiling
- * (`stage3d/markers.ts`).
+ * One camera's cone: every cell `cone` covers as a flat wash on the floor —
+ * amber while the camera is on — and the two edges of its field of view
+ * drawn out from its mount as far as the cone reaches along them. Draws on
+ * top of what the `Ink` holds; the caller clears it. The 3D map lays it on
+ * its floor under each switched-on eye it hangs at the ceiling
+ * (`stage3d/markers.ts`), for the GM alone: a player's scene carries no
+ * cameras at all (`sceneForViewer`).
  */
 export function drawCameraCone(g: Ink, m: SceneMetrics, cam: SecurityCamera, cone: CameraCone): void {
   const color = cam.active ? C.warn : C.faint;
@@ -418,57 +361,13 @@ export function drawCameraCone(g: Ink, m: SceneMetrics, cam: SecurityCamera, con
   }
 }
 
-export function drawCameras(
-  g: Ink,
-  labels: LabelSink,
-  scene: Scene,
-  m: SceneMetrics,
-  cones: readonly CameraCone[] | null | undefined,
-  selectedCameraId: string | null,
-  isGm: boolean,
-  level: number,
-): void {
-  g.clear();
-
-  if (isGm) {
-    for (const cam of scene.geometry.cameras ?? []) {
-      // One floor at a time, like everything else on the canvas.
-      if ((cam.level ?? 0) !== level) continue;
-      const color = cam.active ? C.warn : C.faint;
-      const cone = cam.active ? cones?.find((c) => c.id === cam.id) : undefined;
-
-      if (cone) drawCameraCone(g, m, cam, cone);
-
-      // The eye: a wedge along the facing, a dot at the mount. Built in grid
-      // space and projected, so it foreshortens with the floor in isometric.
-      const eye = worldFromGrid(m, cam.at);
-      const tip = worldFromGrid(m, alongBearing(cam.at, cam.facing, 0.55));
-      const left = worldFromGrid(m, alongBearing(cam.at, cam.facing - 38, 0.3));
-      const right = worldFromGrid(m, alongBearing(cam.at, cam.facing + 38, 0.3));
-      g.poly([eye.x, eye.y, left.x, left.y, tip.x, tip.y, right.x, right.y])
-        .fill({ color, alpha: cam.active ? 0.9 : 0.5 })
-        .stroke({ width: 1, color: C.ground, alpha: 0.9 });
-      g.circle(eye.x, eye.y, 4).fill({ color: C.ground, alpha: 1 }).stroke({ width: 2, color, alpha: 1 });
-      if (!cam.active) {
-        // A dead eye: struck through, so "off" reads without a label.
-        g.moveTo(eye.x - 7, eye.y - 7).lineTo(eye.x + 7, eye.y + 7).stroke({ width: 2, color: C.danger, alpha: 0.9 });
-      }
-      if (cam.id === selectedCameraId) {
-        g.circle(eye.x, eye.y, 13).stroke({ width: 2, color: C.magenta, alpha: 0.95 });
-      }
-
-      labels.put(`cam:${cam.id}`, tag(cam.label ?? cam.id, eye.x + 10, eye.y - 12, 0, color));
-    }
-  }
-
-  labels.sweep();
-}
-
 /**
- * How far one light reaches, drawn out round it on the floor — a wedge for a
- * spotlight — in its own colour, `unitM` metres a square: what `drawLights`
- * draws round the selected light, and the 3D map lays on its floor under the
- * lamp it hangs at its height (`stage3d/markers.ts`).
+ * How far one light (docs/VISION.md §4.1) reaches, drawn out round it on the
+ * floor — a wedge for a spotlight — in its own colour, `unitM` metres a
+ * square, so the GM dialling it in can see how far it goes. Draws on top of
+ * what the `Ink` holds; the caller clears it. The 3D map lays it on its
+ * floor round the selected light, under the lamp it hangs at its height
+ * (`stage3d/markers.ts`).
  */
 export function drawLightReach(g: Ink, m: SceneMetrics, light: SceneLight, unitM: number): void {
   const on = light.on !== false;
@@ -488,72 +387,4 @@ export function drawLightReach(g: Ink, m: SceneMetrics, light: SceneLight, unitM
   g.poly(outline, true)
     .fill({ color, alpha: on ? 0.06 : 0.02 })
     .stroke({ width: 1, color, alpha: on ? 0.6 : 0.3 });
-}
-
-/**
- * The GM's lights (docs/VISION.md §4.1): a small lamp on each one on the
- * floor being drawn, in the light's own colour — bright with rays while it
- * is on, faded and struck through when it is off. The selected one is
- * ringed, and its reach is drawn out round it (a wedge for a spotlight), so
- * the GM dialling it in can see how far it goes.
- *
- * Markers only. What the lights DO to the floor is the light-map view's
- * business (`lightLayer.ts`), and the table's; this is how the GM finds a
- * fixture to click. GM only, like the cameras.
- */
-export function drawLights(
-  g: Ink,
-  labels: LabelSink,
-  scene: Scene,
-  m: SceneMetrics,
-  selectedLightId: string | null,
-  isGm: boolean,
-  level: number,
-): void {
-  g.clear();
-
-  if (isGm) {
-    const r = Math.max(5, m.cell * 0.09);
-    for (const light of scene.geometry.lights ?? []) {
-      if ((light.level ?? 0) !== level) continue;
-      const on = light.on !== false;
-      const color = parseColor(light.color, C.warn);
-      const at = worldFromGrid(m, light.at);
-      const spot = light.fov !== undefined && light.fov < 360;
-
-      if (light.id === selectedLightId) {
-        drawLightReach(g, m, light, scene.grid.unitM);
-        g.circle(at.x, at.y, r * 2.4).stroke({ width: 2, color: C.magenta, alpha: 0.95 });
-      }
-
-      if (on) {
-        // Rays round the bulb — or, for a beam, a short throw along its aim.
-        if (spot) {
-          const tip = worldFromGrid(m, alongBearing(light.at, light.facing ?? 0, 0.6));
-          g.moveTo(at.x, at.y).lineTo(tip.x, tip.y).stroke({ width: 2, color, alpha: 0.9 });
-        } else {
-          for (let k = 0; k < 8; k += 1) {
-            const a = (k * Math.PI) / 4;
-            g.moveTo(at.x + Math.cos(a) * r * 1.35, at.y + Math.sin(a) * r * 1.35)
-              .lineTo(at.x + Math.cos(a) * r * 1.9, at.y + Math.sin(a) * r * 1.9)
-              .stroke({ width: 1.5, color, alpha: 0.85 });
-          }
-        }
-      }
-      g.circle(at.x, at.y, r)
-        .fill({ color, alpha: on ? 0.95 : 0.35 })
-        .stroke({ width: 1.5, color: C.ground, alpha: 0.9 });
-      if (!on) {
-        // Switched off: struck through, so "off" reads without a label.
-        g.moveTo(at.x - r * 1.3, at.y - r * 1.3)
-          .lineTo(at.x + r * 1.3, at.y + r * 1.3)
-          .stroke({ width: 2, color: C.danger, alpha: 0.9 });
-      }
-
-      if (!light.label) continue;
-      labels.put(`light:${light.id}`, tag(light.label, at.x + r * 2, at.y - r * 1.5, 0, on ? color : C.faint));
-    }
-  }
-
-  labels.sweep();
 }

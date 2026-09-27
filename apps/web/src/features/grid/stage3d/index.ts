@@ -325,10 +325,10 @@ function fillsOfSet(scene: Scene, sel: CellSet): GhostFill[] {
   });
 }
 
-/** The 2D map's selection rings and ghost (`stage/fx.ts`), as boxes: magenta outline over a magenta floor; translucent cyan. */
+/** The 2D map's selection rings and ghost, as boxes: magenta outline over a magenta floor; translucent cyan. */
 const SELECTION_STYLE = { color: C.magenta, floorAlpha: 0.12, faceAlpha: 0, lineAlpha: 0.85, hiddenAlpha: 0.3 } as const;
 const GHOST_STYLE = { color: C.cyan, floorAlpha: 0.18, faceAlpha: 0.14, lineAlpha: 0.9, hiddenAlpha: 0.35 } as const;
-/** The 2D map's selection and ghost stroke, in its world px (`drawPaintedSelection`, `drawPaintedGhost`). */
+/** The 2D map's selection and ghost stroke, in its world px. */
 const BOX_STROKE_PX = 2;
 
 /** A figure held where it was dropped (`DROP_HOLD_MS`): there, until its token leaves `from` or `until` passes (`Date.now()`). */

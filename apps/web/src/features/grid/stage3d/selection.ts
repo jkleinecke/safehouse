@@ -1,9 +1,9 @@
 /**
  * The Build selection on the 3D map, standing up (P3 of the move to 3D).
  *
- * The 2D map ringed every square of a selected painted object on the floor
- * (`stage/fx.ts` `drawPaintedSelection`), and laid a faint copy of it where a
- * drag or a paste would put it (`drawPaintedGhost`). Flat on a 3D floor both
+ * The 2D map (gone since P5) ringed every square of a selected painted object
+ * on the floor, and laid a faint copy of it where a drag or a paste would put
+ * it. Flat on a 3D floor both
  * lie at the FOOT of what they mean — a wall's ring is half hidden behind the
  * wall it rings, and a ghost reads as a rug. So here each is a box as tall as
  * what stands on its squares:

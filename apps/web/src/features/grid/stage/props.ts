@@ -461,42 +461,6 @@ export function designFootprint(prop: TileProp): readonly [number, number, numbe
   return FOOTPRINTS[prop];
 }
 
-/** Four legs from the corners of a slab to the ground. */
-export function legs(k: PropKit, u0: number, v0: number, u1: number, v1: number, z: number, color: number): void {
-  const inset = 0.04;
-  for (const [u, v] of [
-    [u0 + inset, v0 + inset],
-    [u1 - inset, v0 + inset],
-    [u1 - inset, v1 - inset],
-    [u0 + inset, v1 - inset],
-  ] as const) {
-    k.line([[u, v, 0], [u, v, z]], color, 2, 0.9);
-  }
-}
-
-/** Four wheels seen on the south face, at the ends of a body. */
-export function wheels(k: PropKit, v: number, z: number, r: number, u0: number, u1: number): void {
-  k.faceCircle(u0, v, z, r, 'u', k.t.ink, 0.95);
-  k.faceCircle(u1, v, z, r, 'u', k.t.ink, 0.95);
-  k.faceCircle(u0, v, z, r * 0.45, 'u', k.t.light, 0.7);
-  k.faceCircle(u1, v, z, r * 0.45, 'u', k.t.light, 0.7);
-}
-
-/** A drum: ribs and a lid. Shared by barrels, kegs and the fire. */
-export function drum(k: PropKit, h: number, color: number): Point[] {
-  const top = k.cyl(0.5, 0.5, 0.3, 0, h * 0.95, color, { sides: 10 });
-  k.band(0.5, 0.5, 0.3, h * 0.3, k.t.light, 0.5);
-  k.band(0.5, 0.5, 0.3, h * 0.65, k.t.light, 0.5);
-  k.band(0.5, 0.5, 0.3, h * 0.12, k.t.ink, 0.5);
-  k.disc(0.5, 0.5, 0.24, h * 0.95, shade(color, 1.1), 1, true);
-  return top;
-}
-
-/** A cabinet: locker doors or a machine body. */
-export function cabinet(k: PropKit, h: number, color: number): Point[] {
-  return k.box(0.1, 0.15, 0.9, 0.85, 0, h, color);
-}
-
 function officeTop(k: PropKit, color: number, f: number): number {
   return shade(color, (k.plan ? 1 : 0.875) * f);
 }

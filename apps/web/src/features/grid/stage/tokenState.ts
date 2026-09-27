@@ -64,7 +64,5 @@ export function barsKey(bars: TokenBars | null): string {
   return bars ? `${bars.physical?.filled}/${bars.physical?.max}:${bars.stun?.filled}/${bars.stun?.max}:${bars.effectCount}` : '';
 }
 
-/** Grid units a figure covers in one walking step — a full cycle is two. */
-export const STEP_BODY = 0.5;
 /** A remote token walks at least this many squares a second, faster over a long move. */
 export const WALK_SQUARES_PER_S = 1.8;

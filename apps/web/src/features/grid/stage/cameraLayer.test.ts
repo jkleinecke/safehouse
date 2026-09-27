@@ -1,17 +1,18 @@
 /**
- * Cameras draw for the GM and for nobody else (FR9.23).
+ * A security camera's cone on the floor (FR9.23): `drawCameraCone`, which
+ * the 3D map lays under each switched-on camera (`stage3d/markers.ts`).
  *
- * The secrecy lives server-side (`sceneForViewer` never sends a player a
- * camera), so this pins the belt-and-braces half: even handed a scene with
- * cameras in it, a player's stage draws none — and the GM's draws the cone,
- * the eye and the label, and drops the cone the moment the camera is off.
+ * Every square the cone covers is washed, and the two edges of its field of
+ * view are drawn out from the mount — a dome has none. Who sees cameras at
+ * all is settled before this is called: the server never sends a player one
+ * (`sceneForViewer`), and the markers draw them for the GM alone.
  */
 import { describe, expect, it } from 'vitest';
-import type { Scene } from '@safehouse/contracts';
+import type { Camera as SecurityCamera } from '@safehouse/contracts';
 import { metricsFor } from '../geometry.js';
 import type { CameraCone } from '../types.js';
-import type { Ink, InkLabel, LabelSink } from './ink.js';
-import { drawCameras } from './layers.js';
+import type { Ink } from './ink.js';
+import { drawCameraCone } from './layers.js';
 
 const flat = metricsFor({ unitM: 1, cols: 12, rows: 8, offset: { x: 0, y: 0 }, projection: 'topdown' as const });
 const iso = metricsFor({ unitM: 1, cols: 12, rows: 8, offset: { x: 0, y: 0 }, projection: 'iso' as const });
@@ -34,87 +35,29 @@ function counting(): { g: Ink; ops: string[]; polys: number } {
   };
 }
 
-/**
- * The map's sink (`DomLabels`) makes a DOM element for a new label; this one
- * never does, recording which keys were asked for instead.
- */
-class StubPool extends Map<string, InkLabel> implements LabelSink {
-  readonly made: string[] = [];
-  private readonly seen = new Set<string>();
-  put(key: string, label: InkLabel): void {
-    if (!this.has(key)) this.made.push(key);
-    this.set(key, label);
-    this.seen.add(key);
-  }
-  sweep(): void {
-    for (const key of [...this.keys()]) if (!this.seen.has(key)) this.delete(key);
-    this.seen.clear();
-  }
-}
-
-function labels(): { pool: StubPool; made: string[] } {
-  const pool = new StubPool();
-  return { pool, made: pool.made };
-}
-
-function scene(cameras: Scene['geometry']['cameras']): Scene {
-  return {
-    id: 's1',
-    campaignId: 'c1',
-    name: 'Cams',
-    state: 'active',
-    grid: { unitM: 1, cols: 12, rows: 8, offset: { x: 0, y: 0 } },
-    environment: { light: 0, visibility: 0, glare: 0, wind: 0 },
-    geometry: { walls: [], doors: [], zones: [], pins: [], cameras },
-    levels: [],
-    mapAttachmentIds: [],
-    fog: { regions: [], revealed: [], revealedShapes: [] },
-  } as unknown as Scene;
-}
-
-const CAM = { id: 'cam_1', at: { x: 2.5, y: 2.5 }, facing: 0, fov: 90, range: 4, level: 0, active: true };
+const CAM: SecurityCamera = { id: 'cam_1', at: { x: 2.5, y: 2.5 }, facing: 0, fov: 90, range: 4, level: 0, active: true };
 const cone: CameraCone = { id: 'cam_1', cells: new Set(['3,2', '4,2', '4,3', '5,2']), key: 'k' };
 
-describe('drawCameras', () => {
-  it('draws nothing at all for a player', () => {
-    const c = counting();
-    const l = labels();
-    drawCameras(c.g, l.pool,scene([CAM]), flat, [cone], null, false, 0);
-    expect(c.ops).toEqual(['clear']);
-    expect(l.made).toEqual([]);
-  });
-
-  it('draws the GM the cone, the eye and a label, in both projections', () => {
+describe('drawCameraCone', () => {
+  it('washes every square of the cone and draws its two edges, in both projections', () => {
     for (const m of [flat, iso]) {
       const c = counting();
-      const l = labels();
-      drawCameras(c.g, l.pool,scene([CAM]), m, [cone], null, true, 0);
-      // Four cone cells, one wedge, and the two field-of-view edges.
-      expect(c.polys).toBe(cone.cells.size + 1);
+      drawCameraCone(c.g, m, CAM, cone);
+      expect(c.polys).toBe(cone.cells.size);
       expect(c.ops.filter((o) => o === 'lineTo').length).toBe(2);
-      expect(l.made).toEqual(['cam:cam_1']);
     }
   });
 
-  it('drops the cone and its edges when the camera is switched off', () => {
+  it('leaves the ink uncleared, so every camera on a floor shares one', () => {
     const c = counting();
-    const l = labels();
-    drawCameras(c.g, l.pool,scene([{ ...CAM, active: false }]), flat, [cone], null, true, 0);
-    expect(c.polys).toBe(1); // the wedge only
-    expect(c.ops.filter((o) => o === 'lineTo').length).toBe(1); // the strike-through
-  });
-
-  it('draws only the cameras on the floor being shown', () => {
-    const c = counting();
-    const l = labels();
-    drawCameras(c.g, l.pool,scene([{ ...CAM, level: 1 }]), flat, [cone], null, true, 0);
-    expect(c.ops).toEqual(['clear']);
+    drawCameraCone(c.g, flat, CAM, cone);
+    expect(c.ops).not.toContain('clear');
   });
 
   it('draws a dome with no edges', () => {
     const c = counting();
-    const l = labels();
-    drawCameras(c.g, l.pool,scene([{ ...CAM, fov: 360 }]), flat, [cone], null, true, 0);
+    drawCameraCone(c.g, flat, { ...CAM, fov: 360 }, cone);
+    expect(c.polys).toBe(cone.cells.size);
     expect(c.ops.filter((o) => o === 'lineTo').length).toBe(0);
   });
 });

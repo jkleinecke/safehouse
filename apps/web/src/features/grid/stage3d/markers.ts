@@ -352,7 +352,7 @@ function housing(b: StandBuilder, x: number, y: number, z: number, facing: numbe
   b.face([p(-1, -1, -1), p(1, -1, -1), p(1, 1, -1), p(-1, 1, -1)], [0, -1, 0], shade(color, 0.5), alpha);
 }
 
-/** The zones' names as the 2D map drew them (`drawPins`): each zone's name, colour and middle. */
+/** When the zones' names (`drawZones`) redraw: any zone's name, colour or middle changing. */
 function zoneKey(state: StageSceneState): string {
   const zones = state.scene.geometry.zones
     .map((z) => `${z.id}:${z.name}:${z.color ?? ''}:${z.polygon.map((p) => `${p.x},${p.y}`).join(';')}`)
@@ -691,7 +691,7 @@ export class GmMarkers {
   }
 
   /**
-   * Map pins (FR9.3), as `drawPins` draws them — a stem up from the point,
+   * Map pins (FR9.3), as the 2D map drew them — a stem up from the point,
    * the head at `pinHeadRise` (hollow for the GM's private ones), the
    * selected one ringed, the name beside the head — standing on the floor
    * in view, for whoever was sent them.
@@ -717,7 +717,7 @@ export class GmMarkers {
     this.labelsDue = true;
   }
 
-  /** The zones' names, the GM's map labels (FR9.2), on the floor at each zone's middle, as `drawPins` puts them. */
+  /** The zones' names, the GM's map labels (FR9.2), on the floor at each zone's middle, as the 2D map put them. */
   private drawZones(state: StageSceneState, m: SceneMetrics): void {
     if (state.role === 'gm') {
       for (const zone of state.scene.geometry.zones) {
@@ -786,7 +786,7 @@ export class GmMarkers {
 
   /**
    * The GM's lights (docs/VISION.md §4.1), the GM's alone, on the floor in
-   * view, as `drawLights` draws them but hung at each lamp's own height: the
+   * view, as the 2D map drew them but hung at each lamp's own height: the
    * bulb in the light's colour, rays round it while it is on (a short throw
    * along the aim for a beam), struck through when it is off, and a line
    * down to where it stands. The selected one is ringed, and its reach is

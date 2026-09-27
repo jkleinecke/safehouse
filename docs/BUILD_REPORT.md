@@ -191,7 +191,7 @@ server-authoritative resolve chain. The list and the switch landed on
 | --- | --- | --- |
 | FR9.1 scenes, configurable grid, notes, activate, private staging | done | `plugins/scenes.ts`, `contracts/src/scene.ts`. **The GM surface is now two screens with a stated division of labour**: `features/gm/ScenesPage.tsx` (+ `gm/scenes/`) is the inventory — create, duplicate, rename, archive, delete, activate for the table, environment (FR9.11), staged reveals (FR9.14) — and the Grid's GM panel is the in-canvas authoring tool. Until this round `/c/:id/gm/scenes` was a placeholder card that the sidebar and the console both linked to. `sceneManager.test.tsx` (24). |
 | FR9.2 map building | done | Image upload, multi-image background list, grid alignment, walls/doors/zones with a GM authoring UI (`web/features/grid/gm/GeometryTab.tsx`, 20 tests), and scan-friendly rotate / crop / contrast / brightness (`gm/MapTab.tsx`, `mapImage.ts`, 13 tests). Prop/tile stamp library remains P3+ by design. |
-| FR9.3 map pins → codex / handouts | done | `gm/PinsTab.tsx` and `stage/layers.ts drawPins`; GM-only pins stripped server-side in `sceneForViewer`. |
+| FR9.3 map pins → codex / handouts | done | `gm/PinsTab.tsx` and `stage3d/markers.ts` (`drawPins`); GM-only pins stripped server-side in `sceneForViewer`. |
 | FR9.4 tokens (PC/NPC/grunt/spirit/drone/prop), art, sizes, facing | done | `contracts/src/token.ts`, `POST /api/scenes/:id/tokens`. A summoned spirit can now become one of these (FR8.3). |
 | FR9.5 drag with snap, server-authoritative, smooth interim motion | done | `token.drag` ephemeral + `token.move` authoritative. |
 | FR9.6 bars, status markers, aura rings | done | `grid/projection.ts` gates numeric bars per viewer (27 tests). |
