@@ -141,7 +141,7 @@ export default function EncounterBuilder({
               onClick={() => {
                 if (sceneId) stage.mutate({ sceneId, encounterId: savedId });
               }}
-              title="Bring every runner and NPC token on the linked scene into this fight (its own tokens are already there)"
+              title="Add every runner and NPC token already on the linked scene to this saved fight. It places no new tokens."
             >
               {stage.isPending ? 'staging…' : 'stage on map'}
             </button>

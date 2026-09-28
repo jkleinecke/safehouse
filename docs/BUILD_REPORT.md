@@ -1863,3 +1863,15 @@ structural rather than editorial: `done` now requires a named screen, `done ·
 thin surface` exists as a word, phase state is the weakest of (capability,
 surface) rather than the strongest, and the headline grade is a table of things a
 person does on a Friday night.
+
+## Follow-up 2026-09-28: guided combat
+
+Built (commits 2541828..ff2600d): roll cards (actions list, preview, settle with app or table dice; the GM settles for anyone), attack exchanges (defend, soak, apply with Undo, cancel, open by hand), the fight follows map tokens, guided initiative (call, per-row entry, roll all NPCs, start with blanks) and the stored order (move, act now, delay, sort, seize). Player side: Act sheet, incoming Defend/Resist banners, the sheet Combat tab. GM side: one card host in Grid and Table, token and tracker entry, two-step card, declare.
+
+Still open:
+
+- Hit the Dirt avoids suppressive fire but does not set the row prone.
+- Open exchanges are not closed when a fight is set to done.
+- No marker on the map token for a pending exchange.
+- Direct-spell attacks get one Resist button that opens the full chooser.
+- `exchange.updated` is missing from contracts WS_EVENT_TYPES (the web casts around it).
