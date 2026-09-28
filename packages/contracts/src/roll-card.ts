@@ -365,6 +365,8 @@ export const CardRequestSchema = z.object({
   actionId: z.string().min(1),
   /** The weapon's name on the sheet, for an action that fires or swings one. */
   weapon: z.string().min(1).optional(),
+  /** The skill a Use Skill rolls (`sneaking`, `negotiation`). */
+  skill: z.string().min(1).optional(),
   target: CardActorRefSchema.optional(),
   /** A measured distance in meters, when the ruler handed one over; else the tokens' own. */
   distanceM: z.number().min(0).optional(),

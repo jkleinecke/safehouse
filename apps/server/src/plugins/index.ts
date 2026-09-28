@@ -26,6 +26,7 @@ import magicPlugin from './magic.js';
 import macrosPlugin from './macros.js';
 import buildsPlugin from './builds.js';
 import advancePlugin from './advance.js';
+import rollCardsPlugin from './roll-cards.js';
 
 const domainPlugins = [
   authPlugin,
@@ -47,6 +48,7 @@ const domainPlugins = [
   magicPlugin,
   buildsPlugin,
   advancePlugin,
+  rollCardsPlugin,
 ] as const;
 
 /** Register every domain plugin (called once from buildApp). */

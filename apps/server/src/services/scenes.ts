@@ -958,7 +958,7 @@ function setExplored(fog: FogState, ids: string[], shapes: Point[][]): void {
 }
 
 /** What a staged NPC token brings to the tracker when its archetype can be rolled. */
-interface RolledBody {
+export interface RolledBody {
   initBase: number;
   monitors: CombatantMonitors;
   copilot: Record<string, unknown>;
@@ -976,7 +976,7 @@ interface RolledBody {
  * full statblock instead derives straight from that. Anything else stages
  * as before.
  */
-function rolledBodyFor(row: NpcTemplateRow | undefined, seed: string): RolledBody | null {
+export function rolledBodyFor(row: NpcTemplateRow | undefined, seed: string): RolledBody | null {
   if (!row) return null;
   const gen = GenTemplateSchema.safeParse(row.gen);
   const tier = gen.success ? gen.data.tiers[0] : undefined;
