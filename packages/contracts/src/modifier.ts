@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { RefSchema } from './common.js';
 
 /** Where a modifier comes from (DESIGN.md §7.2). */
 export const ModifierSourceKindSchema = z.enum([
@@ -34,5 +35,14 @@ export const ModifierSchema = z.object({
   value: z.number(),
   active: z.boolean(),
   note: z.string().optional(),
+  /**
+   * The printed page that explains this modifier — `{ book, page }`, never
+   * book text (M11). Named `bookRef` because `source.ref` was already taken:
+   * that one names the THING the modifier came from (a spell, a focus, a range
+   * category), this one names the PAGE. `applyPipeline` copies it onto the
+   * receipt line as `ProvenanceEntry.ref`; a quality, implant or power without
+   * its own gets the item's page stamped on by `deriveCharacter`.
+   */
+  bookRef: RefSchema.optional(),
 });
 export type Modifier = z.infer<typeof ModifierSchema>;

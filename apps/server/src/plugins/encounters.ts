@@ -565,6 +565,7 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
           label: range.note ?? 'range',
           value: range.value,
           source: 'range',
+          ...(range.bookRef ? { ref: range.bookRef } : {}),
         });
       }
     }

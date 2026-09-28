@@ -19,6 +19,7 @@
  * the attack should be refused rather than quietly penalised.
  */
 import type { Modifier } from '@safehouse/contracts';
+import { lineRef } from '../refs.js';
 import type { CoverLevel } from './los.js';
 
 /**
@@ -66,6 +67,9 @@ export function coverModifier(
     note: because
       ? `${cover} cover (+${value} to defend) — behind ${because}`
       : `${cover} cover (+${value} to defend)`,
+    // The defender's cover sections (SR5 p.190); the numbers also sit in the
+    // Defense Modifiers table on the page before.
+    bookRef: lineRef('cover'),
   };
 }
 

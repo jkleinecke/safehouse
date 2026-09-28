@@ -74,6 +74,12 @@ export function modifiersForFocus(focus: BondedFocus): Modifier[] {
   const kind: FocusSourceKind = focus.sourceKind ?? 'power';
   const label = focusReceipt(focus);
   const explicit = focus.mods ?? [];
+  // The focus's own page rides on each line it writes, as a quality's does
+  // (`deriveCharacter`), unless a modifier already names a page of its own.
+  const pageOf = (m?: Modifier): Pick<Modifier, 'bookRef'> => {
+    const ref = m?.bookRef ?? focus.ref;
+    return ref ? { bookRef: ref } : {};
+  };
   if (explicit.length > 0) {
     return explicit.map((m, i) => ({
       ...m,
@@ -81,6 +87,7 @@ export function modifiersForFocus(focus: BondedFocus): Modifier[] {
       source: { kind, ref: focus.name },
       active: true,
       note: m.note ?? label,
+      ...pageOf(m),
     }));
   }
   const force = Math.max(0, Math.trunc(focus.force));
@@ -92,6 +99,7 @@ export function modifiersForFocus(focus: BondedFocus): Modifier[] {
     value: force,
     active: true,
     note: label,
+    ...pageOf(),
   }));
 }
 

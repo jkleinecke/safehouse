@@ -9,6 +9,7 @@ import type {
 } from '@safehouse/contracts';
 import { metatypeRow } from './chargen/metatypes.js';
 import { applyPipeline, baseEntry } from './derive-pipeline.js';
+import { lineRef } from './refs.js';
 
 /** Which inherent limit a skill test uses, keyed by the skill's linked attribute. */
 export function skillLimitKind(attr: SkillAttr): Exclude<LimitKind, 'accuracy' | 'force'> | null {
@@ -172,7 +173,12 @@ export function buildPools(
       base = agi - 1;
       entries.push(
         { label: 'AGI', value: agi, source: 'attribute' },
-        { label: `defaulting (no ${weapon.skillId})`, value: -1, source: 'skill' },
+        {
+          label: `defaulting (no ${weapon.skillId})`,
+          value: -1,
+          source: 'skill',
+          ref: lineRef('defaulting'),
+        },
       );
     }
     const res = applyPipeline(

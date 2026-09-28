@@ -60,30 +60,82 @@ export function attributeCode(label: string): string | null {
   return ATTRIBUTE_ALIASES[key] ?? null;
 }
 
-/** The general mechanics a roll can lean on. */
+/**
+ * The general mechanics a roll can lean on, and the pages the pool lines point
+ * at. The combat and modifier pages below were read off the GM's own copy of
+ * the core rulebook (printed page = PDF page − 5), not remembered.
+ */
 export const RULE_REFS = {
   skills: SR5(128, 'Skills'),
+  /** A specialization's +2 dice. */
+  specialization: SR5(129, 'Specializations'),
+  /** Rolling a skill you do not have: attribute − 1. */
+  defaulting: SR5(130, 'Defaulting'),
   success: SR5(44, 'Success Tests'),
   opposed: SR5(45, 'Opposed Tests'),
   threshold: SR5(45, 'Thresholds'),
   extended: SR5(48, 'Extended Tests'),
   limits: SR5(47, 'Limits'),
   edge: SR5(56, 'Edge'),
+  /** The +4 cap on what augmentations can add to an attribute. */
+  augmentationCap: SR5(94, 'Augmentation Bonus Cap'),
+  /** What to roll to notice something, and the modifiers table beside it. */
+  perception: SR5(135, 'Using Perception'),
+  perceptionThresholds: SR5(136, 'Perception Thresholds'),
   initiative: SR5(159, 'Initiative'),
-  rangedCombat: SR5(173, 'Ranged Combat'),
-  meleeCombat: SR5(184, 'Melee Combat'),
-  defense: SR5(189, 'Defending in Combat'),
-  soak: SR5(169, 'Damage Resistance'),
+  delaying: SR5(161, 'Delaying Actions'),
+  /** The table of Free, Simple, Complex and Interrupt actions (runs onto p.163). */
+  actions: SR5(162, 'Combat Actions'),
+  /**
+   * The Interrupt Actions heading sits at the foot of p.167; Full Defense,
+   * Dodge, Block and the rest are described over the page on p.168.
+   */
+  interrupts: SR5(167, 'Interrupt Actions'),
+  fullDefense: SR5(168, 'Full Defense'),
   damage: SR5(169, 'Damage'),
+  soak: SR5(169, 'Damage Resistance'),
+  armorPenetration: SR5(169, 'Armor Penetration'),
+  wounds: SR5(169, 'Wound Modifiers'),
+  rangedCombat: SR5(173, 'Ranged Combat'),
+  /** Visibility, light and glare, wind and range read as one table. */
+  environment: SR5(175, 'Environmental Modifiers'),
+  /** Range is one column of the environment table; the bands are on p.185. */
+  range: SR5(175, 'Range'),
+  recoil: SR5(175, 'Recoil'),
+  situational: SR5(176, 'Situational Modifiers'),
+  fireModes: SR5(180, 'Firing Mode Table'),
+  meleeCombat: SR5(184, 'Melee Combat'),
+  rangeTable: SR5(185, 'Range Table'),
+  /** Where the Defending section starts; its modifiers table is the next page. */
+  defense: SR5(188, 'Defending in Combat'),
+  defenseModifiers: SR5(189, 'Defense Modifiers'),
+  /** Good and partial cover as a bonus to the defender's dice. */
+  cover: SR5(190, 'Cover'),
+  matrix: SR5(237, 'Matrix Actions'),
   spellcasting: SR5(281, 'Spellcasting'),
   drain: SR5(282, 'Drain'),
+  /** −2 dice per spell held, from the step after Drain. */
+  sustaining: SR5(282, 'Sustaining Spells'),
+  combatSpells: SR5(283, 'Combat Spells'),
   summoning: SR5(300, 'Summoning'),
-  matrix: SR5(237, 'Matrix Actions'),
   /** Finding and buying gear: the Availability test and haggling over the price. */
   buyingGear: SR5(418, 'Buying Gear'),
 } as const;
 
 export type RuleTopic = keyof typeof RULE_REFS;
+
+/**
+ * A rule reference in the shape a pool line or a modifier carries it
+ * (`ProvenanceEntry.ref`, `Modifier.bookRef`): the book and the printed page,
+ * with the section's name riding in `note` so the chip's tooltip can say what
+ * it opens. The engine stamps these on the lines it writes itself — wounds,
+ * the scene's environment, range, recoil, cover, sustaining — so every buff
+ * and debuff on a pool can show its page.
+ */
+export function lineRef(topic: RuleTopic): Ref {
+  const r = RULE_REFS[topic];
+  return { book: r.book, page: r.page, note: r.topic };
+}
 
 /** Skill groups as the Skills chapter lays them out, and the page each starts on. */
 export const SKILL_GROUP_REFS = {

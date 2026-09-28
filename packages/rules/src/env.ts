@@ -1,4 +1,5 @@
 import type { Modifier, RangeTables, SceneEnvironment } from '@safehouse/contracts';
+import { lineRef } from './refs.js';
 
 /**
  * Environmental tier values (§10.2): index 0 = clear, then the standard
@@ -42,6 +43,9 @@ export function environment(scene: SceneEnvironment): Modifier[] {
       value,
       active: true,
       note: `environment: ${contributors} → ${TIER_NAMES[tier] ?? 'extreme'} (${value})`,
+      // The Environmental Modifiers table (SR5 p.175), so the scene's line on
+      // every receipt opens the page the table is printed on.
+      bookRef: lineRef('environment'),
     },
   ];
 }
@@ -79,5 +83,8 @@ export function rangeModifier(
     value: RANGE_BAND_VALUES[idx] ?? 0,
     active: true,
     note: `${name} range (${distM} m, ${rangeCat})`,
+    // Range is a column of the environment table (SR5 p.175); the page's
+    // Range section points on to the Range Table for the band edges.
+    bookRef: lineRef('range'),
   };
 }

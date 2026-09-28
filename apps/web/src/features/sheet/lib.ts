@@ -13,6 +13,7 @@ import type {
   SheetWeapon,
   WsEvent,
 } from '@safehouse/contracts';
+import { lineRef } from '@safehouse/rules';
 
 // ---------------------------------------------------------------------------
 // Condition monitors (FR3.4)
@@ -149,6 +150,8 @@ export function toggleSustain(sheet: SheetV1, spellName: string): SheetV1 {
     value: -2,
     active: true,
     note: `sustaining ${spellName}`,
+    // The page the −2 is written on, for the receipt's chip (SR5 p.282).
+    bookRef: lineRef('sustaining'),
   };
   return { ...sheet, overrides: [...sheet.overrides, mod] };
 }
@@ -339,6 +342,12 @@ export interface RollChip {
   active: boolean;
   /** Provenance source tag carried into the roll's breakdown. */
   source: string;
+  /**
+   * The page that explains the chip (recoil, range, a specialization), shown
+   * beside it in the dialog and carried onto its receipt line and the
+   * Modifier the server recomputes with, so the page survives the round trip.
+   */
+  ref?: Ref;
 }
 
 export function chipSum(chips: readonly RollChip[]): number {
@@ -348,7 +357,12 @@ export function chipSum(chips: readonly RollChip[]): number {
 export function chipEntries(chips: readonly RollChip[]): ProvenanceEntry[] {
   return chips
     .filter((c) => c.active && c.value !== 0)
-    .map((c) => ({ label: c.label, value: c.value, source: c.source }));
+    .map((c) => ({
+      label: c.label,
+      value: c.value,
+      source: c.source,
+      ...(c.ref ? { ref: c.ref } : {}),
+    }));
 }
 
 export function clampPool(n: number): number {

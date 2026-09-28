@@ -510,7 +510,12 @@ describe('deriveCharacter: +4 augmentation bonus cap (SR5 p.94)', () => {
     );
     const str = d.attributes['str']!;
     expect(str.value).toBe(8); // 4 + 5, held to 4 + 4
-    expect(capLine(str)).toEqual({ label: 'augmentation bonus cap (+4)', value: -1, source: 'engine' });
+    expect(capLine(str)).toEqual({
+      label: 'augmentation bonus cap (+4)',
+      value: -1,
+      source: 'engine',
+      ref: { book: 'SR5', page: 94, note: 'Augmentation Bonus Cap' },
+    });
     expect(sumBreakdown(str)).toBe(8);
     // Everything downstream reads the capped rating.
     expect(d.limits.physical.value).toBe(Math.ceil((8 * 2 + 4 + 4) / 3));
@@ -857,5 +862,58 @@ describe('a skill row with a target gets a pool of its own', () => {
     });
     expect(both.pools['skill.exotic-ranged-weapon::dart-pistol']?.total).toBe(5 + 4 + 1);
     expect(both.pools['skill.exotic-ranged-weapon::blowgun']?.total).toBe(5 + 1 + 1);
+  });
+});
+
+describe('every buff and debuff on a pool can show its page', () => {
+  const QUALITY_PAGE = { book: 'SR5', page: 74 };
+  const OWN_PAGE = { book: 'SR5', page: 77, note: 'its own' };
+
+  it("hands an item's page to modifiers that have none, and keeps a modifier's own", () => {
+    const d = deriveCharacter(
+      makeSheet({
+        qualities: [
+          {
+            name: 'Sharp Eyes',
+            ref: QUALITY_PAGE,
+            mods: [
+              mod({ target: 'pool.skill.perception', value: 1, source: { kind: 'quality' }, note: 'plain' }),
+              mod({ target: 'pool.skill.perception', value: 1, source: { kind: 'quality' }, note: 'paged', bookRef: OWN_PAGE }),
+            ],
+          },
+        ],
+      }),
+    );
+    const lines = d.pools['skill.perception']!.breakdown;
+    expect(lines.find((e) => e.label === 'plain')?.ref).toEqual(QUALITY_PAGE);
+    expect(lines.find((e) => e.label === 'paged')?.ref).toEqual(OWN_PAGE);
+    // The attribute and the rating are explained by the roll's own read-up row.
+    expect(lines.filter((e) => e.source === 'attribute' || e.source === 'skill').every((e) => !e.ref)).toBe(true);
+  });
+
+  it('points wounds at p.169 and the scene at p.175, and leaves the GM’s word unpaged', () => {
+    const d = deriveCharacter(
+      makeSheet({ overrides: [mod({ target: 'pool.all', value: -1, source: { kind: 'override' }, note: 'table rule' })] }),
+      { wounds: { physical: 3, stun: 0 }, situational: environment({ light: 1, visibility: 0, glare: 0, wind: 0 }) },
+    );
+    const lines = d.pools['skill.perception']!.breakdown;
+    expect(lines.find((e) => e.source === 'wound')?.ref).toMatchObject({ book: 'SR5', page: 169 });
+    expect(lines.find((e) => e.source === 'scene')?.ref).toMatchObject({ book: 'SR5', page: 175 });
+    expect(lines.find((e) => e.source === 'override')?.ref).toBeUndefined();
+    expect(d.woundModifier?.breakdown.every((e) => e.ref?.page === 169)).toBe(true);
+    // The page survives the contract, so it reaches the browser.
+    expect(DerivedCharacterSchema.parse(d).pools['skill.perception']?.breakdown).toEqual(lines);
+  });
+
+  it('pages an older sustain toggle kept among the overrides (p.282)', () => {
+    const d = deriveCharacter(
+      makeSheet({
+        overrides: [
+          mod({ id: 'sustain.Glow', target: 'pool.all', value: -2, source: { kind: 'spell', ref: 'Glow' }, note: 'sustaining Glow' }),
+        ],
+      }),
+    );
+    const line = d.pools['skill.perception']!.breakdown.find((e) => e.label === 'sustaining Glow');
+    expect(line?.ref).toMatchObject({ book: 'SR5', page: 282 });
   });
 });

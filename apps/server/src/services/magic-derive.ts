@@ -21,7 +21,7 @@
  * pool's provenance (Principle 3).
  */
 import type { Modifier } from '@safehouse/contracts';
-import { focusModifiers, sustainingReport, type BondedFocus } from '@safehouse/rules';
+import { focusModifiers, lineRef, sustainingReport, type BondedFocus } from '@safehouse/rules';
 import type { Db } from '@safehouse/db';
 import {
   fociFor,
@@ -39,8 +39,13 @@ export interface SustainedLike {
   exempt: boolean;
 }
 
-/** −2 dice per sustained spell, focus/quickening/spirit exempt (FR8.2, §10.2). */
+/**
+ * −2 dice per sustained spell, focus/quickening/spirit exempt (FR8.2, §10.2).
+ * Each line carries the page the −2 is written on (SR5 p.282), so a caster
+ * wondering why every pool is down can open it from the receipt.
+ */
 export function sustainedModifiersFor(sustained: readonly SustainedLike[]): Modifier[] {
+  const bookRef = lineRef('sustaining');
   return sustained
     .filter((s) => !s.exempt)
     .map((s) => ({
@@ -51,6 +56,7 @@ export function sustainedModifiersFor(sustained: readonly SustainedLike[]): Modi
       value: -2,
       active: true,
       note: `sustaining ${s.name} (−2)`,
+      bookRef,
     }));
 }
 

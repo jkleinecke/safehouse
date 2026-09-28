@@ -1,10 +1,21 @@
 import { z } from 'zod';
+import { RefSchema } from './common.js';
 
 /** One line of a derived value's receipt (Principle 3: show your work). */
 export const ProvenanceEntrySchema = z.object({
   label: z.string(),
   value: z.number(),
   source: z.string().optional(),
+  /**
+   * Where the book explains this line: the page a wound penalty, a sustained
+   * spell, the scene's environment or a quality's bonus is written on, so the
+   * receipt can put a page chip beside every buff and debuff (FR11.2). The
+   * pipeline copies it from the modifier's `bookRef`; lines the engine writes
+   * itself (wounds, the augmentation cap) carry their own. Optional because a
+   * base line (an attribute, a skill rating) is explained by the roll's own
+   * "read up" row, and a GM's hand-typed number has no page at all.
+   */
+  ref: RefSchema.optional(),
 });
 export type ProvenanceEntry = z.infer<typeof ProvenanceEntrySchema>;
 

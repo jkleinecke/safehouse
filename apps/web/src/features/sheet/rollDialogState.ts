@@ -38,7 +38,7 @@ import type {
   SheetSkill,
   Visibility,
 } from '@safehouse/contracts';
-import { skillPoolKey } from '@safehouse/rules';
+import { lineRef, skillPoolKey } from '@safehouse/rules';
 import type { PendingRollMod } from '../../live/rollHandoff.js';
 import { chipEntries, chipSum, clampPool, type RollChip } from './lib.js';
 
@@ -97,6 +97,7 @@ export function withPendingRangeChip(
         value: pending.value,
         active: true,
         source: 'range',
+        ref: lineRef('range'),
       },
     ],
   };
@@ -104,7 +105,7 @@ export function withPendingRangeChip(
 
 export type EdgeChoice = 'none' | 'push_pre' | 'second_chance';
 
-/** +2 for a specialization — offered as an off-by-default chip (SR5 p.130). */
+/** +2 for a specialization — offered as an off-by-default chip (SR5 p.129). */
 export const SPEC_BONUS = 2;
 
 /**
@@ -133,6 +134,7 @@ export function skillRollConfig(skill: SheetSkill, pool: PoolBreakdown): RollCon
               value: SPEC_BONUS,
               active: false,
               source: 'situational',
+              ref: lineRef('specialization'),
             },
           ],
         }
@@ -234,6 +236,9 @@ export function chipModifiers(
       value: chip.value,
       active: true,
       note: chip.label,
+      // The chip's page goes with it, so the server's recomputed receipt
+      // still shows the recoil or range line with its book chip.
+      ...(chip.ref ? { bookRef: chip.ref } : {}),
     });
   }
   if (situational !== 0) {

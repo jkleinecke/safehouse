@@ -1,4 +1,5 @@
 import type { Modifier, ModifierSourceKind, ProvenanceEntry } from '@safehouse/contracts';
+import { lineRef } from './refs.js';
 
 /**
  * Fixed modifier pipeline phase order (DESIGN.md §7.2):
@@ -22,6 +23,16 @@ export const PIPELINE_PHASES: readonly (readonly ModifierSourceKind[])[] = [
 /** Human label for a modifier's provenance line. */
 export function modifierLabel(mod: Modifier): string {
   return mod.note ?? mod.source.ref ?? mod.id;
+}
+
+/**
+ * The page a modifier's receipt line points at, spread into the line: the
+ * modifier's own `bookRef` when it has one, nothing otherwise. Spread rather
+ * than assigned so a line without a page carries no `ref: undefined` key and
+ * a receipt compared field by field reads exactly as it did before pages.
+ */
+function lineRefOf(mod: Modifier): Pick<ProvenanceEntry, 'ref'> {
+  return mod.bookRef ? { ref: mod.bookRef } : {};
 }
 
 export interface PipelineResult {
@@ -83,7 +94,9 @@ const countsTowardAugmentationCap = (phase: readonly ModifierSourceKind[]): bool
  *   it actually clamps.
  *
  * Every contribution is recorded as a **delta**, so the breakdown always
- * sums exactly to the final value (Principle 3).
+ * sums exactly to the final value (Principle 3). A modifier that knows its
+ * page (`bookRef`) hands it to its line as `ref`, which is what lets the roll
+ * dialog and the breakdown sheet put a book chip beside each buff and debuff.
  *
  * With `augmentationCap`, the value leaving the augmentation phases may sit
  * no higher than its natural rating (the value entering them) plus the cap
@@ -121,6 +134,7 @@ export function applyPipeline(
       label: `augmentation bonus cap (+${cap})`,
       value: ceiling - value,
       source: 'engine',
+      ref: lineRef('augmentationCap'),
     });
     value = ceiling;
   };
@@ -144,6 +158,7 @@ export function applyPipeline(
         label: `${modifierLabel(winner)} (set ${winner.value})`,
         value: delta,
         source: winner.source.kind,
+        ...lineRefOf(winner),
       });
     }
 
@@ -151,7 +166,12 @@ export function applyPipeline(
       if (m.op !== 'add') continue;
       value += m.value;
       if (augmentation && m.value < 0) penalties += m.value;
-      breakdown.push({ label: modifierLabel(m), value: m.value, source: m.source.kind });
+      breakdown.push({
+        label: modifierLabel(m),
+        value: m.value,
+        source: m.source.kind,
+        ...lineRefOf(m),
+      });
     }
 
     const caps = phaseMods.filter((m) => m.op === 'cap');
@@ -164,6 +184,7 @@ export function applyPipeline(
           label: `${modifierLabel(winner)} (cap ${winner.value})`,
           value: delta,
           source: winner.source.kind,
+          ...lineRefOf(winner),
         });
       }
     }

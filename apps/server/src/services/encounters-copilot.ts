@@ -19,6 +19,7 @@ import type {
 import {
   computeWoundModifier,
   deriveCharacter,
+  lineRef,
   resolveAttackChain,
   type AttackChainOptions,
   type AttackChainResult,
@@ -58,14 +59,23 @@ export function recoilEntry(bullets: number, recoilComp = 0): ProvenanceEntry | 
     label: `recoil (${bullets} rounds, ${recoilComp} comp)`,
     value: -uncompensated,
     source: 'situational',
+    ref: lineRef('recoil'),
   };
 }
 
-/** Scene environment modifiers (FR9.11) as roll-provenance entries. */
+/**
+ * Scene environment modifiers (FR9.11) as roll-provenance entries, each
+ * keeping the page its modifier named (the Environmental Modifiers table).
+ */
 export function environmentEntries(mods: readonly Modifier[]): ProvenanceEntry[] {
   return mods
     .filter((m) => m.active && m.op === 'add' && m.value !== 0)
-    .map((m) => ({ label: m.note ?? 'environment', value: m.value, source: 'scene' }));
+    .map((m) => ({
+      label: m.note ?? 'environment',
+      value: m.value,
+      source: 'scene',
+      ...(m.bookRef ? { ref: m.bookRef } : {}),
+    }));
 }
 
 /** Total of the `pool.all` add-modifiers (scene/situational) for hand-built pools. */
@@ -130,8 +140,12 @@ function attr(derived: DerivedCharacter, code: string): number {
 
 function adjustments(woundModifier: number, envDelta: number): ProvenanceEntry[] {
   const out: ProvenanceEntry[] = [];
-  if (woundModifier !== 0) out.push({ label: 'Wounds', value: woundModifier, source: 'wound' });
-  if (envDelta !== 0) out.push({ label: 'Environment', value: envDelta, source: 'scene' });
+  if (woundModifier !== 0) {
+    out.push({ label: 'Wounds', value: woundModifier, source: 'wound', ref: lineRef('wounds') });
+  }
+  if (envDelta !== 0) {
+    out.push({ label: 'Environment', value: envDelta, source: 'scene', ref: lineRef('environment') });
+  }
   return out;
 }
 
@@ -199,7 +213,7 @@ export function buildRack(sheet: SheetV1, ctx: RackContext): QuickRollRack {
     const wil = attr(derived, 'wil');
     const fullBreakdown: ProvenanceEntry[] = [
       ...defense.breakdown,
-      { label: 'WIL (Full Defense)', value: wil, source: 'situational' },
+      { label: 'WIL (Full Defense)', value: wil, source: 'situational', ref: lineRef('fullDefense') },
     ];
     entries.push({
       key: 'defense.full',
@@ -258,7 +272,7 @@ export function buildRack(sheet: SheetV1, ctx: RackContext): QuickRollRack {
       const int = attr(derived, 'int');
       const breakdown: ProvenanceEntry[] = [
         { label: 'INT', value: int, source: 'attribute' },
-        { label: 'defaulting (no perception)', value: -1, source: 'skill' },
+        { label: 'defaulting (no perception)', value: -1, source: 'skill', ref: lineRef('defaulting') },
         ...adjustments(woundModifier, envDelta),
       ];
       entries.push({

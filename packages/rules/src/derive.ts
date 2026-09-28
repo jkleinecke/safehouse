@@ -5,10 +5,12 @@ import type {
   LivingPersona,
   Modifier,
   ProvenanceEntry,
+  Ref,
   SheetV1,
 } from '@safehouse/contracts';
 import { AUGMENTATION_BONUS_CAP, applyPipeline, baseEntry } from './derive-pipeline.js';
 import { buildPools } from './derive-pools.js';
+import { lineRef } from './refs.js';
 
 export * from './derive-pipeline.js';
 export { buildPools, deriveArmor, skillLimitKind, skillPoolKey } from './derive-pools.js';
@@ -57,13 +59,39 @@ export function dedupeSceneModifiers(mods: readonly Modifier[]): Modifier[] {
   return out;
 }
 
+/**
+ * An item's modifiers with the item's own page stamped on them. A quality, an
+ * implant or an adept power already knows where the book describes it (the
+ * `ref` the builder or Chummer wrote on the sheet); its modifiers usually do
+ * not, because they were written as numbers. Handing the item's page down is
+ * what lets "+1 Reaction (Wired Reflexes)" on a receipt open the page Wired
+ * Reflexes is on. A modifier that names its own page keeps it.
+ */
+function withItemRef(mods: readonly Modifier[], ref: Ref | undefined): Modifier[] {
+  if (!ref) return [...mods];
+  return mods.map((m) => (m.bookRef ? m : { ...m, bookRef: ref }));
+}
+
+/**
+ * The older sustain toggle (`sustain.<spell>`, kind `spell`) lives among the
+ * overrides because that is where the sheet persisted it before play state
+ * grew its own sustained list (see the web's `features/sheet/lib.ts`). Toggles
+ * set since carry their page; ones set before did not, so the page is added
+ * here rather than asking anyone to flip them off and on again. Every other
+ * override is the GM's word and has no page to point at.
+ */
+function withSustainRef(mod: Modifier): Modifier {
+  if (mod.bookRef || mod.source.kind !== 'spell' || !mod.id.startsWith('sustain.')) return mod;
+  return { ...mod, bookRef: lineRef('sustaining') };
+}
+
 /** All active-able modifiers carried on the sheet itself, in pipeline terms. */
 function collectSheetModifiers(sheet: SheetV1): Modifier[] {
   const mods: Modifier[] = [];
-  for (const q of sheet.qualities) mods.push(...q.mods);
-  for (const a of sheet.augments) mods.push(...a.mods);
-  for (const p of sheet.powers) mods.push(...p.mods);
-  mods.push(...sheet.overrides);
+  for (const q of sheet.qualities) mods.push(...withItemRef(q.mods, q.ref));
+  for (const a of sheet.augments) mods.push(...withItemRef(a.mods, a.ref));
+  for (const p of sheet.powers) mods.push(...withItemRef(p.mods, p.ref));
+  mods.push(...sheet.overrides.map(withSustainRef));
   return mods;
 }
 
@@ -199,13 +227,22 @@ export function deriveCharacter(sheet: SheetV1, ctx?: DeriveContext): DerivedCha
     const physicalSteps = neg(Math.floor(Math.max(0, ctx.wounds.physical) / 3));
     const stunSteps = neg(Math.floor(Math.max(0, ctx.wounds.stun) / 3));
     const wm = physicalSteps + stunSteps;
+    // Every wound line points at Wound Modifiers (SR5 p.169): the −1 per three
+    // boxes, and that it hits Initiative as well as the dice.
+    const woundsRef = lineRef('wounds');
     woundModifier = dv(wm, [
       {
         label: `physical wounds (${ctx.wounds.physical} boxes)`,
         value: physicalSteps,
         source: 'wound',
+        ref: woundsRef,
       },
-      { label: `stun wounds (${ctx.wounds.stun} boxes)`, value: stunSteps, source: 'wound' },
+      {
+        label: `stun wounds (${ctx.wounds.stun} boxes)`,
+        value: stunSteps,
+        source: 'wound',
+        ref: woundsRef,
+      },
     ]);
     if (wm !== 0) {
       const note = `wound modifier (${ctx.wounds.physical}P/${ctx.wounds.stun}S boxes)`;
@@ -218,6 +255,7 @@ export function deriveCharacter(sheet: SheetV1, ctx?: DeriveContext): DerivedCha
           value: wm,
           active: true,
           note,
+          bookRef: woundsRef,
         },
         {
           id: 'wound.initiative',
@@ -227,6 +265,7 @@ export function deriveCharacter(sheet: SheetV1, ctx?: DeriveContext): DerivedCha
           value: wm,
           active: true,
           note,
+          bookRef: woundsRef,
         },
       );
     }

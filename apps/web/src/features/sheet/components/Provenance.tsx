@@ -7,7 +7,7 @@ import { useRef, useState } from 'react';
 import type { LimitRef, ProvenanceEntry } from '@safehouse/contracts';
 import { breakdownLabel } from '../a11y.js';
 import { hasOverrideEntry, signed } from '../lib.js';
-import { Sheet } from './ui.js';
+import { RefChip, Sheet } from './ui.js';
 
 const LONG_PRESS_MS = 450;
 
@@ -144,10 +144,14 @@ export function BreakdownSheet({
         )}
       </div>
 
+      {/* A line that knows where the book explains it (a wound penalty, the
+          scene, a quality or implant) carries its page chip, so "why is my
+          pool 11?" ends one tap from the rule rather than at a bare number. */}
       <ul className="divide-y divide-edge/60">
         {breakdown.map((entry, i) => (
           <li key={i} className="flex items-center justify-between gap-3 py-1.5 text-sm">
             <span className="min-w-0 flex-1 truncate text-ink">{entry.label}</span>
+            <RefChip refInfo={entry.ref} />
             {entry.source && <span className="mono-label shrink-0">{entry.source}</span>}
             <span
               className={`w-10 shrink-0 text-right font-label ${

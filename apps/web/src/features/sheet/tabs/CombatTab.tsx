@@ -5,7 +5,7 @@
  */
 import { useState } from 'react';
 import type { SheetWeapon } from '@safehouse/contracts';
-import { rangeModifier } from '@safehouse/rules';
+import { lineRef, rangeModifier } from '@safehouse/rules';
 import {
   bulletsForMode,
   recoilCompensation,
@@ -184,6 +184,7 @@ function WeaponCard({ weapon, character, derived, roll, patchSheet, overrideFor 
         value: rangeMod.value,
         active: true,
         source: 'range',
+        ...(rangeMod.bookRef ? { ref: rangeMod.bookRef } : {}),
       });
     }
     if (penalty !== 0) {
@@ -193,6 +194,7 @@ function WeaponCard({ weapon, character, derived, roll, patchSheet, overrideFor 
         value: penalty,
         active: true,
         source: 'situational',
+        ref: lineRef('recoil'),
       });
     }
     if (mode.toUpperCase() === 'BF' || mode.toUpperCase() === 'FA') {
@@ -202,6 +204,7 @@ function WeaponCard({ weapon, character, derived, roll, patchSheet, overrideFor 
         value: 0,
         active: true,
         source: 'situational',
+        ref: lineRef('fireModes'),
       });
     }
     roll(

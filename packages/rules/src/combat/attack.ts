@@ -5,6 +5,7 @@ import type {
   RollResult,
   SheetWeapon,
 } from '@safehouse/contracts';
+import { lineRef } from '../refs.js';
 import { poolTotal, rollCombatPool } from './roll.js';
 import {
   applyDamage,
@@ -135,7 +136,7 @@ export interface AttackChainResult {
 function woundEntry(actor: CombatActor): ProvenanceEntry | null {
   const wm =
     actor.woundModifier ?? (actor.monitors ? computeWoundModifier(actor.monitors) : 0);
-  return wm !== 0 ? { label: 'Wounds', value: wm, source: 'wound' } : null;
+  return wm !== 0 ? { label: 'Wounds', value: wm, source: 'wound', ref: lineRef('wounds') } : null;
 }
 
 /**
@@ -173,7 +174,11 @@ export function resolveAttackChain(
     { label: 'INT', value: defender.attributes.int },
   ];
   if (fullDefense) {
-    defenseBreakdown.push({ label: 'WIL (Full Defense)', value: defender.attributes.wil ?? 0 });
+    defenseBreakdown.push({
+      label: 'WIL (Full Defense)',
+      value: defender.attributes.wil ?? 0,
+      ref: lineRef('fullDefense'),
+    });
   }
   const defenderWounds = woundEntry(defender);
   if (defenderWounds) defenseBreakdown.push(defenderWounds);
@@ -229,7 +234,7 @@ export function resolveAttackChain(
   const soakBreakdown: ProvenanceEntry[] = [
     { label: 'BOD', value: defender.attributes.bod },
     { label: 'Armor', value: armor },
-    ...(apApplied !== 0 ? [{ label: 'AP', value: apApplied }] : []),
+    ...(apApplied !== 0 ? [{ label: 'AP', value: apApplied, ref: lineRef('armorPenetration') }] : []),
     ...(opts.soakModifiers ?? []),
   ];
   const soakPool = poolTotal(soakBreakdown);

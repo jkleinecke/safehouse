@@ -31,7 +31,7 @@ import {
 } from '../rollDialogState.js';
 import { refsForRoll } from '../rollRefs.js';
 import RollRefs from './RollRefs.js';
-import { Sheet, Stepper } from './ui.js';
+import { RefChip, Sheet, Stepper } from './ui.js';
 
 export type { RollConfig } from '../rollDialogState.js';
 
@@ -168,11 +168,16 @@ export default function RollDialog(props: RollDialogProps) {
       {config.note && <p className="mt-1 text-xs text-warn">{config.note}</p>}
 
       {/* Base provenance, compact. Scene lines are pulled out below so the
-          same penalty is never printed twice on one card. */}
-      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-dim">
+          same penalty is never printed twice on one card. A line that knows
+          its page (wounds, sustaining, a quality's bonus) carries a book chip,
+          so every buff and debuff can be read up without leaving the roll. */}
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-dim">
         {baseEntries.map((e, i) => (
-          <span key={i}>
-            {e.label} <span className="font-label text-ink">{signed(e.value)}</span>
+          <span key={i} className="inline-flex items-center gap-1">
+            <span>
+              {e.label} <span className="font-label text-ink">{signed(e.value)}</span>
+            </span>
+            <RefChip refInfo={e.ref} />
           </span>
         ))}
       </div>
@@ -188,8 +193,9 @@ export default function RollDialog(props: RollDialogProps) {
           <div className="mono-label text-faint">Already in this pool</div>
           <ul className="mt-0.5 space-y-0.5">
             {sceneEntries.map((e, i) => (
-              <li key={i} className="flex items-baseline justify-between gap-2 text-xs text-dim">
+              <li key={i} className="flex items-center justify-between gap-2 text-xs text-dim">
                 <span className="min-w-0 flex-1 truncate">{e.label}</span>
+                <RefChip refInfo={e.ref} />
                 <span className="font-label text-magenta">{signed(e.value)}</span>
               </li>
             ))}
@@ -201,24 +207,28 @@ export default function RollDialog(props: RollDialogProps) {
       {chips.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5" role="group" aria-label="Situational modifiers">
           {chips.map((chip) => (
-            <button
-              key={chip.id}
-              type="button"
-              aria-pressed={chip.active}
-              className={`chip transition-colors ${
-                chip.active
-                  ? chip.value < 0
-                    ? 'border-magenta-dim text-magenta'
-                    : 'border-cyan-dim text-cyan'
-                  : 'text-faint line-through'
-              }`}
-              onClick={() => setFlipped((m) => ({ ...m, [chip.id]: !m[chip.id] }))}
-              aria-label={`${chip.label} ${signed(chip.value)}, ${
-                chip.active ? 'applied — activate to drop' : 'dropped — activate to apply'
-              }`}
-            >
-              {chip.label} {signed(chip.value)}
-            </button>
+            // The page sits beside the toggle, not inside it: a chip is a
+            // button already, and tapping the page must not drop the modifier.
+            <span key={chip.id} className="inline-flex items-center gap-0.5">
+              <button
+                type="button"
+                aria-pressed={chip.active}
+                className={`chip transition-colors ${
+                  chip.active
+                    ? chip.value < 0
+                      ? 'border-magenta-dim text-magenta'
+                      : 'border-cyan-dim text-cyan'
+                    : 'text-faint line-through'
+                }`}
+                onClick={() => setFlipped((m) => ({ ...m, [chip.id]: !m[chip.id] }))}
+                aria-label={`${chip.label} ${signed(chip.value)}, ${
+                  chip.active ? 'applied — activate to drop' : 'dropped — activate to apply'
+                }`}
+              >
+                {chip.label} {signed(chip.value)}
+              </button>
+              <RefChip refInfo={chip.ref} />
+            </span>
           ))}
         </div>
       )}
