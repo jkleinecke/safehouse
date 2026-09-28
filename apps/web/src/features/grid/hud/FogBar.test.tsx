@@ -34,9 +34,9 @@ function render(s: Scene): string {
   );
 }
 
-/** Whether the bar's button `testId` reads pressed. */
+/** Whether the bar's button or switch `testId` reads pressed (on). */
 function pressed(html: string, testId: string): boolean | null {
-  const m = new RegExp(`aria-pressed="(true|false)" data-testid="${testId}"`).exec(html);
+  const m = new RegExp(`aria-(?:pressed|checked)="(true|false)" data-testid="${testId}"`).exec(html);
   return m ? m[1] === 'true' : null;
 }
 

@@ -790,7 +790,12 @@ export class CoverMasks {
       change.shroud = true;
     }
 
-    if (change.fog || change.shroud) setCover(this, maskOf(this.fog, this.fogAmount), maskOf(this.shroud, this.shroudAmount));
+    // The GM's stage keeps the discard compiled in, so her "See as players"
+    // lens is a texture swap rather than a recompile of every lit program
+    // (`setCover`, the module note in cover.ts).
+    if (change.fog || change.shroud) {
+      setCover(this, maskOf(this.fog, this.fogAmount), maskOf(this.shroud, this.shroudAmount), state.role === 'gm');
+    }
     if (change.fog) this.placeLid();
     for (const t of gone) t.dispose();
     return change;

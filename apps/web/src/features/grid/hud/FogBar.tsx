@@ -119,6 +119,57 @@ function Toggle({
   );
 }
 
+/**
+ * A switch on the bar: its name beside a sliding switch that reads on or off
+ * at a glance (the GM, 2026-09-27: "toggles instead of weird text buttons").
+ * The whole thing is one control, so the name is as good a target as the
+ * switch itself.
+ */
+function Switch({
+  on,
+  label,
+  title,
+  testId,
+  disabled,
+  onChange,
+}: {
+  on: boolean;
+  label: string;
+  title: string;
+  testId: string;
+  disabled?: boolean;
+  onChange: (on: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      data-testid={testId}
+      disabled={disabled}
+      title={title}
+      onClick={() => onChange(!on)}
+      className="flex min-h-9 shrink-0 items-center gap-2 rounded px-1.5 py-1 hover:bg-edge/50 disabled:opacity-50"
+    >
+      <span className={'mono-label ' + (on ? 'text-cyan' : 'text-dim')}>{label}</span>
+      <span
+        aria-hidden
+        className={
+          'relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors ' +
+          (on ? 'border-cyan bg-cyan-dim' : 'border-edge-bright bg-deck')
+        }
+      >
+        <span
+          className={
+            'absolute left-0.5 h-3.5 w-3.5 rounded-full transition-transform ' +
+            (on ? 'translate-x-4 bg-cyan shadow-glow-cyan' : 'bg-dim')
+          }
+        />
+      </span>
+    </button>
+  );
+}
+
 /** The gap between two groups: a line where the row is wide, nothing where it has wrapped. */
 function Divider() {
   return <span className="mx-1 hidden h-6 w-px shrink-0 bg-edge sm:block" aria-hidden />;
@@ -173,28 +224,28 @@ export default function FogBar({ scene, commands }: { scene: Scene; commands: Gr
       className="flex w-full min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1.5 border-b border-edge bg-panel px-3 py-1.5"
     >
       <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="What the table sees">
-        <Toggle
+        <Switch
           on={fogged}
           label="Fog"
           testId="fog-bar-fog"
           title={
             fogged
-              ? 'The players and the TV see only what is revealed. Press to show them the whole map.'
-              : 'The players and the TV see the whole map. Press to hide it all under the fog.'
+              ? 'The players and the TV see only what is revealed. Switch off to show them the whole map.'
+              : 'The players and the TV see the whole map. Switch on to hide it all under the fog.'
           }
-          onClick={() => setFog(!fogged)}
+          onChange={setFog}
         />
-        <Toggle
+        <Switch
           on={sight.on}
           label="Party sight"
           testId="fog-bar-sight"
           disabled={sight.pending}
           title={
             sight.on
-              ? 'The table sees what the runners see, and the rooms they have seen, dimmed. Press to stop.'
+              ? 'The table sees what the runners see, and the rooms they have seen, dimmed. Switch off to stop.'
               : 'Let the runners reveal the map: the table sees what they see, and remembers what they have seen.'
           }
-          onClick={() => setSight(!sight.on)}
+          onChange={setSight}
         />
       </div>
 

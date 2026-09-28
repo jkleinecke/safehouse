@@ -43,11 +43,16 @@
  * discard is compiled in only while a fog mask is shown (`discardOn`): a
  * shader with a `discard` in it gives up early depth testing, and on the
  * tile-based GPUs of phones and TV sticks its hidden-surface removal too,
- * whether or not the discard ever fires. The GM and a player on an
- * unfogged scene draw with programs that have none; a player's stage pays
- * one recompile of every covered program when its first fog arrives (none
- * at all when the fog is there from the first frame, which is the usual
- * case). Every material that wears the patch is known (`track`), so a flip
+ * whether or not the discard ever fires. A player on an unfogged scene
+ * draws with programs that have none; a player's stage pays one recompile
+ * of every covered program when its first fog arrives (none at all when the
+ * fog is there from the first frame, which is the usual case). The GM's
+ * stage keeps the discard compiled in from its first frame (`setCover`'s
+ * `keepDiscard`): her "See as players" lens shows the table's fog, and
+ * flipping the discard for it recompiled every lit program on the map —
+ * a noticeable pause at Medium and High each time she looked (2026-09-27).
+ * On her laptop, drawing on demand, the discard's cost is nothing she can
+ * see; on the phones and the TV, which never flip, it would be. Every material that wears the patch is known (`track`), so a flip
  * reaches the ones not in the scene at that moment too.
  *
  * ## What the discard would open
@@ -325,12 +330,14 @@ export function claimCover(who: object): void {
  * Show these masks (null for none) on every covered material, if `who` owns
  * the cover. The caller asks for a frame.
  */
-export function setCover(who: object, fog: CoverMask | null, shroud: CoverMask | null): void {
+export function setCover(who: object, fog: CoverMask | null, shroud: CoverMask | null, keepDiscard = false): void {
   if (owner !== who) return;
   writeMask(U.labCoverFogMap, U.labCoverFogRect, U.labCoverFog, fog, NO_FOG);
   writeMask(U.labCoverShroudMap, U.labCoverShroudRect, U.labCoverShroud, shroud, ALL_SEEN);
-  // The shroud never reaches total: only a fog that can is worth a discard.
-  setDiscard(U.labCoverFog.value >= COVER_TOTAL);
+  // The shroud never reaches total: only a fog that can is worth a discard —
+  // or a stage that asks to keep it, so a fog coming and going costs it no
+  // recompile (the GM's, for her players' lens: see the module note).
+  setDiscard(keepDiscard || U.labCoverFog.value >= COVER_TOTAL);
 }
 
 /** `who` is done with the cover: if it still owns it, nothing is covered any more, and the eyes are plain. */
