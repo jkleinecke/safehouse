@@ -156,6 +156,11 @@ function derive(body: CardBody): DerivedCharacter | null {
   return body.sheet ? deriveCharacter(body.sheet, { situational: body.mods ?? [] }) : null;
 }
 
+/** Worn armor before AP; 0 with no sheet. */
+export function armorOf(body: CardBody): number {
+  return derive(body)?.pools['armor']?.total ?? 0;
+}
+
 /** The fire mode a firing action is made in. */
 function fireModeOf(action: CombatAction): FireModeCode | undefined {
   return FIRE_MODE_CODES.find((code) => FIRE_MODE_ACTIONS[code].includes(action.id));
@@ -175,7 +180,7 @@ export function weaponsFor(sheet: SheetV1 | null, action: CombatAction): SheetWe
   return [...all.filter(fits), ...all.filter((w) => !fits(w))];
 }
 
-function pickWeapon(sheet: SheetV1 | null, action: CombatAction, name?: string): SheetWeapon | undefined {
+export function pickWeapon(sheet: SheetV1 | null, action: CombatAction, name?: string): SheetWeapon | undefined {
   return (name ? sheet?.weapons.find((w) => w.name === name) : undefined) ?? weaponsFor(sheet, action)[0];
 }
 
@@ -498,7 +503,7 @@ function testFor(action: CombatAction, req: CardRequest, target?: CardTarget | n
     return { kind: 'opposed', against: `${target.actor.name}'s defense`, ref: lineRef('opposed') };
   }
   if (action.exchange === 'defends') {
-    return { kind: 'opposed', ...(exchange ? { against: `${exchange.attacker.name}'s attack` } : {}), ref: lineRef('opposed') };
+    return { kind: 'opposed', ...(exchange?.attacker ? { against: `${exchange.attacker.name}'s attack` } : {}), ref: lineRef('opposed') };
   }
   return { kind: 'success', ref: lineRef('success') };
 }

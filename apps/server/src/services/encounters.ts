@@ -62,6 +62,7 @@ import {
   type InitiativeDetail,
 } from './encounters-model.js';
 import type { ChainOutcome } from './encounters-copilot.js';
+import { announceToPlayers, closeBeforeTurn, logToGm, openExchanges } from './exchanges-model.js';
 import {
   recordChainRolls,
   recordCopilotRoll,
@@ -801,6 +802,11 @@ export class EncountersService {
         .update(combatants)
         .set({ copilot: CLEAR_TURN_FLAGS })
         .where(eq(combatants.encounterId, encounterId));
+      const closed = await closeBeforeTurn(itx, encounterId, row.turn);
+      for (const x of closed) {
+        await logToGm(itx, `${x.attacker?.name ?? 'Someone'} → ${x.target.name}: closed with the Combat Turn`, x);
+      }
+      if (closed.length > 0) await announceToPlayers(itx, closed);
       // One fight at a time: the table, the phones and the TV all follow
       // "the live encounter", and two of them would be a coin toss.
       await this.retireOtherLive(itx, row.campaignId, row.id);
@@ -1181,6 +1187,7 @@ export class EncountersService {
         combatants: list,
         activeCombatantId: active,
         turnOrder: order,
+        exchanges: await openExchanges(tx.db, encounter.id),
       },
       visibility: 'gm',
     });

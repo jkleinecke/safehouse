@@ -62,6 +62,8 @@ const UndoSnapshotSchema = z.object({
   boxes: z.number().int().optional(),
   track: z.enum(['physical', 'stun']).optional(),
   note: z.string().optional(),
+  /** Undoing it puts that exchange back to awaiting apply. */
+  exchangeId: z.string().optional(),
   ts: z.string(),
 });
 export type UndoSnapshot = z.infer<typeof UndoSnapshotSchema>;

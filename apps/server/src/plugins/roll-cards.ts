@@ -11,10 +11,15 @@ import {
   CardRequestSchema,
   CardSettleRequestSchema,
   type CardActorRef,
+  type CardRequest,
   type DeclaredBy,
+  type Exchange,
 } from '@safehouse/contracts';
+import { combatAction } from '@safehouse/rules';
 import { assertCampaign, httpError, requireAuth } from '../services/auth.js';
 import { EncountersService } from '../services/encounters.js';
+import { CombatDamageService } from '../services/encounters-damage.js';
+import { ExchangesService } from '../services/exchanges.js';
 import { buildCard, listActions, type CardTarget } from '../services/roll-cards.js';
 import { loadActor, type LoadedActor } from '../services/roll-cards-load.js';
 import { settleCard } from '../services/roll-cards-settle.js';
@@ -59,44 +64,88 @@ export default async function rollCardsPlugin(app: FastifyInstance): Promise<voi
     return listActions(loaded.body, { gm, scene: loaded.scene, ...(against ? { against } : {}) });
   });
 
-  async function targetFor(ref: CardActorRef | undefined, loaded: LoadedActor, gm: boolean): Promise<CardTarget | null> {
+  async function targetFor(ref: CardActorRef | undefined, loaded: LoadedActor, gm: boolean) {
     if (!ref) return null;
     const t = await loadActor(app.db, ref);
     if (t.campaignId !== loaded.campaignId || (!gm && !(await onTable(ref, t)))) {
       throw httpError(404, 'not_found', 'unknown target');
     }
-    return {
+    const target: CardTarget = {
       actor: t.body.actor,
       ...(t.body.token ? { token: t.body.token } : {}),
       ...(t.body.prone ? { prone: true } : {}),
     };
+    return { target, loaded: t };
+  }
+
+  const encounters = new EncountersService(app.db, app.hub);
+  const exchanges = new ExchangesService({
+    db: app.db,
+    hub: app.hub,
+    encounters,
+    damage: new CombatDamageService(encounters),
+  });
+
+  /** A player reaches only an exchange their runner is in, and answers only one aimed at it. */
+  async function exchangeFor(body: CardRequest, loaded: LoadedActor, gm: boolean): Promise<Exchange | null> {
+    if (!body.exchangeId) return null;
+    const { x, campaignId } = await exchanges.load(body.exchangeId);
+    if (campaignId !== loaded.campaignId) throw httpError(404, 'not_found', 'unknown exchange');
+    if (gm) return x;
+    const mine = loaded.row?.combatantId;
+    const target = mine !== undefined && x.target.combatantId === mine;
+    if (!target && !(mine !== undefined && x.attacker?.combatantId === mine)) {
+      throw httpError(404, 'not_found', 'unknown exchange');
+    }
+    const answers = combatAction(body.actionId)?.exchange;
+    if (!target && (answers === 'defends' || answers === 'soaks')) {
+      throw httpError(403, 'forbidden', 'a player answers only an attack on their own runner');
+    }
+    return x;
   }
 
   app.post('/api/cards/preview', async (req) => {
     const body = parse(CardRequestSchema, req.body);
     const { gm, loaded } = await actorFor(req, body.actor);
-    const target = await targetFor(body.target, loaded, gm);
-    // exchangeId: read here once exchanges are stored; buildCard already takes one.
-    return { card: buildCard({ body: loaded.body, req: body, gm, scene: loaded.scene, target }) };
+    const t = await targetFor(body.target, loaded, gm);
+    const exchange = await exchangeFor(body, loaded, gm);
+    return {
+      card: buildCard({ body: loaded.body, req: body, gm, scene: loaded.scene, target: t?.target ?? null, exchange }),
+    };
   });
 
   const deps = {
     db: app.db,
     hub: app.hub,
     rolls: getRollService(app.db, app.hub, app.log),
-    encounters: new EncountersService(app.db, app.hub),
+    encounters,
+    exchanges,
   };
 
   /** The GM may settle for anyone, with any dice; `forActorBy` is theirs alone to set. */
   app.post('/api/cards/settle', async (req, reply) => {
     const body = parse(CardSettleRequestSchema, req.body);
     const { gm, loaded, viewer } = await actorFor(req, body.actor);
-    const target = await targetFor(body.target, loaded, gm);
+    const t = await targetFor(body.target, loaded, gm);
+    const exchange = await exchangeFor(body, loaded, gm);
     const by: DeclaredBy = gm
       ? (body.forActorBy ?? { role: 'gm', name: 'GM' })
       : { role: 'player', name: loaded.body.actor.name };
-    const card = buildCard({ body: loaded.body, req: { ...body, stage: 'dice' }, gm, scene: loaded.scene, target, by });
-    const out = await settleCard(deps, { viewer, loaded, req: body, card, by });
+    const card = buildCard({
+      body: loaded.body,
+      req: { ...body, stage: 'dice' },
+      gm,
+      scene: loaded.scene,
+      target: t?.target ?? null,
+      exchange,
+      by,
+    });
+    const out = await settleCard(deps, { viewer, loaded, req: body, card, by, target: t?.loaded ?? null, exchange });
+    if (out.exchange && !gm) {
+      const copy = await exchanges.copyFor(viewer, out.exchange);
+      if (copy) out.exchange = copy;
+      else delete out.exchange;
+    }
     return reply.status(201).send(out);
   });
 }

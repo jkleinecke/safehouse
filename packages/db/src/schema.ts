@@ -360,6 +360,29 @@ export const combatants = pgTable(
   (t) => [index('combatants_encounter_idx').on(t.encounterId)],
 );
 
+/** One attack, defense to damage (migration 0014). The rest of the `Exchange` rides in `body`. */
+export const exchanges = pgTable(
+  'exchanges',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    campaignId: uuid('campaign_id')
+      .notNull()
+      .references(() => campaigns.id, { onDelete: 'cascade' }),
+    encounterId: uuid('encounter_id')
+      .notNull()
+      .references(() => encounters.id, { onDelete: 'cascade' }),
+    targetId: uuid('target_id')
+      .notNull()
+      .references(() => combatants.id, { onDelete: 'cascade' }),
+    turn: integer('turn').notNull().default(0),
+    state: text('state').notNull().default('awaiting_defense'),
+    body: jsonb('body').notNull(),
+    appliedAt: timestamp('applied_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('exchanges_encounter_state_idx').on(t.encounterId, t.state)],
+);
+
 // ---------------------------------------------------------------------------
 // NPC generation (M10)
 // ---------------------------------------------------------------------------

@@ -256,27 +256,20 @@ export interface HitResult {
 }
 
 /**
- * Compare the attacker's hits with the defender's (p.173 step 3A). Both are
- * counted after their limits — the attack's Accuracy, a Dodge's Physical —
- * because limits apply before an Opposed Test compares hits (p.47).
- *
- * - More hits than the defender: a hit, and the difference is the net hits
- *   added to the DV.
- * - A tie: a grazing hit (p.173). It does no damage, but the attacker makes
- *   contact, so a contact-only attack (a toxin, shock gloves, a touch spell)
- *   still lands. Against a target in cover a tie also means the shot hit the
- *   cover (p.190); what that does to the barrier is the GM's call (p.197).
- * - Fewer: a miss.
- *
- * A tie at nothing apiece is a miss, not a graze. The book does not spell out
- * the zero case; our reading is that a graze is contact, and an attack that
- * scored no hits never reached the target to make any.
+ * A tie at 0-0. The book is silent; a miss until the GM rules (a graze is
+ * contact, and no hits never reached anyone).
+ */
+export const ZERO_TIE_IS_MISS: boolean = true;
+
+/**
+ * Hits after limits on both sides (p.47, 173): more is a hit, a tie a graze
+ * (contact, no damage; in cover it hit the cover, p.190), fewer a miss.
  */
 export function resolveHit(attackHits: number, defenseHits: number): HitResult {
   const attack = Math.max(0, Math.floor(attackHits));
   const netHits = attack - Math.max(0, Math.floor(defenseHits));
   if (netHits > 0) return { netHits, outcome: 'hit' };
-  if (netHits === 0 && attack > 0) return { netHits, outcome: 'graze' };
+  if (netHits === 0 && (attack > 0 || !ZERO_TIE_IS_MISS)) return { netHits, outcome: 'graze' };
   return { netHits, outcome: 'miss' };
 }
 

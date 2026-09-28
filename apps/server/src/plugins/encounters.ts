@@ -40,6 +40,7 @@ import {
   type EncounterRow,
 } from '../services/encounters.js';
 import { CombatDamageService } from '../services/encounters-damage.js';
+import { copiesFor, openExchanges } from '../services/exchanges-model.js';
 import { ScenesService } from '../services/scenes.js';
 import { hintForCombatant } from '../services/tactical-hints.js';
 import {
@@ -336,8 +337,12 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
       // the same order the frames do.
       await service.ericFor(list),
     );
+    const open = await openExchanges(app.db, id);
+    const hidden = new Set(list.filter((c) => c.visibility !== 'public').map((c) => c.id));
     return {
       ...view,
+      // A player's copies carry only their own side (Principle 3).
+      exchanges: auth.role === 'gm' ? open : copiesFor(open, auth.userId, owners, hidden),
       state: view.encounter.state,
       turn: view.encounter.turn,
       pass: view.encounter.pass,

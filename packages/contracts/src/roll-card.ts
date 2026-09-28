@@ -4,6 +4,7 @@ import { LimitKindSchema, ProvenanceEntrySchema } from './derived.js';
 import { EdgeActionSchema, TableResultSchema } from './roll.js';
 import {
   AttackKindSchema,
+  DamageTrackSchema,
   DeclaredBySchema,
   DeclaredDvSchema,
   DeclaredExtraSchema,
@@ -228,6 +229,8 @@ export type CardExtra = z.infer<typeof CardExtraSchema>;
 
 /** Only what the attacker changed; left out means "as the weapon says". */
 export const DeclarationEditSchema = z.object({
+  /** A spell names its kind: `direct-spell` is resisted, not defended (p.283). */
+  attack: AttackKindSchema.optional(),
   dv: DeclaredDvSchema.optional(),
   ap: z.number().int().optional(),
   defenseModifier: z.number().int().max(0).optional(),
@@ -270,3 +273,37 @@ export const CardSettleRequestSchema = CardRequestSchema.extend({
 });
 export type CardSettleRequest = z.infer<typeof CardSettleRequestSchema>;
 export type CardSettleRequestInput = z.input<typeof CardSettleRequestSchema>;
+
+// ---------------------------------------------------------------------------
+// The GM's hand on an exchange
+// ---------------------------------------------------------------------------
+
+/** A tabletop attack with no app roll: "Ari shot the bouncer: 4 hits, 8P, AP −1". */
+export const ExchangeOpenRequestSchema = z.object({
+  target: CardActorRefSchema,
+  attacker: CardActorRefSchema.optional(),
+  /** An attacker with no row or token. */
+  attackerName: z.string().min(1).max(80).optional(),
+  attack: AttackKindSchema.default('ranged'),
+  actionId: z.string().min(1).optional(),
+  weapon: z.string().min(1).max(80).optional(),
+  hits: NonNegInt,
+  dv: DeclaredDvSchema,
+  ap: z.number().int().default(0),
+  /** The fire mode's defense penalty (p.180). */
+  defenseModifier: z.number().int().max(0).default(0),
+  extras: z.array(DeclaredExtraSchema).default([]),
+  note: z.string().max(500).optional(),
+  by: DeclaredBySchema.optional(),
+});
+export type ExchangeOpenRequest = z.infer<typeof ExchangeOpenRequestSchema>;
+export type ExchangeOpenRequestInput = z.input<typeof ExchangeOpenRequestSchema>;
+
+/** Each field overrides what the soak worked out. */
+export const ExchangeApplyRequestSchema = z.object({
+  boxes: NonNegInt.optional(),
+  track: DamageTrackSchema.optional(),
+  /** A grunt group's member (FR4.6). */
+  memberIndex: NonNegInt.optional(),
+});
+export type ExchangeApplyRequest = z.infer<typeof ExchangeApplyRequestSchema>;

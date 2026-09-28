@@ -25,6 +25,7 @@ import { characters, combatants } from '@safehouse/db';
 import type { EventTx } from '../hub.js';
 import { httpError } from './auth.js';
 import type { EncountersService } from './encounters.js';
+import { announceToPlayers, reopenApplied } from './exchanges-model.js';
 import {
   conditionOf,
   isDown,
@@ -57,7 +58,10 @@ export class CombatDamageService {
    * silently disagrees with the tracker the GM is reading from. The two reads
    * this needs happen before the block opens (the deadlock rule).
    */
-  async applyDamage(input: DamageInput): Promise<DamageOutcome> {
+  async applyDamage(
+    input: DamageInput,
+    opts: { exchangeId?: string; alsoInTx?: (tx: EventTx) => Promise<void> } = {},
+  ): Promise<DamageOutcome> {
     const encounter = await this.encounters.getEncounter(input.encounterId);
     const row = await this.encounters.getCombatant(input.targetId);
     if (row.encounterId !== encounter.id) {
@@ -72,6 +76,7 @@ export class CombatDamageService {
       boxes: input.boxes,
       track: input.track,
       ...(input.note ? { note: input.note } : {}),
+      ...(opts.exchangeId ? { exchangeId: opts.exchangeId } : {}),
       ts: new Date().toISOString(),
     };
 
@@ -100,6 +105,8 @@ export class CombatDamageService {
     copilot.lastDamage = snapshot;
 
     return this.hub.atomic(encounter.campaignId, async (tx) => {
+      // First, so a lost race rolls back before the monitor is touched.
+      if (opts.alsoInTx) await opts.alsoInTx(tx);
       const updatedRow = (
         await tx.db
           .update(combatants)
@@ -165,6 +172,12 @@ export class CombatDamageService {
     return { ...outcome, modifiedDv, boxes };
   }
 
+  /** The exchange the row's last damage came from, if any. */
+  async lastDamageExchange(combatantId: string): Promise<string | null> {
+    const row = await this.encounters.getCombatant(combatantId);
+    return parseCopilot(row.copilot).lastDamage?.exchangeId ?? null;
+  }
+
   /** One-tap undo (FR4.5): restore the stored inverse of the last damage. */
   async undoDamage(combatantId: string): Promise<Combatant> {
     const row = await this.encounters.getCombatant(combatantId);
@@ -198,6 +211,8 @@ export class CombatDamageService {
         visibility: combatant.visibility,
       });
       await this.mirrorToCharacter(tx, combatant);
+      const reopened = snapshot.exchangeId ? await reopenApplied(tx, snapshot.exchangeId) : null;
+      if (reopened) await announceToPlayers(tx, [reopened]);
       await this.encounters.emitUpdated(encounter, 'damage.undo', tx);
       return combatant;
     });

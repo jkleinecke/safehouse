@@ -1,24 +1,29 @@
 /**
- * Settling a roll card: the dice (the site's or the table's), then the
- * tracker's share in the roll's own transaction — an Interrupt's score, Full
- * Defense, defenses since acting, an NPC's Edge. Nothing here marks a row done.
+ * Settling a roll card: the dice (the site's or the table's), then in the
+ * roll's own transaction the tracker's share (an Interrupt's score, Full
+ * Defense, defenses since acting, an NPC's Edge) and the exchange's step.
+ * Nothing here marks a row done.
  */
 import { eq, sql, type SQL } from 'drizzle-orm';
 import type {
   CardSettleRequest,
   DeclaredBy,
   EdgeState,
+  Exchange,
+  ExchangeWeapon,
   RollCard,
   RollKind,
   RollRequest,
   Visibility,
 } from '@safehouse/contracts';
-import { EDGE_ACTION_LABELS } from '@safehouse/rules';
+import { EDGE_ACTION_LABELS, combatAction } from '@safehouse/rules';
 import { combatants, type Db } from '@safehouse/db';
 import type { EventTx, Hub } from '../hub.js';
 import { httpError } from './auth.js';
 import { loadCharacter } from './characters.js';
 import type { EncountersService } from './encounters.js';
+import type { ExchangesService } from './exchanges.js';
+import { armorOf, pickWeapon } from './roll-cards.js';
 import type { LoadedActor } from './roll-cards-load.js';
 import type { RollRecord, RollService, RollViewer } from './rolls.js';
 
@@ -28,6 +33,8 @@ export interface CardSettled {
   roll: RollRecord | null;
   /** An Interrupt's cost as paid; the GM retypes the score to undo it. */
   initScore?: { combatantId: string; from: number; to: number };
+  /** Opened, defended or soaked by this settle (the caller trims it for a player). */
+  exchange?: Exchange;
 }
 
 export interface SettleDeps {
@@ -35,6 +42,7 @@ export interface SettleDeps {
   hub: Hub;
   rolls: RollService;
   encounters: EncountersService;
+  exchanges: ExchangesService;
 }
 
 export interface SettleInput {
@@ -43,6 +51,8 @@ export interface SettleInput {
   req: CardSettleRequest;
   card: RollCard;
   by: DeclaredBy;
+  target?: LoadedActor | null;
+  exchange?: Exchange | null;
 }
 
 type Row = NonNullable<LoadedActor['row']>;
@@ -101,6 +111,76 @@ function requestFor(input: SettleInput, visibility: Visibility, edgeDice: number
     },
     ...(table ? { tableResult: table } : {}),
   };
+}
+
+type Step = (tx: EventTx, rec: RollRecord | null) => Promise<Exchange>;
+
+function weaponOf(input: SettleInput): ExchangeWeapon | undefined {
+  const action = combatAction(input.card.action.id);
+  if (action?.pool.from !== 'weapon') return undefined;
+  const w = pickWeapon(input.loaded.body.sheet, action, input.req.weapon);
+  if (!w) return undefined;
+  return {
+    name: w.name,
+    skillId: w.skillId,
+    ...(w.dv ? { dv: w.dv } : {}),
+    ap: w.ap,
+    ...(w.acc !== undefined ? { acc: w.acc } : {}),
+  };
+}
+
+/** An attack on a tracker row opens an exchange; a defense or soak with one answers it. */
+function exchangeStep(deps: SettleDeps, input: SettleInput): Step | null {
+  const { card, req, loaded, target, exchange } = input;
+  const role = card.action.exchange;
+  const row = target?.row;
+  if (role === 'opens' && card.pool && card.declare && target && row) {
+    const declared = card.declare;
+    const weapon = weaponOf(input);
+    return (tx, rec) =>
+      deps.exchanges.openIn(tx, {
+        campaignId: loaded.campaignId,
+        encounterId: row.encounterId,
+        turn: row.turn,
+        targetId: row.combatantId,
+        body: {
+          actionId: card.action.id,
+          attack: req.declare?.attack ?? card.action.attack ?? 'ranged',
+          attacker: { ...(loaded.row ? { combatantId: loaded.row.combatantId } : {}), name: card.actor.name },
+          target: { combatantId: row.combatantId, name: target.body.actor.name },
+          ...(weapon ? { weapon } : {}),
+          declared,
+          attackRollId: rec!.id,
+          attackHits: rec!.limitedHits,
+        },
+      });
+  }
+  if (!exchange) return null;
+  if (exchange.state === 'cancelled' || exchange.appliedAt) {
+    throw httpError(409, 'exchange_closed', 'that exchange is closed or already applied');
+  }
+  const armor = armorOf(loaded.body);
+  if (role === 'defends') {
+    const offersOn = card.offers.filter((o) => o.on).map((o) => o.id);
+    const unaware = card.offers.some((o) => o.on && o.noDefense);
+    return (tx, rec) =>
+      deps.exchanges.defendIn(
+        tx,
+        exchange.id,
+        {
+          actionId: card.action.id,
+          rollId: rec?.id ?? null,
+          hits: rec?.limitedHits ?? 0,
+          offersOn,
+          ...(unaware ? { noDefense: true as const } : {}),
+        },
+        armor,
+      );
+  }
+  if (role === 'soaks' && card.pool) {
+    return (tx, rec) => deps.exchanges.soakIn(tx, exchange.id, { rollId: rec!.id, hits: rec!.limitedHits }, armor);
+  }
+  return null;
 }
 
 /** One write to the row, its frames, and the log lines that say what changed. */
@@ -179,12 +259,16 @@ export async function settleCard(deps: SettleDeps, input: SettleInput): Promise<
   };
 
   const changes = () => book.cost > 0 || book.fullDefense || book.defended || book.edge !== undefined;
+  const step = exchangeStep(deps, input);
+  let exchange: Exchange | undefined;
   if (!card.pool) {
-    if (!row || !changes()) return { card, roll: null };
-    const initScore = await deps.hub.atomic(campaignId, (tx) =>
-      applyTracker(deps, tx, input, row, book, { visibility, ownerUserId, rollId: null }),
-    );
-    return { card, roll: null, ...(initScore ? { initScore } : {}) };
+    if (!step && (!row || !changes())) return { card, roll: null };
+    const initScore = await deps.hub.atomic(campaignId, async (tx) => {
+      if (step) exchange = await step(tx, null);
+      if (!row || !changes()) return undefined;
+      return applyTracker(deps, tx, input, row, book, { visibility, ownerUserId, rollId: null });
+    });
+    return { card, roll: null, ...(initScore ? { initScore } : {}), ...(exchange ? { exchange } : {}) };
   }
 
   // An NPC's Edge: the row's own pool when tracked, else the sheet's rating, unpaid.
@@ -208,9 +292,10 @@ export async function settleCard(deps: SettleDeps, input: SettleInput): Promise<
     character,
     ownerUserId,
     alsoInTx: async (tx, rec) => {
+      if (step) exchange = await step(tx, rec);
       if (!row || !changes()) return;
       initScore = await applyTracker(deps, tx, input, row, book, { visibility, ownerUserId, rollId: rec.id });
     },
   });
-  return { card, roll, ...(initScore ? { initScore } : {}) };
+  return { card, roll, ...(initScore ? { initScore } : {}), ...(exchange ? { exchange } : {}) };
 }

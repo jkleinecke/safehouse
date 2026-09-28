@@ -46,6 +46,7 @@ export {
   parseDamageCode,
   defensePool,
   resolveHit,
+  ZERO_TIE_IS_MISS,
   armorAfterAp,
   damageAfterHit,
   soakPool,
