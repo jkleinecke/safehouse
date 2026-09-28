@@ -1575,7 +1575,7 @@ export default function GridPage() {
         panel keeps Build and Prep; a fight is run from here.
       */}
       {campaignId && scene && store.playRailOpen && (isGm ? store.mode === 'play' : true) && (
-        <PlayRail campaignId={campaignId} onCollapse={store.togglePlayRail} />
+        <PlayRail campaignId={campaignId} sceneId={scene.id} onCollapse={store.togglePlayRail} />
       )}
 
       {isGm && store.gmPanelOpen && scene && campaignId && (

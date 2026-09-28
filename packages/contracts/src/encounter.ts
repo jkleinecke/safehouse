@@ -156,6 +156,8 @@ export const EncounterSchema = z.object({
    * stored; absent when the source did not carry it.
    */
   turnOrder: z.array(z.string()).optional(),
+  /** Player/TV views: someone this viewer may not see is acting ("GM's turn"). */
+  gmTurn: z.boolean().optional(),
   /** Present when the API returns the composed view. */
   combatants: z.array(CombatantSchema).optional(),
 });

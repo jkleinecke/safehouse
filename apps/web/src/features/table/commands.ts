@@ -7,7 +7,8 @@ import { useEffect, useMemo, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Combatant, Encounter, RollTable, WsCommandInput } from '@safehouse/contracts';
 import { apiDelete, apiGet, apiPatch, apiPost } from '../../api/client.js';
-import { fetchEncounter, fetchLiveEncounter, fetchRollTables, liveKeys } from '../../api/live.js';
+import { fetchEncounter, fetchEncounterList, fetchLiveEncounter, fetchRollTables, liveKeys } from '../../api/live.js';
+import { pickEncounterId } from '../grid/hydration.js';
 import { getSession } from '../../api/session.js';
 import { getLiveSocket } from '../../live/socket.js';
 import { useLiveStore } from '../../live/store.js';
@@ -214,6 +215,12 @@ export function useEncounterList(campaignId: string | undefined) {
   });
 }
 
+/** The scene's fight with its rows, or null when it has none. */
+async function fetchSceneEncounter(campaignId: string, sceneId: string): Promise<Encounter | null> {
+  const id = pickEncounterId(await fetchEncounterList(campaignId), sceneId);
+  return id ? fetchEncounter(id) : null;
+}
+
 export interface TrackerEncounter {
   encounter: Encounter | null;
   /** False only while the first REST read is still in flight. */
@@ -234,14 +241,20 @@ export function useTrackerEncounter(
   campaignId: string | undefined,
   /** A fight the GM picked by hand (the picker); null follows "the live one". */
   pickedId: string | null = null,
+  /** The map's scene: follow that scene's fight (`pickEncounterId`) instead. */
+  sceneId: string | null = null,
 ): TrackerEncounter {
   const qc = useQueryClient();
   const live = useLiveStore((s) => s.encounter);
+  const key = liveKeys.encounter(campaignId ?? '');
   const query = useQuery({
-    queryKey: pickedId
-      ? [...liveKeys.encounter(campaignId ?? ''), pickedId]
-      : liveKeys.encounter(campaignId ?? ''),
-    queryFn: () => (pickedId ? fetchEncounter(pickedId) : fetchLiveEncounter(campaignId as string)),
+    queryKey: pickedId ? [...key, pickedId] : sceneId ? [...key, 'scene', sceneId] : key,
+    queryFn: () =>
+      pickedId
+        ? fetchEncounter(pickedId)
+        : sceneId
+          ? fetchSceneEncounter(campaignId as string, sceneId)
+          : fetchLiveEncounter(campaignId as string),
     enabled: Boolean(campaignId),
     staleTime: 15_000,
   });
@@ -262,15 +275,16 @@ export function useTrackerEncounter(
   }, [campaignId, liveId, rest, qc, pickedId]);
 
   const encounter = useMemo<Encounter | null>(() => {
-    // A picked fight is the one on screen whatever the socket is announcing.
-    if (pickedId && live && live.id !== pickedId) return rest;
+    // A picked fight (or the scene's) is the one on screen whatever the socket is announcing.
+    const target = pickedId ?? (sceneId ? (rest?.id ?? null) : null);
+    if (target && live && live.id !== target) return rest;
     if (!live) return rest;
     if (live.combatants && live.combatants.length > 0) return live;
     if (rest && rest.id === live.id) {
       return { ...rest, ...live, ...(rest.combatants ? { combatants: rest.combatants } : {}) };
     }
     return live;
-  }, [live, rest]);
+  }, [live, rest, pickedId, sceneId]);
 
   return {
     encounter,

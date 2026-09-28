@@ -66,21 +66,20 @@ export function resolveSceneId(input: SceneChoiceInput): SceneChoice {
 // ---------------------------------------------------------------------------
 
 /**
- * Pick the encounter whose combatants decorate this scene's tokens. A live
- * fight on THIS scene wins; then any live fight (the GM may have swapped the
- * map mid-fight); then a prep encounter staged against this scene.
+ * The scene's fight: its live one, then its prep one (the newest, as the
+ * server joins placed tokens to), then any live fight (the map swapped mid-fight).
  */
 export function pickEncounterId(
   encounters: readonly Encounter[] | undefined,
   sceneId: string | null,
 ): string | null {
   if (!encounters || encounters.length === 0) return null;
-  const liveHere = encounters.find((e) => e.state === 'live' && sceneId && e.sceneId === sceneId);
+  const here = sceneId ? encounters.filter((e) => e.sceneId === sceneId) : [];
+  const liveHere = here.find((e) => e.state === 'live');
   if (liveHere) return liveHere.id;
-  const anyLive = encounters.find((e) => e.state === 'live');
-  if (anyLive) return anyLive.id;
-  const prepHere = encounters.find((e) => e.state === 'prep' && sceneId && e.sceneId === sceneId);
-  return prepHere?.id ?? null;
+  const prepHere = here.filter((e) => e.state === 'prep').at(-1);
+  if (prepHere) return prepHere.id;
+  return encounters.find((e) => e.state === 'live')?.id ?? null;
 }
 
 /**

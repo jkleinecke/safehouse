@@ -94,6 +94,7 @@ import { emitFogProximity } from '../fixer/proximity.js';
 import { applyDoorOp, doorRefusal, runnersReach, tileDoorState, withTileDoor, withTracedDoor } from '../services/doors.js';
 import { affectsSight, recomputeSight } from '../services/sight.js';
 import { runFogOp } from '../services/fogOps.js';
+import { joinFight, leaveFight, refreshCampaignFights, refreshFights } from '../services/fight-map.js';
 import {
   PerKeyThrottle,
   ScenesService,
@@ -299,6 +300,8 @@ const TokenCreateBody = z.object({
   pose: TokenPoseSchema.optional(),
   look: TokenLookSchema.nullable().optional(),
   light: TokenLightSchema.nullable().optional(),
+  /** A prop that fights: it joins the scene's fight. */
+  combatant: z.boolean().optional(),
 });
 
 const TokenPatchBody = z.object({
@@ -321,6 +324,8 @@ const TokenPatchBody = z.object({
   look: TokenLookSchema.nullable().optional(),
   /** The light it carries — a player may switch their own runner's flashlight; null takes it away. */
   light: TokenLightSchema.nullable().optional(),
+  /** GM only: a prop that fights (flagging one joins the scene's fight). */
+  combatant: z.boolean().optional(),
 });
 
 const SceneLevelsBody = z.object({
@@ -825,6 +830,8 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       // in, `importScene`), or staged while a runner's sheet changed. On a
       // scene without sightlines this writes and sends nothing.
       const pass = await recomputeSight(tx, activated.id);
+      // Every token on either scene just came onto or went off the table, and fight rows follow their tokens.
+      await refreshCampaignFights(tx, row.campaignId);
       return { ...activated, fog: pass.fog };
     });
     return { scene };
@@ -839,18 +846,18 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     const token = await app.hub.atomic(scene.campaignId, async (tx) => {
       const txSvc = svc.withDb(tx.db);
       const created = await txSvc.createToken(scene, body);
-      await tx.emit({
-        type: 'token.added',
-        payload: { token: created },
-        // Judged against the fog as it stands now, inside the transaction,
-        // so a guard placed in a room the GM hid a moment ago stays the GM's.
-        // Read LOCKED (`lockedScene`): a sight pass or a fog op still in
-        // flight is waited for, not read around.
-        visibility: tokenVis(created, await lockedScene(tx, scene.id)),
-      });
+      // Judged against the fog as it stands now, inside the transaction,
+      // so a guard placed in a room the GM hid a moment ago stays the GM's.
+      // Read LOCKED (`lockedScene`): a sight pass or a fog op still in
+      // flight is waited for, not read around.
+      const current = await lockedScene(tx, scene.id);
+      const visibility = tokenVis(created, current);
+      await tx.emit({ type: 'token.added', payload: { token: created }, visibility });
       // A runner placed is a pair of eyes on the table, and a token carrying
       // a light lights the dark for them. Anyone else changes no one's sight.
       if (affectsSight(created)) await recomputeSight(tx, scene.id);
+      // The fight is the map: a fighting token joins the scene's prep or live fight.
+      await joinFight(tx, current, created, visibility);
       return created;
     });
     return reply.status(201).send({ token });
@@ -906,6 +913,10 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
       }
       const written = await svc.withDb(tx.db).patchToken(id, body);
       await emitTokenChange(tx, scene, before, written, { positional, nonPositional });
+      if (written.combatant && !before.combatant) {
+        const current = await lockedScene(tx, scene.id);
+        await joinFight(tx, current, serializeToken(written), tokenVis(written, current));
+      }
       // After the token's own event, so a guard the move walks into sight
       // arrives after the move that showed him, and the sight event carries
       // where the party is looking now.
@@ -938,15 +949,14 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     assertCampaign(auth, scene.campaignId);
     await app.hub.atomic(scene.campaignId, async (tx) => {
       const txSvc = svc.withDb(tx.db);
+      // Judged against the scene as it stands inside this transaction, as
+      // the create and the move are, not the row read before it opened;
+      // locked, as theirs is (`lockedScene`).
+      const visibility = tokenVis(token, await lockedScene(tx, scene.id));
+      // Its rows leave the open fights first: deleting the token nulls their link.
+      await leaveFight(tx, id, visibility);
       await txSvc.deleteToken(id);
-      await tx.emit({
-        type: 'token.removed',
-        payload: { tokenId: id, sceneId: scene.id },
-        // Judged against the scene as it stands inside this transaction, as
-        // the create and the move are, not the row read before it opened;
-        // locked, as theirs is (`lockedScene`).
-        visibility: tokenVis(token, await lockedScene(tx, scene.id)),
-      });
+      await tx.emit({ type: 'token.removed', payload: { tokenId: id, sceneId: scene.id }, visibility });
       // A runner taken off the map takes their eyes with them; a lamp-post
       // token its light.
       if (affectsSight(token)) await recomputeSight(tx, scene.id);
@@ -998,6 +1008,7 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     const now = !table || tokenConcealed(after, current);
     if (was && !now) {
       await tx.emit({ type: 'token.added', payload: { token: dto } });
+      await refreshFights(tx, [after.id]);
       return;
     }
     if (!was && now) {
@@ -1010,6 +1021,7 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         payload: { token: dto },
         visibility: 'gm',
       });
+      await refreshFights(tx, [after.id]);
       return;
     }
     const visibility: Visibility = now ? 'gm' : 'public';
@@ -1422,18 +1434,14 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
   // --- encounter staging hook (FR9.10) --------------------------------------
 
   /**
-   * Turn the scene's character/NPC tokens into combatants. Coordination with
-   * the encounters domain is via db rows only; the emitted `encounter.updated`
-   * lets that plugin's clients refetch.
+   * Every fighting token on the scene (`fightsOnMap`, every floor) into a new
+   * fight or `encounterId`. The emitted `encounter.updated` lets clients refetch.
    */
   app.post('/api/scenes/:id/stage-encounter', async (req, reply) => {
     const { id } = req.params as { id: string };
     const { scene } = await openScene(req, id, { gmOnly: true });
     const body = parseBody(StageEncounterBody, req.body);
-    // One transaction for the whole staging: the encounter row, every
-    // combatant derived from a token, and the announcement. A partial stage —
-    // three of five runners on the tracker, no event — is a fight the GM has
-    // to notice is wrong before it starts.
+    // One transaction: no half-staged fight.
     const staged = await app.hub.atomic(scene.campaignId, async (tx) => {
       const out = await svc.withDb(tx.db).stageEncounter(scene, body);
       await tx.emit({
@@ -1441,11 +1449,7 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         payload: {
           encounterId: out.encounterId,
           sceneId: scene.id,
-          // A public frame, so the count is of the combatants the table may
-          // see (`shown`). It used to be every one staged, and the difference
-          // between that and the roster a player is sent was a head-count of
-          // the guards hidden, or standing in the fog, that the GM is holding
-          // back. The GM has the whole list in the response.
+          // Public: only the rows the table can see, never a head-count of hidden foes.
           staged: out.shown,
           created: out.createdEncounter,
         },

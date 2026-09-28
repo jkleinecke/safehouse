@@ -102,6 +102,8 @@ const CopilotSchema = z
     fullDefenseTurn: z.number().int().optional(),
     /** Defense tests since the row last acted (p.189); cleared when it is marked done. */
     defendedSinceAction: z.number().int().min(0).optional(),
+    /** Joined mid-turn (p.160): a roll this turn loses 10 per pass gone. `passesGone` is as it joined. */
+    lateEntry: z.object({ turn: z.number().int(), passesGone: z.number().int().min(0) }).optional(),
   })
   .loose();
 export type CombatantCopilot = z.infer<typeof CopilotSchema>;
@@ -234,6 +236,27 @@ export function rowsTiedOnScore(list: readonly Combatant[]): Combatant[] {
 // Views (FR4.9: hidden combatants excluded server-side)
 // ---------------------------------------------------------------------------
 
+/**
+ * A row with a token is public exactly while the table has that token
+ * (`ScenesService.tokensOnTable`); off the table a runner's stays its owner's.
+ * A row without a token keeps its own setting.
+ */
+export function tableVisibility(
+  c: { tokenId?: string | null | undefined; source: string; visibility: Visibility },
+  onTable: ReadonlySet<string>,
+): Visibility {
+  if (!c.tokenId) return c.visibility;
+  if (onTable.has(c.tokenId)) return 'public';
+  return c.source === 'character' ? 'gm_owner' : 'gm';
+}
+
+export function withTableVisibility(list: Combatant[], onTable: ReadonlySet<string>): Combatant[] {
+  return list.map((c) => {
+    const visibility = tableVisibility(c, onTable);
+    return visibility === c.visibility ? c : { ...c, visibility };
+  });
+}
+
 export type Condition = 'unharmed' | 'wounded' | 'bloodied' | 'down';
 
 export function conditionOf(m: CombatantMonitors): Condition {
@@ -273,21 +296,7 @@ export interface PlayerCombatantView {
   initBase?: number;
   initDice?: number;
   condition: Condition;
-  /**
-   * The token this row drives, when it has one — what lets the table TV put
-   * the acting glow and the coarse condition bar on the right figure instead
-   * of matching on display name (FR4.10/FR9.20).
-   *
-   * Only when the table HAS that token (`encounterForViewer`'s
-   * `tokensOnTable`): on the active scene and not concealed there. A row is
-   * public from the moment it is staged, and nothing re-derives it; a guard
-   * staged in the open who then walks into the dark keeps his public row, and
-   * his token id on it was the table's way of knowing which of the tokens it
-   * would later be sent was him, and that he was still on the map somewhere.
-   * The name and the condition stay (the fight has him in it); the link to
-   * the map goes until his token is back on it. A hidden combatant was
-   * dropped above, token and all.
-   */
+  /** The row's token, only while the table has it (`encounterForViewer`'s `tokensOnTable`). */
   tokenId?: string;
   /** Own PCs only — never another combatant's exact boxes. */
   monitors?: CombatantMonitors;
@@ -299,6 +308,8 @@ export interface EncounterView {
   combatants: Combatant[] | PlayerCombatantView[];
   activeCombatantId: string | null;
   turnOrder: string[];
+  /** Someone this viewer may not see is acting. */
+  gmTurn?: true;
   scope: 'gm' | 'player';
 }
 
@@ -309,19 +320,15 @@ export interface Viewer {
 
 /**
  * Compose the encounter for one viewer. GMs get everything; everyone else gets
- * turn order, their own monitors, and public condition only — GM-hidden
- * combatants are dropped before serialization, never hidden client-side.
+ * turn order, their own monitors, and public condition only; hidden rows are
+ * dropped here, never client-side.
  *
- * `tokensOnTable` is the ids of the tokens the table has right now
- * (`ScenesService.tokensOnTable`: on the active scene, not concealed there).
- * A row names its token (`tokenId`) to a non-GM viewer only when its token
- * is one of them. Left out, no row names its token: the TV then matches rows
- * to figures by name, and a caller that forgot the set costs a glow, never a
- * guard's id.
+ * `tokensOnTable` is the ids of the tokens the table has now: it decides each
+ * token row's visibility (`tableVisibility`) and whether the row names its token.
  */
 export function encounterForViewer(
   row: EncounterRow,
-  list: Combatant[],
+  rows: Combatant[],
   viewer: Viewer,
   ownerByCombatantId: ReadonlyMap<string, string | null> = new Map(),
   tokensOnTable: ReadonlySet<string> = new Set(),
@@ -330,6 +337,7 @@ export function encounterForViewer(
   // ONE order for the whole fight, worked out over every row and only then
   // cut down to what this viewer may see. Ordering the visible rows on their
   // own could slot a late joiner differently, and the table would disagree.
+  const list = withTableVisibility(rows, tokensOnTable);
   const opts = orderOptionsOf(row, eric);
   const order = turnOrder(list, opts).map((c) => c.id);
   const active = nextActorRules(list, opts)?.id ?? null;
@@ -376,6 +384,7 @@ export function encounterForViewer(
     combatants: views,
     activeCombatantId: active !== null && visibleIds.has(active) ? active : null,
     turnOrder: order.filter((id) => visibleIds.has(id)),
+    ...(active !== null && !visibleIds.has(active) ? { gmTurn: true as const } : {}),
     scope: 'player',
   };
 }
@@ -441,6 +450,8 @@ export interface InitiativeDetail {
   dice: number;
   rolls: number[];
   woundModifier: number;
+  /** Late entry (p.160): −10 per pass gone, already in `score`. */
+  latePenalty?: number;
   score: number;
 }
 

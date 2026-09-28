@@ -14,10 +14,12 @@ import '../../table/table.css';
 
 export interface PlayRailProps {
   campaignId: string;
+  /** The map's scene: the rail shows its fight. */
+  sceneId?: string | null;
   onCollapse: () => void;
 }
 
-export default function PlayRail({ campaignId, onCollapse }: PlayRailProps) {
+export default function PlayRail({ campaignId, sceneId = null, onCollapse }: PlayRailProps) {
   return (
     <aside
       data-testid="play-rail"
@@ -39,7 +41,7 @@ export default function PlayRail({ campaignId, onCollapse }: PlayRailProps) {
       </div>
       <div className="flex min-h-0 flex-1 flex-col md:flex-row xl:flex-col">
         <div className="flex min-h-0 basis-1/2 flex-col overflow-y-auto">
-          <Tracker campaignId={campaignId} />
+          <Tracker campaignId={campaignId} sceneId={sceneId} />
         </div>
         <div className="flex min-h-0 basis-1/2 flex-col border-edge md:border-l xl:border-l-0 xl:border-t">
           <LogStream campaignId={campaignId} />

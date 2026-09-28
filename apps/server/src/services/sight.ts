@@ -102,6 +102,7 @@ import {
 } from '@safehouse/rules';
 import { characters, scenes, tokens, type Db } from '@safehouse/db';
 import type { EventTx } from '../hub.js';
+import { refreshFights } from './fight-map.js';
 import {
   ScenesService,
   concealer,
@@ -373,12 +374,16 @@ export async function emitConcealmentChanges(
   if (!sceneOnTable(after)) return;
   const was = concealer(before);
   const now = concealer(after);
+  const flipped: string[] = [];
   for (const row of await new ScenesService(tx.db).tokensOf(sceneId)) {
     const hidBefore = was(row);
     const hidNow = now(row);
     if (hidBefore && !hidNow) await tx.emit({ type: 'token.added', payload: { token: serializeToken(row) } });
     if (!hidBefore && hidNow) await tx.emit({ type: 'token.removed', payload: { tokenId: row.id, sceneId } });
+    if (hidBefore !== hidNow) flipped.push(row.id);
   }
+  // Fight rows follow their tokens onto and off the table.
+  await refreshFights(tx, flipped);
 }
 
 export interface SightPassOptions {

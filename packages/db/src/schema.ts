@@ -284,6 +284,8 @@ export const tokens = pgTable(
     look: jsonb('look'),
     /** A light the token carries (TokenLight) — a flashlight, a lantern; null is none. */
     light: jsonb('light'),
+    /** A prop that fights: it joins the scene's fight like a runner or NPC token (0015). */
+    combatant: boolean('combatant').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('tokens_scene_idx').on(t.sceneId)],

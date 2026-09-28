@@ -863,9 +863,8 @@ describe('player encounter view (FR4.9)', () => {
    * This adds no secret: a row only reaches this list because it is public or
    * the viewer's own, and it names its token only while the table HAS that
    * token (P6 secrecy sweep): on the scene the table is looking at, and not
-   * concealed there. A GM-hidden combatant is dropped whole, token id
-   * included; a public one whose token is on a scene still being staged keeps
-   * its row and loses the link.
+   * concealed there. A row whose token the table does not have is dropped
+   * whole, token id included (the GM's rule: public exactly while its token is).
    */
   it('carries the token id on visible rows, and none for a hidden one', async () => {
     const id = await newEncounter('Catwalk');
@@ -909,12 +908,10 @@ describe('player encounter view (FR4.9)', () => {
       sheet: sheetFor('Sniper'),
     });
 
-    // Staged, the Catwalk is nobody's but the GM's: the Drone's row is on
-    // the roster, and its token's id is not.
+    // Staged, the Catwalk is nobody's but the GM's, and so is the Drone's row.
     const staged = await call('GET', `/api/encounters/${id}`, player.token);
     const stagedRow = (staged.json() as Record<string, any>)['combatants'].find((c: { id: string }) => c.id === visible.id);
-    expect(stagedRow.name).toBe('Drone');
-    expect(stagedRow.tokenId).toBeUndefined();
+    expect(stagedRow).toBeUndefined();
     expect(staged.body).not.toContain(token.id);
 
     // Live, the Drone is on the table's map, and its row says which figure it is.

@@ -38,6 +38,8 @@ import { fightPhase, passLabel, trackerRows, type Viewer } from './initiative.js
 
 export interface TrackerProps {
   campaignId: string;
+  /** On the map: show that scene's fight rather than the live one. */
+  sceneId?: string | null;
 }
 
 /**
@@ -84,12 +86,12 @@ function phaseLabel(phase: ReturnType<typeof fightPhase>, label: string): string
   return '';
 }
 
-export default function Tracker({ campaignId }: TrackerProps) {
+export default function Tracker({ campaignId, sceneId = null }: TrackerProps) {
   const session = getSession();
   const isGm = session?.role === 'gm';
   // The GM may look at any fight; everyone else follows the live one.
   const [pickedId, setPickedId] = useState<string | null>(null);
-  const { encounter, asked, failed } = useTrackerEncounter(campaignId, isGm ? pickedId : null);
+  const { encounter, asked, failed } = useTrackerEncounter(campaignId, isGm ? pickedId : null, sceneId);
   const list = useEncounterList(isGm ? campaignId : undefined);
 
   const myCharacterId = useMyCharacterId(campaignId);
@@ -163,6 +165,12 @@ export default function Tracker({ campaignId }: TrackerProps) {
           <span className="mono-label text-ink">
             <span className="text-faint">up: </span>
             {acting.combatant.name}
+          </span>
+        )}
+        {!acting && live && encounter?.gmTurn && (
+          <span className="mono-label text-ink">
+            <span className="text-faint">up: </span>
+            GM’s turn
           </span>
         )}
         {isGm && (

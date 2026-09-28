@@ -1,7 +1,7 @@
 /**
  * Exchange rows (migration 0014), the pure steps between states, and each
- * player's copy. No service deps: the tracker and the damage path call these
- * inside their own transactions.
+ * player's copy. The tracker and the damage path call these inside their own
+ * transactions.
  */
 import { and, eq, inArray, isNotNull, lt } from 'drizzle-orm';
 import {
@@ -15,6 +15,8 @@ import {
 import { boxesAfterSoak, damageAfterHit, resolveHit } from '@safehouse/rules';
 import { characters, combatants, exchanges, type Db } from '@safehouse/db';
 import type { EventTx } from '../hub.js';
+import { tableVisibility } from './encounters-model.js';
+import { ScenesService } from './scenes.js';
 
 export type ExchangeRow = typeof exchanges.$inferSelect;
 const COLUMNS = ['id', 'encounterId', 'turn', 'state', 'appliedAt', 'createdAt'] as const;
@@ -197,13 +199,20 @@ export async function partiesOf(db: Db, list: readonly Exchange[]) {
   const hidden = new Set<string>();
   if (ids.length === 0) return { owners, hidden };
   const rows = await db
-    .select({ id: combatants.id, visibility: combatants.visibility, owner: characters.ownerUserId })
+    .select({
+      id: combatants.id,
+      visibility: combatants.visibility,
+      tokenId: combatants.tokenId,
+      source: combatants.source,
+      owner: characters.ownerUserId,
+    })
     .from(combatants)
     .leftJoin(characters, and(eq(combatants.source, 'character'), eq(characters.id, combatants.sourceId)))
     .where(inArray(combatants.id, ids));
+  const onTable = await new ScenesService(db).tokensOnTable(rows.flatMap((r) => (r.tokenId ? [r.tokenId] : [])));
   for (const r of rows) {
     owners.set(r.id, r.owner ?? null);
-    if (r.visibility !== 'public') hidden.add(r.id);
+    if (tableVisibility(r, onTable) !== 'public') hidden.add(r.id);
   }
   return { owners, hidden };
 }

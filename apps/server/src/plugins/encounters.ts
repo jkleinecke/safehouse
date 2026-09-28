@@ -37,6 +37,7 @@ import {
   EncountersService,
   encounterForViewer,
   serializeEncounter,
+  withTableVisibility,
   type EncounterRow,
 } from '../services/encounters.js';
 import { CombatDamageService } from '../services/encounters-damage.js';
@@ -301,32 +302,17 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
   });
 
   /**
-   * The tracker's hydrate-on-mount call (and its reconnect refetch). The
-   * payload contract, stable for both scopes:
-   *
-   *   { encounter: { id, campaignId, sceneId, name, state, turn, pass,
-   *                  activeCombatantId },
-   *     state, turn, pass,        // mirrors of encounter.* — same row, one read
-   *     combatants, activeCombatantId, turnOrder, scope }
-   *
-   * `encounter.state|turn|pass` is canonical; the top-level trio is the same
-   * three numbers hoisted so a client never has to guess where they live. The
-   * `encounter.updated` events carry the same object under `payload.encounter`.
+   * The tracker's hydrate call. Both scopes:
+   *   { encounter, state, turn, pass (mirrors of encounter.*), combatants,
+   *     activeCombatantId, turnOrder, gmTurn? (player: a hidden row acts), scope, exchanges }
    */
   app.get('/api/encounters/:id', async (req) => {
     const { id } = req.params as { id: string };
     const { encounter, auth } = await scope(req, id, false);
     const list = await service.listCombatants(id);
     const owners = await service.ownersFor(list);
-    // Which combatants' tokens the table has right now: a row names its
-    // token to a player or the TV only then (`encounterForViewer`). The GM's
-    // view names every one, and needs no read for it.
-    const onTable =
-      auth.role === 'gm'
-        ? new Set<string>()
-        : await new ScenesService(app.db).tokensOnTable(
-            list.flatMap((c) => (c.tokenId ? [c.tokenId] : [])),
-          );
+    // The tokens the table has now: a token row is public exactly then (`encounterForViewer`).
+    const onTable = await new ScenesService(app.db).tokensOnTable(list.flatMap((c) => (c.tokenId ? [c.tokenId] : [])));
     const view = encounterForViewer(
       encounter,
       list,
@@ -338,7 +324,7 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
       await service.ericFor(list),
     );
     const open = await openExchanges(app.db, id);
-    const hidden = new Set(list.filter((c) => c.visibility !== 'public').map((c) => c.id));
+    const hidden = new Set(withTableVisibility(list, onTable).filter((c) => c.visibility !== 'public').map((c) => c.id));
     return {
       ...view,
       // A player's copies carry only their own side (Principle 3).

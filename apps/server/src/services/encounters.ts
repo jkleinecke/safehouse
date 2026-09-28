@@ -9,7 +9,7 @@
  * Hidden combatants are filtered server-side (Principle 4 / FR4.9): the player
  * view never carries a `gm` row, not even a redacted one.
  */
-import { and, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne, sql } from 'drizzle-orm';
 import {
   SceneEnvironmentSchema,
   SheetV1Schema,
@@ -60,9 +60,11 @@ import {
   type CombatantRow,
   type EncounterRow,
   type InitiativeDetail,
+  withTableVisibility,
 } from './encounters-model.js';
 import type { ChainOutcome } from './encounters-copilot.js';
 import { announceToPlayers, closeBeforeTurn, logToGm, openExchanges } from './exchanges-model.js';
+import { ScenesService } from './scenes.js';
 import {
   recordChainRolls,
   recordCopilotRoll,
@@ -140,7 +142,7 @@ export interface AdvanceResult {
  * last for the turn they were made in (SR5 p.160-161), and a Delayed Action in
  * use lasts for one Action Phase. Literal SQL — these are constants, never input.
  */
-const CLEAR_TURN_FLAGS = sql`${combatants.copilot} - 'delayed'::text - 'seized'::text - 'delayedAction'::text`;
+const CLEAR_TURN_FLAGS = sql`${combatants.copilot} - 'delayed'::text - 'seized'::text - 'delayedAction'::text - 'lateEntry'::text`;
 /** The end of a pass, or a row marked done: the Delayed Action in use is spent. */
 const CLEAR_DELAYED_ACTION = sql`${combatants.copilot} - 'delayedAction'::text`;
 /** A row marked done: its phase is over, so is the count of defenses since it last acted (p.189). */
@@ -182,8 +184,13 @@ export class EncountersService {
     return row;
   }
 
+  /** Oldest first: the newest prep fight on a scene is the one placed tokens join (`sceneFight`). */
   async listEncounters(campaignId: string): Promise<EncounterRow[]> {
-    return this.db.select().from(encounters).where(eq(encounters.campaignId, campaignId));
+    return this.db
+      .select()
+      .from(encounters)
+      .where(eq(encounters.campaignId, campaignId))
+      .orderBy(asc(encounters.createdAt));
   }
 
   async createEncounter(input: {
@@ -383,6 +390,8 @@ export class EncountersService {
     if (patch.edge !== undefined) copilot.edge = patch.edge;
     if (patch.grunt !== undefined) copilot.grunt = patch.grunt;
     if (patch.leader !== undefined) copilot.leader = patch.leader;
+    // A score entered settles a late entry.
+    if (patch.initScore !== undefined) delete copilot.lateEntry;
     if (patch.professionalRating !== undefined) {
       const pr = Math.max(0, Math.floor(patch.professionalRating));
       copilot.generator = { ...(copilot.generator ?? {}), professionalRating: pr };
@@ -452,6 +461,7 @@ export class EncountersService {
       const detail = rollInitiative(combatant, kind, rng, {
         ...(line ? { base: line.base, dice: line.dice } : {}),
       });
+      const late = latePenalty(combatant, encounter);
       rolled.push({
         combatantId: combatant.id,
         kind,
@@ -462,7 +472,8 @@ export class EncountersService {
           dice: detail.dice,
           rolls: detail.rolls,
           woundModifier: detail.woundModifier,
-          score: detail.score,
+          ...(late ? { latePenalty: late } : {}),
+          score: detail.score + late,
         },
       });
     }
@@ -476,6 +487,8 @@ export class EncountersService {
             initKind: r.kind,
             initBase: r.detail.base,
             actedThisPass: false,
+            // A roll settles a late entry.
+            copilot: sql`${combatants.copilot} - 'lateEntry'::text`,
           })
           .where(eq(combatants.id, r.combatantId));
         details.push(r.detail);
@@ -523,7 +536,8 @@ export class EncountersService {
     if (input.rolled !== undefined) {
       const current = serializeCombatant(await this.getCombatant(combatantId));
       const base = input.base ?? current.initBase;
-      score = base + input.rolled + computeWoundModifier(current.monitors);
+      const late = latePenalty(current, await this.getEncounter(current.encounterId));
+      score = base + input.rolled + computeWoundModifier(current.monitors) + late;
     }
     return this.updateCombatant(combatantId, {
       ...(score !== undefined ? { initScore: score, actedThisPass: false } : {}),
@@ -566,40 +580,9 @@ export class EncountersService {
     return row;
   }
 
-  /**
-   * The ERIC attributes (SR5 p.159) of every row whose score another live row
-   * shares — the only rows the tie-break can matter for, so on most reads no
-   * sheet is touched. A runner's comes off their live sheet, an NPC's off the
-   * sheet it carries, and a row with neither brings only its Edge pool, if it
-   * has one (`EricAttributes`: missing counts as 0).
-   */
+  /** ERIC tie-break attributes of tied rows (`ericForRows`). */
   async ericFor(list: Combatant[], tx?: EventTx): Promise<Record<string, EricAttributes>> {
-    const tied = rowsTiedOnScore(list);
-    if (tied.length === 0) return {};
-    const characterIds = tied
-      .filter((c) => c.source === 'character' && c.sourceId)
-      .map((c) => c.sourceId as string);
-    const sheets = new Map<string, SheetV1>();
-    if (characterIds.length > 0) {
-      const rows = await this.read(tx)
-        .select({ id: characters.id, sheet: characters.sheet })
-        .from(characters)
-        .where(inArray(characters.id, characterIds));
-      for (const r of rows) {
-        const parsed = SheetV1Schema.safeParse(r.sheet);
-        if (parsed.success) sheets.set(r.id, parsed.data);
-      }
-    }
-    const out: Record<string, EricAttributes> = {};
-    for (const c of tied) {
-      const sheet =
-        c.source === 'character' && c.sourceId
-          ? sheets.get(c.sourceId)
-          : parseCopilot(c.copilot).sheet;
-      if (sheet) out[c.id] = ericOf(sheet);
-      else if (c.edge) out[c.id] = { edg: c.edge.max };
-    }
-    return out;
+    return ericForRows(this.read(tx), list);
   }
 
   /** Everything `turnOrder` needs for this fight, as it stands in `list`. */
@@ -1145,84 +1128,116 @@ export class EncountersService {
 
   // --- emission -----------------------------------------------------------
 
-  /**
-   * `encounter.updated` twice: the full delta at `gm` visibility, and a
-   * player-safe delta at `public` (hidden combatants stripped before
-   * serialization, Principle 4). Payloads carry `scope` so clients pick.
-   *
-   * Pass the caller's `tx` and both frames join that transaction — they then
-   * describe the row as it will be after COMMIT, and a rolled-back change is
-   * also an unsent frame. Without one this opens its own block, so the two
-   * frames still cannot half-land relative to each other.
-   */
+  /** The fight's two frames (`emitFightFrames`), in the caller's transaction or one of their own. */
   async emitUpdated(
     encounter: EncounterRow,
     reason: string,
     tx?: EventTx,
   ): Promise<Combatant[]> {
-    return this.hub.atomicIn(encounter.campaignId, tx, async (itx) =>
-      this.emitUpdatedIn(itx, encounter, reason),
-    );
-  }
-
-  private async emitUpdatedIn(
-    tx: EventTx,
-    encounter: EncounterRow,
-    reason: string,
-  ): Promise<Combatant[]> {
-    const list = await this.listCombatants(encounter.id, tx);
-    // The ONE order every client should draw (the manual order, seizes, ERIC),
-    // worked out over the whole fight; the public frame gets it cut down to
-    // the rows it may see, never re-sorted from them.
-    const opts = await this.orderOptions(encounter, list, tx);
-    const order = turnOrder(list, opts).map((c) => c.id);
-    const active = nextActorRules(list, opts)?.id ?? null;
-    await tx.emit({
-      type: 'encounter.updated',
-      payload: {
-        encounterId: encounter.id,
-        scope: 'gm',
-        reason,
-        encounter: serializeEncounter(encounter),
-        combatants: list,
-        activeCombatantId: active,
-        turnOrder: order,
-        exchanges: await openExchanges(tx.db, encounter.id),
-      },
-      visibility: 'gm',
-    });
-    const visible = list.filter((c) => c.visibility === 'public');
-    const visibleIds = new Set(visible.map((c) => c.id));
-    await tx.emit({
-      type: 'encounter.updated',
-      payload: {
-        encounterId: encounter.id,
-        scope: 'public',
-        reason,
-        // The manual order names only rows the table may see (FR4.9).
-        encounter: serializeEncounter(encounter, visibleIds),
-        combatants: visible.map((c) => ({
-          id: c.id,
-          name: c.name,
-          source: c.source,
-          initScore: c.initScore,
-          initKind: c.initKind,
-          actedThisPass: c.actedThisPass,
-          ...(c.delayed ? { delayed: true } : {}),
-          ...(c.seized ? { seized: true } : {}),
-          // The party's dice lines travel with the frame (FR4.2); an NPC's stays the GM's.
-          ...(c.source === 'character' ? { initBase: c.initBase, initDice: c.initDice } : {}),
-          condition: conditionOf(c.monitors),
-        })),
-        activeCombatantId: active !== null && visibleIds.has(active) ? active : null,
-        turnOrder: order.filter((id) => visibleIds.has(id)),
-      },
-      visibility: 'public',
-    });
-    return list;
+    return this.hub.atomicIn(encounter.campaignId, tx, async (itx) => emitFightFrames(itx, encounter, reason));
   }
 
   async emitUpdatedById(encounterId: string, reason: string, tx?: EventTx): Promise<void> {
     await this.emitUpdated(await this.getEncounter(encounterId, tx), reason, tx);
   }
+}
+
+/**
+ * The ERIC attributes (SR5 p.159) of every row whose score another live row
+ * shares: a runner's off their live sheet, an NPC's off the sheet it carries,
+ * else only its Edge pool. Most reads have no tie and touch no sheet.
+ */
+export async function ericForRows(db: Db, list: Combatant[]): Promise<Record<string, EricAttributes>> {
+  const tied = rowsTiedOnScore(list);
+  if (tied.length === 0) return {};
+  const characterIds = tied
+    .filter((c) => c.source === 'character' && c.sourceId)
+    .map((c) => c.sourceId as string);
+  const sheets = new Map<string, SheetV1>();
+  if (characterIds.length > 0) {
+    const rows = await db
+      .select({ id: characters.id, sheet: characters.sheet })
+      .from(characters)
+      .where(inArray(characters.id, characterIds));
+    for (const r of rows) {
+      const parsed = SheetV1Schema.safeParse(r.sheet);
+      if (parsed.success) sheets.set(r.id, parsed.data);
+    }
+  }
+  const out: Record<string, EricAttributes> = {};
+  for (const c of tied) {
+    const sheet =
+      c.source === 'character' && c.sourceId ? sheets.get(c.sourceId) : parseCopilot(c.copilot).sheet;
+    if (sheet) out[c.id] = ericOf(sheet);
+    else if (c.edge) out[c.id] = { edg: c.edge.max };
+  }
+  return out;
+}
+
+/**
+ * `encounter.updated` twice, in the caller's transaction: the whole fight at
+ * `gm`, and the table's copy at `public`. Token rows are public exactly while
+ * the table has their token (`withTableVisibility`); while a row the table
+ * cannot see is acting, the public frame says `gmTurn`.
+ */
+export async function emitFightFrames(tx: EventTx, encounter: EncounterRow, reason: string): Promise<Combatant[]> {
+  const rows = (await tx.db.select().from(combatants).where(eq(combatants.encounterId, encounter.id))).map(
+    serializeCombatant,
+  );
+  const onTable = await new ScenesService(tx.db).tokensOnTable(rows.flatMap((c) => (c.tokenId ? [c.tokenId] : [])));
+  const list = withTableVisibility(rows, onTable);
+  // ONE order over the whole fight; the public frame gets it cut down, never re-sorted.
+  const opts = orderOptionsOf(encounter, await ericForRows(tx.db, list));
+  const order = turnOrder(list, opts).map((c) => c.id);
+  const active = nextActorRules(list, opts)?.id ?? null;
+  await tx.emit({
+    type: 'encounter.updated',
+    payload: {
+      encounterId: encounter.id,
+      scope: 'gm',
+      reason,
+      encounter: serializeEncounter(encounter),
+      combatants: list,
+      activeCombatantId: active,
+      turnOrder: order,
+      exchanges: await openExchanges(tx.db, encounter.id),
+    },
+    visibility: 'gm',
+  });
+  const visible = list.filter((c) => c.visibility === 'public');
+  const visibleIds = new Set(visible.map((c) => c.id));
+  await tx.emit({
+    type: 'encounter.updated',
+    payload: {
+      encounterId: encounter.id,
+      scope: 'public',
+      reason,
+      // The manual order names only rows the table may see (FR4.9).
+      encounter: serializeEncounter(encounter, visibleIds),
+      combatants: visible.map((c) => ({
+        id: c.id,
+        name: c.name,
+        source: c.source,
+        initScore: c.initScore,
+        initKind: c.initKind,
+        actedThisPass: c.actedThisPass,
+        ...(c.delayed ? { delayed: true } : {}),
+        ...(c.seized ? { seized: true } : {}),
+        // The party's dice lines travel with the frame (FR4.2); an NPC's stays the GM's.
+        ...(c.source === 'character' ? { initBase: c.initBase, initDice: c.initDice } : {}),
+        condition: conditionOf(c.monitors),
+      })),
+      activeCombatantId: active !== null && visibleIds.has(active) ? active : null,
+      ...(active !== null && !visibleIds.has(active) ? { gmTurn: true } : {}),
+      turnOrder: order.filter((id) => visibleIds.has(id)),
+    },
+    visibility: 'public',
+  });
+  return list;
+}
+
+/** Late entry (p.160): a row that joined this Combat Turn rolls −10 per pass gone by now; else 0. */
+export function latePenalty(c: Pick<Combatant, 'copilot'>, encounter: Pick<EncounterRow, 'turn' | 'pass'>): number {
+  const late = parseCopilot(c.copilot).lateEntry;
+  return late && late.turn === encounter.turn && encounter.pass > 1 ? -10 * (encounter.pass - 1) : 0;
 }

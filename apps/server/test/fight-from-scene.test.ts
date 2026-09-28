@@ -118,6 +118,7 @@ describe('an NPC token placed from an archetype', () => {
     expect(bruiser.initBase).toBe(7); // REA 4 + INT 3
     expect(bruiser.initDice).toBe(1);
     expect(bruiser.monitors.physical.max).toBe(11); // 8 + ceil(6/2)
-    expect(bruiser.visibility).toBe('public');
+    // The scene is not on the table yet, so neither is his row.
+    expect(bruiser.visibility).toBe('gm');
   });
 });

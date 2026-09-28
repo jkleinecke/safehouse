@@ -15,9 +15,9 @@ import { environment } from '@safehouse/rules';
 import { combatants, encounters, npcTemplates, scenes, tokens, type Db } from '@safehouse/db';
 import { httpError } from './auth.js';
 import { activeSceneModifiers, liveWounds, loadCharacter, type CharacterRecord } from './characters.js';
-import { parseCopilot, serializeCombatant, type CombatantRow } from './encounters-model.js';
+import { parseCopilot, serializeCombatant, tableVisibility, type CombatantRow } from './encounters-model.js';
 import { magicSituationalFor } from './magic-derive.js';
-import { rolledBodyFor } from './scenes.js';
+import { rolledBodyFor, ScenesService } from './scenes.js';
 import type { CardBody, CardScene, TokenAt } from './roll-cards.js';
 
 type SceneRow = typeof scenes.$inferSelect;
@@ -103,13 +103,18 @@ async function fromCombatant(
   }
   const effectMods: Modifier[] = c.effects.flatMap((e) => e.mods.filter((m) => m.active));
   const live = encounter.state === 'live';
+  // A token row is public exactly while the table has its token.
+  const onTable = c.tokenId ? await new ScenesService(db).tokensOnTable([c.tokenId]) : new Set<string>();
+  const vis = tableVisibility(c, onTable);
+  const hidden = vis !== 'public';
   return {
     body: {
       ...parts,
       actor: { kind: ref.kind, id: ref.id, name: c.name },
       mods: [...('mods' in parts ? parts.mods : []), ...effectMods],
       wounds: { physical: c.monitors.physical.filled, stun: c.monitors.stun.filled },
-      secret: c.source !== 'character' || c.visibility !== 'public',
+      // A runner off the table is still their player's: only a gm row is secret.
+      secret: c.source !== 'character' || vis === 'gm',
       initScore: c.initScore,
       delayedAction: copilot.delayedAction === true,
       prone: pose === 'prone' || c.effects.some((e) => /prone/i.test(e.name)),
@@ -120,7 +125,7 @@ async function fromCombatant(
     campaignId: encounter.campaignId,
     characterId: character?.id ?? null,
     scene: sceneFound ? sceneOf(sceneFound) : null,
-    hidden: c.visibility !== 'public',
+    hidden,
     row: {
       combatantId: c.id,
       encounterId: encounter.id,

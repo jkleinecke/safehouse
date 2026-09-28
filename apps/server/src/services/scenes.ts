@@ -643,7 +643,13 @@ export function serializeToken(row: TokenRow): TokenDto {
     pose: row.pose === 'crouch' || row.pose === 'prone' ? row.pose : 'stand',
     look: lookOf(row.look),
     light: lightParsed.success ? lightParsed.data : null,
+    ...(row.combatant ? { combatant: true } : {}),
   };
+}
+
+/** Tokens that fight: runners, NPCs, the generator's combatants, and props the GM flagged. */
+export function fightsOnMap(token: { source: string; combatant?: boolean | undefined }): boolean {
+  return token.source !== 'prop' || token.combatant === true;
 }
 
 /** A stored look, or null when there is none or it no longer fits the schema. */
@@ -911,6 +917,8 @@ export interface TokenCreateInput {
   look?: TokenLook | null;
   /** A light the token carries (docs/VISION.md §4.1); null is none. */
   light?: TokenLight | null;
+  /** A prop that joins the fight (`fightsOnMap`). */
+  combatant?: boolean;
 }
 
 export interface FogOpInput {
@@ -1024,6 +1032,77 @@ function monitorsFrom(stats: StatShape | null | undefined) {
     stun: { max: 8 + Math.ceil(wil / 2), filled: 0 },
     overflow: { max: Math.max(1, bod), filled: 0 },
   };
+}
+
+type EncounterRow = typeof encounters.$inferSelect;
+type CombatantRow = typeof combatants.$inferSelect;
+
+/** A new row staging made, for the join log line. */
+export interface StagedRow {
+  combatantId: string;
+  tokenId: string;
+  name: string;
+  /** Joined a live fight mid-turn: passes already gone (p.160). */
+  passesGone?: number;
+}
+
+export interface StageResult {
+  encounterId: string;
+  createdEncounter: boolean;
+  /** New rows. */
+  combatantIds: string[];
+  /** Rows already in the fight that took the token (a runner, the generator's own). */
+  linkedIds: string[];
+  shown: number;
+  joined: StagedRow[];
+}
+
+interface StagedBody {
+  source: string;
+  sourceId: string | null;
+  initBase: number;
+  monitors: CombatantMonitors;
+  copilot: Record<string, unknown>;
+}
+
+/** What a copied row keeps: its body, not its turn (seize, delay, defenses, undo). */
+const BODY_KEYS = ['sheet', 'initDice', 'edge', 'grunt', 'leader', 'generator'] as const;
+
+/** A staged row's body, from what its token stands for. */
+function bodyOf(
+  t: TokenRow,
+  found: { sheet?: unknown; template?: NpcTemplateRow | undefined; row?: CombatantRow | undefined },
+): StagedBody {
+  const bare = { initBase: 0, monitors: monitorsFrom(undefined), copilot: { initDice: 1 } };
+  if (t.source === 'character') {
+    // Through the engine, as addCombatant does: wired reflexes and adept powers count.
+    const parsed = found.sheet != null ? SheetV1Schema.safeParse(found.sheet) : null;
+    const derived = parsed?.success ? deriveFor(parsed.data, 'physical') : null;
+    const stats = (found.sheet ?? undefined) as StatShape | undefined;
+    return {
+      source: 'character',
+      sourceId: t.sourceId,
+      initBase: derived ? derived.base : (stats?.attributes?.rea ?? 0) + (stats?.attributes?.int ?? 0),
+      monitors: derived ? derived.monitors : monitorsFrom(stats),
+      copilot: { initDice: derived ? derived.dice : 1 },
+    };
+  }
+  if (t.source === 'npc_template') {
+    return { source: 'npc_template', sourceId: t.sourceId, ...(rolledBodyFor(found.template, t.id) ?? bare) };
+  }
+  if (t.source === 'combatant' && found.row) {
+    const r = found.row;
+    const copilot = (r.copilot ?? {}) as Record<string, unknown>;
+    return {
+      source: r.source,
+      sourceId: r.sourceId,
+      initBase: r.initBase,
+      monitors: r.monitors as CombatantMonitors,
+      copilot: Object.fromEntries(BODY_KEYS.filter((k) => copilot[k] !== undefined).map((k) => [k, copilot[k]])),
+    };
+  }
+  // A flagged prop, or a generator token whose row is gone.
+  return { source: 'manual', sourceId: null, ...bare };
 }
 
 export class ScenesService {
@@ -1321,6 +1400,7 @@ export class ScenesService {
           pose: input.pose ?? 'stand',
           look,
           light: input.light ?? null,
+          combatant: input.combatant ?? false,
         })
         .returning()
     )[0]!;
@@ -1332,7 +1412,7 @@ export class ScenesService {
     // `level` belongs in this list: the route already accepts it, and leaving
     // it out meant a token sent upstairs was written back unchanged — the
     // request succeeded, the response looked right, and the runner never moved.
-    for (const key of ['name', 'x', 'y', 'level', 'size', 'rotation', 'artRef', 'hidden', 'barsVisibility', 'aura', 'pose', 'look', 'light'] as const) {
+    for (const key of ['name', 'x', 'y', 'level', 'size', 'rotation', 'artRef', 'hidden', 'barsVisibility', 'aura', 'pose', 'look', 'light', 'combatant'] as const) {
       if (patch[key] !== undefined) set[key] = patch[key];
     }
     const row = (
@@ -1699,124 +1779,121 @@ export class ScenesService {
   // --- encounter staging (FR9.10) ------------------------------------------
 
   /**
-   * Create combatants from the scene's character/NPC tokens (props skipped;
-   * concealed tokens — hidden, or standing under the fog — become
-   * gm-visibility combatants). Coordination with the encounters domain is via
-   * db rows only.
-   *
-   * `shown` is how many of the new combatants the table may see. It is the
-   * only count that can go on a public event: the whole count, less the
-   * shown ones, is exactly the number of foes the GM is holding back.
+   * The scene's fighting tokens (`fightsOnMap`, every floor) become rows in a
+   * new fight or in `encounterId`; `tokenIds` limits it to those tokens (one
+   * just placed). Concealed tokens make gm rows. `shown` counts the new rows
+   * the table can see: the only count a public event may carry.
    */
   async stageEncounter(
     scene: SceneRow,
-    opts: { name?: string; encounterId?: string },
-  ): Promise<{ encounterId: string; createdEncounter: boolean; combatantIds: string[]; shown: number }> {
+    opts: { name?: string; encounterId?: string; tokenIds?: readonly string[] },
+  ): Promise<StageResult> {
+    const only = opts.tokenIds ? new Set(opts.tokenIds) : null;
     const tokenRows = await this.db.select().from(tokens).where(eq(tokens.sceneId, scene.id));
-    let stageable = tokenRows.filter((t) => t.source === 'character' || t.source === 'npc_template');
+    let stageable = tokenRows.filter((t) => fightsOnMap(t) && (only === null || only.has(t.id)));
 
-    let encounterId = opts.encounterId;
+    let fight: EncounterRow | undefined;
     let createdEncounter = false;
-    if (encounterId) {
-      const enc = (
-        await this.db.select().from(encounters).where(eq(encounters.id, encounterId)).limit(1)
-      )[0];
-      if (!enc || enc.campaignId !== scene.campaignId) {
+    const linkedIds: string[] = [];
+    if (opts.encounterId) {
+      fight = (await this.db.select().from(encounters).where(eq(encounters.id, opts.encounterId)).limit(1))[0];
+      if (!fight || fight.campaignId !== scene.campaignId) {
         throw httpError(404, 'not_found', 'unknown encounter');
       }
-      if (!enc.sceneId) {
-        await this.db.update(encounters).set({ sceneId: scene.id }).where(eq(encounters.id, encounterId));
+      if (!fight.sceneId) {
+        await this.db.update(encounters).set({ sceneId: scene.id }).where(eq(encounters.id, fight.id));
       }
       const existing = await this.db
-        .select({ tokenId: combatants.tokenId })
+        .select({ id: combatants.id, tokenId: combatants.tokenId, source: combatants.source, sourceId: combatants.sourceId })
         .from(combatants)
-        .where(eq(combatants.encounterId, encounterId));
+        .where(eq(combatants.encounterId, fight.id));
       const linked = new Set(existing.map((e) => e.tokenId).filter((id): id is string => id != null));
-      stageable = stageable.filter((t) => !linked.has(t.id));
+      const rest: TokenRow[] = [];
+      for (const t of stageable) {
+        if (linked.has(t.id)) continue;
+        // A runner already on the tracker, or the generator's own row, is that body: link it, never a second row.
+        const same = t.sourceId
+          ? existing.find((e) =>
+              t.source === 'character'
+                ? e.source === 'character' && e.sourceId === t.sourceId
+                : t.source === 'combatant' && e.id === t.sourceId,
+            )
+          : undefined;
+        if (!same) {
+          rest.push(t);
+          continue;
+        }
+        if (same.tokenId === null) {
+          await this.db.update(combatants).set({ tokenId: t.id }).where(eq(combatants.id, same.id));
+          same.tokenId = t.id;
+          linkedIds.push(same.id);
+        }
+      }
+      stageable = rest;
     } else {
-      const enc = (
+      fight = (
         await this.db
           .insert(encounters)
           .values({ campaignId: scene.campaignId, sceneId: scene.id, name: opts.name ?? scene.name, state: 'prep' })
           .returning()
       )[0]!;
-      encounterId = enc.id;
       createdEncounter = true;
     }
 
-    // Stats for character tokens (monitor sizes + initiative line).
-    const charIds = stageable
-      .filter((t) => t.source === 'character' && t.sourceId)
-      .map((t) => t.sourceId!) ;
-    const charRows = charIds.length
-      ? await this.db.select().from(characters).where(inArray(characters.id, charIds))
-      : [];
+    const idsOf = (source: TokenRow['source']) =>
+      stageable.filter((t) => t.source === source && t.sourceId).map((t) => t.sourceId!);
+    const charIds = idsOf('character');
+    const charRows = charIds.length ? await this.db.select().from(characters).where(inArray(characters.id, charIds)) : [];
     const sheetById = new Map(charRows.map((c) => [c.id, c.sheet]));
-
-    // The archetype behind each NPC token, so the ganger the GM placed on the
-    // catwalk arrives on the tracker as a BODY — attributes, pools, monitors,
-    // a copilot rack — and not as a name with 0+1d6 and ten boxes.
-    const templateIds = stageable
-      .filter((t) => t.source === 'npc_template' && t.sourceId)
-      .map((t) => t.sourceId!);
+    const templateIds = idsOf('npc_template');
     const templateRows = templateIds.length
       ? await this.db.select().from(npcTemplates).where(inArray(npcTemplates.id, templateIds))
       : [];
     const templateById = new Map(templateRows.map((r) => [r.id, r]));
+    // A generator token whose row is in another fight: that row's body is copied in.
+    const bodyIds = idsOf('combatant');
+    const bodyRows = bodyIds.length ? await this.db.select().from(combatants).where(inArray(combatants.id, bodyIds)) : [];
+    const bodyById = new Map(bodyRows.map((r) => [r.id, r]));
+
+    // Late entry (p.160): no score until the GM rolls or enters one; each pass gone takes 10 off the roll.
+    const late =
+      fight.state === 'live' && fight.turn >= 1 ? { turn: fight.turn, passesGone: Math.max(0, fight.pass - 1) } : null;
 
     const combatantIds: string[] = [];
+    const joined: StagedRow[] = [];
     let shown = 0;
-    // Read once: whether each token is on the table is asked of the same scene.
-    const concealed = concealer(serializeScene(scene));
+    const dto = serializeScene(scene);
+    const concealed = concealer(dto);
+    const onTable = sceneOnTable(dto);
     for (const t of stageable) {
-      const raw = t.sourceId ? sheetById.get(t.sourceId) : undefined;
-      // FR9.10/FR4.2: derive the initiative line through the ENGINE, exactly as
-      // `EncountersService.addCombatant` does — REA + INT + 1d6 is only the
-      // unaugmented case, and reading the sheet raw silently dropped wired
-      // reflexes, adept powers and every other `initiative.*` modifier (staged
-      // PCs all came out at a flat REA+INT with a single die).
-      const parsed = raw !== undefined && raw !== null ? SheetV1Schema.safeParse(raw) : null;
-      const derived = parsed?.success ? deriveFor(parsed.data, 'physical') : null;
-      const stats = (raw ?? undefined) as StatShape | undefined;
-      const body =
-        t.source === 'npc_template' && t.sourceId
-          ? rolledBodyFor(templateById.get(t.sourceId), t.id)
-          : null;
-      const initBase = body
-        ? body.initBase
-        : derived
-          ? derived.base
-          : (stats?.attributes?.rea ?? 0) + (stats?.attributes?.int ?? 0);
-      // Concealed by flag, by layer (FR9.26) or by the fog (FR9.13): a
-      // combatant nobody was shown must not appear in the tracker, or on the
-      // TV's ribbon, before it appears on the map. This asked `tokenHidden`
-      // alone, so a guard the server was withholding from every player's map
-      // because he stood in unrevealed fog went onto the public roster by
-      // name the moment the GM staged the fight.
+      const body = bodyOf(t, {
+        sheet: t.sourceId ? sheetById.get(t.sourceId) : undefined,
+        template: t.sourceId ? templateById.get(t.sourceId) : undefined,
+        row: t.sourceId ? bodyById.get(t.sourceId) : undefined,
+      });
       const visibility = concealed(t) ? 'gm' : 'public';
-      if (visibility === 'public') shown += 1;
+      if (onTable && visibility === 'public') shown += 1;
       const row = (
         await this.db
           .insert(combatants)
           .values({
-            encounterId,
+            encounterId: fight.id,
             tokenId: t.id,
-            source: t.source === 'character' ? 'character' : 'npc_template',
-            sourceId: t.sourceId,
+            source: body.source,
+            sourceId: body.sourceId,
             name: t.name,
-            initBase,
+            initBase: body.initBase,
             initKind: 'physical',
-            monitors: body ? body.monitors : derived ? derived.monitors : monitorsFrom(stats),
+            monitors: body.monitors,
             visibility,
-            // `initDice` rides in the copilot JSONB (no column of its own); a
-            // missing value would default to 1 die and lose the augmentation.
-            copilot: body ? body.copilot : { initDice: derived ? derived.dice : 1 },
+            copilot: late ? { ...body.copilot, lateEntry: late } : body.copilot,
           })
           .returning()
       )[0]!;
       combatantIds.push(row.id);
+      joined.push({ combatantId: row.id, tokenId: t.id, name: row.name, ...(late ? { passesGone: late.passesGone } : {}) });
     }
-    return { encounterId, createdEncounter, combatantIds, shown };
+    return { encounterId: fight.id, createdEncounter, combatantIds, linkedIds, shown, joined };
   }
 
   async activeSceneModifiers(campaignId: string): Promise<Modifier[]> {

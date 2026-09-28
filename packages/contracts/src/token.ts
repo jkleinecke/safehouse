@@ -122,6 +122,8 @@ export const TokenSchema = z.object({
   look: TokenLookSchema.nullable().optional(),
   /** A light the token carries (`TokenLightSchema`); null or absent is none. */
   light: TokenLightSchema.nullable().optional(),
+  /** A prop the GM flagged as a combatant: it joins the scene's fight. Runners and NPCs always do. */
+  combatant: z.boolean().optional(),
 });
 export type Token = z.infer<typeof TokenSchema>;
 export type TokenInput = z.input<typeof TokenSchema>;

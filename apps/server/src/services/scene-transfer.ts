@@ -185,6 +185,7 @@ export async function importScene(db: Db, campaignId: string, file: SceneFile, f
       ...(t.pose ? { pose: t.pose } : {}),
       look: t.look ?? null,
       light: t.light ?? null,
+      ...(t.combatant ? { combatant: true } : {}),
     };
     const made = await svc.createToken(row, input);
     tokenIds.set(t.id, made.id);

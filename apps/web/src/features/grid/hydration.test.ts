@@ -134,6 +134,15 @@ describe('pickEncounterId', () => {
     expect(pickEncounterId(list, 'sc1')).toBe('here');
   });
 
+  it('takes this scene’s newest prep fight over a live one elsewhere', () => {
+    const list = [
+      encounter({ id: 'elsewhere', sceneId: 'sc2', state: 'live' }),
+      encounter({ id: 'older', sceneId: 'sc1', state: 'prep' }),
+      encounter({ id: 'newer', sceneId: 'sc1', state: 'prep' }),
+    ];
+    expect(pickEncounterId(list, 'sc1')).toBe('newer');
+  });
+
   it('falls back to any live fight, then to one staged against this scene', () => {
     expect(pickEncounterId([encounter({ id: 'elsewhere', sceneId: 'sc2' })], 'sc1')).toBe('elsewhere');
     expect(

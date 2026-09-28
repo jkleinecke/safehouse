@@ -1968,7 +1968,7 @@ describe('the secrecy sweep: what the map withholds, no other channel carries (P
     for (const { role, token } of viewers) expect(pinsTold(await since(token, from)), role).toEqual([]);
   });
 
-  it('names a combatant’s token to the table only while the table has that token', async () => {
+  it('shows a combatant’s row, and names its token, only while the table has that token', async () => {
     await fogOp(houseId, { op: 'reveal', regionId: roomId });
     const res = await post(`/api/scenes/${houseId}/stage-encounter`, sw.gmToken, { name: 'Counting house job' });
     expect(res.statusCode).toBe(201);
@@ -1993,20 +1993,18 @@ describe('the secrecy sweep: what the map withholds, no other channel carries (P
       expect(r.tokenOf('Wren'), role).toBe(runnerTokenId);
     }
 
-    // He walks out into the dark: still in the fight (his row, his name and
-    // his condition stay), but the link from his row to a figure goes, and
-    // his token's id with it, until the table has his token again.
+    // He walks out into the dark: his row follows his token off the table (the GM's rule).
     await patchToken(guardId, OUT_IN_THE_DARK);
     for (const { role, token } of viewers) {
       const r = await roster(token);
-      expect(r.names, role).toEqual([GUARD, 'Wren'].sort());
-      expect(r.tokenOf(GUARD), role).toBeUndefined();
+      expect(r.names, role).toEqual(['Wren']);
+      expect(r.raw, role).not.toContain(GUARD);
       expect(r.raw, role).not.toContain(guardId);
       expect(r.tokenOf('Wren'), role).toBe(runnerTokenId);
     }
     expect((await roster(sw.gmToken)).tokenOf(GUARD)).toBe(guardId);
 
-    // Back in the room, and back on his row.
+    // Back in the room, and back on the table's roster.
     await patchToken(guardId, MOVED_TO);
     for (const { role, token } of viewers) expect((await roster(token)).tokenOf(GUARD), role).toBe(guardId);
   });
