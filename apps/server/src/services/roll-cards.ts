@@ -459,6 +459,30 @@ function buildOffers(ctx: OfferContext): BuiltOffer[] {
   return built;
 }
 
+/** The offer id of an Interrupt's Initiative cost. */
+export const INIT_COST_OFFER = 'init_cost';
+
+/** An Interrupt's cost as a line of its own: ticked, and the settle pays it only while it stays ticked. */
+function costOffer(action: CombatAction, body: CardBody, req: CardRequest): CardOffer | null {
+  if (!action.initCost) return null;
+  const score = body.initScore;
+  return {
+    id: INIT_COST_OFFER,
+    label: `Costs ${action.initCost} Initiative`,
+    value: -action.initCost,
+    target: 'initiative',
+    ref: action.ref,
+    on: req.offersOn ? req.offersOn.includes(INIT_COST_OFFER) : true,
+    auto: 'initCost',
+    ...(score !== undefined ? { note: `${score} → ${score - action.initCost}` } : {}),
+  };
+}
+
+/** Whether a settle of this card takes the Interrupt's cost off the score. */
+export function paysInitiative(card: RollCard): boolean {
+  return card.offers.some((o) => o.id === INIT_COST_OFFER && o.on);
+}
+
 function offerLine(b: BuiltOffer): CardLine {
   const o = b.offer;
   const source = o.auto === 'wounds' ? 'wound' : o.auto === 'environment' ? 'scene' : 'situational';
@@ -549,7 +573,8 @@ export function buildCard(inputs: CardInputs): RollCard {
     exchange,
     distance: distanceOf(req, body, target),
   });
-  const offers = built.map((b) => b.offer);
+  const initCost = costOffer(action, body, req);
+  const offers = [...(initCost ? [initCost] : []), ...built.map((b) => b.offer)];
   const on = built.filter((b) => b.offer.on);
   const noDefense = on.some((b) => b.offer.noDefense);
 
@@ -558,7 +583,7 @@ export function buildCard(inputs: CardInputs): RollCard {
   if (base && !noDefense) {
     const lines: CardLine[] = [
       ...base.lines.map(baseLine),
-      ...on.filter((b) => b.offer.target !== 'limit' && !b.offer.noDefense).map(offerLine),
+      ...on.filter((b) => b.offer.target === undefined && !b.offer.noDefense).map(offerLine),
       ...(req.extras ?? []).map((x) => ({ label: x.label, value: x.value, source: 'gm', tone: toneOf(x.value) })),
     ];
     pool = { total: Math.max(0, sum(lines)), lines };
@@ -577,7 +602,7 @@ export function buildCard(inputs: CardInputs): RollCard {
   }
 
   const cost = {
-    ...(action.initCost && body.initScore !== undefined
+    ...(action.initCost && initCost?.on && body.initScore !== undefined
       ? { initScore: { from: body.initScore, to: body.initScore - action.initCost } }
       : {}),
     ...(action.rounds ? { rounds: action.rounds } : {}),

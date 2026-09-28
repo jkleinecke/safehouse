@@ -127,8 +127,8 @@ async function gmJson<T = Record<string, any>>(
   return res.json() as T;
 }
 
-async function newEncounter(name: string): Promise<string> {
-  const body = await gmJson(`POST`, `/api/campaigns/${campaignId}/encounters`, { name });
+async function newEncounter(name: string, state?: 'live'): Promise<string> {
+  const body = await gmJson(`POST`, `/api/campaigns/${campaignId}/encounters`, { name, ...(state ? { state } : {}) });
   return body['encounter'].id as string;
 }
 
@@ -784,8 +784,16 @@ describe('the copilot writes to the record (G5 / FR2.1 / FR6.1)', () => {
 });
 
 describe('player encounter view (FR4.9)', () => {
+  it('never shows a player a prep fight', async () => {
+    const id = await newEncounter('Back office');
+    const player = await joinAs(app, campaignId, gmToken, 'player', 'Moth');
+    expect((await call('GET', `/api/encounters/${id}`, player.token)).statusCode).toBe(404);
+    const list = (await call('GET', `/api/campaigns/${campaignId}/encounters`, player.token)).json() as { encounters: { id: string }[] };
+    expect(list.encounters.map((e) => e.id)).not.toContain(id);
+  });
+
   it('shows turn order and own monitors but never a GM-hidden combatant', async () => {
-    const id = await newEncounter('Chokepoint');
+    const id = await newEncounter('Chokepoint', 'live');
     const player = await joinAs(app, campaignId, gmToken, 'player', 'Ferro');
     const [character] = await harness.db
       .insert(characters)
@@ -834,7 +842,7 @@ describe('player encounter view (FR4.9)', () => {
   });
 
   it('hides another player-visible combatant\'s exact boxes', async () => {
-    const id = await newEncounter('Ramp');
+    const id = await newEncounter('Ramp', 'live');
     const player = await joinAs(app, campaignId, gmToken, 'player', 'Wisp');
     const mook = (
       await gmJson('POST', `/api/encounters/${id}/combatants`, {
@@ -872,7 +880,7 @@ describe('player encounter view (FR4.9)', () => {
    * whole, token id included (the GM's rule: public exactly while its token is).
    */
   it('carries the token id on visible rows, and none for a hidden one', async () => {
-    const id = await newEncounter('Catwalk');
+    const id = await newEncounter('Catwalk', 'live');
     const player = await joinAs(app, campaignId, gmToken, 'player', 'Kestrel');
     const scene = (await gmJson('POST', `/api/campaigns/${campaignId}/scenes`, { name: 'Catwalk' }))[
       'scene'

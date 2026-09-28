@@ -1,7 +1,7 @@
 /**
  * Settling a roll card over the real API: table dice recorded without faces,
- * an Interrupt paid from the row in the roll's transaction, NPC rolls kept
- * behind the screen. Original fiction only.
+ * an Interrupt paid from the row in the roll's transaction unless its cost is
+ * struck, NPC rolls kept behind the screen. Original fiction only.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SheetV1Schema } from '@safehouse/contracts';
@@ -106,5 +106,17 @@ describe('settling a card', () => {
     const offers = next['card'].offers as Array<Record<string, any>>;
     expect(offers.find((o) => o['id'] === 'full_defense')).toMatchObject({ on: true, value: 3 });
     expect(offers.find((o) => o['id'] === 'previous_defenses')).toMatchObject({ on: true, value: -2 });
+  });
+
+  it("takes no Initiative when the Interrupt's cost is struck", async () => {
+    const out = await gm('POST', '/api/cards/settle', {
+      actor: { kind: 'combatant', id: rowId },
+      actionId: 'dodge',
+      offersOn: [],
+      settle: { hits: 1, glitch: 'none' },
+    });
+    expect((out['card'].offers as Array<Record<string, any>>).find((o) => o['id'] === 'init_cost')).toMatchObject({ on: false });
+    expect(out['initScore']).toBeUndefined();
+    expect((await copilotOf())['initScore']).toBe(-1);
   });
 });

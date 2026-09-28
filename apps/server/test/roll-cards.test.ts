@@ -108,6 +108,20 @@ describe('roll cards', () => {
     expect(card.stage).toBe('dice');
   });
 
+  it("an Interrupt's cost is a ticked line of its own, and striking it leaves the pool alone", () => {
+    const paid = buildCard({ body: runner, req: { actor: runner.actor, actionId: 'dodge' }, gm: true, exchange: burst });
+    expect(offer(paid, 'init_cost')).toMatchObject({ on: true, value: -5, target: 'initiative', note: '12 → 7' });
+    expect(paid.pool!.lines.some((l) => l.offerId === 'init_cost')).toBe(false);
+    expect(() => RollCardSchema.parse(paid)).not.toThrow();
+
+    const on = paid.offers.filter((o) => o.on && o.id !== 'init_cost').map((o) => o.id);
+    const struck = buildCard({ body: runner, req: { actor: runner.actor, actionId: 'dodge', offersOn: on }, gm: true, exchange: burst });
+    expect(offer(struck, 'init_cost')!.on).toBe(false);
+    expect(struck.cost?.initScore).toBeUndefined();
+    expect(struck.pool!.total).toBe(paid.pool!.total);
+    expect(offer(buildCard({ body: runner, req: { actor: runner.actor, actionId: 'defense' }, gm: true }), 'init_cost')).toBeUndefined();
+  });
+
   it('Full Defense carries its Willpower once', () => {
     const card = buildCard({ body: runner, req: { actor: runner.actor, actionId: 'full_defense' }, gm: true });
     expect(card.pool!.lines.filter((l) => l.label.startsWith('WIL'))).toHaveLength(1);

@@ -297,7 +297,13 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
     const { campaignId } = req.params as { campaignId: string };
     const auth = requireAuth(req);
     assertCampaign(auth, campaignId);
-    const rows = await service.listEncounters(campaignId);
+    // A prep fight is the GM's; a player lists only live fights their runner is in, the TV every live one.
+    let rows = await service.listEncounters(campaignId);
+    if (auth.role !== 'gm') rows = rows.filter((r) => r.state === 'live');
+    if (auth.role === 'player') {
+      const theirs = await service.fightsWithRunnerOf(auth.userId, rows.map((r) => r.id));
+      rows = rows.filter((r) => theirs.has(r.id));
+    }
     // A list entry carries no rows, so a player's copy of a manual order
     // names nobody (`[]`: "the GM arranged it"); the ids could be hidden ones.
     const visible = auth.role === 'gm' ? undefined : new Set<string>();
@@ -321,6 +327,7 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
   app.get('/api/encounters/:id', async (req) => {
     const { id } = req.params as { id: string };
     const { encounter, auth } = await scope(req, id, false);
+    if (auth.role !== 'gm' && encounter.state !== 'live') throw httpError(404, 'not_found', 'unknown encounter');
     const list = await service.listCombatants(id);
     const owners = await service.ownersFor(list);
     // The tokens the table has now: a token row is public exactly then (`encounterForViewer`).
@@ -432,6 +439,7 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
     const { id } = req.params as { id: string };
     const { encounter, auth } = await scope(req, id, false);
     if (auth.role === 'gm') return initiative.view(id);
+    if (encounter.state !== 'live') throw httpError(404, 'not_found', 'unknown encounter');
     const mine = await app.authService.characterOwnedBy(encounter.campaignId, auth.userId);
     return initiative.view(id, (c) => mine !== null && c.source === 'character' && c.sourceId === mine);
   });

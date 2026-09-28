@@ -121,7 +121,8 @@ describe('the manual order: place only', () => {
     expect(moved.combatants.find((c) => c.id === ids['Wren'])?.initScore).toBe(14);
 
     // A player draws the same order, cut to what they may see: not even the
-    // hidden row's id rides in the manual order (FR4.9).
+    // hidden row's id rides in the manual order (FR4.9). Only a live fight is theirs to read.
+    await gm('PATCH', `/api/encounters/${id}`, { state: 'live' });
     const res = await call('GET', `/api/encounters/${id}`, player.token);
     const theirs = res.json() as View;
     expect(theirs.turnOrder).toEqual([ids['Wren'], ids['Hook']]);

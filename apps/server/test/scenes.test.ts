@@ -727,7 +727,7 @@ describe('a fogged scene reaches players and the TV covered, and tells them noth
     }
   });
 
-  it('stages a guard standing in the fog as a GM-only combatant, and counts only the runner in public', async () => {
+  it('stages a guard standing in the fog as a GM-only combatant, and tells the table nothing of a prep fight', async () => {
     // The vault is hidden again (the case above), so the guard is under the
     // fog and the runner beside him is not.
     const res = await post(`/api/scenes/${fogSceneId}/stage-encounter`, fb.gmToken, { name: 'Vault job' });
@@ -741,30 +741,23 @@ describe('a fogged scene reaches players and the TV covered, and tells them noth
     // withholding went onto the public roster, and the TV's ribbon, by name.
     expect(byName).toEqual({ [GUARD]: 'gm', Rook: 'public' });
 
+    // A prep fight is the GM's: no roster, and no word that it was staged.
     for (const { role, token } of viewers) {
       const roster = await t.app.inject({
         method: 'GET',
         url: `/api/encounters/${staged.encounterId}`,
         headers: as(token),
       });
-      expect(roster.statusCode, role).toBe(200);
-      const names = (roster.json() as { combatants: { name: string }[] }).combatants.map((c) => c.name);
-      expect(names, role).toEqual(['Rook']);
+      expect(roster.statusCode, role).toBe(404);
       expect(roster.body, role).not.toContain(GUARD);
-      expect(roster.body, role).not.toContain(guardId);
 
-      // The public word that the fight was staged counts what the table may
-      // see. The whole count, less the roster a player is sent, was a
-      // head-count of the guards in the dark.
       const log = await t.app.inject({
         method: 'GET',
         url: `/api/campaigns/${fb.campaignId}/log?types=encounter.updated`,
         headers: as(token),
       });
       expect(log.statusCode, role).toBe(200);
-      const events = (log.json() as { events: { payload: Record<string, unknown> }[] }).events;
-      const word = events.find((e) => e.payload['encounterId'] === staged.encounterId);
-      expect(word?.payload['staged'], role).toBe(1);
+      expect(log.body, role).not.toContain(staged.encounterId);
       expect(log.body, role).not.toContain(GUARD);
     }
   });
@@ -1973,6 +1966,9 @@ describe('the secrecy sweep: what the map withholds, no other channel carries (P
     const res = await post(`/api/scenes/${houseId}/stage-encounter`, sw.gmToken, { name: 'Counting house job' });
     expect(res.statusCode).toBe(201);
     const encounterId = (res.json() as { encounterId: string }).encounterId;
+    // Only a live fight reaches the table.
+    const live = await t.app.inject({ method: 'PATCH', url: `/api/encounters/${encounterId}`, headers: as(sw.gmToken), payload: { state: 'live' } });
+    expect(live.statusCode).toBe(200);
 
     async function roster(token: string) {
       const read = await t.app.inject({ method: 'GET', url: `/api/encounters/${encounterId}`, headers: as(token) });

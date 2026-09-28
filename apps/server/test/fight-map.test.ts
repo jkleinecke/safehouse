@@ -1,7 +1,8 @@
 /**
  * The fight is the map: staging takes every fighting token, a token placed
- * joins the scene's fight (late entry mid-turn, p.160), a deleted token
- * leaves it, and a row is public exactly while the table has its token.
+ * joins the scene's fight (late entry mid-turn, p.160), a deleted token leaves
+ * a prep fight but not a live one, a row is public exactly while the table has
+ * its token, and a prep fight is the GM's alone.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { characters } from '@safehouse/db';
@@ -111,10 +112,16 @@ describe('a token placed on a live fight’s scene', () => {
     expect(set['combatant'].copilot['lateEntry']).toBeUndefined();
   });
 
-  it('leaves the fight when its token is deleted, with a log line', async () => {
+  it('stays in the live fight when its token is deleted: no token, damage and exchanges kept', async () => {
+    await gm('POST', `/api/encounters/${fightId}/damage`, { targetId: lateId, boxes: 3, track: 'physical' });
+    const opened = await gm('POST', '/api/exchanges', { target: { kind: 'combatant', id: lateId }, hits: 2, dv: { value: 6, type: 'P' } });
     await gm('DELETE', `/api/tokens/${lateToken}`);
-    expect(rowNamed(await roster(), 'Late ganger')).toBeUndefined();
-    expect(await logTexts()).toContain('Late ganger leaves Dock fight: token removed');
+
+    const row = rowNamed(await roster(), 'Late ganger') as Record<string, any>;
+    expect(row).toMatchObject({ tokenId: null, tokenRemoved: true });
+    expect(row['monitors'].physical.filled).toBe(3);
+    expect((await gm('GET', `/api/exchanges/${opened['exchange'].id}`))['exchange'].state).toBe('awaiting_defense');
+    expect(await logTexts()).toContain('Late ganger: token removed, still in Dock fight');
   });
 });
 
@@ -141,5 +148,32 @@ describe('a row follows its token onto and off the table', () => {
     );
     expect(frame?.payload['gmTurn']).toBe(true);
     expect(JSON.stringify(frame)).not.toContain('Bruiser');
+  });
+});
+
+describe('a prep fight is the GM’s', () => {
+  it('never reaches a phone or the TV, and a deleted token takes its row with it', async () => {
+    const tv = await joinAs(t.app, boot.campaignId, boot.gmToken, 'display', 'Table TV');
+    const back = (await gm('POST', `/api/campaigns/${boot.campaignId}/scenes`, { name: 'Back lot' }))['scene'].id;
+    await gm('POST', `/api/scenes/${back}/activate`, {});
+    await gm('POST', `/api/scenes/${back}/tokens`, { source: 'npc_template', sourceId: templateId, name: 'Heavy', x: 2.5, y: 2.5 });
+    const prep = (await gm('POST', `/api/scenes/${back}/stage-encounter`, { name: 'Back lot job' }))['encounterId'];
+    const extra = (await gm('POST', `/api/scenes/${back}/tokens`, { source: 'npc_template', sourceId: templateId, name: 'Spotter', x: 4.5, y: 4.5 }))['token'].id;
+    expect(rowNamed(await gm('GET', `/api/encounters/${prep}`), 'Spotter')).toBeDefined();
+
+    for (const token of [player.token, tv.token]) {
+      const list = (await call('GET', `/api/campaigns/${boot.campaignId}/encounters`, token)).json() as { encounters: { id: string }[] };
+      expect(list.encounters.map((e) => e.id)).toEqual([fightId]);
+      expect((await call('GET', `/api/encounters/${prep}`, token)).statusCode).toBe(404);
+    }
+
+    await gm('DELETE', `/api/tokens/${extra}`);
+    expect(rowNamed(await gm('GET', `/api/encounters/${prep}`), 'Spotter')).toBeUndefined();
+    expect(await logTexts()).toContain('Spotter leaves Back lot job: token removed');
+    for (const token of [player.token, tv.token]) {
+      const log = await call('GET', `/api/campaigns/${boot.campaignId}/log?limit=500`, token);
+      expect(log.body).not.toContain('Back lot job');
+      expect(log.body).not.toContain(prep);
+    }
   });
 });

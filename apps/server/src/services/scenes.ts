@@ -14,7 +14,7 @@ import { mkdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { migrateTileLayer } from '@safehouse/rules';
 import {
   GridProjectionSchema,
@@ -1055,6 +1055,8 @@ export interface StageResult {
   linkedIds: string[];
   shown: number;
   joined: StagedRow[];
+  /** The fight is live: the table may hear of it. */
+  live: boolean;
 }
 
 interface StagedBody {
@@ -1822,7 +1824,10 @@ export class ScenesService {
           continue;
         }
         if (same.tokenId === null) {
-          await this.db.update(combatants).set({ tokenId: t.id }).where(eq(combatants.id, same.id));
+          await this.db
+            .update(combatants)
+            .set({ tokenId: t.id, copilot: sql`${combatants.copilot} - 'tokenRemoved'::text` })
+            .where(eq(combatants.id, same.id));
           same.tokenId = t.id;
           linkedIds.push(same.id);
         }
@@ -1891,7 +1896,7 @@ export class ScenesService {
       combatantIds.push(row.id);
       joined.push({ combatantId: row.id, tokenId: t.id, name: row.name, ...(late ? { passesGone: late.passesGone } : {}) });
     }
-    return { encounterId: fight.id, createdEncounter, combatantIds, linkedIds, shown, joined };
+    return { encounterId: fight.id, createdEncounter, combatantIds, linkedIds, shown, joined, live: fight.state === 'live' };
   }
 
   async activeSceneModifiers(campaignId: string): Promise<Modifier[]> {

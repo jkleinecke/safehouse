@@ -36,6 +36,15 @@ describe('exchange steps', () => {
     expect(out).toMatchObject({ boxes: 2, track: 'stun', state: 'awaiting_apply' });
   });
 
+  it('Hit the Dirt avoids suppressive fire, and a suppressive hit is the base DV (p.179-180)', () => {
+    const zone: Exchange = { ...base, attack: 'suppressive', declared: { ...base.declared, ap: 0 } };
+    const dirt = afterDefense(zone, { actionId: 'hit_the_dirt', rollId: null, hits: 0, offersOn: [], avoided: true }, 12);
+    expect(dirt).toMatchObject({ outcome: 'miss', state: 'done' });
+    expect(dirt.damage).toBeUndefined();
+    const hit = afterDefense(zone, { actionId: 'avoid_suppression', rollId: null, hits: 1, offersOn: [] }, 0);
+    expect(hit.damage?.modifiedDv).toBe(5);
+  });
+
   it('keeps a 0-0 tie a miss, a tie with hits a graze', () => {
     const none = { ...base, attackHits: 0 };
     expect(afterDefense(none, { actionId: 'defense', rollId: null, hits: 0, offersOn: [] }, 0).outcome).toBe('miss');
@@ -231,5 +240,47 @@ describe('exchanges over the API', () => {
       exchangeId: opened['exchange'].id,
     });
     expect(JSON.stringify(card)).not.toContain('Sniper');
+  });
+
+  it('Hit the Dirt settles suppressive fire as a miss, with no dice', async () => {
+    const opened = await gm('POST', '/api/exchanges', {
+      target: { kind: 'combatant', id: lark },
+      attackerName: 'Gunner in the van',
+      attack: 'suppressive',
+      hits: 3,
+      dv: { value: 9, type: 'P' },
+    });
+    const out = await gm('POST', '/api/cards/settle', {
+      actor: { kind: 'combatant', id: lark },
+      actionId: 'hit_the_dirt',
+      exchangeId: opened['exchange'].id,
+      settle: 'app',
+    });
+    expect(out['roll']).toBeNull();
+    expect(out['exchange']).toMatchObject({ outcome: 'miss', state: 'done', defense: { avoided: true } });
+  });
+
+  it('opens nothing on a prep fight; starting a fight closes what opened before initiative', async () => {
+    const prep = (await gm('POST', `/api/campaigns/${boot.campaignId}/encounters`, { name: 'Back room' }))['encounter'].id;
+    const guard = (await gm('POST', `/api/encounters/${prep}/combatants`, { source: 'manual', name: 'Guard', monitors }))['combatant'];
+    const target = { kind: 'combatant', id: guard.id };
+    expect((await call('POST', '/api/exchanges', boot.gmToken, { target, hits: 2, dv: { value: 6, type: 'P' } })).statusCode).toBe(409);
+    const shot = await gm('POST', '/api/cards/settle', {
+      actor: { kind: 'combatant', id: lark },
+      actionId: 'fire_sa',
+      weapon: 'Hold-out',
+      target,
+      settle: { hits: 2, glitch: 'none' },
+    });
+    expect(shot['roll']).not.toBeNull();
+    expect(shot['exchange']).toBeUndefined();
+
+    // Live, but no initiative yet: turn 0.
+    const early = (await gm('POST', `/api/campaigns/${boot.campaignId}/encounters`, { name: 'Loading dock', state: 'live' }))['encounter'].id;
+    const lookout = (await gm('POST', `/api/encounters/${early}/combatants`, { source: 'manual', name: 'Lookout', monitors }))['combatant'];
+    const opened = await gm('POST', '/api/exchanges', { target: { kind: 'combatant', id: lookout.id }, hits: 2, dv: { value: 6, type: 'P' } });
+    expect(opened['exchange'].turn).toBe(0);
+    await gm('POST', `/api/encounters/${early}/roll-initiative`, {});
+    expect((await gm('GET', `/api/exchanges/${opened['exchange'].id}`))['exchange'].state).toBe('cancelled');
   });
 });

@@ -91,6 +91,8 @@ const CopilotSchema = z
      * row as `Combatant.seized`; cleared by a new Combat Turn.
      */
     seized: z.boolean().optional(),
+    /** Its token was deleted mid-fight; lifted onto the row as `Combatant.tokenRemoved`. */
+    tokenRemoved: z.boolean().optional(),
     /**
      * This Action Phase is a Delayed Action being used: the row was holding
      * one and the GM pressed "Act now". Its actions take -1 die (p.161; the
@@ -158,6 +160,7 @@ export function serializeCombatant(row: CombatantRow): Combatant {
     actedThisPass: row.actedThisPass,
     ...(copilot.delayed ? { delayed: true } : {}),
     ...(copilot.seized ? { seized: true } : {}),
+    ...(copilot.tokenRemoved ? { tokenRemoved: true } : {}),
     ...(copilot.edge ? { edge: copilot.edge } : {}),
     ...(copilot.grunt ? { grunt: copilot.grunt } : {}),
     copilot: copilot as Record<string, unknown>,
@@ -294,6 +297,8 @@ export interface PlayerCombatantView {
   delayed?: true;
   /** Seized the Initiative this Combat Turn (p.160-161): the spend was said out loud. */
   seized?: true;
+  /** Its token was deleted mid-fight; the row stays. */
+  tokenRemoved?: true;
   /** True when this row is the viewer's own PC. */
   own: boolean;
   /**
@@ -372,6 +377,7 @@ export function encounterForViewer(
       actedThisPass: c.actedThisPass,
       ...(c.delayed ? { delayed: true as const } : {}),
       ...(c.seized ? { seized: true as const } : {}),
+      ...(c.tokenRemoved ? { tokenRemoved: true as const } : {}),
       own,
       ...(own || c.source === 'character' ? { initBase: c.initBase, initDice: c.initDice } : {}),
       condition: conditionOf(c.monitors),

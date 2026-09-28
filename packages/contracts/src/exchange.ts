@@ -103,6 +103,8 @@ export const ExchangeDefenseSchema = z.object({
   hits: NonNegInt,
   offersOn: z.array(z.string()).default([]),
   noDefense: z.literal(true).optional(),
+  /** Out of the attack, no test: Hit the Dirt under suppressive fire (p.179-180). */
+  avoided: z.literal(true).optional(),
 });
 export type ExchangeDefense = z.infer<typeof ExchangeDefenseSchema>;
 

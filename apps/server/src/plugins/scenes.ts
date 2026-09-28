@@ -1444,10 +1444,11 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         payload: {
           encounterId: out.encounterId,
           sceneId: scene.id,
-          // Public: only the rows the table can see, never a head-count of hidden foes.
+          // Only the rows the table can see, never a head-count of hidden foes; a prep fight is the GM's.
           staged: out.shown,
           created: out.createdEncounter,
         },
+        visibility: out.live ? 'public' : 'gm',
       });
       return out;
     });

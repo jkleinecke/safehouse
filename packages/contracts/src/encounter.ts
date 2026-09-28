@@ -99,6 +99,8 @@ export const CombatantSchema = z.object({
    * Combat Turn clears it.
    */
   seized: z.boolean().optional(),
+  /** Its map token was deleted mid-fight: the row stays, with no token. */
+  tokenRemoved: z.boolean().optional(),
   edge: EdgeStateSchema.optional(),
   grunt: GruntStateSchema.optional(),
   /** Copilot state: quick-roll rack config, morale flags (FR10.7–10.9). */

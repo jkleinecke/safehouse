@@ -195,6 +195,17 @@ export class EncountersService {
       .orderBy(asc(encounters.createdAt));
   }
 
+  /** Of these fights, the ones with a row of a runner this user owns. */
+  async fightsWithRunnerOf(userId: string, encounterIds: readonly string[]): Promise<Set<string>> {
+    if (encounterIds.length === 0) return new Set();
+    const rows = await this.db
+      .select({ id: combatants.encounterId })
+      .from(combatants)
+      .innerJoin(characters, and(eq(combatants.source, 'character'), eq(characters.id, combatants.sourceId)))
+      .where(and(inArray(combatants.encounterId, [...encounterIds]), eq(characters.ownerUserId, userId)));
+    return new Set(rows.map((r) => r.id));
+  }
+
   async createEncounter(input: {
     campaignId: string;
     name: string;
@@ -237,8 +248,9 @@ export class EncountersService {
       const row = (
         await tx.db.update(encounters).set(patch).where(eq(encounters.id, id)).returning()
       )[0]!;
+      if (row.turn > current.turn) await closeExchangesBefore(tx, id, row.turn);
       if (patch.state === 'live') await this.retireOtherLive(tx, row.campaignId, row.id);
-      await this.emitUpdated(row, 'updated', tx);
+      await this.emitUpdated(row, 'updated', tx, fightIsPublic(row) || current.state === 'live');
       return row;
     });
   }
@@ -517,6 +529,7 @@ export class EncountersService {
                 .returning()
             )[0] ?? encounter)
           : encounter;
+      if (started.turn > encounter.turn) await closeExchangesBefore(itx, encounterId, started.turn);
       const after = await this.emitUpdated(started, 'initiative.rolled', itx);
       const order = await this.orderOptions(started, after, itx);
       return {
@@ -815,11 +828,7 @@ export class EncountersService {
         .update(combatants)
         .set({ copilot: CLEAR_TURN_FLAGS })
         .where(eq(combatants.encounterId, encounterId));
-      const closed = await closeBeforeTurn(itx, encounterId, row.turn);
-      for (const x of closed) {
-        await logToGm(itx, `${x.attacker?.name ?? 'Someone'} → ${x.target.name}: closed with the Combat Turn`, x);
-      }
-      if (closed.length > 0) await announceToPlayers(itx, closed);
+      await closeExchangesBefore(itx, encounterId, row.turn);
       // One fight at a time: the table, the phones and the TV all follow
       // "the live encounter", and two of them would be a coin toss.
       await this.retireOtherLive(itx, row.campaignId, row.id);
@@ -1052,7 +1061,8 @@ export class EncountersService {
       .set({ state: 'done' })
       .where(and(eq(encounters.campaignId, campaignId), eq(encounters.state, 'live'), ne(encounters.id, keepId)))
       .returning();
-    for (const other of others) await this.emitUpdated(other, 'updated', tx);
+    // They were live: the table hears that they ended.
+    for (const other of others) await this.emitUpdated(other, 'updated', tx, true);
   }
 
   /** Interrupt action: deduct its Initiative Score cost immediately (FR4.4). */
@@ -1207,13 +1217,24 @@ export class EncountersService {
     encounter: EncounterRow,
     reason: string,
     tx?: EventTx,
+    table = fightIsPublic(encounter),
   ): Promise<Combatant[]> {
-    return this.hub.atomicIn(encounter.campaignId, tx, async (itx) => emitFightFrames(itx, encounter, reason));
+    return this.hub.atomicIn(encounter.campaignId, tx, async (itx) => emitFightFrames(itx, encounter, reason, table));
   }
 
   async emitUpdatedById(encounterId: string, reason: string, tx?: EventTx): Promise<void> {
     await this.emitUpdated(await this.getEncounter(encounterId, tx), reason, tx);
   }
+}
+
+/** Open exchanges from before `turn` close with their Combat Turn; turn 0 is before the fight started. */
+async function closeExchangesBefore(tx: EventTx, encounterId: string, turn: number): Promise<void> {
+  const closed = await closeBeforeTurn(tx, encounterId, turn);
+  for (const x of closed) {
+    const when = x.turn === 0 ? 'closed as the fight started' : 'closed with the Combat Turn';
+    await logToGm(tx, `${x.attacker?.name ?? 'Someone'} → ${x.target.name}: ${when}`, x);
+  }
+  if (closed.length > 0) await announceToPlayers(tx, closed);
 }
 
 /** ERIC tie-break attributes (p.159) of rows sharing a score: the sheet's, else the Edge pool. */
@@ -1244,11 +1265,21 @@ export async function ericForRows(db: Db, list: Combatant[]): Promise<Record<str
   return out;
 }
 
+/** A prep fight is the GM's alone; a done one is the table's only if it ran (callers that saw it live say so). */
+function fightIsPublic(encounter: Pick<EncounterRow, 'state' | 'turn'>): boolean {
+  return encounter.state === 'live' || (encounter.state === 'done' && encounter.turn >= 1);
+}
+
 /**
- * `encounter.updated` at `gm` and at `public`, in the caller's transaction. Token
- * rows are public only while on the table; a hidden row acting shows as `gmTurn`.
+ * `encounter.updated` at `gm`, and at `public` when `table` (never for a prep fight), in the
+ * caller's transaction. Token rows are public only while on the table; a hidden row acting shows as `gmTurn`.
  */
-export async function emitFightFrames(tx: EventTx, encounter: EncounterRow, reason: string): Promise<Combatant[]> {
+export async function emitFightFrames(
+  tx: EventTx,
+  encounter: EncounterRow,
+  reason: string,
+  table = fightIsPublic(encounter),
+): Promise<Combatant[]> {
   const rows = (await tx.db.select().from(combatants).where(eq(combatants.encounterId, encounter.id))).map(
     serializeCombatant,
   );
@@ -1272,6 +1303,7 @@ export async function emitFightFrames(tx: EventTx, encounter: EncounterRow, reas
     },
     visibility: 'gm',
   });
+  if (!table) return list;
   const visible = list.filter((c) => c.visibility === 'public');
   const visibleIds = new Set(visible.map((c) => c.id));
   await tx.emit({
@@ -1291,6 +1323,7 @@ export async function emitFightFrames(tx: EventTx, encounter: EncounterRow, reas
         actedThisPass: c.actedThisPass,
         ...(c.delayed ? { delayed: true } : {}),
         ...(c.seized ? { seized: true } : {}),
+        ...(c.tokenRemoved ? { tokenRemoved: true } : {}),
         // The party's dice lines travel with the frame (FR4.2); an NPC's stays the GM's.
         ...(c.source === 'character' ? { initBase: c.initBase, initDice: c.initDice } : {}),
         condition: conditionOf(c.monitors),

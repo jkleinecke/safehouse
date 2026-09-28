@@ -21,7 +21,7 @@ import { httpError } from './auth.js';
 import { loadCharacter } from './characters.js';
 import type { EncountersService } from './encounters.js';
 import type { ExchangesService } from './exchanges.js';
-import { armorOf, pickWeapon } from './roll-cards.js';
+import { armorOf, paysInitiative, pickWeapon } from './roll-cards.js';
 import type { LoadedActor } from './roll-cards-load.js';
 import type { RollRecord, RollService, RollViewer } from './rolls.js';
 
@@ -29,7 +29,7 @@ export interface CardSettled {
   card: RollCard;
   /** Null for an action with no test (Hit the Dirt, an unaware defender). */
   roll: RollRecord | null;
-  /** An Interrupt's cost as paid; the GM retypes the score to undo it. */
+  /** An Interrupt's cost as paid (absent when its offer was struck); the GM retypes the score to undo it. */
   initScore?: { combatantId: string; from: number; to: number };
   /** Opened, defended or soaked by this settle (the caller trims it for a player). */
   exchange?: Exchange;
@@ -132,7 +132,8 @@ function exchangeStep(deps: SettleDeps, input: SettleInput): Step | null {
   const { card, req, loaded, target, exchange } = input;
   const role = card.action.exchange;
   const row = target?.row;
-  if (role === 'opens' && card.pool && card.declare && target && row) {
+  // A prep or done fight takes no exchange: the attack settles as a plain roll.
+  if (role === 'opens' && card.pool && card.declare && target && row?.live) {
     const declared = card.declare;
     const weapon = weaponOf(input);
     return (tx, rec) =>
@@ -161,6 +162,7 @@ function exchangeStep(deps: SettleDeps, input: SettleInput): Step | null {
   if (role === 'defends') {
     const offersOn = card.offers.filter((o) => o.on).map((o) => o.id);
     const unaware = card.offers.some((o) => o.on && o.noDefense);
+    const avoided = combatAction(card.action.id)?.avoids?.includes(exchange.attack) ?? false;
     return (tx, rec) =>
       deps.exchanges.defendIn(
         tx,
@@ -171,6 +173,7 @@ function exchangeStep(deps: SettleDeps, input: SettleInput): Step | null {
           hits: rec?.limitedHits ?? 0,
           offersOn,
           ...(unaware ? { noDefense: true as const } : {}),
+          ...(avoided ? { avoided: true as const } : {}),
         },
         armor,
       );
@@ -251,7 +254,7 @@ export async function settleCard(deps: SettleDeps, input: SettleInput): Promise<
   const ownerUserId = character?.ownerUserId ?? viewer.userId;
   const row = loaded.row?.live ? loaded.row : undefined;
   const book: Bookkeeping = {
-    cost: card.action.type === 'interrupt' ? (card.action.initCost ?? 0) : 0,
+    cost: paysInitiative(card) ? (card.action.initCost ?? 0) : 0,
     fullDefense: card.action.id === 'full_defense',
     defended: card.action.exchange === 'defends' && card.pool !== null,
   };

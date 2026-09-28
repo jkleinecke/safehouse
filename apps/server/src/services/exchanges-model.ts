@@ -65,7 +65,8 @@ function damageOf(x: Exchange, netHits: number, armor: number): ExchangeDamage {
   const spell = x.attack === 'direct-spell';
   const d = damageAfterHit({
     base: { value, type, raw: `${value}${type}` },
-    netHits,
+    // Suppressive fire hits for the weapon's base DV (p.180).
+    netHits: x.attack === 'suppressive' ? 0 : netHits,
     armor: spell ? 0 : armor,
     ap: spell ? 0 : x.declared.ap,
   });
@@ -82,6 +83,7 @@ const trackOf = (type: 'P' | 'S') => (type === 'P' ? 'physical' : 'stun');
 
 /** The defense is in: hit, graze or miss. A re-rolled defense starts the rest over. */
 export function afterDefense(x: Exchange, defense: ExchangeDefense, armor: number): Exchange {
+  if (defense.avoided) return { ...cleared(x), defense, outcome: 'miss', state: 'done' };
   const hit = resolveHit(x.attackHits ?? 0, defense.hits);
   const next: Exchange = { ...cleared(x), defense, netHits: hit.netHits, outcome: hit.outcome };
   if (hit.outcome !== 'hit') return { ...next, state: 'done' };

@@ -132,6 +132,8 @@ export interface CombatAction {
   attack?: AttackKind;
   /** For a defense: the kinds of attack it may answer. */
   against?: readonly AttackKind[];
+  /** For a defense: the kinds of attack it takes the defender out of, no test (Hit the Dirt, p.179-180). */
+  avoids?: readonly AttackKind[];
   /** For a defense bought with an Interrupt: one test (Dodge, Block, Parry) or the whole Combat Turn (Full Defense). */
   lasts?: 'test' | 'turn';
 }
@@ -640,6 +642,7 @@ export const COMBAT_ACTIONS: readonly CombatAction[] = [
     offers: NONE,
     exchange: 'defends',
     against: ['suppressive'],
+    avoids: ['suppressive'],
   },
 
   // --- Reactions: tests that are not actions --------------------------------

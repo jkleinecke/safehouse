@@ -112,6 +112,7 @@ export class ExchangesService {
   async openByHand(req: ExchangeOpenRequest, target: LoadedActor, attacker: LoadedActor | null): Promise<Exchange> {
     const row = target.row;
     if (!row) throw httpError(409, 'not_in_fight', `${target.body.actor.name} has no row on the tracker`);
+    if (!row.live) throw httpError(409, 'not_in_fight', `${target.body.actor.name} is not in a live fight`);
     const by: DeclaredBy = req.by ?? { role: 'gm', name: 'GM' };
     const attackerParty = attacker
       ? { ...(attacker.row ? { combatantId: attacker.row.combatantId } : {}), name: attacker.body.actor.name }
@@ -152,7 +153,8 @@ export class ExchangesService {
   async defendIn(tx: EventTx, id: string, defense: ExchangeDefense, armor: number): Promise<Exchange> {
     const x = await writeExchange(tx, afterDefense(await this.locked(tx, id), defense, armor));
     const word = x.outcome === 'hit' ? 'hit' : x.outcome === 'graze' ? 'grazed' : 'missed';
-    await logToGm(tx, `${who(x)}: ${word} (${x.attackHits ?? 0} vs ${defense.hits})`, x);
+    const why = defense.avoided ? 'avoided, no test' : `${x.attackHits ?? 0} vs ${defense.hits}`;
+    await logToGm(tx, `${who(x)}: ${word} (${why})`, x);
     await this.announce(tx, x, 'exchange.defended');
     return x;
   }

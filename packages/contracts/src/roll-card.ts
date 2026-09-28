@@ -40,6 +40,7 @@ export const ModifierAutoSchema = z.enum([
   'previousDefenses',
   'ap',
   'sustaining',
+  'initCost',
 ]);
 export type ModifierAuto = z.infer<typeof ModifierAutoSchema>;
 
@@ -153,8 +154,8 @@ export const CardOfferSchema = z.object({
   label: z.string(),
   value: z.number().int(),
   stepper: CardStepperSchema.optional(),
-  /** Changes the limit, not the pool. */
-  target: z.literal('limit').optional(),
+  /** Changes the limit or the Initiative Score (an Interrupt's cost), not the pool. */
+  target: z.enum(['limit', 'initiative']).optional(),
   ref: RefSchema,
   on: z.boolean(),
   group: ModifierGroupSchema.optional(),
@@ -168,7 +169,7 @@ export const CardOfferSchema = z.object({
 });
 export type CardOffer = z.infer<typeof CardOfferSchema>;
 
-/** An Interrupt's score cost ("14 → 9", p.168) and the rounds fired (p.180). */
+/** An Interrupt's score cost ("14 → 9", p.168) while its offer is ticked, and the rounds fired (p.180). */
 export const CardCostSchema = z.object({
   initScore: z.object({ from: z.number().int(), to: z.number().int() }).optional(),
   rounds: z.number().int().min(1).optional(),
