@@ -68,6 +68,9 @@ import { contextMenuItems, type ContextMenuActions, type ContextMenuInput } from
 import MeasurePanel from './hud/MeasurePanel.js';
 import OrderChip from './hud/OrderChip.js';
 import PlayRail from './hud/PlayRail.js';
+import CardFlow from '../combat/CardFlow.js';
+import { MapIncoming } from '../combat/IncomingAttack.js';
+import { offerTokenPick } from '../combat/tokenPick.js';
 import { availableModes, clampMode } from './hud/eyes.js';
 import ModeBar from './hud/ModeBar.js';
 import { FOG_BAR_MODES } from './hud/modes.js';
@@ -510,6 +513,12 @@ export default function GridPage() {
   // and where; the page decides the verbs and draws the list.
   const [menu, setMenu] = useState<ContextMenuRequest | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
+  // The roll card for a token: the player's own runner, or anyone for the GM.
+  const [actAs, setActAs] = useState<Token | null>(null);
+  const myToken = useMemo(
+    () => (isGm ? undefined : tokens.find((t) => t.source === 'character' && t.sourceId === myCharacterId)),
+    [isGm, tokens, myCharacterId],
+  );
   const deleteToken = useDeleteToken(scene?.id);
   const navigate = useNavigate();
   // Where each token stood before a drop, without rebuilding every stage
@@ -549,7 +558,10 @@ export default function GridPage() {
         commands.move(id, x, y, rotation);
       },
       onTokenDrag: (id, x, y) => commands.drag(id, x, y),
-      onSelectToken: (id) => useGridStore.getState().selectToken(id),
+      onSelectToken: (id) => {
+        useGridStore.getState().selectToken(id);
+        offerTokenPick(id);
+      },
       onPing: (x, y) => commands.ping(x, y),
       onPointer: (x, y) => commands.pointer(x, y),
       onRuler: (r: RulerState | null) => useGridStore.getState().setRuler(r),
@@ -1030,6 +1042,7 @@ export default function GridPage() {
     setLight: (tokenId, light) => patchToken.mutate({ tokenId, patch: { light } }),
     customiseLook: (tokenId) => useGridStore.getState().setLookTokenId(tokenId),
     removeToken: (tokenId) => deleteToken.mutate(tokenId),
+    act: (token) => setActAs(token),
     doorOp: (input) => doorOp.mutate(input, { onError: showDoorNotice }),
     pinHere: (x, y) => callbacks.onPinPlace?.(x, y),
     noteHere: (x, y) => callbacks.onNotePlace?.(x, y),
@@ -1472,6 +1485,17 @@ export default function GridPage() {
             {campaignId && scene && (isGm ? store.mode === 'play' : true) && (
               <OrderChip campaignId={campaignId} sceneId={scene.id} sceneName={scene.name} tokens={tokens} />
             )}
+            {myToken && (
+              <button
+                type="button"
+                data-testid="act-open"
+                className="chip pointer-events-auto border-cyan-dim bg-panel/90 text-cyan pointer-coarse:min-h-10"
+                title="Your actions, each with its roll card"
+                onClick={() => setActAs(myToken)}
+              >
+                Act
+              </button>
+            )}
             {doorNotice && (
               <span data-testid="door-notice" className="chip bg-panel/90 text-warn">
                 {doorNotice}
@@ -1523,6 +1547,31 @@ export default function GridPage() {
             about={menuAbout}
             items={menuItems}
             onClose={closeMenu}
+          />
+        )}
+
+        {campaignId && scene && actAs && (
+          <CardFlow
+            key={actAs.id}
+            campaignId={campaignId}
+            sceneId={scene.id}
+            actor={{ kind: 'token', id: actAs.id }}
+            title={actAs.name}
+            mode={{ kind: 'act' }}
+            gm={isGm}
+            // The GM rolling for a runner is the player's roll made at the table.
+            {...(isGm && actAs.source === 'character' ? { forActorBy: { role: 'player' as const, name: actAs.name } } : {})}
+            {...(!isGm && ownCharacter.data ? { skills: ownCharacter.data.sheet.skills.map((k) => k.id) } : {})}
+            tokens={tokens}
+            onClose={() => setActAs(null)}
+          />
+        )}
+        {campaignId && scene && viewer.role === 'player' && (
+          <MapIncoming
+            campaignId={campaignId}
+            sceneId={scene.id}
+            tokens={tokens}
+            {...(ownCharacter.data ? { skills: ownCharacter.data.sheet.skills.map((k) => k.id) } : {})}
           />
         )}
 

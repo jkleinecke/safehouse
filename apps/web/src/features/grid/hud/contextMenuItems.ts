@@ -41,6 +41,8 @@ export interface ContextMenuActions {
   /** Save the light a token carries (VISION.md §4.1) — here, the same one switched on or off. */
   setLight(tokenId: string, light: TokenLight | null): void;
   removeToken(tokenId: string): void;
+  /** Open the roll card for a token: a player's own runner, or anyone for the GM in Play. */
+  act?(token: Token): void;
   doorOp(input: DoorOpInput): void;
   pinHere(x: number, y: number): void;
   noteHere(x: number, y: number): void;
@@ -141,6 +143,15 @@ function tokenItems(input: ContextMenuInput, token: Token): MenuItem[] {
   const { role, actions, tokens, selectedTokenId, myCharacterId } = input;
   const items: MenuItem[] = [];
   const mine = token.source === 'character' && token.sourceId !== null && token.sourceId === myCharacterId;
+  const act = actions.act;
+  if (act && token.source !== 'prop' && (mine || (role === 'gm' && input.mode === 'play'))) {
+    items.push({
+      id: 'act',
+      label: mine ? 'Act…' : `Act as ${token.name}…`,
+      hint: 'the actions, each with its roll card',
+      run: () => act(token),
+    });
+  }
   // The other token to measure from: the selected one, or the viewer's own.
   const other =
     tokens.find((t) => t.id !== token.id && t.id === selectedTokenId) ??

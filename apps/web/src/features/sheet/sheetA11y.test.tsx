@@ -168,7 +168,8 @@ describe('skill rows are real buttons with real names', () => {
 
 describe('other tabs lost their handler-divs too', () => {
   it('gives the defense and soak quick rolls a spoken name', () => {
-    const html = render(<CombatTab {...tabProps()} />);
+    // The actions list reaches for TanStack Query.
+    const html = renderWithQuery(<CombatTab {...tabProps()} />);
     expect(html).not.toContain('role="button"');
     expect(labels(html).some((l) => l.startsWith('Roll Defense, pool'))).toBe(true);
     expect(labels(html).some((l) => l.startsWith('Roll Soak, pool'))).toBe(true);

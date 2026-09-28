@@ -126,6 +126,18 @@ describe('the token menu', () => {
     expect(ids(other)).toEqual(['range', 'center']);
     expect(other[0]!.label).toBe('Range from Whisper');
   });
+
+  it('offers Act on a player’s own runner, and on anyone to the GM in Play', () => {
+    const act = vi.fn();
+    const with_ = (over: Partial<ContextMenuInput>) => contextMenuItems(input({ actions: { ...actions(), act }, ...over }));
+    const own = with_({ role: 'player', myCharacterId: 'char-Whisper', target: { kind: 'token', id: 'Whisper' } });
+    expect(ids(own)[0]).toBe('act');
+    own[0]!.run();
+    expect(act).toHaveBeenCalledWith(expect.objectContaining({ id: 'Whisper' }));
+    expect(ids(with_({ role: 'player', myCharacterId: 'char-Whisper', target: { kind: 'token', id: 'Ganger' } }))).not.toContain('act');
+    expect(with_({ mode: 'play', target: { kind: 'token', id: 'Ganger' } })[0]!.label).toBe('Act as Ganger…');
+    expect(ids(with_({ mode: 'prep', target: { kind: 'token', id: 'Ganger' } }))).not.toContain('act');
+  });
 });
 
 describe('the floor menu', () => {

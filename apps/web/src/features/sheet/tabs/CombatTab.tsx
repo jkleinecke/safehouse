@@ -22,6 +22,7 @@ import { Empty, RefChip, SectionLabel } from '../components/ui.js';
 import AddFromBooks from '../catalogue/AddFromBooks.js';
 import { withoutItem } from '../catalogue/toSheet.js';
 import VitalsStrip from '../components/VitalsStrip.js';
+import SheetActions from '../../combat/SheetActions.js';
 import type { TabProps } from './shared.js';
 
 export default function CombatTab(props: TabProps) {
@@ -85,6 +86,13 @@ export default function CombatTab(props: TabProps) {
           </div>
         )}
       </div>
+
+      <SheetActions
+        campaignId={props.campaignId}
+        characterId={character.id}
+        characterName={character.name}
+        skills={sheet.skills.map((s) => s.id)}
+      />
 
       <div className="flex items-center justify-between gap-2">
         <SectionLabel>Weapons</SectionLabel>

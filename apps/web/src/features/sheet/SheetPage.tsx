@@ -39,6 +39,7 @@ import {
 import { SHEET_TABS, useSheetPlayStore, type SheetTab } from './playState.js';
 import { useSheetLive } from './useSheetLive.js';
 import { useLiveStore } from '../../live/store.js';
+import IncomingAttack from '../combat/IncomingAttack.js';
 import CloseCallOfferCard from './components/CloseCallOffer.js';
 import IdentityStrip from './components/IdentityStrip.js';
 import PortraitControl from './components/PortraitControl.js';
@@ -310,6 +311,15 @@ export default function SheetPage() {
       )}
 
       <TabView {...tabProps} />
+
+      {/* An attack on this runner: the owner's own Defend and Resist cards. */}
+      {view.combatantId && getSession()?.role === 'player' && (
+        <IncomingAttack
+          campaignId={campaignId}
+          myCombatantIds={[view.combatantId]}
+          skills={sheet.skills.map((s) => s.id)}
+        />
+      )}
 
       {improving && (
         <Suspense
