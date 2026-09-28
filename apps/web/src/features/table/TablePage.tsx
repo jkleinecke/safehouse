@@ -8,6 +8,8 @@
  */
 import { useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { getSession } from '../../api/session.js';
+import GmCardHost from '../combat/GmCardHost.js';
 import DiceRoller from './DiceRoller.js';
 import LogStream from './LogStream.js';
 import RollTablesPanel from './RollTablesPanel.js';
@@ -77,6 +79,8 @@ export default function TablePage() {
           <RollTablesPanel campaignId={campaignId} />
         </div>
       </aside>
+      {/* The tracker's Actions, rack chips and attack banners open the GM's card here. */}
+      {getSession()?.role === 'gm' && <GmCardHost campaignId={campaignId} />}
     </div>
   );
 }

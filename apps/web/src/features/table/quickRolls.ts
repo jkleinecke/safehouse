@@ -26,7 +26,7 @@ export interface RackEntry {
   pool: number;
   breakdown: ProvenanceEntry[];
   limit?: LimitRef;
-  weapon?: { name: string; dv: string | null; ap: number };
+  weapon?: { name: string; dv: string | null; ap: number; mode?: string | null; rangeCat?: string | null };
 }
 
 /**

@@ -135,7 +135,7 @@ describe('the token menu', () => {
     own[0]!.run();
     expect(act).toHaveBeenCalledWith(expect.objectContaining({ id: 'Whisper' }));
     expect(ids(with_({ role: 'player', myCharacterId: 'char-Whisper', target: { kind: 'token', id: 'Ganger' } }))).not.toContain('act');
-    expect(with_({ mode: 'play', target: { kind: 'token', id: 'Ganger' } })[0]!.label).toBe('Act as Ganger…');
+    expect(with_({ mode: 'play', target: { kind: 'token', id: 'Ganger' } })[0]!.label).toBe('Actions…');
     expect(ids(with_({ mode: 'prep', target: { kind: 'token', id: 'Ganger' } }))).not.toContain('act');
   });
 });

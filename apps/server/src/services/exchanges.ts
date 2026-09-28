@@ -129,6 +129,8 @@ export class ExchangesService {
         dv: req.dv,
         ap: req.ap,
         defenseModifier: req.defenseModifier,
+        ...(req.mode ? { mode: req.mode } : {}),
+        ...(req.rounds ? { rounds: req.rounds } : {}),
         extras: req.extras,
         ...(req.note ? { note: req.note } : {}),
         by,

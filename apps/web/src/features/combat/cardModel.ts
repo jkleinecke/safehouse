@@ -50,6 +50,18 @@ export function newDraft(
   };
 }
 
+/** A card opened straight on one action (a rack chip, a defense button); Back goes to the list. */
+export interface CardStart {
+  action: Pick<ActionSummary, 'id' | 'weapons' | 'needsTarget'>;
+  weapon?: string;
+  skill?: string;
+}
+
+export function startDraft(actor: CardActorRef, start: CardStart, exchangeId?: string): CardDraft {
+  const d = newDraft(actor, start.action, exchangeId);
+  return { ...d, ...(start.weapon ? { weapon: start.weapon } : {}), ...(start.skill ? { skill: start.skill } : {}) };
+}
+
 /** The preview request, defaults for the offers (`offersOnWith` adds the flips). */
 export function requestOf(d: CardDraft): CardRequestInput {
   const declare = Object.keys(d.declare).length > 0 ? d.declare : undefined;

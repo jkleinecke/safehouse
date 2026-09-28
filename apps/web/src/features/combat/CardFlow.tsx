@@ -3,18 +3,19 @@
  * of an actor's actions, or the answers to an incoming attack). On the map the
  * sheet steps aside while the player taps a target token.
  */
-import { useEffect, useState } from 'react';
-import type { AttackKind, CardActorRef, DeclaredBy, Token } from '@safehouse/contracts';
+import { useEffect, useState, type ReactNode } from 'react';
+import type { AttackKind, CardActorRef, DeclaredBy, Token, Visibility } from '@safehouse/contracts';
+import type { CoverLevel } from '@safehouse/rules';
 import { Sheet } from '../sheet/components/ui.js';
 import ActionList, { ActionRow } from './ActionList.js';
 import { useActorActions, type ActionSummary } from './cardApi.js';
-import { defenseChoices, newDraft, type CardDraft } from './cardModel.js';
+import { defenseChoices, newDraft, startDraft, type CardDraft, type CardStart } from './cardModel.js';
 import RollCardPanel from './RollCardPanel.js';
 import { useTokenPick } from './tokenPick.js';
 
 export type CardFlowMode =
-  | { kind: 'act' }
-  | { kind: 'defend'; exchangeId: string; against: AttackKind }
+  | { kind: 'act'; start?: CardStart }
+  | { kind: 'defend'; exchangeId: string; against: AttackKind; start?: CardStart }
   | { kind: 'card'; action: Pick<ActionSummary, 'id' | 'weapons' | 'needsTarget'>; exchangeId?: string };
 
 export interface CardFlowProps {
@@ -28,11 +29,17 @@ export interface CardFlowProps {
   skills?: readonly string[];
   /** The map's tokens: "tap a token" is offered only with them. */
   tokens?: readonly Token[];
+  /** Above the list (the GM's incoming attacks and "Declare an attack"). */
+  header?: ReactNode;
+  /** GM, on the map: the cover the map reads between two rows. */
+  coverOf?: (attackerId: string, targetId: string) => CoverLevel | null;
+  initialVisibility?: Visibility;
   onClose: () => void;
 }
 
 function firstDraft(actor: CardActorRef, mode: CardFlowMode): CardDraft | null {
-  return mode.kind === 'card' ? newDraft(actor, mode.action, mode.exchangeId) : null;
+  if (mode.kind === 'card') return newDraft(actor, mode.action, mode.exchangeId);
+  return mode.start ? startDraft(actor, mode.start, mode.kind === 'defend' ? mode.exchangeId : undefined) : null;
 }
 
 export default function CardFlow(props: CardFlowProps) {
@@ -94,6 +101,8 @@ export default function CardFlow(props: CardFlowProps) {
         {...(props.forActorBy ? { forActorBy: props.forActorBy } : {})}
         {...(props.skills ? { skills: props.skills } : {})}
         {...(pickOnMap ? { onPickOnMap: pickOnMap } : {})}
+        {...(props.coverOf ? { coverOf: props.coverOf } : {})}
+        {...(props.initialVisibility ? { initialVisibility: props.initialVisibility } : {})}
         {...(listed ? { onBack: () => setDraft(null) } : {})}
         onDone={props.onClose}
       />
@@ -105,7 +114,7 @@ export default function CardFlow(props: CardFlowProps) {
   } else if (mode.kind === 'defend') {
     body = (
       <>
-        <p className="mb-2 text-xs text-faint">Optional: the GM can roll it for you.</p>
+        {!gm && <p className="mb-2 text-xs text-faint">Optional: the GM can roll it for you.</p>}
         <ul>
           {defenseChoices(actions.data).map((a) => (
             <ActionRow key={a.id} action={a} onPick={pick} />
@@ -115,6 +124,14 @@ export default function CardFlow(props: CardFlowProps) {
     );
   } else {
     body = <ActionList actions={actions.data} onPick={pick} />;
+  }
+  if (!draft && props.header) {
+    body = (
+      <>
+        {props.header}
+        {body}
+      </>
+    );
   }
 
   return (

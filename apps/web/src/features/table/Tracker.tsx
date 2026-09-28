@@ -19,6 +19,8 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { Combatant } from '@safehouse/contracts';
 import { useMyCharacterId } from '../../api/campaigns.js';
 import { getSession } from '../../api/session.js';
+import { useGmExchanges } from '../combat/gmApi.js';
+import GmIncoming from '../combat/GmIncoming.js';
 import CombatantRow, { type RowOrderControls } from './CombatantRow.js';
 import {
   patchEncounter,
@@ -142,6 +144,9 @@ export default function Tracker({ campaignId, sceneId = null, emptyAction }: Tra
   const [manageOpen, setManageOpen] = useState(false);
 
   const encounterId = encounter?.id ?? '';
+  // Open attacks, on their rows; the count opens them all in one list.
+  const exchanges = useGmExchanges(isGm ? encounterId : null);
+  const [openList, setOpenList] = useState(false);
 
   const run = (fn: () => Promise<unknown>) => {
     if (!encounterId || busy) return;
@@ -211,6 +216,17 @@ export default function Tracker({ campaignId, sceneId = null, emptyAction }: Tra
             <span className="text-faint">up: </span>
             {acting.combatant.name}
           </span>
+        )}
+        {isGm && exchanges.length > 0 && (
+          <button
+            type="button"
+            className={`chip py-0 ${openList ? 'border-magenta text-magenta' : 'border-magenta-dim text-magenta'}`}
+            aria-pressed={openList}
+            onClick={() => setOpenList((v) => !v)}
+            title="Attacks waiting on a defense, a soak or the boxes"
+          >
+            {exchanges.length} open {exchanges.length === 1 ? 'attack' : 'attacks'}
+          </button>
         )}
         {!acting && live && encounter?.gmTurn && (
           <span className="mono-label text-ink">
@@ -397,6 +413,14 @@ export default function Tracker({ campaignId, sceneId = null, emptyAction }: Tra
         />
       )}
 
+      {isGm && openList && exchanges.length > 0 && (
+        <div className="border-b border-edge px-3 pb-2" aria-label="Open attacks">
+          {exchanges.map((x) => (
+            <GmIncoming key={x.id} x={x} row={combatants.find((c) => c.id === x.target.combatantId)} named />
+          ))}
+        </div>
+      )}
+
       {showInit && encounter && (
         <InitiativePanel
           encounter={encounter}
@@ -429,6 +453,7 @@ export default function Tracker({ campaignId, sceneId = null, emptyAction }: Tra
             onDamage={(c, track) => setDamageFor(track ? { c, track } : { c })}
             onOpenChain={(id) => setChainFor(id)}
             {...(isGm && live && !gathering ? { orderControls: orderControls(row) } : {})}
+            {...(isGm ? { incoming: exchanges.filter((x) => x.target.combatantId === row.combatant.id) } : {})}
           />
         ))}
       </ul>

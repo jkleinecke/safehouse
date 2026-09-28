@@ -10,6 +10,7 @@ import {
   DeclaredExtraSchema,
   ExchangeDeclarationSchema,
   ExchangeSchema,
+  FireModeCodeSchema,
 } from './exchange.js';
 
 /**
@@ -284,6 +285,9 @@ export const ExchangeOpenRequestSchema = z.object({
   ap: z.number().int().default(0),
   /** The fire mode's defense penalty (p.180). */
   defenseModifier: z.number().int().max(0).default(0),
+  /** Shown with the attack ("SA"); the penalty above is what counts. */
+  mode: FireModeCodeSchema.optional(),
+  rounds: z.number().int().min(1).optional(),
   extras: z.array(DeclaredExtraSchema).default([]),
   note: z.string().max(500).optional(),
   by: DeclaredBySchema.optional(),

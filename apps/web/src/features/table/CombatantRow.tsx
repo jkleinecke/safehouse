@@ -14,7 +14,10 @@
  * Act now, Delay) — a place only, never a score (SR5 p.159-161).
  */
 import { useEffect, useState, type DragEvent } from 'react';
-import type { Combatant } from '@safehouse/contracts';
+import type { Combatant, Exchange } from '@safehouse/contracts';
+import { openGmCard } from '../combat/gmCard.js';
+import GmIncoming, { AppliedLines } from '../combat/GmIncoming.js';
+import { rackStart } from '../combat/gmModel.js';
 import { hasCopilotRack } from './copilot.js';
 import {
   deleteCombatant,
@@ -57,6 +60,8 @@ export interface CombatantRowProps {
   onOpenChain: (combatantId: string) => void;
   /** GM, fight running: move, call, delay. */
   orderControls?: RowOrderControls;
+  /** GM: the open attacks on this row. */
+  incoming?: readonly Exchange[];
 }
 
 const STATE_LABEL: Partial<Record<RowState, { text: string; cls: string; title: string }>> = {
@@ -191,8 +196,10 @@ export default function CombatantRow({
   onDamage,
   onOpenChain,
   orderControls,
+  incoming = [],
 }: CombatantRowProps) {
   const c = row.combatant;
+  const who = { actor: { kind: 'combatant' as const, id: c.id }, title: c.name, runner: c.source === 'character' };
   const [menuOpen, setMenuOpen] = useState(false);
   // Removing a row takes two clicks: the second one is the confirmation.
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -391,6 +398,10 @@ export default function CombatantRow({
                 combatant={c}
                 visibility={rackVisibility}
                 onOpenChain={() => onOpenChain(c.id)}
+                onOpenCard={(entry) => {
+                  const start = rackStart(entry);
+                  openGmCard({ ...who, kind: 'act', visibility: rackVisibility, ...(start ? { start } : {}) });
+                }}
               />
               {/* FR10.10 — one advisory line, GM-only, off by default. The
                   server withholds it unless the campaign turned hints on, so
@@ -398,6 +409,11 @@ export default function CombatantRow({
               <HintLine combatant={c} isGm={isGm} acting={row.acting} />
             </>
           )}
+          {isGm &&
+            incoming.map((x) => (
+              <GmIncoming key={x.id} x={x} row={c} />
+            ))}
+          {isGm && <AppliedLines combatantId={c.id} />}
         </div>
 
         <div className="relative flex shrink-0 items-center gap-1">
@@ -409,6 +425,16 @@ export default function CombatantRow({
               title={`Roll ${c.initDice}d6 + ${c.initBase} with the server’s dice`}
             >
               ROLL
+            </button>
+          )}
+          {isGm && (
+            <button
+              type="button"
+              className="chip border-cyan-dim text-cyan hover:border-cyan"
+              onClick={() => openGmCard({ ...who, kind: 'act' })}
+              title="Every action, each with its roll card; and declare an attack on this row"
+            >
+              Actions
             </button>
           )}
           {canDamage && (

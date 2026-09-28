@@ -29,6 +29,7 @@ import { useGridStore, type GmTab } from '../store.js';
 import { usePaintBatch } from '../api.js';
 import { copySet, describeSet, eraseBodies } from '../cellSelection.js';
 import { MODE_TABS } from '../hud/modes.js';
+import TokenCombat from '../../combat/TokenCombat.js';
 import CamerasTab from './CamerasTab.js';
 import DisplayTab from './DisplayTab.js';
 import EnvTab from './EnvTab.js';
@@ -67,6 +68,11 @@ export default function GmPanel(props: GmPanelProps) {
   const select = useGridStore((s) => s.select);
   const cellSelection = useGridStore((s) => s.cellSelection);
   const setCellSelection = useGridStore((s) => s.setCellSelection);
+  const selectedTokenId = useGridStore((s) => s.selectedTokenId);
+  const selectToken = useGridStore((s) => s.selectToken);
+  // Play: the picked token's attacks and actions, above the tabs.
+  const playToken =
+    mode === 'play' ? (props.tokens.find((t) => t.id === selectedTokenId && t.source !== 'prop') ?? null) : null;
   // Only the current mode's sections (§3.1): a GM laying a floor is not shown
   // the TV controls, and a GM running a fight is not shown calibration.
   const tabs = MODE_TABS[mode].map((id) => TABS.find((t) => t.id === id)!).filter(Boolean);
@@ -155,6 +161,16 @@ export default function GmPanel(props: GmPanelProps) {
       )}
 
       {build && cellSelection && <SelectionInspector scene={props.scene} />}
+
+      {playToken && (
+        <TokenCombat
+          key={playToken.id}
+          campaignId={props.campaignId}
+          sceneId={props.scene.id}
+          token={playToken}
+          onClose={() => selectToken(null)}
+        />
+      )}
 
       {selected && (
         <div

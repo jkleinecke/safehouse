@@ -19,6 +19,7 @@ import type {
   RollCard,
   Visibility,
 } from '@safehouse/contracts';
+import type { CoverLevel } from '@safehouse/rules';
 import { useMyCharacterId } from '../../api/campaigns.js';
 import { useLiveStore } from '../../live/store.js';
 import { Stepper } from '../sheet/components/ui.js';
@@ -38,6 +39,7 @@ import {
   tableResult,
   type CardDraft,
 } from './cardModel.js';
+import { modifierOrder, saidBy, stepLine, withCoverHint } from './gmModel.js';
 
 export interface RollCardPanelProps {
   campaignId: string;
@@ -52,6 +54,9 @@ export interface RollCardPanelProps {
   skills?: readonly string[];
   /** On the map: step aside so the next token tap is the target. */
   onPickOnMap?: () => void;
+  /** GM, on the map: the cover the map reads between two rows (a hint, never ticked). */
+  coverOf?: (attackerId: string, targetId: string) => CoverLevel | null;
+  initialVisibility?: Visibility;
   onBack?: () => void;
   onDone: () => void;
 }
@@ -98,7 +103,7 @@ function failText(e: unknown): string {
 }
 
 /** A number typed on a phone: shown as it stands, taken on blur or Enter. */
-function NumberField({
+export function NumberField({
   value,
   label,
   min = 0,
@@ -414,7 +419,28 @@ function useFollowed(x: Exchange | undefined): Exchange | undefined {
   }, [events, x]);
 }
 
-function Settled({ out, onAgain, onDone }: { out: CardSettled; onAgain: () => void; onDone: () => void }) {
+/** GM: the attack this card answers, and who said so. */
+function Answering({ x }: { x: Exchange }) {
+  return (
+    <p className="mt-2 rounded border border-magenta-dim/60 px-2 py-1 text-xs text-ink" data-testid="card-answering">
+      {stepLine(x)}
+      <span className="text-faint"> · {saidBy(x.declared.by)}</span>
+      {x.declared.note && <span className="block text-[0.65rem] text-faint">{x.declared.note}</span>}
+    </p>
+  );
+}
+
+function Settled({
+  out,
+  gm,
+  onAgain,
+  onDone,
+}: {
+  out: CardSettled;
+  gm: boolean;
+  onAgain: () => void;
+  onDone: () => void;
+}) {
   const x = useFollowed(out.exchange);
   const r = out.roll;
   const role = out.card.action.exchange;
@@ -427,7 +453,9 @@ function Settled({ out, onAgain, onDone }: { out: CardSettled; onAgain: () => vo
         {OUTCOME_WORD[x.outcome]}
       </p>
     ) : (
-      <p className="text-sm text-dim">Waiting for {x.target.name} to defend…</p>
+      <p className="text-sm text-dim">
+        {gm ? `Open on ${x.target.name}'s row: defend it there.` : `Waiting for ${x.target.name} to defend…`}
+      </p>
     );
   } else if (x && role === 'defends' && x.outcome) {
     follow = (
@@ -503,7 +531,7 @@ export default function RollCardPanel(props: RollCardPanelProps) {
   const rows = useTargetRows(props.campaignId, props.sceneId ?? null, draft, gm);
 
   const [edge, setEdge] = useState<EdgeAction | 'none'>('none');
-  const [visibility, setVisibility] = useState<Visibility | null>(null);
+  const [visibility, setVisibility] = useState<Visibility | null>(props.initialVisibility ?? null);
   const [hits, setHits] = useState(0);
   const [glitch, setGlitch] = useState<Glitch>('none');
   const [busy, setBusy] = useState(false);
@@ -554,7 +582,13 @@ export default function RollCardPanel(props: RollCardPanelProps) {
     );
   }
 
-  const initCost = card.offers.find((o) => o.target === 'initiative');
+  const answering = card.context?.exchange;
+  const coverFrom = answering?.attacker?.combatantId;
+  const coverTo = answering?.target.combatantId;
+  const cover =
+    props.coverOf && card.action.exchange === 'defends' && coverFrom && coverTo ? props.coverOf(coverFrom, coverTo) : null;
+  const offers = withCoverHint(card.offers, cover);
+  const initCost = offers.find((o) => o.target === 'initiative');
   const modifiersFirst = gm && card.stage === 'modifiers';
   const targeted = card.action.exchange === 'opens' || draft.needsTarget === true || draft.target !== undefined;
   const stale = preview.isPlaceholderData || preview.isFetching;
@@ -582,6 +616,7 @@ export default function RollCardPanel(props: RollCardPanelProps) {
         {card.cost?.rounds ? ` · ${card.cost.rounds} rounds` : ''}
         {test && <PageChip refValue={test.ref} />}
       </p>
+      {gm && answering && <Answering x={answering} />}
 
       {initCost && (
         <div className="mt-2 flex items-center gap-2 rounded border border-warn/40 px-2 py-1 text-xs">
@@ -642,18 +677,20 @@ export default function RollCardPanel(props: RollCardPanelProps) {
       {modifiersFirst ? (
         <Section label="Modifiers">
           <ul className="mt-1">
-            {card.offers
-              .filter((o) => o.target !== 'initiative')
-              .map((o) => (
-                <OfferRow key={o.id} offer={o} onFlip={flip} onStep={step} />
-              ))}
+            {modifierOrder(offers).map((o) => (
+              <OfferRow key={o.id} offer={o} onFlip={flip} onStep={step} />
+            ))}
           </ul>
+          <div className="mt-2 flex items-center justify-between">
+            <span className="mono-label text-faint">Other</span>
+            <Stepper value={draft.other} onChange={(n) => onDraft({ ...draft, other: n })} label="other modifier" />
+          </div>
           <button
             type="button"
             className="btn btn-accent mt-2 w-full py-2"
             onClick={() => onDraft({ ...draft, stage: 'dice' })}
           >
-            Show the dice
+            Done, show dice
           </button>
         </Section>
       ) : (
@@ -662,12 +699,23 @@ export default function RollCardPanel(props: RollCardPanelProps) {
             <Section
               label="Pool"
               aside={
-                <span className="font-label text-2xl leading-none text-cyan" aria-label={`${card.pool.total} dice`}>
-                  {card.pool.total}
-                </span>
+                <>
+                  {gm && (
+                    <button
+                      type="button"
+                      className="btn px-2 py-0.5 text-xs"
+                      onClick={() => onDraft({ ...draft, stage: 'modifiers' })}
+                    >
+                      ← Modifiers
+                    </button>
+                  )}
+                  <span className="font-label text-2xl leading-none text-cyan" aria-label={`${card.pool.total} dice`}>
+                    {card.pool.total}
+                  </span>
+                </>
               }
             >
-              <Receipt lines={card.pool.lines} offers={card.offers} onFlip={flip} onStep={step} />
+              <Receipt lines={card.pool.lines} offers={offers} onFlip={flip} onStep={step} />
             </Section>
           ) : (
             <p className="mt-3 text-sm text-dim">No test for this one.</p>
@@ -686,14 +734,14 @@ export default function RollCardPanel(props: RollCardPanelProps) {
                 </>
               }
             >
-              <Receipt lines={card.limit.lines} offers={card.offers} onFlip={flip} onStep={step} />
+              <Receipt lines={card.limit.lines} offers={offers} onFlip={flip} onStep={step} />
             </Section>
           )}
 
-          {offOffers(card.offers).length > 0 && (
+          {offOffers(offers).length > 0 && (
             <Section label="More modifiers">
               <ul className="mt-1">
-                {offOffers(card.offers).map((o) => (
+                {offOffers(offers).map((o) => (
                   <OfferRow key={o.id} offer={o} onFlip={flip} onStep={step} />
                 ))}
               </ul>
@@ -711,6 +759,7 @@ export default function RollCardPanel(props: RollCardPanelProps) {
       {settled ? (
         <Settled
           out={settled}
+          gm={gm}
           onAgain={() => {
             setSettled(null);
             setHits(0);
@@ -764,7 +813,7 @@ export default function RollCardPanel(props: RollCardPanelProps) {
                   disabled={busy || stale}
                   onClick={() => settle('app')}
                 >
-                  {busy ? 'Rolling…' : `Roll ${card.pool.total} d6 here`}
+                  {busy ? 'Rolling…' : gm ? 'Roll here' : `Roll ${card.pool.total} d6 here`}
                 </button>
                 <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
                   <span className="mono-label">I rolled:</span>

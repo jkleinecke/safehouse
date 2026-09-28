@@ -69,6 +69,8 @@ import MeasurePanel from './hud/MeasurePanel.js';
 import OrderChip from './hud/OrderChip.js';
 import PlayRail from './hud/PlayRail.js';
 import CardFlow from '../combat/CardFlow.js';
+import { openGmCard } from '../combat/gmCard.js';
+import GmCardHost from '../combat/GmCardHost.js';
 import { MapIncoming } from '../combat/IncomingAttack.js';
 import { offerTokenPick } from '../combat/tokenPick.js';
 import { availableModes, clampMode } from './hud/eyes.js';
@@ -1042,7 +1044,11 @@ export default function GridPage() {
     setLight: (tokenId, light) => patchToken.mutate({ tokenId, patch: { light } }),
     customiseLook: (tokenId) => useGridStore.getState().setLookTokenId(tokenId),
     removeToken: (tokenId) => deleteToken.mutate(tokenId),
-    act: (token) => setActAs(token),
+    // The GM's Actions sheet carries the attacks on it and "Declare an attack".
+    act: (token) =>
+      isGm
+        ? openGmCard({ kind: 'act', actor: { kind: 'token', id: token.id }, title: token.name, runner: token.source === 'character' })
+        : setActAs(token),
     doorOp: (input) => doorOp.mutate(input, { onError: showDoorNotice }),
     pinHere: (x, y) => callbacks.onPinPlace?.(x, y),
     noteHere: (x, y) => callbacks.onNotePlace?.(x, y),
@@ -1565,6 +1571,9 @@ export default function GridPage() {
             tokens={tokens}
             onClose={() => setActAs(null)}
           />
+        )}
+        {campaignId && scene && isGm && (
+          <GmCardHost campaignId={campaignId} sceneId={scene.id} scene={scene} tokens={tokens} />
         )}
         {campaignId && scene && viewer.role === 'player' && (
           <MapIncoming

@@ -1,7 +1,8 @@
 /**
- * Quick-roll rack on generator-backed NPC rows (FR10.7): one-tap attack /
- * defense / soak / composure rolls into the log, plus the resolve-chain
- * launcher (FR10.8). GM only — the parent gates rendering.
+ * Quick-roll rack on generator-backed NPC rows (FR10.7): attack / defense /
+ * soak / composure chips, each opening its roll card (the GM ticks the
+ * modifiers before seeing the dice), plus the resolve-chain launcher
+ * (FR10.8). GM only — the parent gates rendering.
  *
  * The rack is computed SERVER-side (`GET /api/combatants/:id/quick-rolls`) and
  * rolled server-side (`POST .../quick-roll`), so the pools already carry live
@@ -9,9 +10,7 @@
  * proposes a pool for a combatant: it names a rack key and the server decides
  * what that is worth right now.
  */
-import { useMutation } from '@tanstack/react-query';
 import type { Combatant } from '@safehouse/contracts';
-import { apiPost } from '../../api/client.js';
 import { useQuickRolls, type RackEntry } from './quickRolls.js';
 
 export type { QuickRolls, RackEntry } from './quickRolls.js';
@@ -22,6 +21,8 @@ export interface CopilotRackProps {
   /** Rack rolls default behind the screen; the tracker header can flip this. */
   visibility: 'gm' | 'public';
   onOpenChain: () => void;
+  /** A chip opens its card rather than rolling on tap. */
+  onOpenCard: (entry: RackEntry) => void;
 }
 
 /**
@@ -40,15 +41,12 @@ export default function CopilotRack({
   combatant,
   visibility,
   onOpenChain,
+  onOpenCard,
 }: CopilotRackProps) {
   void campaignId; // the roll is scoped by the combatant, not the campaign
+  void visibility; // the card starts on it (the row passes it through)
 
   const rack = useQuickRolls(combatant.id);
-
-  const roll = useMutation({
-    mutationFn: (key: string) =>
-      apiPost<unknown>(`/api/combatants/${combatant.id}/quick-roll`, { key, visibility }),
-  });
 
   const entries = rack.data?.entries ?? [];
   if (entries.length === 0) return null;
@@ -61,12 +59,11 @@ export default function CopilotRack({
         <button
           key={entry.key}
           type="button"
-          className="chip whitespace-nowrap border-edge-bright hover:border-cyan hover:text-cyan disabled:opacity-30"
-          disabled={roll.isPending}
-          title={`${entry.label} — pool ${entry.pool}${
+          className="chip whitespace-nowrap border-edge-bright hover:border-cyan hover:text-cyan"
+          title={`${entry.label}: pool ${entry.pool}${
             entry.limit ? ` (limit ${entry.limit.kind} ${entry.limit.value})` : ''
-          }`}
-          onClick={() => roll.mutate(entry.key)}
+          }. Opens its card.`}
+          onClick={() => onOpenCard(entry)}
         >
           {chipLabel(entry)} {entry.pool}
         </button>

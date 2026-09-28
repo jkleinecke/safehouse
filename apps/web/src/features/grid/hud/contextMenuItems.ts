@@ -147,8 +147,8 @@ function tokenItems(input: ContextMenuInput, token: Token): MenuItem[] {
   if (act && token.source !== 'prop' && (mine || (role === 'gm' && input.mode === 'play'))) {
     items.push({
       id: 'act',
-      label: mine ? 'Act…' : `Act as ${token.name}…`,
-      hint: 'the actions, each with its roll card',
+      label: mine ? 'Act…' : 'Actions…',
+      hint: mine ? 'the actions, each with its roll card' : 'its actions and the attacks on it',
       run: () => act(token),
     });
   }
