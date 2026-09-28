@@ -142,6 +142,8 @@ export interface AdvanceResult {
 const CLEAR_TURN_FLAGS = sql`${combatants.copilot} - 'delayed'::text - 'seized'::text - 'delayedAction'::text`;
 /** The end of a pass, or a row marked done: the Delayed Action in use is spent. */
 const CLEAR_DELAYED_ACTION = sql`${combatants.copilot} - 'delayedAction'::text`;
+/** A row marked done: its phase is over, so is the count of defenses since it last acted (p.189). */
+const CLEAR_ON_ACTED = sql`${combatants.copilot} - 'delayedAction'::text - 'defendedSinceAction'::text`;
 
 /** Merge a few flags into a row's copilot in place, without a read-modify-write. */
 function mergeCopilot(patch: Record<string, unknown>) {
@@ -631,7 +633,7 @@ export class EncountersService {
   private async markActedIn(tx: EventTx, combatantId: string): Promise<void> {
     await tx.db
       .update(combatants)
-      .set({ actedThisPass: true, copilot: CLEAR_DELAYED_ACTION })
+      .set({ actedThisPass: true, copilot: CLEAR_ON_ACTED })
       .where(eq(combatants.id, combatantId));
   }
 

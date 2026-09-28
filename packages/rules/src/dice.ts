@@ -1,4 +1,4 @@
-import type { Glitch, LimitRef, RollRequest, RollResult } from '@safehouse/contracts';
+import type { Glitch, LimitRef, RollRequest, RollResult, TableResult } from '@safehouse/contracts';
 
 /** Every Edge action the engine knows (FR2.3) — dice-side and tracker-side. */
 export type EdgeActionKind =
@@ -124,18 +124,25 @@ export function resolveRoll(req: RollRequest, rng: () => number): RollResult {
   const ones = countOnes(all);
   const glitch = glitchLocked ?? glitchFor(ones, all.length, hits);
 
-  const ignoresLimit = edge === 'push_pre' || edge === 'push_post';
-  const limitedHits =
-    req.limit && !ignoresLimit ? Math.min(hits, Math.max(0, req.limit.value)) : hits;
-
   return {
     faces,
     hits,
     ones,
     glitch,
-    limitedHits,
+    limitedHits: limitHits(req, hits),
     ...(exploded.length > 0 ? { exploded } : {}),
   };
+}
+
+/** Push the Limit, either timing, ignores the limit (p.56). */
+function limitHits(req: RollRequest, hits: number): number {
+  const ignoresLimit = req.edge === 'push_pre' || req.edge === 'push_post';
+  return req.limit && !ignoresLimit ? Math.min(hits, Math.max(0, req.limit.value)) : hits;
+}
+
+/** The table's own dice: the typed hits and glitch, no faces, the limit applied. */
+export function resolveTableRoll(req: RollRequest, table: TableResult): RollResult {
+  return { faces: [], hits: table.hits, ones: 0, glitch: table.glitch, limitedHits: limitHits(req, table.hits) };
 }
 
 export interface ExtendedTestResult {

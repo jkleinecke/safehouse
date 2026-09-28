@@ -53,8 +53,10 @@ export interface RollView {
   edge?: string | null;
   /** meta.burnEdge — the loud one (FR2.3). */
   burnedEdge: boolean;
-  /** meta.buyHits — no-roll bought hits (FR2.4). */
+  /** Bought hits, no roll (FR2.4): meta.bought, or the older meta.buyHits. */
   bought: boolean;
+  /** Hits typed from the table's own dice: no faces to show. */
+  tableDice: boolean;
   faces: number[];
   exploded: number[];
   hits: number;
@@ -124,7 +126,8 @@ export function parseRoll(event: WsEvent): RollView | null {
     limit: limitKind && limitValue !== undefined ? { kind: limitKind, value: limitValue } : undefined,
     edge: str(record['edgeAction'] ?? req['edge']) ?? null,
     burnedEdge: meta['burnEdge'] === true,
-    bought: meta['buyHits'] === true,
+    bought: meta['bought'] === true || meta['buyHits'] === true,
+    tableDice: meta['tableDice'] === true || req['tableResult'] !== undefined,
     faces,
     exploded: numArray(res['exploded']),
     hits: effectiveHits,

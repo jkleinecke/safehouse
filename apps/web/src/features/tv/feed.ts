@@ -36,6 +36,7 @@ export interface TvMoment {
   glitch: GlitchState;
   limit?: { kind: string; value: number };
   bought: boolean;
+  tableDice: boolean;
   burnedEdge: boolean;
   edge?: string | null;
   /**
@@ -80,6 +81,7 @@ export function tvMoments(events: WsEvent[], cap: number = TV_MOMENT_CAP): TvMom
       glitch: roll.glitch,
       ...(roll.limit !== undefined ? { limit: roll.limit } : {}),
       bought: roll.bought,
+      tableDice: roll.tableDice,
       burnedEdge: roll.burnedEdge,
       edge: roll.edge,
       flagged: isFlaggedMeta(roll.meta),

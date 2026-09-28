@@ -30,6 +30,7 @@ import {
   deriveCharacter,
   resolveExtendedTest,
   resolveRoll,
+  resolveTableRoll,
   resolveTeamwork,
 } from '@safehouse/rules';
 import type { EventTx, Hub } from '../hub.js';
@@ -340,6 +341,51 @@ export class RollService {
     });
   }
 
+  /**
+   * A roll card settled: the card's own pool (already server-built), the
+   * site's dice or the table's typed result. A sheet's Edge is debited here;
+   * anyone else's rides in `alsoInTx`, which the caller also uses for the tracker.
+   */
+  async settleCard(opts: {
+    campaignId: string;
+    viewer: RollViewer;
+    request: RollRequest;
+    character?: CharacterRecord | undefined;
+    ownerUserId: string;
+    alsoInTx?: (tx: EventTx, roll: RollRecord) => Promise<void>;
+  }): Promise<RollRecord> {
+    const { campaignId, viewer, character, ownerUserId } = opts;
+    const request: RollRequest = { ...opts.request, meta: { ...(opts.request.meta ?? {}), ownerUserId } };
+    const meta = request.meta as Record<string, unknown>;
+    assertMayRoll(viewer, request.visibility);
+    if (request.edge && character) {
+      if (character.sheet.attributes.edg.current < 1) throw httpError(400, 'no_edge', 'no Edge left to spend');
+      meta['edgeDice'] = character.sheet.attributes.edg.max;
+    }
+    const result = request.tableResult
+      ? resolveTableRoll(request, request.tableResult)
+      : resolveRoll(request, this.rng);
+    const threshold = request.kind === 'threshold' ? numberFrom(meta['threshold'], 1) : null;
+    const detail =
+      threshold !== null
+        ? { threshold, success: result.limitedHits >= threshold, netHits: result.limitedHits - threshold }
+        : undefined;
+    if (detail) meta['detail'] = detail;
+    const spend = request.edge && character ? character : undefined;
+    return this.persistAndEmit({
+      campaignId,
+      viewer,
+      request,
+      result,
+      ...(detail ? { detail } : {}),
+      ownerUserId,
+      alsoInTx: async (tx, rec) => {
+        if (spend) await this.spendEdge(tx, campaignId, spend, viewer, request.visibility, ownerUserId);
+        if (opts.alsoInTx) await opts.alsoInTx(tx, rec);
+      },
+    });
+  }
+
   /** Paginated campaign roll log, visibility-filtered in SQL (Principle 4). */
   async listRolls(
     campaignId: string,
@@ -541,7 +587,7 @@ export class RollService {
     detail?: Record<string, unknown>;
     ownerUserId: string;
     /** Extra writes that must share the roll's fate (the Edge debit). */
-    alsoInTx?: (tx: EventTx) => Promise<void>;
+    alsoInTx?: (tx: EventTx, rec: RollRecord) => Promise<void>;
   }): Promise<RollRecord> {
     const { campaignId, request, result } = opts;
     const sessionId = await activeSessionId(this.db, campaignId);
@@ -587,7 +633,7 @@ export class RollService {
         visibility: rec.visibility,
         ownerUserId: opts.ownerUserId,
       });
-      if (opts.alsoInTx) await opts.alsoInTx(tx);
+      if (opts.alsoInTx) await opts.alsoInTx(tx, rec);
       return rec;
     });
     // Outbound mirroring is deliberately outside the transaction: it is a

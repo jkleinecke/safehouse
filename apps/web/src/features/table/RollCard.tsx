@@ -57,6 +57,10 @@ export default function RollCard({ roll }: { roll: RollView }) {
         <div className="mt-2 text-sm text-dim">
           Bought hits — pool {roll.pool} → <span className="font-semibold text-cyan">{roll.hits} hits</span>
         </div>
+      ) : roll.tableDice ? (
+        <div className="mt-2 text-sm text-dim">
+          <span className="chip text-faint">table dice</span> pool {roll.pool}, hits as counted at the table
+        </div>
       ) : (
         <DiceFaces faces={roll.faces} exploded={roll.exploded} className="mt-2" />
       )}

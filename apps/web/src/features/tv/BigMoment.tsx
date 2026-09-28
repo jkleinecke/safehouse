@@ -59,6 +59,8 @@ export default function BigMoment({ moment }: { moment: TvMoment }) {
 
       {moment.bought ? (
         <div className="mt-6 text-4xl text-dim">Bought hits — no roll</div>
+      ) : moment.tableDice ? (
+        <div className="mt-6 text-4xl text-dim">Table dice</div>
       ) : (
         <div className="mt-6 flex flex-wrap items-center gap-3">
           {faces.map((f, i) => (

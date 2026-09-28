@@ -96,6 +96,10 @@ const CopilotSchema = z
      * new Combat Turn.
      */
     delayedAction: z.boolean().optional(),
+    /** The Combat Turn Full Defense was taken in (+WIL to defenses for that turn, p.168). */
+    fullDefenseTurn: z.number().int().optional(),
+    /** Defense tests since the row last acted (p.189); cleared when it is marked done. */
+    defendedSinceAction: z.number().int().min(0).optional(),
   })
   .loose();
 export type CombatantCopilot = z.infer<typeof CopilotSchema>;

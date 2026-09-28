@@ -79,6 +79,20 @@ describe('parseRoll', () => {
     expect(roll?.actorName).toBe('GM');
   });
 
+  it('reads the server’s meta.bought, and marks table dice', () => {
+    const bought = parseRoll(evt('roll.created', { faces: [], hits: 2, request: { pool: 8, meta: { bought: true } } }));
+    expect(bought?.bought).toBe(true);
+    const table = parseRoll(
+      evt('roll.created', {
+        faces: [],
+        hits: 4,
+        limitedHits: 3,
+        request: { pool: 9, tableResult: { hits: 4, glitch: 'none' }, meta: { tableDice: true } },
+      }),
+    );
+    expect(table).toMatchObject({ tableDice: true, bought: false, pool: 9, limitedHits: 3 });
+  });
+
   it('counts ones itself when the server omits them', () => {
     const roll = parseRoll(
       evt('roll.created', { result: { faces: [1, 1, 5, 6], hits: 2, glitch: 'none', limitedHits: 2 } }),

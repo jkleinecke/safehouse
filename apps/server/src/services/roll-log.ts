@@ -176,5 +176,6 @@ export function summarize(record: RollRecord): string {
         ? ' — glitch'
         : '';
   const net = record.netHits !== undefined ? `, net ${record.netHits}` : '';
-  return `🎲 ${label}: ${record.limitedHits} hit${record.limitedHits === 1 ? '' : 's'} on ${record.request.pool} dice${limitNote}${net}${glitchNote}`;
+  const table = meta['tableDice'] === true ? ' (table dice)' : '';
+  return `🎲 ${label}: ${record.limitedHits} hit${record.limitedHits === 1 ? '' : 's'} on ${record.request.pool} dice${table}${limitNote}${net}${glitchNote}`;
 }

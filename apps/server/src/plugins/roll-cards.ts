@@ -1,9 +1,7 @@
 /**
- * Guided roll cards: the actions an actor can take, and a card built for one
- * (services/roll-cards.ts). No dice here.
- *
- * The GM may use any actor; a player only their own runner, and never learns
- * more of a target than its name.
+ * Guided roll cards: an actor's actions, a card for one, and settling it.
+ * The GM may act for anyone; a player only for their own runner, and learns
+ * no more of a target than its name.
  */
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -11,11 +9,16 @@ import {
   AttackKindSchema,
   CardActorKindSchema,
   CardRequestSchema,
+  CardSettleRequestSchema,
   type CardActorRef,
+  type DeclaredBy,
 } from '@safehouse/contracts';
 import { assertCampaign, httpError, requireAuth } from '../services/auth.js';
+import { EncountersService } from '../services/encounters.js';
 import { buildCard, listActions, type CardTarget } from '../services/roll-cards.js';
 import { loadActor, type LoadedActor } from '../services/roll-cards-load.js';
+import { settleCard } from '../services/roll-cards-settle.js';
+import { getRollService } from '../services/rolls.js';
 import { ScenesService } from '../services/scenes.js';
 
 function parse<T extends z.ZodType>(schema: T, body: unknown): z.output<T> {
@@ -38,7 +41,7 @@ export default async function rollCardsPlugin(app: FastifyInstance): Promise<voi
         throw httpError(403, 'forbidden', 'a player builds cards for their own runner only');
       }
     }
-    return { gm: auth.role === 'gm', loaded };
+    return { gm: auth.role === 'gm', loaded, viewer: { userId: auth.userId, role: auth.role } };
   }
 
   /** What the table can see of a target; a hidden one does not exist for a player. */
@@ -56,22 +59,44 @@ export default async function rollCardsPlugin(app: FastifyInstance): Promise<voi
     return listActions(loaded.body, { gm, scene: loaded.scene, ...(against ? { against } : {}) });
   });
 
+  async function targetFor(ref: CardActorRef | undefined, loaded: LoadedActor, gm: boolean): Promise<CardTarget | null> {
+    if (!ref) return null;
+    const t = await loadActor(app.db, ref);
+    if (t.campaignId !== loaded.campaignId || (!gm && !(await onTable(ref, t)))) {
+      throw httpError(404, 'not_found', 'unknown target');
+    }
+    return {
+      actor: t.body.actor,
+      ...(t.body.token ? { token: t.body.token } : {}),
+      ...(t.body.prone ? { prone: true } : {}),
+    };
+  }
+
   app.post('/api/cards/preview', async (req) => {
     const body = parse(CardRequestSchema, req.body);
     const { gm, loaded } = await actorFor(req, body.actor);
-    let target: CardTarget | null = null;
-    if (body.target) {
-      const t = await loadActor(app.db, body.target);
-      if (t.campaignId !== loaded.campaignId || (!gm && !(await onTable(body.target, t)))) {
-        throw httpError(404, 'not_found', 'unknown target');
-      }
-      target = {
-        actor: t.body.actor,
-        ...(t.body.token ? { token: t.body.token } : {}),
-        ...(t.body.prone ? { prone: true } : {}),
-      };
-    }
+    const target = await targetFor(body.target, loaded, gm);
     // exchangeId: read here once exchanges are stored; buildCard already takes one.
     return { card: buildCard({ body: loaded.body, req: body, gm, scene: loaded.scene, target }) };
+  });
+
+  const deps = {
+    db: app.db,
+    hub: app.hub,
+    rolls: getRollService(app.db, app.hub, app.log),
+    encounters: new EncountersService(app.db, app.hub),
+  };
+
+  /** The GM may settle for anyone, with any dice; `forActorBy` is theirs alone to set. */
+  app.post('/api/cards/settle', async (req, reply) => {
+    const body = parse(CardSettleRequestSchema, req.body);
+    const { gm, loaded, viewer } = await actorFor(req, body.actor);
+    const target = await targetFor(body.target, loaded, gm);
+    const by: DeclaredBy = gm
+      ? (body.forActorBy ?? { role: 'gm', name: 'GM' })
+      : { role: 'player', name: loaded.body.actor.name };
+    const card = buildCard({ body: loaded.body, req: { ...body, stage: 'dice' }, gm, scene: loaded.scene, target, by });
+    const out = await settleCard(deps, { viewer, loaded, req: body, card, by });
+    return reply.status(201).send(out);
   });
 }

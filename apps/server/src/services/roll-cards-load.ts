@@ -7,6 +7,7 @@ import {
   GridSchema,
   SceneEnvironmentSchema,
   type CardActorRef,
+  type EdgeState,
   type Modifier,
   type SheetV1,
 } from '@safehouse/contracts';
@@ -30,6 +31,8 @@ export interface LoadedActor {
   scene: CardScene | null;
   /** Kept from the table: a GM-only row or a hidden token. */
   hidden: boolean;
+  /** The tracker row, when the actor is in a fight. */
+  row?: { combatantId: string; encounterId: string; turn: number; live: boolean; edge?: EdgeState };
 }
 
 function sceneOf(row: SceneRow): CardScene {
@@ -99,6 +102,7 @@ async function fromCombatant(
     }
   }
   const effectMods: Modifier[] = c.effects.flatMap((e) => e.mods.filter((m) => m.active));
+  const live = encounter.state === 'live';
   return {
     body: {
       ...parts,
@@ -109,12 +113,21 @@ async function fromCombatant(
       initScore: c.initScore,
       delayedAction: copilot.delayedAction === true,
       prone: pose === 'prone' || c.effects.some((e) => /prone/i.test(e.name)),
+      defended: copilot.defendedSinceAction ?? 0,
+      fullDefense: live && copilot.fullDefenseTurn === encounter.turn,
       ...(token ? { token } : {}),
     },
     campaignId: encounter.campaignId,
     characterId: character?.id ?? null,
     scene: sceneFound ? sceneOf(sceneFound) : null,
     hidden: c.visibility !== 'public',
+    row: {
+      combatantId: c.id,
+      encounterId: encounter.id,
+      turn: encounter.turn,
+      live,
+      ...(c.edge ? { edge: c.edge } : {}),
+    },
   };
 }
 

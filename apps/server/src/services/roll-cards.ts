@@ -16,6 +16,7 @@ import type {
   CardOffer,
   CardRequest,
   CardTest,
+  DeclaredBy,
   DerivedCharacter,
   Exchange,
   ExchangeDeclaration,
@@ -89,6 +90,10 @@ export interface CardBody {
   recoilFired?: Record<string, number>;
   /** Spells sustained that cost dice (p.282). */
   sustaining?: number;
+  /** Defense tests since the row last acted (p.189). */
+  defended?: number;
+  /** On Full Defense this Combat Turn (p.168). */
+  fullDefense?: boolean;
   token?: TokenAt;
 }
 
@@ -112,6 +117,8 @@ export interface CardInputs {
   exchange?: Exchange | null;
   /** Reuse a derivation (the actions list builds dozens of cards). */
   derived?: DerivedCharacter | null;
+  /** Who declares an attack, when not the viewer (the GM entering a player's roll). */
+  by?: DeclaredBy;
 }
 
 // ---------------------------------------------------------------------------
@@ -357,12 +364,12 @@ function offerFor(m: SituationalModifier, ctx: OfferContext): BuiltOffer {
   };
   let env: ProvenanceEntry['env'];
   // Engine lines arrive on; tick boxes arrive off.
-  let on = m.auto !== undefined && m.auto !== 'fullDefense';
+  let on = m.auto === 'fullDefense' ? body.fullDefense === true : m.auto !== undefined;
 
   if (m.value !== null && typeof m.value === 'object') {
     // Take Aim tops out at half Willpower, rounded up (p.166).
     const max = m.value.unit === 'aim' ? Math.ceil(attr(d, 'wil') / 2) : undefined;
-    const known = m.auto === 'sustaining' ? body.sustaining : undefined;
+    const known = m.auto === 'sustaining' ? body.sustaining : m.auto === 'previousDefenses' ? body.defended : undefined;
     const asked = req.steppers?.[m.id] ?? known ?? 0;
     const count = max !== undefined ? Math.min(asked, max) : asked;
     offer.stepper = { per: m.value.per, unit: m.value.unit, count, ...(max !== undefined ? { max } : {}) };
@@ -393,6 +400,10 @@ function offerFor(m: SituationalModifier, ctx: OfferContext): BuiltOffer {
       break;
     case 'fullDefense':
       offer.value = attr(d, 'wil');
+      if (body.fullDefense) offer.note = 'on Full Defense this Combat Turn';
+      break;
+    case 'previousDefenses':
+      if (body.defended) offer.note = `${body.defended} since last acting, per the tracker`;
       break;
     case 'ap': {
       const armor = d?.pools['armor']?.total ?? 0;
@@ -513,7 +524,7 @@ function declarationFor(
     defenseModifier: edit.defenseModifier ?? defenseModifierFor(action, weapon?.ammo?.current),
     extras: edit.extras ?? [],
     ...(note ? { note } : {}),
-    by: inputs.gm ? { role: 'gm', name: 'GM' } : { role: 'player', name: inputs.body.actor.name },
+    by: inputs.by ?? (inputs.gm ? { role: 'gm', name: 'GM' } : { role: 'player', name: inputs.body.actor.name }),
   };
 }
 
