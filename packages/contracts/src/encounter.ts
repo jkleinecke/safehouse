@@ -108,6 +108,31 @@ export const EncounterSchema = z.object({
   /** Initiative pass within the turn (scores −10 per pass). */
   pass: z.number().int().min(0).default(0),
   activeCombatantId: z.string().nullable().optional(),
+  /**
+   * The GM's own arrangement of the order for this Combat Turn: combatant ids,
+   * first to act first. Null (or absent) means the book's order — Initiative
+   * Score, highest first, ties broken by Edge, Reaction, Intuition (p.159).
+   *
+   * Moving a row changes its PLACE and nothing else (the GM's decision of
+   * 2026-09-28): the score, and so the number of passes it acts in (p.159),
+   * stay what the dice said, the way Seize the Initiative and a Delayed Action
+   * move someone without rewriting their score (p.160-161). A row the list
+   * does not name — a late joiner — is slotted in by score. "Sort by score"
+   * sets it back to null, and a new Combat Turn clears it.
+   *
+   * Optional rather than defaulted because the server only sends it once the
+   * fight has one, and older frames and cached lists never had it.
+   */
+  manualOrder: z.array(z.string()).nullable().optional(),
+  /**
+   * The table rolls initiative with its own dice: each row takes its dice
+   * total (the tracker adds the base and the wounds), and a new Combat Turn —
+   * "Next" past the last pass included — starts without the site rolling for
+   * everyone. Stored on the fight rather than on one device, so the GM's
+   * laptop, the new-turn path and the players' phones agree; absent means the
+   * site rolls.
+   */
+  handRolls: z.boolean().optional(),
   /** Present when the API returns the composed view. */
   combatants: z.array(CombatantSchema).optional(),
 });

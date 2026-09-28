@@ -28,6 +28,8 @@
  */
 import type {
   CombatantMonitors,
+  DamageType,
+  HitOutcome,
   LimitRef,
   ProvenanceEntry,
   RollResult,
@@ -43,7 +45,12 @@ import {
   type DamageTrack,
 } from './damage.js';
 
-export type DamageType = 'P' | 'S';
+/**
+ * `DamageType` ('P' | 'S') and `HitOutcome` ('miss' | 'graze' | 'hit', p.173)
+ * are the contracts' (exchange.ts), since an attack exchange stores both;
+ * re-exported here with the steps that produce them.
+ */
+export type { DamageType, HitOutcome };
 
 /** A parsed user-entered damage code such as '8P', '10S(e)', '(STR+2)P'. */
 export interface ParsedDamageCode {
@@ -241,9 +248,6 @@ export function defensePool(
 // ---------------------------------------------------------------------------
 // Step 3A, the comparison: hit, graze or miss (p.173)
 // ---------------------------------------------------------------------------
-
-/** How an attack came out (p.173). */
-export type HitOutcome = 'miss' | 'graze' | 'hit';
 
 export interface HitResult {
   /** Attack hits minus defense hits. Positive only for a hit; 0 for a graze; negative (or 0) for a miss. */

@@ -46,7 +46,7 @@
  * - Perception: the Perception Test Modifiers table (p.135); thresholds are
  *   the next page (p.136).
  */
-import type { Ref } from '@safehouse/contracts';
+import type { AttackKind, ModifierAuto, ModifierGroup, PerUnit, Ref } from '@safehouse/contracts';
 import { lineRef, sr5Page } from '../refs.js';
 import { COVER_DEFENCE_BONUS } from '../vision/cover.js';
 
@@ -65,29 +65,23 @@ export type ModifierScope =
   | 'all';
 
 /**
- * What kind of attack is incoming, as far as the defender's choices care.
- * `ranged` includes an indirect combat spell, which is defended like a shot
- * (p.283); `direct-spell` is resisted, never defended (p.283); `suppressive`
- * is dodged with its own Reaction + Edge test (p.179).
+ * The vocabularies a guided card carries to the browser live in the contracts
+ * and are re-exported from here, so this catalogue and the card cannot drift
+ * apart:
+ *
+ * - `AttackKind` (exchange.ts): what kind of attack is incoming, as far as the
+ *   defender's choices care. `ranged` includes an indirect combat spell, which
+ *   is defended like a shot (p.283); `direct-spell` is resisted, never
+ *   defended (p.283); `suppressive` is dodged with its own Reaction + Edge test
+ *   (p.179).
+ * - `ModifierGroup` (roll-card.ts): alternatives — tick one and the rest of
+ *   the group clears.
+ * - `ModifierAuto` (roll-card.ts): the lines the engine fills in itself (see
+ *   the header).
+ * - `PerUnit` (roll-card.ts): what a per-unit value counts — Take Aim actions,
+ *   points of net Reach, …
  */
-export type AttackKind = 'ranged' | 'melee' | 'suppressive' | 'direct-spell';
-
-/** Alternatives: tick one and the rest of the group clears. */
-export type ModifierGroup = 'smartgun' | 'targetMoving' | 'cover' | 'spread' | 'reach' | 'distance';
-
-/** The lines the engine fills in itself (see the header). */
-export type ModifierAuto =
-  | 'wounds'
-  | 'environment'
-  | 'recoil'
-  | 'fireMode'
-  | 'fullDefense'
-  | 'previousDefenses'
-  | 'ap'
-  | 'sustaining';
-
-/** What a per-unit value counts: Take Aim actions, points of net Reach, … */
-export type PerUnit = 'aim' | 'reach' | 'defense' | 'spell' | 'rating';
+export type { AttackKind, ModifierAuto, ModifierGroup, PerUnit };
 
 /**
  * A modifier's number. A plain number is dice (or Accuracy, see `target`); a

@@ -45,6 +45,20 @@ describe('RollRequestSchema', () => {
   it('rejects negative pools', () => {
     expect(RollRequestSchema.safeParse({ pool: -1 }).success).toBe(false);
   });
+
+  it('reads table dice as hits + glitch, with a critical glitch only at 0 hits (p.45)', () => {
+    const typed = (hits: number, glitch?: string) =>
+      RollRequestSchema.safeParse({ pool: 9, tableResult: { hits, glitch } });
+    expect(typed(4).data?.tableResult).toEqual({ hits: 4, glitch: 'none' });
+    expect(typed(2, 'glitch').data?.tableResult).toEqual({ hits: 2, glitch: 'glitch' });
+    // A glitch with no hits IS a critical glitch.
+    expect(typed(0, 'glitch').data?.tableResult).toEqual({ hits: 0, glitch: 'critical' });
+    expect(typed(0, 'critical').data?.tableResult).toEqual({ hits: 0, glitch: 'critical' });
+    // A critical glitch with hits contradicts itself: refused, not guessed at.
+    expect(typed(1, 'critical').success).toBe(false);
+    expect(typed(-1).success).toBe(false);
+    expect(RollRequestSchema.parse({ pool: 9 }).tableResult).toBeUndefined();
+  });
 });
 
 describe('RollResultSchema', () => {

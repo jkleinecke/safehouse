@@ -38,7 +38,15 @@
  * - Block and Parry stay melee only: Block needs empty hands against an
  *   unarmed or melee attack, Parry a melee weapon in hand (p.188, 191-192).
  */
-import type { LimitKind, Ref, SheetWeapon, SkillAttr } from '@safehouse/contracts';
+import type {
+  ActionType,
+  ExchangeRole,
+  FireModeCode,
+  LimitKind,
+  Ref,
+  SheetWeapon,
+  SkillAttr,
+} from '@safehouse/contracts';
 import { lineRef, skillKey, sr5Page } from '../refs.js';
 import {
   situationalFor,
@@ -48,8 +56,15 @@ import {
   type SituationalModifier,
 } from './situational.js';
 
-/** Free, Simple, Complex, Interrupt (p.162) — and `none` for a reaction such as the free defense test or soak. */
-export type ActionType = 'free' | 'simple' | 'complex' | 'interrupt' | 'none';
+/**
+ * Free, Simple, Complex, Interrupt (p.162) — and `none` for a reaction such as
+ * the free defense test or soak. The vocabulary lives in the contracts
+ * (`ActionTypeSchema`, roll-card.ts), because the guided card carries it to
+ * the browser; it is re-exported here so the catalogue reads as one piece.
+ * Likewise `ExchangeRole` (an action opens an attack exchange, answers one, or
+ * resists its damage) and `FireModeCode`.
+ */
+export type { ActionType, ExchangeRole, FireModeCode };
 
 /** The order the action types are listed in, as on the p.162 table. */
 export const ACTION_TYPES: readonly ActionType[] = ['free', 'simple', 'complex', 'interrupt', 'none'];
@@ -80,12 +95,6 @@ export type PoolRecipe =
   | { from: 'attrs'; attrs: readonly PoolAttr[] }
   | { from: 'spell' }
   | { from: 'none' };
-
-/**
- * The action's part in an attack exchange: it starts one (an attack), answers
- * one (a defense), or resists its damage (soak).
- */
-export type ExchangeRole = 'opens' | 'defends' | 'soaks';
 
 export interface CombatAction {
   id: string;
@@ -787,9 +796,13 @@ export function defenseModifierFor(action: CombatAction, roundsLoaded?: number):
 // The sheet's fire modes → actions
 // ---------------------------------------------------------------------------
 
-/** The fire modes a weapon's stat line lists (p.178-179). */
-export const FIRE_MODE_CODES = ['SS', 'SA', 'BF', 'FA'] as const;
-export type FireModeCode = (typeof FIRE_MODE_CODES)[number];
+/**
+ * The fire modes a weapon's stat line lists (p.178-179). `FireModeCode` is the
+ * contracts' (`FireModeCodeSchema`, exchange.ts), since an exchange records
+ * the mode; `FIRE_MODE_ACTIONS` below is keyed by it, so a code added there
+ * without its actions here fails to compile.
+ */
+export const FIRE_MODE_CODES = ['SS', 'SA', 'BF', 'FA'] as const satisfies readonly FireModeCode[];
 
 /**
  * What each fire mode lets the shooter do (p.162, 165-167, 179):

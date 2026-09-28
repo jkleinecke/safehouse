@@ -1,7 +1,11 @@
-import type { Combatant, CombatantMonitors } from '@safehouse/contracts';
+import type { Combatant, CombatantMonitors, DamageTrack } from '@safehouse/contracts';
 
-/** Which condition monitor a damage application targets. */
-export type DamageTrack = 'physical' | 'stun';
+/**
+ * Which condition monitor a damage application targets. The contracts' type
+ * (exchange.ts), since an attack exchange records the track its boxes land
+ * on; re-exported here with the damage rules.
+ */
+export type { DamageTrack };
 
 export interface DamageOptions {
   /**

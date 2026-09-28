@@ -10,6 +10,8 @@ export * from './build.js';
 export * from './advancement.js';
 export * from './derived.js';
 export * from './roll.js';
+export * from './exchange.js';
+export * from './roll-card.js';
 export * from './events.js';
 export * from './scene.js';
 export * from './token.js';
