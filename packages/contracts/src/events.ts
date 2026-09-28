@@ -174,6 +174,14 @@ export type FogRevealCommand = z.infer<typeof FogRevealCommandSchema>;
 export const EncounterAdvanceCommandSchema = z.object({
   cmd: z.literal('encounter.advance'),
   encounterId: z.string(),
+  /**
+   * Who the sender saw acting when "Next" was pressed — null for "nobody, the
+   * pass is waiting". The server advances only when that is still who is
+   * acting, so a double press, or two devices pressing together, marks one
+   * combatant done instead of skipping the next one. Left out, there is no
+   * check (older clients).
+   */
+  expectedActorId: z.string().nullable().optional(),
 });
 export type EncounterAdvanceCommand = z.infer<typeof EncounterAdvanceCommandSchema>;
 

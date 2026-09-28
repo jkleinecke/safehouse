@@ -12,8 +12,13 @@
 export {
   MAX_INIT_DICE,
   rollInitiative,
+  compareInitiative,
   turnOrder,
   nextActor,
+  delayedRows,
+  moveInOrder,
+  actNowOrder,
+  seizeInitiative,
   markActed,
   advancePass,
   anyActiveScores,
@@ -24,6 +29,9 @@ export {
   type InitiativeRollDetail,
   type RollInitiativeOptions,
   type InterruptAction,
+  type EricAttributes,
+  type TurnOrderOptions,
+  type SeizeInitiativeOutcome,
 } from './initiative.js';
 export {
   computeWoundModifier,

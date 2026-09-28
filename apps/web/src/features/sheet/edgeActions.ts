@@ -25,7 +25,7 @@ export const EDGE_ACTION_LABELS: Record<EdgeActionId, string> = {
 };
 
 export const EDGE_ACTION_HINTS: Record<EdgeActionId, string> = {
-  seize_initiative: 'Spend 1 Edge to act first in this pass.',
+  seize_initiative: 'Spend 1 Edge to act first for the rest of this Combat Turn (your score stays the same).',
   blitz: 'Spend 1 Edge to re-roll initiative with 5d6.',
   close_call: 'Spend 1 Edge to negate the glitch on that roll — or to make a critical glitch an ordinary one.',
 };

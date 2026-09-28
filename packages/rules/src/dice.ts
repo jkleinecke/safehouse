@@ -201,36 +201,11 @@ export function resolveExtendedTest(
 // Edge actions that are not extra dice (FR2.3, FR4.4)
 // ---------------------------------------------------------------------------
 
-/**
- * Seize the Initiative (FR2.3/FR4.4): spend Edge to act first in the current
- * pass, whatever the roll said.
- *
- * The tracker orders by Initiative Score (`turnOrder`), so "first" is expressed
- * as a score strictly above everyone else still in the pass — one number the
- * whole table can see, rather than a hidden priority flag the ordering would
- * have to special-case. `otherScores` is every OTHER combatant's current score.
+/*
+ * Seize the Initiative (FR2.3/FR4.4) moved to `combat/initiative.ts` beside
+ * the order it changes: it is a PLACE at the top of the order for the Combat
+ * Turn (SR5 p.160-161), not a raised score, so it needs `turnOrder`.
  */
-export interface SeizeInitiativeOutcome {
-  /** Score before the spend. */
-  from: number;
-  /** Score after: strictly above every other score in the pass. */
-  to: number;
-  /** The score that had to be beaten, or null when nobody else is up. */
-  beat: number | null;
-  /** False when the actor already led — the Edge still buys the guarantee. */
-  changed: boolean;
-}
-
-export function seizeInitiative(
-  actorScore: number,
-  otherScores: readonly number[],
-): SeizeInitiativeOutcome {
-  const from = Math.floor(actorScore);
-  const beat = otherScores.length > 0 ? Math.max(...otherScores.map((s) => Math.floor(s))) : null;
-  // At least 1, so the actor is in `turnOrder` at all (it drops scores ≤ 0).
-  const to = Math.max(from, (beat ?? 0) + 1, 1);
-  return { from, to, beat, changed: to !== from };
-}
 
 /** SR5 ceiling on initiative dice — Blitz buys straight to it (FR2.3/§10.2). */
 export const BLITZ_INITIATIVE_DICE = 5;

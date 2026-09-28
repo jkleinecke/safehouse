@@ -254,7 +254,15 @@ export default function Tracker({ campaignId }: TrackerProps) {
                   type="button"
                   className="btn btn-accent px-2.5 py-1"
                   disabled={busy}
-                  onClick={() => sendCommand(campaignId, { cmd: 'encounter.advance', encounterId })}
+                  onClick={() =>
+                    sendCommand(campaignId, {
+                      cmd: 'encounter.advance',
+                      encounterId,
+                      // Who this screen shows acting: a second tap after the order
+                      // moved on does nothing, instead of skipping the next row.
+                      expectedActorId: acting?.combatant.id ?? null,
+                    })
+                  }
                   title="The acting combatant is done; on to the next"
                 >
                   Next ▸

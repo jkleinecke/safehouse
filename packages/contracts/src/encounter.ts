@@ -85,6 +85,19 @@ export const CombatantSchema = z.object({
   effects: z.array(StatusEffectSchema).default([]),
   visibility: VisibilitySchema.default('public'),
   actedThisPass: z.boolean().default(false),
+  /**
+   * Holding a Delayed Action (SR5 p.161): the row keeps its score and its
+   * place, and "Next" steps over it until the GM says it acts ("Act now"),
+   * on whatever score the order has reached. It carries into later passes of
+   * the same Combat Turn, and the next turn clears it.
+   */
+  delayed: z.boolean().optional(),
+  /**
+   * Spent Edge to Seize the Initiative this Combat Turn (SR5 p.160-161): the
+   * row goes before everyone who did not, its score untouched. The next
+   * Combat Turn clears it.
+   */
+  seized: z.boolean().optional(),
   edge: EdgeStateSchema.optional(),
   grunt: GruntStateSchema.optional(),
   /** Copilot state: quick-roll rack config, morale flags (FR10.7–10.9). */
@@ -133,6 +146,16 @@ export const EncounterSchema = z.object({
    * site rolls.
    */
   handRolls: z.boolean().optional(),
+  /**
+   * The acting order as the server works it out — combatant ids, first to act
+   * first — for the viewer it was sent to. Every `encounter.updated` frame and
+   * `GET /api/encounters/:id` carry it (at the top level of the payload), and
+   * it is the one order a tracker, a phone or the TV should draw: the manual
+   * order, seizes, and the ERIC tie-break all live in it, and a client that
+   * sorts by score on its own will disagree with the table. Derived, never
+   * stored; absent when the source did not carry it.
+   */
+  turnOrder: z.array(z.string()).optional(),
   /** Present when the API returns the composed view. */
   combatants: z.array(CombatantSchema).optional(),
 });

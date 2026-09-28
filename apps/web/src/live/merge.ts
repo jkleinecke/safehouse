@@ -36,6 +36,15 @@ function arr(v: unknown): unknown[] {
   return Array.isArray(v) ? v : [];
 }
 
+function bool(v: unknown): boolean | undefined {
+  return typeof v === 'boolean' ? v : undefined;
+}
+
+/** A list of ids, or undefined when it is not one (null included). */
+function ids(v: unknown): string[] | undefined {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : undefined;
+}
+
 function firstDefined<T>(...vals: Array<T | undefined>): T | undefined {
   for (const v of vals) if (v !== undefined) return v;
   return undefined;
@@ -259,6 +268,10 @@ export function normalizeCombatant(raw: unknown, encounterId: string): Combatant
     effects,
     visibility,
     actedThisPass: o['actedThisPass'] === true,
+    // Holding a Delayed Action / seized the initiative this Combat Turn
+    // (SR5 p.160-161): the server lifts both onto the row, both frames carry them.
+    ...(o['delayed'] === true ? { delayed: true } : {}),
+    ...(o['seized'] === true ? { seized: true } : {}),
     ...(edgeMax !== undefined && edgeCurrent !== undefined
       ? { edge: { max: edgeMax, current: edgeCurrent } }
       : {}),
@@ -320,6 +333,15 @@ export function normalizeEncounter(raw: unknown, fallbackId?: string): Encounter
   const turn = firstDefined(int(enc['turn']), int(root['turn']));
   const pass = firstDefined(int(enc['pass']), int(root['pass']));
   const sceneId = firstDefined(str(enc['sceneId']), str(root['sceneId']));
+  // The acting order as the server works it out (manual order, seizes, ERIC):
+  // the frames put it at the top level, next to `activeCombatantId`. It is
+  // the one order a client should draw rather than sorting by score itself.
+  const turnOrder = firstDefined(ids(root['turnOrder']), ids(enc['turnOrder']));
+  // The GM's arrangement for this Combat Turn: a list, or null for the book's
+  // order. `undefined` — the source did not say — is kept apart from null.
+  const manualSource = 'manualOrder' in enc ? enc : 'manualOrder' in root ? root : null;
+  const manualOrder = manualSource ? (ids(manualSource['manualOrder']) ?? null) : undefined;
+  const handRolls = firstDefined(bool(enc['handRolls']), bool(root['handRolls']));
 
   const out: Encounter = {
     id,
@@ -330,6 +352,9 @@ export function normalizeEncounter(raw: unknown, fallbackId?: string): Encounter
     turn: Math.max(0, turn ?? 0),
     pass: Math.max(0, pass ?? 0),
     activeCombatantId,
+    ...(turnOrder !== undefined ? { turnOrder } : {}),
+    ...(manualOrder !== undefined ? { manualOrder } : {}),
+    ...(handRolls !== undefined ? { handRolls } : {}),
     // Present only when the source actually carried rows: an encounter list
     // entry has none, and an empty array there would look like "0 combatants"
     // rather than "not asked" (honest empty states).
@@ -347,11 +372,22 @@ export function normalizeEncounter(raw: unknown, fallbackId?: string): Encounter
   if (turn !== undefined) carried.push('turn');
   if (pass !== undefined) carried.push('pass');
   if (sceneId !== undefined) carried.push('sceneId');
+  if (turnOrder !== undefined) carried.push('turnOrder');
+  if (manualOrder !== undefined) carried.push('manualOrder');
+  if (handRolls !== undefined) carried.push('handRolls');
   Object.defineProperty(out, CARRIED, { value: carried, enumerable: false });
   return out;
 }
 
-type CarriedField = 'name' | 'state' | 'turn' | 'pass' | 'sceneId';
+type CarriedField =
+  | 'name'
+  | 'state'
+  | 'turn'
+  | 'pass'
+  | 'sceneId'
+  | 'turnOrder'
+  | 'manualOrder'
+  | 'handRolls';
 const CARRIED = Symbol('carried');
 
 /** The header fields a normalised encounter's source actually carried, or null for a hand-built one. */
@@ -386,8 +422,20 @@ export function mergeEncounter(prev: Encounter | null, next: Encounter | null): 
         ...(carried.has('turn') ? { turn: next.turn } : {}),
         ...(carried.has('pass') ? { pass: next.pass } : {}),
         ...(carried.has('sceneId') ? { sceneId: next.sceneId } : {}),
+        ...(carried.has('turnOrder') ? { turnOrder: next.turnOrder } : {}),
+        ...(carried.has('manualOrder') ? { manualOrder: next.manualOrder } : {}),
+        ...(carried.has('handRolls') ? { handRolls: next.handRolls } : {}),
       }
-    : { name: next.name, state: next.state, turn: next.turn, pass: next.pass, sceneId: next.sceneId };
+    : {
+        name: next.name,
+        state: next.state,
+        turn: next.turn,
+        pass: next.pass,
+        sceneId: next.sceneId,
+        ...(next.turnOrder !== undefined ? { turnOrder: next.turnOrder } : {}),
+        ...(next.manualOrder !== undefined ? { manualOrder: next.manualOrder } : {}),
+        ...(next.handRolls !== undefined ? { handRolls: next.handRolls } : {}),
+      };
   return {
     ...prev,
     ...header,

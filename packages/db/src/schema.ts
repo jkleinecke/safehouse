@@ -321,6 +321,15 @@ export const encounters = pgTable(
     state: text('state').$type<'prep' | 'live' | 'done'>().notNull().default('prep'),
     turn: integer('turn').notNull().default(0),
     pass: integer('pass').notNull().default(0),
+    /**
+     * The GM's arrangement of the acting order for this Combat Turn: combatant
+     * ids, first to act first. Null is the book's order (score, then ERIC, SR5
+     * p.159). Place only, never a score; cleared by "Sort by score" and by every
+     * new Combat Turn (migration 0013).
+     */
+    manualOrder: jsonb('manual_order').$type<string[] | null>(),
+    /** The table rolls initiative with its own dice: a new turn opens blank. */
+    handRolls: boolean('hand_rolls').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('encounters_campaign_idx').on(t.campaignId)],

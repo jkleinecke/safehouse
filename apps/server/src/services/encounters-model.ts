@@ -8,7 +8,14 @@
  *   - `combatants` has no init_dice / edge / grunt columns; those ride in the
  *     `copilot` JSONB (`initDice`, `edge`, `grunt`, plus our `lastDamage`).
  *   - `encounters` has no active_combatant_id; the acting combatant is DERIVED
- *     (highest score that has not acted this pass), so nothing can drift.
+ *     (the first row in the order that has not acted this pass and is not
+ *     holding a Delayed Action), so nothing can drift.
+ *
+ * The order itself is derived too, in one place (`@safehouse/rules`
+ * `turnOrder`), from three things this file reads off the rows: the fight's
+ * stored manual order (`encounters.manual_order`), each row's seize and delay
+ * flags (in `copilot`), and the ERIC tie-break attributes, which the service
+ * reads off the sheets only when two scores tie (`orderOptionsOf`).
  */
 import { z } from 'zod';
 import {
@@ -35,7 +42,9 @@ import {
   turnOrder,
   type DamageResult,
   type DamageTrack,
+  type EricAttributes,
   type MoraleReport,
+  type TurnOrderOptions,
 } from '@safehouse/rules';
 import { combatants, encounters } from '@safehouse/db';
 
@@ -68,6 +77,25 @@ const CopilotSchema = z
     /** One-tap undo (FR4.5): the inverse of the last damage application. */
     lastDamage: UndoSnapshotSchema.optional(),
     generator: z.object({ professionalRating: z.number().optional() }).loose().optional(),
+    /**
+     * Holding a Delayed Action (SR5 p.161). Lifted onto the row as
+     * `Combatant.delayed`; carries across passes, cleared by a new Combat Turn
+     * and by acting ("Act now").
+     */
+    delayed: z.boolean().optional(),
+    /**
+     * Seized the Initiative this Combat Turn (SR5 p.160-161). Lifted onto the
+     * row as `Combatant.seized`; cleared by a new Combat Turn.
+     */
+    seized: z.boolean().optional(),
+    /**
+     * This Action Phase is a Delayed Action being used: the row was holding
+     * one and the GM pressed "Act now". Its actions take -1 die (p.161; the
+     * catalogue's `delayed_action`), which a guided roll card reads from here.
+     * Cleared when the row is marked done, at the end of the pass, and by a
+     * new Combat Turn.
+     */
+    delayedAction: z.boolean().optional(),
   })
   .loose();
 export type CombatantCopilot = z.infer<typeof CopilotSchema>;
@@ -113,13 +141,27 @@ export function serializeCombatant(row: CombatantRow): Combatant {
     effects: parseEffects(row.effects),
     visibility: row.visibility,
     actedThisPass: row.actedThisPass,
+    ...(copilot.delayed ? { delayed: true } : {}),
+    ...(copilot.seized ? { seized: true } : {}),
     ...(copilot.edge ? { edge: copilot.edge } : {}),
     ...(copilot.grunt ? { grunt: copilot.grunt } : {}),
     copilot: copilot as Record<string, unknown>,
   };
 }
 
-export function serializeEncounter(row: EncounterRow, list?: Combatant[]): Encounter {
+/**
+ * Row -> contract `Encounter`: the header only. The acting row and the order
+ * are derived per viewer and travel beside it (`encounterForViewer`, the
+ * `encounter.updated` frames), so `activeCombatantId` here is always null.
+ *
+ * `visible`, when given, is the ids of the rows the reader may know about:
+ * the manual order then names only those. A player's view must never carry a
+ * hidden combatant's id (FR4.9 / Principle 4), and a manual order the GM
+ * arranged with an ambusher in it would otherwise do exactly that. An empty
+ * set leaves `[]` for "the GM has arranged the order", with no names in it.
+ */
+export function serializeEncounter(row: EncounterRow, visible?: ReadonlySet<string>): Encounter {
+  const manual = manualOrderOf(row);
   return {
     id: row.id,
     campaignId: row.campaignId,
@@ -128,9 +170,58 @@ export function serializeEncounter(row: EncounterRow, list?: Combatant[]): Encou
     state: row.state,
     turn: row.turn,
     pass: row.pass,
-    activeCombatantId: list ? (nextActorRules(list)?.id ?? null) : null,
-    ...(list ? { combatants: list } : {}),
+    activeCombatantId: null,
+    manualOrder: manual && visible ? manual.filter((id) => visible.has(id)) : manual,
+    handRolls: row.handRolls,
   };
+}
+
+/** The stored manual order, read defensively (jsonb): null unless a list of ids. */
+export function manualOrderOf(row: EncounterRow): string[] | null {
+  const raw: unknown = row.manualOrder;
+  if (!Array.isArray(raw)) return null;
+  const ids = raw.filter((id): id is string => typeof id === 'string');
+  return ids.length > 0 ? ids : null;
+}
+
+/**
+ * Everything `turnOrder` needs from the fight: the stored manual order, the
+ * ERIC attributes the service read for tied rows (`EncountersService.ericFor`),
+ * and the coin, seeded with the fight and its Combat Turn: the same toss on
+ * every read this turn, a fresh one next turn (SR5 p.159).
+ */
+export function orderOptionsOf(
+  row: EncounterRow,
+  eric: Readonly<Record<string, EricAttributes>> = {},
+): TurnOrderOptions {
+  return { manualOrder: manualOrderOf(row), eric, coin: `${row.id}:${row.turn}` };
+}
+
+/**
+ * The ERIC tie-break off a sheet (SR5 p.159): Edge (the attribute, not what
+ * is left of it to spend), and Reaction and Intuition as they stand after
+ * cyberware, bioware and magic, the values the character actually tests with.
+ */
+export function ericOf(sheet: SheetV1): EricAttributes {
+  const attrs = deriveCharacter(sheet).attributes;
+  return {
+    edg: attrs['edg']?.value ?? sheet.attributes.edg.max,
+    rea: attrs['rea']?.value ?? sheet.attributes.rea,
+    int: attrs['int']?.value ?? sheet.attributes.int,
+  };
+}
+
+/**
+ * Rows whose score another live row shares: the only ones the ERIC chain can
+ * matter for, so the only ones worth reading and deriving a sheet for. Most
+ * frames have none, and then no sheet is read at all.
+ */
+export function rowsTiedOnScore(list: readonly Combatant[]): Combatant[] {
+  const counts = new Map<number, number>();
+  for (const c of list) {
+    if (c.initScore > 0) counts.set(c.initScore, (counts.get(c.initScore) ?? 0) + 1);
+  }
+  return list.filter((c) => c.initScore > 0 && (counts.get(c.initScore) ?? 0) > 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +252,10 @@ export interface PlayerCombatantView {
   initScore: number;
   initKind: InitKind;
   actedThisPass: boolean;
+  /** Holding a Delayed Action (p.161): the table sees someone waiting to act. */
+  delayed?: true;
+  /** Seized the Initiative this Combat Turn (p.160-161): the spend was said out loud. */
+  seized?: true;
   /** True when this row is the viewer's own PC. */
   own: boolean;
   /**
@@ -224,14 +319,20 @@ export function encounterForViewer(
   viewer: Viewer,
   ownerByCombatantId: ReadonlyMap<string, string | null> = new Map(),
   tokensOnTable: ReadonlySet<string> = new Set(),
+  eric: Readonly<Record<string, EricAttributes>> = {},
 ): EncounterView {
-  const active = nextActorRules(list)?.id ?? null;
+  // ONE order for the whole fight, worked out over every row and only then
+  // cut down to what this viewer may see. Ordering the visible rows on their
+  // own could slot a late joiner differently, and the table would disagree.
+  const opts = orderOptionsOf(row, eric);
+  const order = turnOrder(list, opts).map((c) => c.id);
+  const active = nextActorRules(list, opts)?.id ?? null;
   if (viewer.role === 'gm') {
     return {
       encounter: serializeEncounter(row),
       combatants: list,
       activeCombatantId: active,
-      turnOrder: turnOrder(list).map((c) => c.id),
+      turnOrder: order,
       scope: 'gm',
     };
   }
@@ -240,6 +341,7 @@ export function encounterForViewer(
     if (c.visibility === 'gm_owner') return ownerByCombatantId.get(c.id) === viewer.userId;
     return false;
   });
+  const visibleIds = new Set(visible.map((c) => c.id));
   const views: PlayerCombatantView[] = visible.map((c) => {
     const own = ownerByCombatantId.get(c.id) === viewer.userId;
     return {
@@ -249,6 +351,8 @@ export function encounterForViewer(
       initScore: c.initScore,
       initKind: c.initKind,
       actedThisPass: c.actedThisPass,
+      ...(c.delayed ? { delayed: true as const } : {}),
+      ...(c.seized ? { seized: true as const } : {}),
       own,
       ...(own || c.source === 'character' ? { initBase: c.initBase, initDice: c.initDice } : {}),
       condition: conditionOf(c.monitors),
@@ -262,10 +366,10 @@ export function encounterForViewer(
     };
   });
   return {
-    encounter: serializeEncounter(row),
+    encounter: serializeEncounter(row, visibleIds),
     combatants: views,
-    activeCombatantId: visible.some((c) => c.id === active) ? active : null,
-    turnOrder: turnOrder(visible).map((c) => c.id),
+    activeCombatantId: active !== null && visibleIds.has(active) ? active : null,
+    turnOrder: order.filter((id) => visibleIds.has(id)),
     scope: 'player',
   };
 }

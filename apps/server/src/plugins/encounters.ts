@@ -6,6 +6,11 @@
  * is role-aware: GMs get the full tracker, players get turn order, their own
  * monitors, and public condition — GM-hidden combatants are dropped server-side
  * (FR4.9 / Principle 4).
+ *
+ * The acting order is the server's (`turnOrder` in every view and frame): the
+ * GM moves rows by PLACE (`POST /api/encounters/:id/order`), holds a Delayed
+ * Action (`POST /api/combatants/:id/delay`), and "Next" carries the id of the
+ * row the GM saw acting, so a double press cannot skip anyone (SR5 p.159-161).
  */
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -67,6 +72,8 @@ const PatchEncounterBody = z.object({
   state: z.enum(['prep', 'live', 'done']).optional(),
   turn: z.number().int().min(0).optional(),
   pass: z.number().int().min(0).optional(),
+  /** The table rolls initiative with its own dice (FR4.2): stored on the fight. */
+  handRolls: z.boolean().optional(),
 });
 
 const AddCombatantBody = z.object({
@@ -132,8 +139,33 @@ const SetInitiativeBody = z.object({
 });
 
 const NewTurnBody = z.object({
-  /** False opens the turn with blank scores for hand rolls (FR4.2). */
-  roll: z.boolean().default(true),
+  /**
+   * False opens the turn with blank scores for hand rolls (FR4.2), true has
+   * the server roll. Left out, the fight's own hand-rolls setting decides.
+   */
+  roll: z.boolean().optional(),
+});
+
+/**
+ * Who the GM saw acting when "Next" was pressed (null: nobody). When the
+ * order has moved on since, the press does nothing (409 `stale_actor`).
+ */
+const NextBody = z.object({
+  expectedActorId: z.string().nullable().optional(),
+});
+
+/** The GM's levers on the order: place only, never a score (SR5 p.159-161). */
+const OrderBody = z.union([
+  z.object({
+    move: z.object({ combatantId: z.string(), toIndex: z.number().int().min(0) }),
+  }),
+  z.object({ actNow: z.string() }),
+  z.object({ sort: z.literal('score') }),
+]);
+
+/** Hold a Delayed Action (true, the default), or stop holding it (p.161). */
+const DelayBody = z.object({
+  delayed: z.boolean().default(true),
 });
 
 const InterruptBody = z.object({
@@ -252,7 +284,10 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
     const auth = requireAuth(req);
     assertCampaign(auth, campaignId);
     const rows = await service.listEncounters(campaignId);
-    return { encounters: rows.map((r) => serializeEncounter(r)) };
+    // A list entry carries no rows, so a player's copy of a manual order
+    // names nobody (`[]`: "the GM arranged it"); the ids could be hidden ones.
+    const visible = auth.role === 'gm' ? undefined : new Set<string>();
+    return { encounters: rows.map((r) => serializeEncounter(r, visible)) };
   });
 
   app.post('/api/campaigns/:campaignId/encounters', async (req, reply) => {
@@ -297,6 +332,9 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
       { userId: auth.userId, role: auth.role },
       owners,
       onTable,
+      // ERIC (SR5 p.159) off the sheets of rows that tie, so this read draws
+      // the same order the frames do.
+      await service.ericFor(list),
     );
     return {
       ...view,
@@ -354,6 +392,11 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
         throw httpError(403, 'forbidden', 'only the GM rolls initiative for the table');
       }
       for (const combatantId of body.combatantIds) await ownRowScope(req, combatantId);
+      // Their own dice, and nothing else: the full roster (hidden rows, NPC
+      // sheets, the manual order) is the GM's. The table sees the result in
+      // the public `encounter.updated` frame like everyone else (FR4.9).
+      const out = await service.rollInitiativeAll(id, body);
+      return { details: out.details };
     }
     return service.rollInitiativeAll(id, body);
   });
@@ -372,7 +415,37 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
   app.post('/api/encounters/:id/next-actor', async (req) => {
     const { id } = req.params as { id: string };
     await scope(req, id);
-    return service.nextActor(id);
+    return service.nextActor(id, parse(NextBody, req.body));
+  });
+
+  /**
+   * "Next ▸" over REST — the same one-button loop as the `encounter.advance`
+   * WS command (mark done → next, or wait on a delay, or end the pass, or a
+   * new Combat Turn), for a client without the socket and for tests.
+   */
+  app.post('/api/encounters/:id/advance', async (req) => {
+    const { id } = req.params as { id: string };
+    await scope(req, id);
+    return service.advance(id, parse(NextBody, req.body));
+  });
+
+  /**
+   * Arrange the order: `{ move: { combatantId, toIndex } }`, `{ actNow: id }`
+   * or `{ sort: 'score' }`. Place only — no score changes, so nobody gains or
+   * loses a pass (the GM's decision of 2026-09-28; SR5 p.159). The arrangement
+   * lasts for this Combat Turn.
+   */
+  app.post('/api/encounters/:id/order', async (req) => {
+    const { id } = req.params as { id: string };
+    await scope(req, id);
+    return service.setOrder(id, parse(OrderBody, req.body));
+  });
+
+  /** Hold a Delayed Action, or stop holding it (SR5 p.161). */
+  app.post('/api/combatants/:id/delay', async (req) => {
+    const { id } = req.params as { id: string };
+    await combatantScope(req, id);
+    return { combatant: await service.delay(id, parse(DelayBody, req.body).delayed) };
   });
 
   app.post('/api/encounters/:id/end-pass', async (req) => {
@@ -646,7 +719,13 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
   /**
    * `encounter.advance`: the one-button FR4.3 loop — mark the acting combatant
    * done; when the pass is spent, drop every score by 10; when nobody is left
-   * above 0, start a new turn (everyone re-rolls).
+   * above 0, start a new turn (the server rolls, or the lines open blank when
+   * the fight is set to hand rolls). A pass still waiting on a Delayed Action
+   * stops for the GM (SR5 p.161). All of it is `EncountersService.advance`.
+   *
+   * `expectedActorId` is who the pressing device saw acting (null: nobody);
+   * a press the order has already moved past does nothing and gets a
+   * `stale_actor` error back, so a double tap marks one row done, not two.
    */
   app.hub.onCommand('encounter.advance', async (msg, ctx) => {
     if (ctx.auth.role !== 'gm') {
@@ -660,10 +739,19 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
     }
     const encounter = await service.getEncounter(encounterId);
     if (encounter.campaignId !== ctx.campaignId) return;
-    const { active } = await service.nextActor(encounterId);
-    if (active) return;
-    const pass = await service.endPass(encounterId);
-    if (!pass.anyActive) await service.newTurn(encounterId);
+    const raw = msg['expectedActorId'];
+    const expectedActorId = typeof raw === 'string' ? raw : raw === null ? null : undefined;
+    try {
+      await service.advance(encounterId, { expectedActorId });
+    } catch (err) {
+      const code = (err as { code?: unknown }).code;
+      if (code !== 'stale_actor') throw err;
+      ctx.reply({
+        type: 'error',
+        payload: { code: 'stale_actor', message: (err as Error).message },
+        ephemeral: true,
+      });
+    }
   });
 
   /** `damage.apply`: boxes onto a monitor from the tracker (FR4.5). */

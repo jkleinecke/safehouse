@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
+  actNowOrder,
   advancePass,
   anyActiveScores,
   applyInterrupt,
   beginTurn,
   canInterrupt,
   DEFAULT_INTERRUPTS,
+  delayedRows,
   markActed,
+  moveInOrder,
   nextActor,
   rollInitiative,
+  seizeInitiative,
   turnOrder,
 } from '../src/index.js';
 import { combatant, monitors, mulberry32 } from './combat-helpers.js';
@@ -159,5 +163,146 @@ describe('interrupt actions (FR4.4)', () => {
     expect(canInterrupt(c, 5)).toBe(false);
     expect(canInterrupt(c, 4)).toBe(true);
     expect(applyInterrupt(c, 5).initScore).toBe(-1);
+  });
+});
+
+describe('ties: ERIC, then the coin (SR5 p.159)', () => {
+  it('breaks a tied score on Edge, then Reaction, then Intuition', () => {
+    const roster = [
+      combatant({ id: 'plain', initScore: 12 }),
+      combatant({ id: 'lucky', initScore: 12 }),
+      combatant({ id: 'sharp', initScore: 12 }),
+      combatant({ id: 'first', initScore: 13 }),
+    ];
+    const eric = {
+      plain: { edg: 2, rea: 5, int: 4 },
+      lucky: { edg: 3, rea: 3, int: 3 }, // Edge wins before anything else is read
+      sharp: { edg: 2, rea: 5, int: 5 }, // same E and R as plain: Intuition decides
+    };
+    expect(turnOrder(roster, { eric }).map((c) => c.id)).toEqual(['first', 'lucky', 'sharp', 'plain']);
+  });
+
+  it('tosses the same coin for the same seed whatever order the rows arrive in', () => {
+    const a = combatant({ id: 'row-a', initScore: 9 });
+    const b = combatant({ id: 'row-b', initScore: 9 });
+    const one = turnOrder([a, b], { coin: 'fight:1' }).map((c) => c.id);
+    const two = turnOrder([b, a], { coin: 'fight:1' }).map((c) => c.id);
+    expect(one).toEqual(two);
+    // The initiative base is no longer a tie-break: a bigger base with the
+    // same ERIC does not decide it, the coin does.
+    const based = turnOrder([{ ...a, initBase: 20 }, b], { coin: 'fight:1' }).map((c) => c.id);
+    expect(based).toEqual(one);
+  });
+});
+
+describe('the manual order: place only (the GM, 2026-09-28)', () => {
+  const roster = () => [
+    combatant({ id: 'a', initScore: 20 }),
+    combatant({ id: 'b', initScore: 15 }),
+    combatant({ id: 'c', initScore: 10 }),
+  ];
+
+  it('plays the GM’s arrangement and never touches a score', () => {
+    const list = roster();
+    const order = turnOrder(list, { manualOrder: ['c', 'a', 'b'] });
+    expect(order.map((c) => c.id)).toEqual(['c', 'a', 'b']);
+    expect(order.map((c) => c.initScore)).toEqual([10, 20, 15]);
+    expect(nextActor(list, { manualOrder: ['c', 'a', 'b'] })?.id).toBe('c');
+    // Scores still decide passes: after one pass only a (10) and b (5) act again.
+    expect(turnOrder(advancePass(list), { manualOrder: ['c', 'a', 'b'] }).map((c) => c.id)).toEqual(['a', 'b']);
+  });
+
+  it('slots a row the list does not name straight after the last row that outranks it', () => {
+    const list = [...roster(), combatant({ id: 'late', initScore: 17 })];
+    expect(turnOrder(list, { manualOrder: ['c', 'a', 'b'] }).map((c) => c.id)).toEqual(['c', 'a', 'late', 'b']);
+  });
+
+  it('drags one row to a new place, and Sort by score is just no manual order', () => {
+    const list = roster();
+    const moved = moveInOrder(list, 'c', 0);
+    expect(moved).toEqual(['c', 'a', 'b']);
+    expect(moveInOrder(list, 'a', 99)).toEqual(['b', 'c', 'a']); // clamped to the end
+    expect(moveInOrder([...list, combatant({ id: 'spent', initScore: 0 })], 'spent', 0)).toBeNull();
+    expect(turnOrder(list, { manualOrder: null }).map((c) => c.id)).toEqual(['a', 'b', 'c']);
+  });
+});
+
+describe('a Delayed Action (SR5 p.161)', () => {
+  it('keeps its score and place, is stepped over, and the pass waits for it', () => {
+    let list = [
+      combatant({ id: 'cutter', initScore: 13, delayed: true }),
+      combatant({ id: 'painkiller', initScore: 11 }),
+      combatant({ id: 'ash', initScore: 6 }),
+    ];
+    expect(turnOrder(list).map((c) => c.id)).toEqual(['cutter', 'painkiller', 'ash']);
+    expect(nextActor(list)?.id).toBe('painkiller');
+    expect(delayedRows(list).map((c) => c.id)).toEqual(['cutter']);
+
+    // Everyone else acts: nobody is next, but the pass still waits on Cutter.
+    list = list.map((c) => (c.delayed ? c : markActed(c)));
+    expect(nextActor(list)).toBeNull();
+    expect(delayedRows(list).map((c) => c.id)).toEqual(['cutter']);
+  });
+
+  it('"Act now" puts the delayed row in front of whoever was next, score untouched', () => {
+    const list = [
+      combatant({ id: 'cutter', initScore: 13, delayed: true }),
+      combatant({ id: 'painkiller', initScore: 11, actedThisPass: true }),
+      combatant({ id: 'ash', initScore: 6 }),
+    ];
+    const placed = actNowOrder(list, 'cutter');
+    expect(placed).toEqual(['painkiller', 'cutter', 'ash']);
+    // The caller takes the hold off; Cutter is then the one acting, on 13 still.
+    const after = list.map((c) => (c.id === 'cutter' ? { ...c, delayed: false } : c));
+    const up = nextActor(after, { manualOrder: placed });
+    expect(up?.id).toBe('cutter');
+    expect(up?.initScore).toBe(13);
+  });
+
+  it('goes last when nobody else is left to call (p.161: after the last one)', () => {
+    const list = [
+      combatant({ id: 'held', initScore: 20, delayed: true }),
+      combatant({ id: 'done', initScore: 9, actedThisPass: true }),
+    ];
+    expect(actNowOrder(list, 'held')).toEqual(['done', 'held']);
+  });
+});
+
+describe('Seize the Initiative on the order (SR5 p.160-161)', () => {
+  it('seizers go first, in order of their scores, with their scores untouched', () => {
+    const list = [
+      combatant({ id: 'fast', initScore: 25 }),
+      combatant({ id: 'slow-seizer', initScore: 8, seized: true }),
+      combatant({ id: 'mid-seizer', initScore: 12, seized: true }),
+      combatant({ id: 'mid', initScore: 14 }),
+    ];
+    const order = turnOrder(list);
+    expect(order.map((c) => c.id)).toEqual(['mid-seizer', 'slow-seizer', 'fast', 'mid']);
+    expect(order.map((c) => c.initScore)).toEqual([12, 8, 25, 14]);
+  });
+
+  it('cuts the seizer out of a manual order so the book puts it on top, and holds through Sort by score', () => {
+    const list = [
+      combatant({ id: 'a', initScore: 20 }),
+      combatant({ id: 'b', initScore: 15 }),
+      combatant({ id: 's', initScore: 7 }),
+    ];
+    const out = seizeInitiative(list, 's', { manualOrder: ['b', 'a', 's'] });
+    expect(out.manualOrder).toEqual(['b', 'a']);
+    expect(out).toMatchObject({ score: 7, from: 3, to: 1, changed: true });
+    const seized = list.map((c) => (c.id === 's' ? { ...c, seized: true } : c));
+    expect(turnOrder(seized, { manualOrder: out.manualOrder }).map((c) => c.id)).toEqual(['s', 'b', 'a']);
+    expect(turnOrder(seized, { manualOrder: null }).map((c) => c.id)).toEqual(['s', 'a', 'b']);
+  });
+
+  it('a new Combat Turn takes the seize and the delay off', () => {
+    const { combatants } = beginTurn(
+      [combatant({ seized: true, initScore: 3 }), combatant({ delayed: true, initScore: 4 })],
+      mulberry32(2),
+    );
+    for (const c of combatants) {
+      expect(c.seized).toBeUndefined();
+      expect(c.delayed).toBeUndefined();
+    }
   });
 });

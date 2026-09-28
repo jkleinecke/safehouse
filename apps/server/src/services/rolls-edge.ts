@@ -5,7 +5,8 @@
  *
  * Shape of every action here:
  *   authorize → engine decides (pure, `@safehouse/rules`) → the tracker is
- *   updated so initiative ORDERING moves with the spend → the point of Edge is
+ *   updated so initiative ORDER moves with the spend (Seize: a place at the
+ *   top for the Combat Turn; Blitz: a new score) → the point of Edge is
  *   debited from whichever ledger the actor has (a PC's sheet, an NPC's copilot
  *   Edge) AND the loud `log.posted` line naming the action, the actor and the
  *   Edge left is written in the SAME transaction (FR2.3: "Edge spend decrements
@@ -29,7 +30,6 @@ import {
   closeCall,
   computeWoundModifier,
   EDGE_ACTION_LABELS,
-  seizeInitiative,
   type BlitzOutcome,
   type SeizeInitiativeOutcome,
 } from '@safehouse/rules';
@@ -53,6 +53,13 @@ export interface InitiativeTracker {
       edge?: { max: number; current: number };
     },
   ): Promise<Combatant>;
+  /**
+   * Put a row at the top of the order for this Combat Turn, its score
+   * untouched (SR5 p.160-161; `EncountersService.seizeInitiative`).
+   */
+  seizeInitiative(
+    combatantId: string,
+  ): Promise<{ combatant: Combatant; outcome: SeizeInitiativeOutcome }>;
 }
 
 export interface EdgeState {
@@ -99,34 +106,41 @@ export class EdgeActionService {
 
   /**
    * Seize the Initiative (FR2.3/FR4.4): a point of Edge puts the actor at the
-   * head of the current pass and un-marks them as having acted.
+   * top of the order for the rest of this Combat Turn (SR5 p.160-161).
+   *
+   * The PLACE moves, the score does not: raising it to one above the leader
+   * (the old way) also handed out passes, a runner on 11 seizing over a 24
+   * acting three times instead of twice. Nor does it hand back an Action
+   * Phase already taken this pass; a seizer who has acted leads from the next
+   * pass on.
    */
   async seize(opts: {
     campaignId: string;
     viewer: RollViewer;
     combatantId: string;
   }): Promise<SeizeResult> {
-    const { combatant, list } = await this.scopeCombatant(opts.campaignId, opts.combatantId);
+    const { combatant } = await this.scopeCombatant(opts.campaignId, opts.combatantId);
     const payer = await this.payerFor(combatant);
     this.assertMaySpend(opts.viewer, payer);
 
     // Balance first, tracker second, debit last: a refused spend never moves
     // anyone in the order, and a failed tracker write never costs a point.
     this.assertCanPay(payer);
-    const outcome = seizeInitiative(
-      combatant.initScore,
-      list.filter((c) => c.id !== combatant.id).map((c) => c.initScore),
-    );
-    const moved = await this.tracker.updateCombatant(combatant.id, {
-      initScore: outcome.to,
-      actedThisPass: false,
-    });
+    // The tracker reads the fight itself, inside its own lock on the order.
+    const { combatant: moved, outcome } = await this.tracker.seizeInitiative(combatant.id);
     const paid = await this.spend(opts, payer, 'seize_initiative', {
       detail:
-        outcome.beat === null
-          ? `initiative ${outcome.from} → ${outcome.to}`
-          : `initiative ${outcome.from} → ${outcome.to}, ahead of ${outcome.beat}`,
-      extra: { combatantId: combatant.id, initScore: outcome.to, from: outcome.from },
+        outcome.to === null
+          ? `to the top of the order this Combat Turn once the score is in (score ${outcome.score} unchanged)`
+          : outcome.from === null || outcome.from === outcome.to
+            ? `top of the order this Combat Turn (place ${outcome.to}, score ${outcome.score} unchanged)`
+            : `place ${outcome.from} → ${outcome.to} this Combat Turn (score ${outcome.score} unchanged)`,
+      extra: {
+        combatantId: combatant.id,
+        initScore: outcome.score,
+        from: outcome.from,
+        to: outcome.to,
+      },
     });
     const { edge } = paid;
     const updated = paid.combatant ?? moved;

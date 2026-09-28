@@ -7,8 +7,9 @@
  *
  *  - the point of Edge actually leaves the sheet — a spend that does not
  *    decrement is a house rule, not a rule;
- *  - the ORDER moves with the spend, immediately (Seize puts the actor above
- *    everyone still up; Blitz re-rolls at the SR5 ceiling of 5d6);
+ *  - the ORDER moves with the spend, immediately (Seize puts the actor at the
+ *    top of the order for the Combat Turn with the score untouched, SR5
+ *    p.160-161; Blitz re-rolls at the SR5 ceiling of 5d6);
  *  - Close Call never edits the roll it answers. `rolls` is append-only (G5),
  *    so the negation is a new log line carrying the roll id, and the stored row
  *    still says it glitched.
@@ -29,7 +30,7 @@ interface Sheet {
 interface SeizeOut {
   action: string;
   combatant: Combatant;
-  outcome: { from: number; to: number; beat: number | null; changed: boolean };
+  outcome: { score: number; from: number | null; to: number | null; changed: boolean };
   edge: EdgeState;
 }
 
@@ -76,18 +77,18 @@ export async function edgeActions(beat: EdgeBeat): Promise<void> {
   // --- Seize the Initiative -------------------------------------------------
   const sparrowPhone = phones['Sparrow']!;
   const before = (await gm.get<{ combatants: Combatant[] }>(`/api/encounters/${encounterId}`)).combatants;
-  const others = before.filter((c) => c.id !== beat.sparrow.id).map((c) => c.initScore);
-  const topOfPass = Math.max(...others);
+  const scoreBefore = before.find((c) => c.id === beat.sparrow.id)?.initScore ?? 0;
   const edgeBefore = await edgeOf(gm, sparrowPhone.characterId);
 
   const seized = await gm.post<SeizeOut>('/api/edge/seize-initiative', { combatantId: beat.sparrow.id });
+  const orderAfter = (await gm.get<{ turnOrder: string[] }>(`/api/encounters/${encounterId}`)).turnOrder;
   checks.record(
-    'Seize the Initiative puts the actor above everyone still in the pass',
-    `strictly above ${topOfPass}`,
-    `${seized.outcome.from} → ${seized.outcome.to} (beat ${String(seized.outcome.beat)})`,
-    seized.outcome.to > topOfPass && seized.combatant.initScore === seized.outcome.to,
+    'Seize the Initiative puts the actor at the top of the order for the Combat Turn',
+    'first in the server order',
+    `place ${String(seized.outcome.from)} → ${String(seized.outcome.to)}; order starts ${orderAfter[0] ?? 'nobody'}`,
+    orderAfter[0] === beat.sparrow.id,
   );
-  checks.eq('…and hands the action back — she has not acted this pass', false, seized.combatant.actedThisPass);
+  checks.eq('…with her score untouched — no pass gained (SR5 p.160-161)', scoreBefore, seized.combatant.initScore);
   checks.eq('…and it costs exactly one point of Edge', edgeBefore - 1, seized.edge.current);
   checks.eq('…debited on the sheet itself, not in a note', edgeBefore - 1, await edgeOf(gm, sparrowPhone.characterId));
 
@@ -129,7 +130,8 @@ export async function edgeActions(beat: EdgeBeat): Promise<void> {
 
   story.say(
     'Sparrow spends a point of Edge to get in front of the whole shed — the tracker moves her to the top of the ' +
-      `pass on the spot (${seized.outcome.from} → ${seized.outcome.to}) and gives her the action back. Torque ` +
+      `order for the Combat Turn on the spot (place ${String(seized.outcome.from)} → ${String(seized.outcome.to)}), ` +
+      `still on her own ${seized.outcome.score}. Torque ` +
       `blitzes hers: five dice instead of two, [${blitzed.outcome.rolls.join(' ')}], initiative ${blitzed.outcome.score}. ` +
       'Both points come off the sheets and both spends say so in the log.',
   );

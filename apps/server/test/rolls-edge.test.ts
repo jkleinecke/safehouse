@@ -4,7 +4,8 @@
  *
  * The load-bearing assertions: each action costs exactly one point of Edge and
  * says so out loud in the session log (FR2.3); Seize and Blitz move the
- * combatant in the tracker's ORDER, not just its row; Close Call negates the
+ * combatant in the tracker's ORDER, not just its row (Seize by place, its
+ * score untouched, SR5 p.160-161); Close Call negates the
  * critical glitch without editing the stored roll (G5, append-only); an NPC
  * pays from its own Edge pool; and a player can only ever spend their own.
  *
@@ -166,8 +167,8 @@ afterAll(async () => {
   await t.close();
 }, 60_000);
 
-describe('Seize the Initiative (FR2.3/FR4.4)', () => {
-  it('puts the actor at the head of the pass and bills one point of Edge', async () => {
+describe('Seize the Initiative (FR2.3/FR4.4, SR5 p.160-161)', () => {
+  it('puts the actor at the top of the order, score untouched, and bills one point of Edge', async () => {
     await resetEdge(3);
     const fight = await stagedFight('Cargo lift');
     const before = await edgeLeft();
@@ -176,17 +177,19 @@ describe('Seize the Initiative (FR2.3/FR4.4)', () => {
       combatantId: fight.pc.id,
     });
     expect(out['action']).toBe('seize_initiative');
-    expect(out['outcome'].from).toBe(11);
-    expect(out['outcome'].to).toBe(25); // ahead of the enforcer's 24
+    // Behind the enforcer's 24 before, at the top after — on the same 11.
+    expect(out['outcome']).toMatchObject({ score: 11, from: 2, to: 1, changed: true });
     expect(out['edge'].current).toBe(before - 1);
     expect(await edgeLeft()).toBe(before - 1);
 
-    // The TRACKER agrees: the seizer is the next to act (FR4.4).
+    // The TRACKER agrees: the seizer is the next to act (FR4.4), and still on
+    // 11, so still one pass this turn — Seize moves the place, not the number.
     const view = await json('GET', `/api/encounters/${fight.id}`, boot.gmToken);
     expect(view['activeCombatantId']).toBe(fight.pc.id);
     expect((view['turnOrder'] as string[])[0]).toBe(fight.pc.id);
-    const rows = view['combatants'] as { id: string; initScore: number }[];
-    expect(rows.find((c) => c.id === fight.pc.id)?.initScore).toBe(25);
+    const rows = view['combatants'] as { id: string; initScore: number; seized?: boolean }[];
+    expect(rows.find((c) => c.id === fight.pc.id)?.initScore).toBe(11);
+    expect(rows.find((c) => c.id === fight.pc.id)?.seized).toBe(true);
 
     const log = await edgeLog(boot.gmToken);
     const line = log[0]!;
@@ -196,14 +199,18 @@ describe('Seize the Initiative (FR2.3/FR4.4)', () => {
     expect(line.extra['edgeAction']).toBe('seize_initiative');
   });
 
-  it('un-marks an actor who already acted this pass', async () => {
+  it('does not hand back an Action Phase already taken this pass', async () => {
     await resetEdge(3);
     const fight = await stagedFight('Stairwell');
     await json('PATCH', `/api/combatants/${fight.pc.id}`, boot.gmToken, { actedThisPass: true });
     const out = await json('POST', '/api/edge/seize-initiative', boot.gmToken, {
       combatantId: fight.pc.id,
     });
-    expect(out['combatant'].actedThisPass).toBe(false);
+    // At the top of the order, but done for this pass: the enforcer is up.
+    expect(out['combatant'].actedThisPass).toBe(true);
+    const view = await json('GET', `/api/encounters/${fight.id}`, boot.gmToken);
+    expect((view['turnOrder'] as string[])[0]).toBe(fight.pc.id);
+    expect(view['activeCombatantId']).toBe(fight.npc.id);
   });
 
   it('refuses when the character is out of Edge', async () => {
@@ -234,11 +241,12 @@ describe('Seize the Initiative (FR2.3/FR4.4)', () => {
     const out = await json('POST', '/api/edge/seize-initiative', boot.gmToken, {
       combatantId: fight.npc.id,
     });
-    expect(out['outcome'].to).toBe(31);
+    expect(out['outcome']).toMatchObject({ score: 24, from: 2, to: 1 });
     expect(out['edge']).toEqual({ max: 2, current: 1 });
-    // The returned row is the one that paid — score moved AND Edge debited.
+    // The returned row is the one that paid — seized AND Edge debited.
     expect(out['combatant'].edge).toEqual({ max: 2, current: 1 });
-    expect(out['combatant'].initScore).toBe(31);
+    expect(out['combatant'].seized).toBe(true);
+    expect(out['combatant'].initScore).toBe(24);
     expect(await edgeLeft()).toBe(3); // the PC's sheet is untouched
   });
 });

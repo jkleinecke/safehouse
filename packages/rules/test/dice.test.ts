@@ -359,32 +359,30 @@ describe('statistical sanity (§17.1, seeded rng)', () => {
 // Edge actions that are not extra dice (FR2.3, FR4.4)
 // ---------------------------------------------------------------------------
 
-describe('Seize the Initiative (FR2.3/FR4.4)', () => {
-  it('lifts the actor strictly above every other score in the pass', () => {
-    const out = seizeInitiative(9, [21, 14, 3]);
-    expect(out.from).toBe(9);
-    expect(out.beat).toBe(21);
-    expect(out.to).toBe(22);
+describe('Seize the Initiative (FR2.3/FR4.4, SR5 p.160-161)', () => {
+  it('moves the actor to the top of the order and leaves the score alone', () => {
+    const roster = [combatant('lead', 21), combatant('mid', 14), combatant('seizer', 9)];
+    const out = seizeInitiative(roster, 'seizer');
+    expect(out.score).toBe(9); // no pass gained: 9 still acts once
+    expect(out.from).toBe(3);
+    expect(out.to).toBe(1);
     expect(out.changed).toBe(true);
-    // …and the tracker's own ordering agrees the seizer now leads.
-    const order = turnOrder([
-      combatant('seizer', out.to),
-      combatant('lead', 21),
-      combatant('mid', 14),
-    ]);
+    // …and the tracker's own ordering agrees, once the row carries the flag.
+    const order = turnOrder(roster.map((c) => (c.id === 'seizer' ? { ...c, seized: true } : c)));
     expect(order.map((c) => c.id)).toEqual(['seizer', 'lead', 'mid']);
   });
 
   it('leaves a leader where they are (Edge still buys the guarantee)', () => {
-    const out = seizeInitiative(30, [21, 14]);
-    expect(out.to).toBe(30);
+    const out = seizeInitiative([combatant('lead', 30), combatant('mid', 21)], 'lead');
+    expect(out.to).toBe(1);
     expect(out.changed).toBe(false);
   });
 
-  it('puts a spent actor back into the pass when nobody else is up', () => {
-    const out = seizeInitiative(0, []);
-    expect(out.to).toBe(1); // turnOrder drops scores <= 0
-    expect(out.beat).toBeNull();
+  it('marks a blank line, which has no place until its score comes in', () => {
+    const out = seizeInitiative([combatant('blank', 0), combatant('mid', 12)], 'blank');
+    expect(out.from).toBeNull();
+    expect(out.to).toBeNull(); // turnOrder drops scores <= 0
+    expect(out.score).toBe(0);
   });
 });
 
