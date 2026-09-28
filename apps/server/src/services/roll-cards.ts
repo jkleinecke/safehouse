@@ -369,7 +369,7 @@ function offerFor(m: SituationalModifier, ctx: OfferContext): BuiltOffer {
   };
   let env: ProvenanceEntry['env'];
   // Engine lines arrive on; tick boxes arrive off.
-  let on = m.auto === 'fullDefense' ? body.fullDefense === true : m.auto !== undefined;
+  let on = m.auto === 'fullDefense' ? body.fullDefense === true : m.auto !== undefined && !m.offByDefault;
 
   if (m.value !== null && typeof m.value === 'object') {
     // Take Aim tops out at half Willpower, rounded up (p.166).

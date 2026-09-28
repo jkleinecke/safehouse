@@ -1114,6 +1114,12 @@ export class EncountersService {
     );
   }
 
+  async setEffects(combatantId: string, effects: StatusEffect[]): Promise<Combatant> {
+    const row = await this.getCombatant(combatantId);
+    const had = parseEffects(row.effects).length;
+    return this.writeEffects(row, effects, effects.length < had ? 'effect.detached' : 'effect.attached');
+  }
+
   private async writeEffects(
     row: CombatantRow,
     effects: StatusEffect[],

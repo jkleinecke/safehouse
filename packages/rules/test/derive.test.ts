@@ -352,6 +352,22 @@ describe('deriveCharacter: scene environment integration (FR9.11)', () => {
     expect(entry?.value).toBe(-3);
     expect(d.pools['soak']?.total).toBe(4); // no armor worn, unaffected by scene
   });
+
+  it('a melee weapon pool reads visibility and light only (p.187)', () => {
+    const sheet = makeSheet({
+      skills: [
+        { id: 'blades', rating: 3, attr: 'agi' },
+        { id: 'automatics', rating: 4, attr: 'agi' },
+      ],
+      weapons: [
+        { name: 'Knife', skillId: 'blades', modes: [], ap: 0 },
+        { name: 'Rifle', skillId: 'automatics', modes: ['SA'], ap: 0 },
+      ],
+    });
+    const d = deriveCharacter(sheet, { situational: environment({ light: 0, visibility: 0, glare: 0, wind: 3 }) });
+    expect(d.pools['weapon.Knife']?.total).toBe(8);
+    expect(d.pools['weapon.Rifle']?.total).toBeLessThan(9);
+  });
 });
 
 describe('deriveCharacter: overrides (Principle 2)', () => {

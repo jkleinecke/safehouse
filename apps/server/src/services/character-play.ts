@@ -10,7 +10,7 @@
  */
 import { z } from 'zod';
 import type { CombatantMonitors, SheetV1 } from '@safehouse/contracts';
-import { applyDamage, computeWoundModifier, healDamage } from '@safehouse/rules';
+import { applyDamage, computeWoundModifier, deriveCharacter, healDamage, recoilPenalty } from '@safehouse/rules';
 import { httpError } from './auth.js';
 import { slug } from './chummer.js';
 import type { PlayState } from './characters.js';
@@ -161,9 +161,10 @@ function findWeapon(sheet: SheetV1, name: string): number {
   return index;
 }
 
-/** Uncompensated recoil as a dice modifier (assistive, GM-editable). */
-export function recoilModifier(comp: number, counter: number): number {
-  return Math.min(0, comp - counter);
+/** Uncompensated recoil (p.175): shared rules, so Strength and the free point count. */
+function recoilModifier(sheet: SheetV1, comp: number, counter: number): number {
+  const str = deriveCharacter(sheet).attributes['str']?.value ?? 0;
+  return recoilPenalty(counter, 0, comp, str);
 }
 
 export interface AmmoChange {
@@ -206,7 +207,7 @@ export function applyAmmoOp(sheet: SheetV1, play: PlayState, body: AmmoInput): A
     ammo,
     recoil,
     recoilComp: comp,
-    modifier: recoilModifier(comp, recoil),
+    modifier: recoilModifier(sheet, comp, recoil),
   };
 }
 
@@ -228,7 +229,7 @@ export function applyRecoilOp(sheet: SheetV1, play: PlayState, body: RecoilInput
     weapon: weapon.name,
     recoil: next,
     recoilComp: comp,
-    modifier: recoilModifier(comp, next),
+    modifier: recoilModifier(sheet, comp, next),
   };
 }
 

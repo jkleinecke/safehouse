@@ -30,7 +30,7 @@ import {
   type RollRequest,
   type SheetWeapon,
 } from '@safehouse/contracts';
-import { bulletsForMode, rangeModifier, recoilLine, resolveRoll } from '@safehouse/rules';
+import { bulletsForMode, isMeleeSkill, rangeModifier, recoilLine, resolveRoll } from '@safehouse/rules';
 import { assertCampaign, httpError, requireAuth, requireRole } from '../services/auth.js';
 import { rng } from '../services/dice.js';
 import {
@@ -125,6 +125,8 @@ const PatchCombatantBody = z.object({
   leader: z.boolean().optional(),
   /** Fix a row's PR mid-fight (FR4.8); mirrors onto the grunt group's own. */
   professionalRating: z.number().int().min(0).max(10).optional(),
+  /** The row's whole effect list (the tracker's remove chip sends it). */
+  effects: z.array(StatusEffectSchema).optional(),
 });
 
 const RollInitiativeBody = z.object({
@@ -214,6 +216,7 @@ const QuickRollBody = QuickRollQuery.extend({
   edge: z.enum(['push_pre', 'push_post', 'second_chance']).nullable().optional(),
   edgeDice: z.number().int().min(0).optional(),
   extra: z.array(ProvenanceEntrySchema).optional(),
+  visibility: VisibilitySchema.optional(),
 });
 
 const ChainBody = z.object({
@@ -370,7 +373,10 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
   app.patch('/api/combatants/:id', async (req) => {
     const { id } = req.params as { id: string };
     await combatantScope(req, id);
-    return { combatant: await service.updateCombatant(id, parse(PatchCombatantBody, req.body)) };
+    const { effects, ...patch } = parse(PatchCombatantBody, req.body);
+    let combatant = Object.keys(patch).length > 0 || !effects ? await service.updateCombatant(id, patch) : null;
+    if (effects) combatant = await service.setEffects(id, effects);
+    return { combatant };
   });
 
   app.delete('/api/combatants/:id', async (req) => {
@@ -612,7 +618,9 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
       0,
       breakdown.reduce((sum, e) => sum + e.value, 0),
     );
-    const visibility = combatant.visibility === 'public' ? 'public' : 'gm';
+    // The GM's public/behind-screen pick wins; unset, only a visible runner rolls in the open.
+    const visibility =
+      body.visibility ?? (combatant.source === 'character' && combatant.visibility === 'public' ? 'public' : 'gm');
     const request: RollRequest = RollRequestSchema.parse({
       kind: 'simple',
       pool,
@@ -675,8 +683,13 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
       body.distanceM !== undefined && weapon.rangeCat
         ? rangeModifier(body.distanceM, weapon.rangeCat, attackerSheet.rangeTables)
         : null;
+    // Melee: visibility and light only, no smartlink (p.187).
+    const melee = isMeleeSkill(weapon.skillId);
+    const attackerComp = environmentCompensation(attackerSheet);
     const attackModifiers: ProvenanceEntry[] = [
-      ...sceneEntries(sceneMods, environmentCompensation(attackerSheet).shot, range),
+      ...(melee
+        ? sceneEntries(sceneMods, attackerComp.sight, null, ['visibility', 'light'])
+        : sceneEntries(sceneMods, attackerComp.shot, range)),
       ...(body.attackModifiers ?? []),
     ];
     const attackerActor = chainActor(attackerSheet, attacker.monitors, {

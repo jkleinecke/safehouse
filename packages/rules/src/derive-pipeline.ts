@@ -1,4 +1,5 @@
 import type { Modifier, ModifierSourceKind, ProvenanceEntry } from '@safehouse/contracts';
+import type { EnvColumn } from './combat/situational.js';
 import { envRowsOf, foldEnvironment, type EnvironmentCompensation } from './env.js';
 import { lineRef } from './refs.js';
 
@@ -56,6 +57,8 @@ export interface PipelineOptions {
    * scene's line (and a shot's range band) are read as one lookup.
    */
   environment?: EnvironmentCompensation;
+  /** Only these p.175 columns count (melee: visibility and light, p.187). */
+  envColumns?: readonly EnvColumn[];
 }
 
 /**
@@ -186,7 +189,10 @@ export function applyPipeline(
         // The scene and the range band: one lookup, one line (see above).
         if (envFolded) continue;
         envFolded = true;
-        const line = foldEnvironment(envMods, { compensation: opts?.environment ?? {} });
+        const line = foldEnvironment(envMods, {
+          compensation: opts?.environment ?? {},
+          ...(opts?.envColumns ? { columns: opts.envColumns } : {}),
+        });
         if (!line) continue;
         value += line.value;
         if (augmentation && line.value < 0) penalties += line.value;

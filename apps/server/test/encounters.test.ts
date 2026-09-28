@@ -339,6 +339,11 @@ describe('damage, undo and status effects (FR4.5 / FR4.7)', () => {
     expect(attached['combatant'].effects).toHaveLength(1);
     const detached = await gmJson('DELETE', `/api/combatants/${c.id}/effects/prone`);
     expect(detached['combatant'].effects).toHaveLength(0);
+
+    // The tracker's remove chip PATCHes the whole list.
+    await gmJson('POST', `/api/combatants/${c.id}/effects`, { id: 'stunned', name: 'Stunned', mods: [], duration: { kind: 'manual' } });
+    const patched = await gmJson('PATCH', `/api/combatants/${c.id}`, { effects: [] });
+    expect(patched['combatant'].effects).toHaveLength(0);
   });
 });
 

@@ -9,6 +9,7 @@ import type {
 } from '@safehouse/contracts';
 import { metatypeRow } from './chargen/metatypes.js';
 import { applyPipeline, baseEntry } from './derive-pipeline.js';
+import { isMeleeSkill } from './combat/actions.js';
 import { eyesOnly, type EnvironmentCompensation } from './env.js';
 import { lineRef } from './refs.js';
 
@@ -123,7 +124,7 @@ export function deriveArmor(sheet: SheetV1, mods: readonly Modifier[]): PoolBrea
  * bare `pool.skill.<id>`.
  *
  * `envComp` is what the character brings against the environment table (SR5
- * p.175). A weapon pool gets all of it — a smartlink reads the wind for the
+ * p.175). A ranged weapon pool gets all of it — a smartlink reads the wind for the
  * gun — and every other pool only the eyes (`eyesOnly`), so a smartlink never
  * steadies a Perception Test.
  */
@@ -137,6 +138,8 @@ export function buildPools(
   const pools: Record<string, PoolBreakdown> = {};
   const sight = { floorZero: true, environment: eyesOnly(envComp) };
   const shot = { floorZero: true, environment: envComp };
+  // Melee reads visibility and light only, and a smartlink does nothing (p.187).
+  const melee = { ...sight, envColumns: ['visibility', 'light'] as const };
 
   const armor = deriveArmor(sheet, mods);
   pools['armor'] = armor;
@@ -195,7 +198,7 @@ export function buildPools(
       entries,
       [`pool.weapon.${weapon.name}`, `pool.skill.${weapon.skillId}`, 'pool.all'],
       mods,
-      shot,
+      isMeleeSkill(weapon.skillId) ? melee : shot,
     );
     pools[`weapon.${weapon.name}`] = {
       total: res.value,

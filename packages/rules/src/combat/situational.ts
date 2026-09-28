@@ -117,6 +117,8 @@ export interface SituationalModifier {
   columns?: readonly EnvColumn[];
   /** Ticking it means there is no defense test at all: the attack becomes a Success Test (p.189). */
   noDefense?: true;
+  /** Engine-filled but arrives unticked: the GM decides. */
+  offByDefault?: true;
 }
 
 // ---------------------------------------------------------------------------
@@ -196,6 +198,18 @@ export const SITUATIONAL_MODIFIERS: readonly SituationalModifier[] = [
     columns: ['visibility', 'light'],
     ref: MELEE_TABLE,
     refs: [lineRef('environment'), lineRef('perception'), lineRef('spellcasting')],
+  },
+  {
+    // p.173: defense takes "appropriate environmental modifiers"; the GM decides which.
+    id: 'environment_defense',
+    label: 'Environment (defender)',
+    applies: ['defense'],
+    value: null,
+    auto: 'environment',
+    columns: ['visibility', 'light'],
+    offByDefault: true,
+    ref: lineRef('environment'),
+    refs: [sr5Page(173, 'Environmental Modifiers')],
   },
 
   // --- ranged attack: Situational Modifiers table (p.176) -----------------

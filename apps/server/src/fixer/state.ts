@@ -13,7 +13,7 @@
  */
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { DerivedCharacter, SceneEnvironment, SheetV1 } from '@safehouse/contracts';
-import { deriveCharacter } from '@safehouse/rules';
+import { deriveCharacter, nextActor, turnOrder } from '@safehouse/rules';
 import {
   characters,
   combatants,
@@ -30,6 +30,8 @@ import {
 } from '@safehouse/db';
 import { concealer, serializeScene, serializeToken } from '../services/scenes.js';
 import { httpError } from '../services/auth.js';
+import { ericForRows } from '../services/encounters.js';
+import { orderOptionsOf, serializeCombatant } from '../services/encounters-model.js';
 import {
   NO_WOUNDS,
   activeSceneRow,
@@ -231,6 +233,8 @@ export interface EncounterCombatantState {
   initBase: number;
   initKind: string;
   actedThisPass: boolean;
+  /** Holding a Delayed Action (p.161). */
+  delayed?: true;
   visibility: string;
   monitors: { physical: { max: number; filled: number }; stun: { max: number; filled: number } } | null;
   /** Filled physical + stun boxes — the "hurt worst" sort key. */
@@ -246,8 +250,9 @@ export interface EncounterState {
   turn: number;
   pass: number;
   sceneId: string | null;
-  /** Highest initiative score that has not acted this pass. */
+  /** The stored turn order's next actor (seize, manual places, delays). */
   upNext: { id: string; name: string; initScore: number } | null;
+  /** Acting order first; rows with score 0 or less (no phase this pass) after. */
   order: EncounterCombatantState[];
   down: string[];
 }
@@ -272,28 +277,39 @@ export async function getEncounterState(
     throw httpError(404, 'not_found', 'no encounter to read');
   }
   const rows = await db.select().from(combatants).where(eq(combatants.encounterId, row.id));
-  const order: EncounterCombatantState[] = rows
-    .map((c) => {
-      const monitors = monitorsOf(c.monitors);
-      const physical = monitors?.physical ?? { max: 0, filled: 0 };
-      const stun = monitors?.stun ?? { max: 0, filled: 0 };
-      return {
-        id: c.id,
-        name: c.name,
-        source: c.source,
-        initScore: c.initScore,
-        initBase: c.initBase,
-        initKind: c.initKind,
-        actedThisPass: c.actedThisPass,
-        visibility: c.visibility,
-        monitors: monitors ? { physical, stun } : null,
-        damageTaken: physical.filled + stun.filled,
-        conditions: effectNames(c.effects),
-        hidden: c.visibility !== 'public',
-      };
-    })
-    .sort((a, b) => b.initScore - a.initScore || a.name.localeCompare(b.name));
-  const upNextRow = order.find((c) => !c.actedThisPass);
+  const list = rows.map(serializeCombatant);
+  const opts = orderOptionsOf(row, await ericForRows(db, list));
+  const ranked = turnOrder(list, opts);
+  const rankedIds = new Set(ranked.map((c) => c.id));
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const sorted = [
+    ...ranked,
+    ...list
+      .filter((c) => !rankedIds.has(c.id))
+      .sort((a, b) => b.initScore - a.initScore || a.name.localeCompare(b.name)),
+  ];
+  const order: EncounterCombatantState[] = sorted.map((s) => {
+    const c = byId.get(s.id)!;
+    const monitors = monitorsOf(c.monitors);
+    const physical = monitors?.physical ?? { max: 0, filled: 0 };
+    const stun = monitors?.stun ?? { max: 0, filled: 0 };
+    return {
+      id: c.id,
+      name: c.name,
+      source: c.source,
+      initScore: c.initScore,
+      initBase: c.initBase,
+      initKind: c.initKind,
+      actedThisPass: c.actedThisPass,
+      ...(s.delayed ? { delayed: true as const } : {}),
+      visibility: c.visibility,
+      monitors: monitors ? { physical, stun } : null,
+      damageTaken: physical.filled + stun.filled,
+      conditions: effectNames(c.effects),
+      hidden: c.visibility !== 'public',
+    };
+  });
+  const upNextRow = nextActor(list, opts);
   return {
     id: row.id,
     name: row.name,

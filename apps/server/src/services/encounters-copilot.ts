@@ -28,6 +28,7 @@ import {
   recoilLine,
   resolveAttackChain,
   type AttackChainOptions,
+  type EnvColumn,
   type EnvironmentCompensation,
   type AttackChainResult,
   type CombatActor,
@@ -76,8 +77,9 @@ export function sceneEntries(
   mods: readonly Modifier[],
   compensation: EnvironmentCompensation,
   range?: Modifier | null,
+  columns?: readonly EnvColumn[],
 ): ProvenanceEntry[] {
-  const env = foldEnvironment([...mods, ...(range ? [range] : [])], { compensation });
+  const env = foldEnvironment([...mods, ...(range ? [range] : [])], { compensation, ...(columns ? { columns } : {}) });
   const rest = environmentEntries(mods.filter((m) => envRowsOf(m) === undefined));
   return [...(env ? [env] : []), ...rest];
 }

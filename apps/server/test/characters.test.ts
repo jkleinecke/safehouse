@@ -334,7 +334,7 @@ describe('live-play widgets (FR3.4)', () => {
       ammo: { cap: 30, current: 27 },
       recoil: 3,
       recoilComp: 2,
-      modifier: -1,
+      modifier: 0, // 1 free + ceil(STR 4 / 3) + gun 2 = 5 (p.175)
     });
 
     const more = await t.app.inject({
@@ -343,7 +343,7 @@ describe('live-play widgets (FR3.4)', () => {
       headers: auth(player.token),
       payload: { weapon: 'Kestrel A4', op: 'add', amount: 3 },
     });
-    expect(more.json()).toMatchObject({ recoil: 6, modifier: -4 });
+    expect(more.json()).toMatchObject({ recoil: 6, modifier: -1 });
 
     const reloaded = await t.app.inject({
       method: 'POST',

@@ -114,6 +114,23 @@ describe('roll cards', () => {
     expect(offer(card, 'full_defense')).toBeUndefined();
   });
 
+  it('offers the defender the environment unticked (p.173: the GM decides)', () => {
+    const card = buildCard({ body: runner, req: { actor: runner.actor, actionId: 'defense' }, gm: true, scene, exchange: burst });
+    expect(offer(card, 'environment_defense')).toMatchObject({ value: -1, on: false });
+    const on = buildCard({
+      body: runner,
+      req: {
+        actor: runner.actor,
+        actionId: 'defense',
+        offersOn: [...card.offers.filter((o) => o.on).map((o) => o.id), 'environment_defense'],
+      },
+      gm: true,
+      scene,
+      exchange: burst,
+    });
+    expect(on.pool!.total).toBe(card.pool!.total - 1);
+  });
+
   it('lists every action, grouped, and orders the defenses without dropping any', () => {
     const list = listActions(runner, { gm: true, scene, against: 'ranged' });
     const ids = list.groups.flatMap((g) => g.actions.map((a) => a.id));
