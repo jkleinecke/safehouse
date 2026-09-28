@@ -272,6 +272,7 @@ export function normalizeCombatant(raw: unknown, encounterId: string): Combatant
     // (SR5 p.160-161): the server lifts both onto the row, both frames carry them.
     ...(o['delayed'] === true ? { delayed: true } : {}),
     ...(o['seized'] === true ? { seized: true } : {}),
+    ...(o['tokenRemoved'] === true ? { tokenRemoved: true } : {}),
     ...(edgeMax !== undefined && edgeCurrent !== undefined
       ? { edge: { max: edgeMax, current: edgeCurrent } }
       : {}),

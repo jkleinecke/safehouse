@@ -6,9 +6,9 @@
  * nothing else required — and throws a fight away. Everything the server
  * could already do and the browser could not reach.
  *
- * A fight is made here in two ways: a new empty one to fill by hand, or the
- * the Generator's parts —
- * those two live on their own screens and are linked from the empty state.
+ * A fight is made here as a new empty one to fill by hand. The map's tokens
+ * (the Play rail's "Start from the map") and the Generator's parts are the
+ * other two ways in.
  */
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -111,7 +111,7 @@ export default function FightMenu({ campaignId, encounter, onPick, onClose }: Fi
           </button>
         </div>
         <p className="text-xs text-faint">
-          Or roll the opposition in the Generator and save it there.
+          Or start one from the map’s tokens in the Play rail, or roll the opposition in the Generator.
         </p>
       </section>
 

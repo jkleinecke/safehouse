@@ -66,6 +66,7 @@ import ContextMenu from './hud/ContextMenu.js';
 import LookEditor from './gm/LookEditor.js';
 import { contextMenuItems, type ContextMenuActions, type ContextMenuInput } from './hud/contextMenuItems.js';
 import MeasurePanel from './hud/MeasurePanel.js';
+import OrderChip from './hud/OrderChip.js';
 import PlayRail from './hud/PlayRail.js';
 import { availableModes, clampMode } from './hud/eyes.js';
 import ModeBar from './hud/ModeBar.js';
@@ -1467,6 +1468,10 @@ export default function GridPage() {
                 tracker · log
               </button>
             )}
+            {/* Phones have no rail: the order rides on the map as a chip. */}
+            {campaignId && scene && (isGm ? store.mode === 'play' : true) && (
+              <OrderChip campaignId={campaignId} sceneId={scene.id} sceneName={scene.name} tokens={tokens} />
+            )}
             {doorNotice && (
               <span data-testid="door-notice" className="chip bg-panel/90 text-warn">
                 {doorNotice}
@@ -1575,7 +1580,13 @@ export default function GridPage() {
         panel keeps Build and Prep; a fight is run from here.
       */}
       {campaignId && scene && store.playRailOpen && (isGm ? store.mode === 'play' : true) && (
-        <PlayRail campaignId={campaignId} sceneId={scene.id} onCollapse={store.togglePlayRail} />
+        <PlayRail
+          campaignId={campaignId}
+          sceneId={scene.id}
+          sceneName={scene.name}
+          tokens={tokens}
+          onCollapse={store.togglePlayRail}
+        />
       )}
 
       {isGm && store.gmPanelOpen && scene && campaignId && (

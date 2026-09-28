@@ -23,7 +23,7 @@
 import type { Combatant, Encounter, Token, WsEvent } from '@safehouse/contracts';
 import { coarseBars } from '../grid/tvStage.js';
 import type { TokenBars } from '../grid/types.js';
-import { conditionBand, type ConditionBand } from '../table/initiative.js';
+import { conditionBand, inServerOrder, type ConditionBand } from '../table/initiative.js';
 import { rec } from '../table/views.js';
 
 const str = (v: unknown): string | undefined =>
@@ -67,6 +67,10 @@ export interface TvEncounter {
    * p.159-161). Absent when the source did not carry one.
    */
   turnOrder?: string[];
+  /** A row the table may not see is acting: nobody on the ribbon glows. */
+  gmTurn?: boolean;
+  /** Initiative is being gathered: nobody acts yet. */
+  gathering?: boolean;
 }
 
 /** Server-side coarse condition (`encounters-model.ts conditionOf`). */
@@ -145,6 +149,8 @@ export function normalizeTvEncounter(input: unknown): TvEncounter | null {
   // Like the roster, the order rides beside the encounter object in the
   // server's views and frames, and inside it on the GM-grade `Encounter`.
   const turnOrder = idList(raw['turnOrder']) ?? idList(body['turnOrder']);
+  const gmTurn = raw['gmTurn'] === true || body['gmTurn'] === true;
+  const gathering = raw['gathering'] === true || body['gathering'] === true;
 
   return {
     id,
@@ -155,6 +161,8 @@ export function normalizeTvEncounter(input: unknown): TvEncounter | null {
     activeCombatantId: combatants.some((c) => c.id === active) ? active : null,
     combatants,
     ...(turnOrder ? { turnOrder } : {}),
+    ...(gmTurn ? { gmTurn } : {}),
+    ...(gathering ? { gathering } : {}),
   };
 }
 
@@ -241,14 +249,9 @@ function compareOrder(a: TvCombatantRow, b: TvCombatantRow): number {
 }
 
 /**
- * Public combatants in acting order; the acting one is flagged for the glow.
- *
- * The order is the server's (`turnOrder`) whenever it names every live row:
- * a Seize the Initiative moves the seizer's PLACE to the top and leaves the
- * score alone (SR5 p.160-161), and the GM's manual places move no score
- * either, so a sort by score would put them back where the dice left them.
- * Without a usable order (an older server, a frame from before a late
- * joiner) the ribbon falls back to the score.
+ * Public combatants in the server's acting order (`turnOrder`: manual places,
+ * seizes, ERIC ties; SR5 p.159-161); the acting one is flagged for the glow.
+ * A row the order does not name is slotted in by score (`inServerOrder`).
  */
 export function tvRibbonRows(
   encounter: TvEncounter | null,
@@ -258,14 +261,10 @@ export function tvRibbonRows(
   if (all.length === 0) return [];
   const live = all.filter((c) => c.initScore > 0);
   const pool = live.length > 0 ? live : all;
-  const order = encounter?.turnOrder ?? [];
-  const places = new Map(order.map((id, i) => [id, i] as const));
-  const byServer = live.length > 0 && live.every((c) => places.has(c.id));
-  const sorted = [...pool].sort(
-    byServer ? (a, b) => (places.get(a.id) ?? 0) - (places.get(b.id) ?? 0) : compareOrder,
-  );
+  const sorted = inServerOrder(pool, live.length > 0 ? encounter?.turnOrder : undefined, compareOrder);
+  const idle = encounter?.gmTurn === true || encounter?.gathering === true;
   const actingId =
-    encounter?.activeCombatantId ?? sorted.find((c) => !c.actedThisPass)?.id ?? null;
+    encounter?.activeCombatantId ?? (idle ? null : sorted.find((c) => !c.actedThisPass)?.id) ?? null;
   return sorted.slice(0, Math.max(0, cap)).map((c, i) => ({
     id: c.id,
     name: c.name,

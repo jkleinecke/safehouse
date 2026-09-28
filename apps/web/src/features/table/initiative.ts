@@ -18,10 +18,12 @@ import {
   computeWoundModifier,
   gruntMoraleTriggers,
   moraleReport,
-  nextActor,
   type MoraleReport,
 } from '@safehouse/rules';
 import { OWNED_BY_VIEWER } from '../../live/merge.js';
+
+const rec = (v: unknown): Record<string, unknown> =>
+  typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : {};
 
 export interface Viewer {
   role: Role;
@@ -98,6 +100,9 @@ export const CONDITION_LABEL: Record<ConditionBand, string> = {
 // Row order (FR4.3: descending score, current pass, who's still coming)
 // ---------------------------------------------------------------------------
 
+/** Where a row stands on the order strip this pass. */
+export type RowState = 'acting' | 'next' | 'waiting' | 'delayed' | 'acted' | 'out' | 'blank';
+
 export interface TrackerRow {
   combatant: Combatant;
   /** 1-based place in the acting order; null once the score is spent. */
@@ -111,6 +116,11 @@ export interface TrackerRow {
   own: boolean;
   /** False while the line is blank this turn — the dice have not come in yet. */
   rolled: boolean;
+  state: RowState;
+  /** Action Phases still to take this turn, this pass's included (p.159). */
+  passesLeft: number;
+  /** Blank because it joined mid-turn: its roll takes 10 per pass gone (p.160). */
+  late: boolean;
 }
 
 /** Which stretch of the fight the tracker is in. */
@@ -120,14 +130,26 @@ export function fightPhase(encounter: Encounter | null | undefined): FightPhase 
   return encounter ? encounter.state : 'none';
 }
 
+const turnOf = (v: unknown): number | undefined => {
+  const t = rec(v)['turn'];
+  return typeof t === 'number' ? t : undefined;
+};
+
+/** Blank this turn because it joined late and has no score yet (the server's `copilot.lateEntry`). */
+function isLateBlank(encounter: Encounter, c: Combatant): boolean {
+  return c.initScore === 0 && turnOf(c.copilot?.['lateEntry']) === encounter.turn;
+}
+
 /**
  * Has this row's initiative come in this turn? A score of 0 in the first
  * pass is a blank line, not a runner with no initiative — the tracker shows
  * "—" and offers the dice rather than ranking a zero. Later in the turn a 0
- * is a spent score, which is a different thing and is drawn as one.
+ * is a spent score, unless the row joined late and is still waiting on its roll.
  */
 export function isRolled(encounter: Encounter | null | undefined, c: Combatant): boolean {
   if (!encounter) return false;
+  if (turnOf(c.copilot?.['initEntry']) === encounter.turn) return true;
+  if (isLateBlank(encounter, c)) return false;
   return c.initScore !== 0 || (encounter.pass ?? 0) > 1 || c.actedThisPass;
 }
 
@@ -138,7 +160,7 @@ export function scoreFromRolled(c: Combatant, rolled: number): number {
 
 /**
  * Seizers first (SR5 p.160-161), then score desc, then initiative base desc,
- * then id — the fallback when the server's order is not on hand.
+ * then id — only for rows the server's order does not name.
  */
 function compareOrder(a: Combatant, b: Combatant): number {
   return (
@@ -150,21 +172,44 @@ function compareOrder(a: Combatant, b: Combatant): number {
 }
 
 /**
- * The server's acting order (`Encounter.turnOrder`) as places, when it names
- * every live row on screen; null otherwise.
- *
- * The server is the one that knows the order: the GM's manual places, Seize
- * the Initiative and ERIC ties (SR5 p.159-161). A seize moves the PLACE and
- * leaves the score alone, so a tracker sorting by score would keep a seizer
- * where the dice put them while the server calls them first. An order that
- * misses a live row (an older server, a frame from before a late joiner) is
- * not trusted, and the score order stands.
+ * `rows` in the server's order (`Encounter.turnOrder`). A row it does not name
+ * (a frame from before a late joiner) goes straight after the last named row
+ * `compare` puts ahead of it, the way the server slots one into a manual order.
  */
-function serverPlaces(encounter: Encounter | null | undefined, live: readonly Combatant[]): Map<string, number> | null {
-  const order = encounter?.turnOrder;
-  if (!order || order.length === 0) return null;
-  const places = new Map(order.map((id, i) => [id, i] as const));
-  return live.every((c) => places.has(c.id)) ? places : null;
+export function inServerOrder<T extends { id: string }>(
+  rows: readonly T[],
+  order: readonly string[] | undefined,
+  compare: (a: T, b: T) => number,
+): T[] {
+  const book = [...rows].sort(compare);
+  if (!order || order.length === 0) return book;
+  const byId = new Map(book.map((r) => [r.id, r] as const));
+  const out: T[] = [];
+  const placed = new Set<string>();
+  for (const id of order) {
+    const r = byId.get(id);
+    if (!r || placed.has(id)) continue;
+    out.push(r);
+    placed.add(id);
+  }
+  for (const r of book) {
+    if (placed.has(r.id)) continue;
+    let at = 0;
+    for (let i = out.length - 1; i >= 0; i -= 1) {
+      if (compare(out[i]!, r) < 0) {
+        at = i + 1;
+        break;
+      }
+    }
+    out.splice(at, 0, r);
+    placed.add(r.id);
+  }
+  return out;
+}
+
+/** The GM has arranged this turn's order by hand (a player's copy says so with `[]`). */
+export function isManualOrder(encounter: Encounter | null | undefined): boolean {
+  return Array.isArray(encounter?.manualOrder);
 }
 
 /**
@@ -174,24 +219,37 @@ function serverPlaces(encounter: Encounter | null | undefined, live: readonly Co
  */
 export function trackerRows(encounter: Encounter | null | undefined, viewer: Viewer): TrackerRow[] {
   const all = visibleCombatants(encounter?.combatants ?? [], viewer);
-  const places = serverPlaces(
-    encounter,
+  const ranked = inServerOrder(
     all.filter((c) => c.initScore > 0),
+    encounter?.turnOrder,
+    compareOrder,
   );
-  const sorted = [...all].sort(
-    (a, b) =>
-      Number(a.initScore <= 0) - Number(b.initScore <= 0) ||
-      (places && a.initScore > 0 && b.initScore > 0
-        ? (places.get(a.id) ?? 0) - (places.get(b.id) ?? 0)
-        : compareOrder(a, b)),
-  );
-  // Nobody acts while initiative is gathered; "Next" then starts the turn.
-  const actingId = encounter?.activeCombatantId ?? (encounter?.gathering ? null : nextActor(all)?.id) ?? null;
+  const sorted = [...ranked, ...all.filter((c) => c.initScore <= 0).sort(compareOrder)];
+  // Nobody acts while initiative is gathered, nor (for this viewer) while a hidden row does.
+  const running = encounter?.state === 'live' && !encounter.gathering && !encounter.gmTurn;
+  const due = (c: Combatant) => !c.actedThisPass && c.delayed !== true;
+  const actingId = encounter?.activeCombatantId ?? (running ? ranked.find(due)?.id : null) ?? null;
+  const nextId = running || actingId ? (ranked.find((c) => c.id !== actingId && due(c))?.id ?? null) : null;
 
   let order = 0;
   return sorted.map((c) => {
     const active = c.initScore > 0;
     if (active) order += 1;
+    const rolled = isRolled(encounter, c);
+    const state: RowState =
+      c.id === actingId
+        ? 'acting'
+        : !rolled
+          ? 'blank'
+          : !active
+            ? 'out'
+            : c.actedThisPass
+              ? 'acted'
+              : c.delayed
+                ? 'delayed'
+                : c.id === nextId
+                  ? 'next'
+                  : 'waiting';
     return {
       combatant: c,
       order: active ? order : null,
@@ -201,9 +259,21 @@ export function trackerRows(encounter: Encounter | null | undefined, viewer: Vie
       woundModifier: computeWoundModifier(c.monitors),
       detail: monitorDetailFor(c, viewer),
       own: isOwnCombatant(c, viewer),
-      rolled: isRolled(encounter, c),
+      rolled,
+      state,
+      passesLeft: active ? Math.ceil(c.initScore / 10) - (c.actedThisPass ? 1 : 0) : 0,
+      late: encounter ? isLateBlank(encounter, c) : false,
     };
   });
+}
+
+/** The index a ▲ or ▼ sends to `POST /order` `move`; null at either end or off the order. */
+export function stepIndex(rows: readonly TrackerRow[], combatantId: string, dir: -1 | 1): number | null {
+  const ranked = rows.filter((r) => r.order !== null);
+  const at = ranked.findIndex((r) => r.combatant.id === combatantId);
+  if (at < 0) return null;
+  const to = at + dir;
+  return to < 0 || to >= ranked.length ? null : to;
 }
 
 /** "TURN 2 · PASS 1" — the always-visible turn structure readout (FR4.3). */
@@ -247,9 +317,6 @@ export interface MoralePrompt {
 }
 
 export const MORALE_PROMPT_CAP = 3;
-
-const rec = (v: unknown): Record<string, unknown> =>
-  typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : {};
 
 /**
  * Derive morale prompts from live grunt-group state. `copilot.leaderDown`

@@ -5,7 +5,7 @@
  */
 import { useEffect, useMemo, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Combatant, Encounter, RollTable, WsCommandInput } from '@safehouse/contracts';
+import type { Combatant, Encounter, InitiativeCall, InitiativeRecipe, RollTable, WsCommandInput } from '@safehouse/contracts';
 import { apiDelete, apiGet, apiPatch, apiPost } from '../../api/client.js';
 import { fetchEncounter, fetchEncounterList, fetchLiveEncounter, fetchRollTables, liveKeys } from '../../api/live.js';
 import { pickEncounterId } from '../grid/hydration.js';
@@ -55,12 +55,6 @@ export function postEndPass(encounterId: string): Promise<unknown> {
   return apiPost(`/api/encounters/${encounterId}/end-pass`);
 }
 
-/** Start a new combat turn — re-rolls initiative for everyone (FR4.3). */
-/** New combat turn (FR4.3); `roll: false` opens it with blank scores for hand rolls (FR4.2). */
-export function postNewTurn(encounterId: string, roll = true): Promise<unknown> {
-  return apiPost(`/api/encounters/${encounterId}/new-turn`, { roll });
-}
-
 /** Roll initiative for everyone, or for the rows named (a player: only their own). */
 export function postRollInitiative(encounterId: string, combatantIds?: string[]): Promise<unknown> {
   return apiPost(`/api/encounters/${encounterId}/roll-initiative`, combatantIds ? { combatantIds } : {});
@@ -79,9 +73,68 @@ export function postSetInitiative(
 
 export function patchEncounter(
   encounterId: string,
-  patch: { name?: string; state?: 'prep' | 'live' | 'done'; sceneId?: string | null },
+  patch: { name?: string; state?: 'prep' | 'live' | 'done'; sceneId?: string | null; handRolls?: boolean },
 ): Promise<unknown> {
   return apiPatch(`/api/encounters/${encounterId}`, patch);
+}
+
+/**
+ * "Next ▸" over REST, so the button can wait for the answer. `expectedActorId`
+ * is who this screen shows acting: a second press after the order moved on is refused.
+ */
+export function postAdvance(encounterId: string, expectedActorId: string | null): Promise<unknown> {
+  return apiPost(`/api/encounters/${encounterId}/advance`, { expectedActorId });
+}
+
+/** The GM's levers on the order: a place, never a score (SR5 p.159-161). */
+export type OrderMove = { move: { combatantId: string; toIndex: number } } | { actNow: string } | { sort: 'score' };
+
+export function postOrder(encounterId: string, body: OrderMove): Promise<unknown> {
+  return apiPost(`/api/encounters/${encounterId}/order`, body);
+}
+
+/** Hold a Delayed Action, or stop holding it (p.161). */
+export function postDelay(combatantId: string, delayed: boolean): Promise<unknown> {
+  return apiPost(`/api/combatants/${combatantId}/delay`, { delayed });
+}
+
+/** Drop one status effect (FR4.7). */
+export function deleteEffect(combatantId: string, effectId: string): Promise<unknown> {
+  return apiDelete(`/api/combatants/${combatantId}/effects/${effectId}`);
+}
+
+// ---------------------------------------------------------------------------
+// Guided initiative: call, recipes, entries, NPCs, start
+// ---------------------------------------------------------------------------
+
+/** Call for initiative: turn 1 for a fight not yet live, else the next Combat Turn. */
+export function postCallInitiative(encounterId: string): Promise<InitiativeCall> {
+  return apiPost<InitiativeCall>(`/api/encounters/${encounterId}/initiative/call`);
+}
+
+/** The recipes: every row for the GM, a player's own runner only. */
+export function fetchInitiativeCall(encounterId: string): Promise<InitiativeCall> {
+  return apiGet<InitiativeCall>(`/api/encounters/${encounterId}/initiative`);
+}
+
+/** One row's score: app dice, the table's dice total, or a final score. */
+export type InitiativeInput = { app: true } | { rolled: number } | { score: number };
+
+export function postEnterInitiative(
+  combatantId: string,
+  input: InitiativeInput,
+): Promise<{ recipe: InitiativeRecipe }> {
+  return apiPost<{ recipe: InitiativeRecipe }>(`/api/combatants/${combatantId}/initiative/enter`, input);
+}
+
+/** App dice for every NPC row still blank. */
+export function postRollNpcs(encounterId: string): Promise<InitiativeCall> {
+  return apiPost<InitiativeCall>(`/api/encounters/${encounterId}/initiative/roll-npcs`);
+}
+
+/** Start the turn with whatever is in; blank rows join late (p.160). */
+export function postStartTurn(encounterId: string): Promise<unknown> {
+  return apiPost(`/api/encounters/${encounterId}/initiative/start`);
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +278,8 @@ export interface TrackerEncounter {
   encounter: Encounter | null;
   /** False only while the first REST read is still in flight. */
   asked: boolean;
+  /** The REST read itself has answered (the socket alone does not count). */
+  fetched: boolean;
   failed: boolean;
 }
 
@@ -278,6 +333,8 @@ export function useTrackerEncounter(
     // A picked fight (or the scene's) is the one on screen whatever the socket is announcing.
     const target = pickedId ?? (sceneId ? (rest?.id ?? null) : null);
     if (target && live && live.id !== target) return rest;
+    // A scene with no fight yet shows none, not another scene's prep fight off the socket.
+    if (sceneId && !pickedId && !rest && live && live.sceneId !== sceneId && live.state !== 'live') return null;
     if (!live) return rest;
     if (live.combatants && live.combatants.length > 0) return live;
     if (rest && rest.id === live.id) {
@@ -289,6 +346,7 @@ export function useTrackerEncounter(
   return {
     encounter,
     asked: query.isFetched || live !== null,
+    fetched: query.isFetched,
     failed: query.isError,
   };
 }

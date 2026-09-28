@@ -1,6 +1,6 @@
 /**
  * The tracker's on-ramps (FR4.2, FR4.3, FR4.8): a fight that has not started
- * offers "Start the fight" and nothing that presumes it has; a running fight
+ * offers "Roll initiative" and nothing that presumes it has; a running fight
  * offers the turn controls, a roll, and an end; the dice line is on every
  * row; a blank line shows "—" and not a ranked zero; and a runner gets the
  * dice on their own row and nobody else's.
@@ -87,14 +87,14 @@ const LIVE: Encounter = {
 };
 
 describe('a fight that has not started', () => {
-  it('offers the GM "Start the fight" and the hand-rolls switch, and nothing that presumes it is running', () => {
+  it('offers the GM "Roll initiative" and the hand-rolls switch, and nothing that presumes it is running', () => {
     const html = render('gm', PREP);
-    expect(html).toContain('Start the fight');
+    expect(html).toContain('Roll initiative');
     expect(html).toContain('hand rolls off');
     expect(html).toContain('NOT STARTED');
     expect(html).not.toContain('New turn');
     expect(html).not.toContain('End pass');
-    expect(html).not.toContain('Roll initiative');
+    expect(html).not.toContain('Next ▸');
   });
 
   it('shows every line’s dice and a blank score, never a ranked zero', () => {
@@ -115,7 +115,7 @@ describe('a fight that has not started', () => {
     const html = render('player', PREP);
     expect(html).not.toContain('manage ▾');
     expect(html).not.toContain('Remove Static from the fight');
-    expect(html).not.toContain('Start the fight');
+    expect(html).not.toContain('Roll initiative');
     expect(html).not.toContain('hand rolls');
     expect(html).not.toContain('Dice total for');
   });
@@ -145,6 +145,8 @@ describe('a running fight', () => {
     expect((html.match(/>ROLL</g) ?? []).length).toBe(1);
     // …and never the GM's score override.
     expect(html).not.toContain('Initiative score for');
+    // Damage is the GM's to apply.
+    expect(html).not.toContain('>DMG<');
   });
 
   it('offers the GM a picker only when there is more than one fight to pick from', () => {

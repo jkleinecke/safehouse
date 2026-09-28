@@ -5,12 +5,15 @@ import {
   effectHint,
   fightPhase,
   formatModifier,
+  inServerOrder,
+  isManualOrder,
   isRolled,
   monitorDetailFor,
   moraleLine,
   moralePrompts,
   passLabel,
   scoreFromRolled,
+  stepIndex,
   trackerRows,
   visibleCombatants,
   type Viewer,
@@ -314,5 +317,59 @@ describe('blank lines and hand rolls (FR4.2)', () => {
     expect(fightPhase(encounter([], { state: 'prep' }))).toBe('prep');
     expect(fightPhase(encounter([]))).toBe('live');
     expect(fightPhase(encounter([], { state: 'done' }))).toBe('done');
+  });
+});
+
+describe('the order strip', () => {
+  it('draws the server order and slots a row it does not name by score', () => {
+    const byScore = (a: { id: string; s: number }, b: { id: string; s: number }) => b.s - a.s;
+    const rows = [
+      { id: 'a', s: 20 },
+      { id: 'b', s: 8 },
+      { id: 'late', s: 15 },
+    ];
+    expect(inServerOrder(rows, ['b', 'a'], byScore).map((r) => r.id)).toEqual(['b', 'a', 'late']);
+    expect(inServerOrder(rows, ['a', 'b'], byScore).map((r) => r.id)).toEqual(['a', 'late', 'b']);
+    expect(inServerOrder(rows, undefined, byScore).map((r) => r.id)).toEqual(['a', 'late', 'b']);
+  });
+
+  it('marks acting, next, delayed, acted and out, with the passes left', () => {
+    const rows = trackerRows(
+      encounter(
+        [
+          combatant({ id: 'done', initScore: 22, actedThisPass: true }),
+          combatant({ id: 'up', initScore: 14 }),
+          combatant({ id: 'hold', initScore: 12, delayed: true }),
+          combatant({ id: 'then', initScore: 5 }),
+          combatant({ id: 'spent', initScore: 0 }),
+        ],
+        { pass: 2, activeCombatantId: 'up', turnOrder: ['done', 'up', 'hold', 'then'] },
+      ),
+      GM,
+    );
+    expect(rows.map((r) => [r.combatant.id, r.state, r.passesLeft])).toEqual([
+      ['done', 'acted', 2],
+      ['up', 'acting', 2],
+      ['hold', 'delayed', 2],
+      ['then', 'next', 1],
+      ['spent', 'out', 0],
+    ]);
+    expect(stepIndex(rows, 'then', -1)).toBe(2);
+    expect(stepIndex(rows, 'done', -1)).toBeNull();
+    expect(stepIndex(rows, 'spent', 1)).toBeNull();
+  });
+
+  it("glows nobody on a player's screen while a hidden row acts or initiative is gathered", () => {
+    const list = [combatant({ id: 'a', initScore: 12 })];
+    expect(trackerRows(encounter(list, { gmTurn: true }), PLAYER).some((r) => r.acting)).toBe(false);
+    expect(trackerRows(encounter(list, { gathering: true }), GM).some((r) => r.acting)).toBe(false);
+  });
+
+  it('reads a late joiner as blank, not spent, and a manual order off the frame', () => {
+    const late = combatant({ id: 'l', initScore: 0, copilot: { lateEntry: { turn: 1, passesGone: 1 } } });
+    const rows = trackerRows(encounter([late], { pass: 2 }), GM);
+    expect(rows[0]).toMatchObject({ rolled: false, state: 'blank', late: true });
+    expect(isManualOrder(encounter([], { manualOrder: [] }))).toBe(true);
+    expect(isManualOrder(encounter([], { manualOrder: null }))).toBe(false);
   });
 });
