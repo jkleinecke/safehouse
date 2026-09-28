@@ -75,7 +75,7 @@ export default function FociRack(props: FociRackProps) {
         onClick={() => setAdding(true)}
         aria-label="Bond a focus"
       >
-        + Bond a focus
+        + Bond
       </button>
 
       {adding && (

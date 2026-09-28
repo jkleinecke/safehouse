@@ -83,7 +83,7 @@ describe('the builds list', () => {
     expect(html).toContain('data-build-row="b-draft"');
     expect(html).toContain(`href="/c/${CAMPAIGN}/build/b-draft"`);
     expect(html).toMatch(/data-testid="build-state-chip">draft</);
-    expect(html).toMatch(/<button[^>]*>start a new runner<\/button>/);
+    expect(html).toMatch(/<button[^>]*aria-label="Start a new runner"[^>]*>start<\/button>/);
     expect(html).toMatch(/>resume</);
     expect(html).not.toContain('data-filter=');
     expect(html).not.toContain('data-testid="build-owner"');
@@ -124,7 +124,7 @@ describe('the builds list', () => {
     for (const role of ['observer', 'display'] as Role[]) {
       const html = view({ role });
       expect(html).toContain('data-testid="builds-not-for-role"');
-      expect(html).not.toContain('start a new runner');
+      expect(html).not.toContain('Start a new runner');
     }
   });
 
@@ -176,7 +176,7 @@ describe('entry points are role-gated', () => {
     for (const role of ['gm', 'player']) {
       session.role = role;
       expect(withClient(<BuildRunnerButton campaignId={CAMPAIGN} name="Kestrel" />)).toMatch(
-        /<button[^>]*data-testid="build-runner"[^>]*>build a runner<\/button>/,
+        /<button[^>]*data-testid="build-runner"[^>]*>build<\/button>/,
       );
     }
     for (const role of ['observer', 'display']) {
@@ -202,7 +202,7 @@ describe('entry points are role-gated', () => {
       stubs: [],
       unreadable: 0,
     });
-    expect(empty).toContain('start a new runner');
+    expect(empty).toContain('aria-label="Start a new runner"');
     for (const role of ['gm', 'observer', 'display']) {
       session.role = role;
       expect(withClient(<PlayerBuildsCard campaignId={CAMPAIGN} hasCharacter={false} />)).toBe('');

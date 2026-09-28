@@ -178,8 +178,15 @@ export default function CustomItemForm({ kinds, kind, onKind, onAdd, onFind, tes
         </label>
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <button type="submit" className="btn btn-accent px-3 py-1.5" disabled={!ready} data-testid={`${testId}-custom-add`}>
-          add {name.trim() || 'it'} to the sheet
+        <button
+          type="submit"
+          className="btn btn-accent px-3 py-1.5"
+          disabled={!ready}
+          title={`Add ${name.trim() || 'it'} to the sheet`}
+          aria-label={`Add ${name.trim() || 'it'} to the sheet`}
+          data-testid={`${testId}-custom-add`}
+        >
+          add
         </button>
         {onFind && (
           <button
@@ -190,9 +197,10 @@ export default function CustomItemForm({ kinds, kind, onKind, onAdd, onFind, tes
               onFind(build());
               reset();
             }}
+            title="Find and negotiate — the Availability test (SR5 p.418)"
             data-testid={`${testId}-custom-find`}
           >
-            find &amp; negotiate
+            find
           </button>
         )}
       </div>

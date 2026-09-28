@@ -54,7 +54,7 @@ describe('the find & negotiate panel', () => {
     expect(html).toContain('>roll 7 vs 5<');
     expect(html).toContain('list 725¥');
     expect(html).toContain('aria-label="Price paid"');
-    expect(html).toContain('>add it for 725¥<');
+    expect(html).toContain('>add · 725¥<');
     expect(html).toContain('the spend is proposed, pending the GM');
     expect(html).toContain('SR5 p.418');
   });

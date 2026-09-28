@@ -80,8 +80,9 @@ function HandoutRow({
               className="btn btn-accent px-2.5 py-1"
               disabled={reveal.isPending}
               onClick={() => reveal.mutate({ attachmentId: handout.attachmentId })}
+              title="Reveal to the table"
             >
-              {reveal.isPending ? 'revealing…' : 'reveal to table'}
+              {reveal.isPending ? 'revealing…' : 'reveal'}
             </button>
           ) : (
             <button
@@ -90,8 +91,9 @@ function HandoutRow({
               onClick={() =>
                 reveal.mutate({ attachmentId: handout.attachmentId, visibility: 'gm' })
               }
+              title="Hide it from the table again"
             >
-              re-hide
+              hide
             </button>
           )}
           <button

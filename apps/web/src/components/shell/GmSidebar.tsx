@@ -118,8 +118,9 @@ export default function GmSidebar({
               data-nav="display-qr"
               className="block w-full rounded-md px-3 py-1.5 text-left font-label text-xs uppercase tracking-widest text-dim transition-colors hover:bg-panel hover:text-ink"
               onClick={onShowDisplayQr ?? onShowQr}
+              title="Pair the TV"
             >
-              Pair the TV
+              Pair
             </button>
             <p className="px-3 pt-1 text-[0.7rem] leading-snug text-faint">
               The TV needs its own display invite — open the kiosk on that screen and scan.
@@ -130,8 +131,9 @@ export default function GmSidebar({
               rel="noreferrer"
               data-nav="tv-preview"
               className="block rounded-md px-3 py-1.5 font-label text-xs uppercase tracking-widest text-dim transition-colors hover:bg-panel hover:text-ink"
+              title="Preview the kiosk"
             >
-              Preview kiosk ↗
+              Preview ↗
             </a>
           </Section>
         </nav>
@@ -140,8 +142,8 @@ export default function GmSidebar({
       {/* Footer: join QR + build badge (hidden when collapsed) */}
       {!collapsed && (
         <div className="border-t border-edge p-3">
-          <button className="btn w-full" onClick={onShowQr}>
-            Show join QR
+          <button className="btn w-full" onClick={onShowQr} title="Show the join QR" aria-label="Show the join QR">
+            QR
           </button>
           {/* Which build is running — the answer to "is my change in here?". */}
           <BuildBadge className="mt-2.5 px-1" />

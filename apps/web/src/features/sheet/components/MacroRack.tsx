@@ -178,8 +178,9 @@ function MacroEditor({
             ...(hasLimit ? { limitKind, limitValue: Math.floor(limitNum) } : {}),
           })
         }
+        aria-label="Save macro"
       >
-        Save macro
+        Save
       </button>
       <p className="mt-2 text-xs text-faint">
         Macros are free-form rolls: the server takes the pool as given —

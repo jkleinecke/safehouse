@@ -148,8 +148,13 @@ function InvitePanel({
         >
           {create.isPending ? 'minting…' : 'mint invite'}
         </button>
-        <button className="btn btn-accent ml-auto px-3 py-1.5" onClick={() => onShowQr(role)}>
-          show join QR
+        <button
+          className="btn btn-accent ml-auto px-3 py-1.5"
+          onClick={() => onShowQr(role)}
+          title="Show the join QR"
+          aria-label="Show the join QR"
+        >
+          QR
         </button>
       </div>
       <ErrorNote error={create.error} />
@@ -191,8 +196,13 @@ function DevicesPanel({ campaignId, onShowQr }: { campaignId: string; onShowQr: 
             title="No devices have joined"
             blurb="Players scan a QR off this laptop and they are in — no accounts, no app store, nobody typing an IP address. The table TV needs its own display invite."
             actions={
-              <button className="btn btn-accent px-3 py-1.5" onClick={onShowQr}>
-                show join QR
+              <button
+                className="btn btn-accent px-3 py-1.5"
+                onClick={onShowQr}
+                title="Show the join QR"
+                aria-label="Show the join QR"
+              >
+                QR
               </button>
             }
           />
@@ -244,8 +254,9 @@ function ChargenLink({ campaignId }: { campaignId: string }) {
       <Link
         className="btn btn-accent mt-3 inline-block px-3 py-1.5"
         to={gmHref(campaignId, { to: '/gm/chargen' })}
+        title="Set creation rules"
       >
-        set creation rules
+        configure
       </Link>
     </div>
   );

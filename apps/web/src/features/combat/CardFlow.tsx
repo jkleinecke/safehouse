@@ -79,8 +79,10 @@ export default function CardFlow(props: CardFlowProps) {
             setMine(false);
             useTokenPick.getState().stop();
           }}
+          title="Back to the card"
+          aria-label="Back to the card"
         >
-          Back to the card
+          Back
         </button>
       </div>
     );

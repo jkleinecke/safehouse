@@ -147,8 +147,9 @@ export default function TemplatePanel({ campaignId, page, isGm }: TemplatePanelP
           className="btn mt-3 w-full px-3 py-1.5"
           disabled={busy}
           onClick={() => setPicking(true)}
+          title="Link an archetype"
         >
-          link an archetype
+          link
         </button>
       )}
 

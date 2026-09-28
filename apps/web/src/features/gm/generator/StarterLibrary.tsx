@@ -79,8 +79,8 @@ function StarterRow({
         )}
         <span className="ml-auto flex gap-2">
           {row && onEdit && (
-            <button className="btn px-3 py-1.5" onClick={onEdit}>
-              open in editor
+            <button className="btn px-3 py-1.5" onClick={onEdit} title="Open in the editor">
+              edit
             </button>
           )}
           <button
@@ -166,14 +166,13 @@ export default function StarterLibrary({
             className="btn btn-accent px-3 py-1.5"
             disabled={install.isPending || missing.length === 0}
             onClick={() => run(missing)}
+            title={missing.length === 0 ? undefined : 'Install every archetype not yet here'}
           >
-            {missing.length === 0
-              ? 'whole library installed'
-              : `install all ${missing.length} archetype${missing.length === 1 ? '' : 's'}`}
+            {missing.length === 0 ? 'whole library installed' : `install all ${missing.length}`}
           </button>
           {onCreateOwn && (
-            <button className="btn px-3 py-1.5" onClick={onCreateOwn}>
-              create my own instead
+            <button className="btn px-3 py-1.5" onClick={onCreateOwn} title="Create my own archetype instead">
+              create
             </button>
           )}
           {install.isPending && <Spinner label="installing" />}

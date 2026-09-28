@@ -202,7 +202,7 @@ describe('the question', () => {
     expect(copy(theirs)).toContain('Priorities: B/C/E/D/A becomes D/B/E/C/A');
     expect(copy(theirs)).not.toContain('your change');
     expect(copy(html)).toContain('Who the runner is — alias, real name, age, sex and background — stays as it is.');
-    expect(html).toMatch(/<button[^>]*data-testid="concept-confirm-cancel"[^>]*>keep the build as it is<\/button>/);
+    expect(html).toMatch(/<button[^>]*data-testid="concept-confirm-cancel"[^>]*>keep<\/button>/);
     expect(html).toMatch(/<button[^>]*data-testid="concept-confirm-go"[^>]*>use this card<\/button>/);
   });
 

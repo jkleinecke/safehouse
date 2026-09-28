@@ -182,8 +182,9 @@ function Formulae({ step, taps, readOnly, kind }: KarmaSectionProps & { kind: 's
                 if (open) setOpen(false);
                 else if (any.gate.open) setOpen(true);
               }}
+              title={open ? `Close the ${noun} list` : undefined}
             >
-              {open ? `close the ${noun} list` : `learn a ${noun}`}
+              {open ? 'close' : `learn a ${noun}`}
             </button>
             {any.gate.open && <CostQuote amount={any.price} budgets={step.budgets} id={toggleId} />}
           </div>

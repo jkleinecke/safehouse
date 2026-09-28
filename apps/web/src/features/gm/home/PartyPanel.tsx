@@ -155,8 +155,14 @@ export default function PartyPanel({ campaignId, limit, compact, onShowQr }: Par
             actions={<AddCharacter campaignId={campaignId} />}
             hint={
               onShowQr ? (
-                <button type="button" className="btn px-2.5 py-1" onClick={onShowQr}>
-                  or show the join QR first
+                <button
+                  type="button"
+                  className="btn px-2.5 py-1"
+                  onClick={onShowQr}
+                  title="Show the join QR first"
+                  aria-label="Show the join QR first"
+                >
+                  QR
                 </button>
               ) : undefined
             }
@@ -189,8 +195,8 @@ export default function PartyPanel({ campaignId, limit, compact, onShowQr }: Par
 
           {compact ? (
             <div className="mt-3">
-              <Link className="btn px-2.5 py-1" to={`/c/${campaignId}/gm/party`}>
-                open the roster
+              <Link className="btn px-2.5 py-1" to={`/c/${campaignId}/gm/party`} title="Open the roster">
+                open
               </Link>
             </div>
           ) : (

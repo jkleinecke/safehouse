@@ -253,8 +253,13 @@ export default function ProposalCard({
         >
           {busy ? 'writing…' : target === 'new' ? 'accept — create the page' : 'accept'}
         </button>
-        <button type="button" className="btn px-3 py-1.5" onClick={() => setEditing((v) => !v)}>
-          {editing ? 'back to the diff' : 'edit'}
+        <button
+          type="button"
+          className="btn px-3 py-1.5"
+          onClick={() => setEditing((v) => !v)}
+          title={editing ? 'Back to the diff' : undefined}
+        >
+          {editing ? 'back' : 'edit'}
         </button>
         <button
           type="button"

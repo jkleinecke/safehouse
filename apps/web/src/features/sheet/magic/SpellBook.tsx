@@ -310,8 +310,10 @@ function CastDialog({
           type="button"
           className={`chip mt-3 ${sustain ? 'border-magenta-dim text-magenta' : 'text-dim'}`}
           onClick={() => setSustain((s) => !s)}
+          title="Sustain after casting"
+          aria-pressed={sustain}
         >
-          {sustain ? 'Will sustain (−2)' : 'Sustain after casting?'}
+          {sustain ? 'Will sustain (−2)' : 'Sustain'}
         </button>
       )}
 

@@ -91,7 +91,7 @@ describe('the add-from-books dialog', () => {
 
   it('opens the write-your-own form with the fields of the kind', () => {
     const closed = renderToStaticMarkup(<AddFromBooksView {...base} />);
-    expect(closed).toContain('or write your own');
+    expect(closed).toContain('>custom<');
     expect(closed).not.toContain('data-testid="add-weapon-custom"');
     const open = renderToStaticMarkup(<AddFromBooksView {...base} custom />);
     expect(open).toContain('data-testid="add-weapon-custom"');

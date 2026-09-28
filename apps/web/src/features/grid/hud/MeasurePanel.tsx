@@ -101,8 +101,9 @@ export default function MeasurePanel(p: MeasurePanelProps) {
                   type="button"
                   className="btn mt-2 w-full py-1"
                   onClick={() => p.onApplyMod(p.range?.value ?? 0, p.range?.label ?? 'range')}
+                  title="Apply this modifier to the next roll"
                 >
-                  apply {p.range.value === 0 ? '±0' : p.range.value} to next roll
+                  apply {p.range.value === 0 ? '±0' : p.range.value}
                 </button>
               )}
             </div>
@@ -157,8 +158,9 @@ export default function MeasurePanel(p: MeasurePanelProps) {
               className="btn ml-auto py-1"
               disabled={!p.aoe}
               onClick={p.onScatter}
+              title="Roll scatter"
             >
-              roll scatter
+              roll
             </button>
           </div>
           {p.scatter && (

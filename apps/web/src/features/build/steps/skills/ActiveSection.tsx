@@ -127,10 +127,10 @@ function EntryControls({
         {conflict && entry.index !== null && !readOnly && (
           <TextButton
             onClick={() => props.update((b) => returnActivePoints(b, entry.index!))}
-            label={`give back ${label}'s own points`}
+            label={`Refund ${label}'s own points`}
             testId="skill-return-points"
           >
-            give back its points
+            refund
           </TextButton>
         )}
         <IssueNotes issues={issues} />

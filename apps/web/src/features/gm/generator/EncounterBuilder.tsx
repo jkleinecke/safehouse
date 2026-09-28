@@ -131,8 +131,9 @@ export default function EncounterBuilder({
             className="btn btn-accent px-3 py-1.5"
             disabled={entries.length === 0 || create.isPending}
             onClick={save}
+            title="Save the fight"
           >
-            {create.isPending ? 'saving…' : 'save the fight'}
+            {create.isPending ? 'saving…' : 'save'}
           </button>
           {savedId && (
             <button
@@ -143,13 +144,13 @@ export default function EncounterBuilder({
               }}
               title="Add every runner and NPC token already on the linked scene to this saved fight. It places no new tokens."
             >
-              {stage.isPending ? 'staging…' : 'stage on map'}
+              {stage.isPending ? 'staging…' : 'stage'}
             </button>
           )}
           {savedId && <span className="mono-label text-ok">saved</span>}
           {savedId && (
-            <Link className="btn btn-accent px-3 py-1.5" to={`/c/${campaignId}/table`}>
-              open the tracker
+            <Link className="btn btn-accent px-3 py-1.5" to={`/c/${campaignId}/table`} title="Open the tracker">
+              open tracker
             </Link>
           )}
         </div>

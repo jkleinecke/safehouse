@@ -94,8 +94,14 @@ export function PowerPointSection({ props, issues }: { props: StepProps; issues:
             {bought} power {bought === 1 ? 'point' : 'points'} bought with Karma stay from an earlier choice; only a mystic adept buys them.
           </span>
           {!props.readOnly && (
-            <button type="button" className="btn px-2.5 py-1 text-xs" onClick={() => props.update((b) => setPowerPointsBought(b, 0))} data-testid="magic-pp-clear">
-              remove the purchase
+            <button
+              type="button"
+              className="btn px-2.5 py-1 text-xs"
+              onClick={() => props.update((b) => setPowerPointsBought(b, 0))}
+              title="Remove the power point purchase"
+              data-testid="magic-pp-clear"
+            >
+              remove
             </button>
           )}
         </p>

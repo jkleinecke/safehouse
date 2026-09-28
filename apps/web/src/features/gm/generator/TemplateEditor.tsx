@@ -331,7 +331,7 @@ export default function TemplateEditor({
                 })
               }
             >
-              {save.isPending ? 'saving…' : draft.id ? 'save archetype' : 'create archetype'}
+              {save.isPending ? 'saving…' : draft.id ? 'save' : 'create'}
             </button>
             <button className="btn px-3 py-1.5" onClick={() => setDraft(null)}>
               close

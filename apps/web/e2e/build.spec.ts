@@ -388,7 +388,7 @@ async function playerFixes(page: Page, world: World, alias: string): Promise<voi
   const steps = page.getByRole('navigation', { name: 'Build steps' });
   await expect(steps.getByRole('button', { name: /^Gear — Step 7, Gear: .*the GM left a note here$/ })).toBeVisible();
   const pointer = finish.getByRole('note').filter({ hasText: 'The GM returned this build with a note on step 7, Gear.' });
-  await pointer.getByRole('button', { name: 'read it' }).click();
+  await pointer.getByRole('button', { name: 'read', exact: true }).click();
 
   const gear = await onStep(page, 'Gear');
   await expect(gear.getByRole('note', { name: "The GM's note" })).toContainText(RETURN_NOTE);

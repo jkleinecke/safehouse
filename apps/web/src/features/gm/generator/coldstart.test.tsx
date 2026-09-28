@@ -243,8 +243,8 @@ describe('a campaign with no archetypes', () => {
         onCreateOwn={() => {}}
       />,
     );
-    expect(html).toContain('install the starter library (2 archetypes)');
-    expect(html).toContain('create my own');
+    expect(html).toContain('>install 2<');
+    expect(html).toContain('>create<');
     expect(html).toContain('reusable recipe');
     expect(html).toContain('fully editable');
     // The bug this replaces: a select with one dead option and no explanation.
@@ -258,7 +258,7 @@ describe('a campaign with no archetypes', () => {
       <GeneratePanel campaignId={CAMP} templates={[]} isLoading onAddEntry={() => {}} />,
     );
     expect(html).toContain('loading archetypes');
-    expect(html).not.toContain('install the starter library');
+    expect(html).not.toContain('title="Install the starter library"');
   });
 
   it('still offers the editor when the server has no library route', () => {
@@ -277,7 +277,7 @@ describe('a campaign with no archetypes', () => {
       />,
     );
     expect(html).toContain('no starter library yet');
-    expect(html).toContain('create my own');
+    expect(html).toContain('>create<');
   });
 
   it('lists the archetypes in the picker once they exist', () => {
@@ -299,8 +299,8 @@ describe('a campaign with no archetypes', () => {
     // The tier dial and the seed are both on screen, not behind a disclosure.
     expect(html).toContain('Tier dial');
     expect(html).toContain('Seed');
-    expect(html).toContain('duplicate');
-    expect(html).not.toContain('install the starter library');
+    expect(html).toContain('>fork<');
+    expect(html).not.toContain('title="Install the starter library"');
   });
 });
 
@@ -316,7 +316,7 @@ describe('the library browser', () => {
     expect(html).toContain('the first fight of a run gone loud');
     expect(html).toContain('tier ladder: Street → Pro');
     expect(html).toContain('ganger');
-    expect(html).toContain('install all 2 archetypes');
+    expect(html).toContain('>install all 2<');
     expect(html).toContain('rename them, retune every range');
   });
 
@@ -327,8 +327,8 @@ describe('the library browser', () => {
       <StarterLibrary campaignId={CAMP} templates={[RIPPERS]} onEditTemplate={() => {}} />,
     );
     expect(html).toContain('installed');
-    expect(html).toContain('open in editor');
-    expect(html).toContain('install all 1 archetype<');
+    expect(html).toContain('>edit<');
+    expect(html).toContain('>install all 1<');
     expect(html).toContain('1 of 2 installed');
   });
 });
@@ -363,7 +363,7 @@ describe('installing the library', () => {
       />,
     );
     expect(html).toContain('Ripper crew');
-    expect(html).not.toContain('install the starter library');
+    expect(html).not.toContain('title="Install the starter library"');
   });
 
   it('installs one row when the GM picks one row', async () => {
@@ -454,7 +454,7 @@ describe('forking an installed archetype', () => {
     expect(html).toContain('Street');
     expect(html).toContain('automatics');
     // Unsaved fork: the button offers to create, not to overwrite.
-    expect(html).toContain('create archetype');
+    expect(html).toContain('>create<');
   });
 
   it('offers the library from the editor when the campaign is bare', () => {
@@ -462,7 +462,7 @@ describe('forking an installed archetype', () => {
     queryClient.setQueryData(['campaign', CAMP, 'npc-templates'], []);
     queryClient.setQueryData(['campaign', CAMP, 'archetype-library'], normalizeCatalog(CATALOG_PAYLOAD));
     const html = render(<TemplateEditor campaignId={CAMP} onBrowseLibrary={() => {}} />);
-    expect(html).toContain('install the starter library');
+    expect(html).toContain('title="Install the starter library"');
     expect(html).toContain('reusable recipe');
   });
 });
@@ -481,7 +481,7 @@ describe('the opposition kit workspace', () => {
     expect(landing).toContain('Starter library');
     expect(landing).toContain('start here');
     // Landing on Generate still explains itself rather than showing a dial.
-    expect(landing).toContain('install the starter library');
+    expect(landing).toContain('title="Install the starter library"');
 
     const deep = render(<GeneratorWorkspace campaignId={CAMP} initialTab="library" />);
     expect(deep).toContain('the first fight of a run gone loud');

@@ -55,22 +55,20 @@ export default function GeneratorEmptyState({
             className="btn btn-accent px-4 py-2"
             disabled={install.isPending || library.isLoading || count === 0}
             onClick={() => install.mutate({}, { onSuccess: () => onInstalled?.() })}
+            title="Install the starter library"
+            aria-label={count > 0 ? `Install ${count} starter archetypes` : 'Install the starter library'}
           >
-            {install.isPending
-              ? 'installing…'
-              : count > 0
-                ? `install the starter library (${count} archetypes)`
-                : 'install the starter library'}
+            {install.isPending ? 'installing…' : count > 0 ? `install ${count}` : 'install'}
           </button>
         )}
         {!unavailable && count > 0 && onBrowseLibrary && (
-          <button className="btn px-3 py-1.5" onClick={onBrowseLibrary}>
-            browse it first
+          <button className="btn px-3 py-1.5" onClick={onBrowseLibrary} title="Browse the starter library first">
+            browse
           </button>
         )}
         {onCreateOwn && (
-          <button className="btn px-3 py-1.5" onClick={onCreateOwn}>
-            create my own
+          <button className="btn px-3 py-1.5" onClick={onCreateOwn} title="Create my own archetype">
+            create
           </button>
         )}
       </div>

@@ -64,8 +64,9 @@ export default function PairPanel({ campaignId }: PairPanelProps) {
           className="btn px-3 py-1.5"
           disabled={device.isPending}
           onClick={() => device.mutate(label.trim() ? { label: label.trim() } : {})}
+          title="Mint a GM token for me"
         >
-          {device.isPending ? 'minting…' : 'mint token for me'}
+          {device.isPending ? 'minting…' : 'mint'}
         </button>
       </div>
 

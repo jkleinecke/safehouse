@@ -79,8 +79,8 @@ export default function ResultCard({
         <span className="chip text-faint">{npc.tierId}</span>
         <span className="ml-auto flex gap-2">
           {onAddToEncounter && (
-            <button className="btn px-3 py-1.5" onClick={onAddToEncounter}>
-              {addLabel ?? 'add to the fight'}
+            <button className="btn px-3 py-1.5" onClick={onAddToEncounter} title="Add to the fight">
+              {addLabel ?? 'add'}
             </button>
           )}
           <button

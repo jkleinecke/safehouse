@@ -46,8 +46,9 @@ export function GmActorBlock({
           openGmCard({ kind: 'declare', target: row ? { kind: 'combatant', id: row.id } : actor, targetName: name })
         }
         title="A tabletop attack: who, hits, DV, AP, fire mode"
+        aria-label={`Declare attack on ${name}`}
       >
-        Declare an attack on {name}
+        Declare attack
       </button>
     </div>
   );

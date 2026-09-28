@@ -166,7 +166,7 @@ function tokenItems(input: ContextMenuInput, token: Token): MenuItem[] {
       run: () => actions.rangeBetween(other, token),
     });
   }
-  items.push({ id: 'center', label: 'Centre on it', run: () => actions.centerOn(token.x, token.y) });
+  items.push({ id: 'center', label: 'Centre', run: () => actions.centerOn(token.x, token.y) });
   if (token.source === 'character' && token.sourceId && (role === 'gm' || mine)) {
     const id = token.sourceId;
     items.push({ id: 'sheet', label: mine ? 'Open my sheet' : `Open ${token.name}'s sheet`, run: () => actions.openSheet(id) });
@@ -206,14 +206,14 @@ function tokenItems(input: ContextMenuInput, token: Token): MenuItem[] {
   if (role === 'gm') {
     items.push({
       id: 'hidden',
-      label: token.hidden ? 'Reveal to players' : 'Hide from players',
+      label: token.hidden ? 'Reveal' : 'Hide',
       hint: token.hidden ? 'it appears on every screen' : 'players and the TV stop seeing it',
       run: () => actions.setHidden(token.id, !token.hidden),
     });
     items.push({
       id: 'remove',
-      label: 'Remove from the scene',
-      hint: 'Ctrl+Z puts it back',
+      label: 'Remove',
+      hint: 'from the scene; Ctrl+Z puts it back',
       danger: true,
       run: () => actions.removeToken(token.id),
     });
@@ -226,16 +226,16 @@ function floorItems(input: ContextMenuInput): MenuItem[] {
   const x = grid.x;
   const y = grid.y;
   const items: MenuItem[] = [
-    { id: 'ping', label: 'Ping here', hint: 'a flash on every screen', run: () => actions.ping(x, y) },
+    { id: 'ping', label: 'Ping', hint: 'a flash on every screen', run: () => actions.ping(x, y) },
   ];
   if (role !== 'gm') return items;
-  items.push({ id: 'focus', label: 'Focus everyone here', hint: 'pans the players and the TV', run: () => actions.focus(x, y) });
+  items.push({ id: 'focus', label: 'Focus', hint: 'pans everyone here: the players and the TV', run: () => actions.focus(x, y) });
   const region = regionAt(scene, grid);
   if (region) items.push(...regionItems(actions, region));
   if (input.mode !== 'build') {
     items.push({
       id: 'place',
-      label: 'Place a token here',
+      label: 'Place token',
       hint: 'opens the roster with this square filled in',
       run: () => actions.placeTokenHere(x, y),
     });
@@ -273,18 +273,18 @@ function doorItems(input: ContextMenuInput, doorId: string): MenuItem[] {
   const items: MenuItem[] = [
     {
       id: 'door-toggle',
-      label: door.open ? 'Close the door' : 'Open the door',
+      label: door.open ? 'Close' : 'Open',
       run: () => actions.doorOp({ doorId, op: door.open ? 'close' : 'open' }),
     },
   ];
   if (role === 'gm') {
     items.push({
       id: 'door-lock',
-      label: door.locked ? 'Unlock it' : 'Lock it',
+      label: door.locked ? 'Unlock' : 'Lock',
       hint: door.locked ? 'players can open it again' : 'players are refused; you are not',
       run: () => actions.doorOp({ doorId, op: door.locked ? 'unlock' : 'lock' }),
     });
-    items.push({ id: 'door-remove', label: 'Remove the door', danger: true, run: () => actions.removeDoor(doorId) });
+    items.push({ id: 'door-remove', label: 'Remove', danger: true, run: () => actions.removeDoor(doorId) });
   }
   return items;
 }
@@ -297,14 +297,14 @@ function tileDoorItems(input: ContextMenuInput, cell: string, level: number): Me
   const items: MenuItem[] = [
     {
       id: 'door-toggle',
-      label: state.open ? 'Close the door' : 'Open the door',
+      label: state.open ? 'Close' : 'Open',
       run: () => actions.doorOp({ cell, level, op: state.open ? 'close' : 'open' }),
     },
   ];
   if (role === 'gm') {
     items.push({
       id: 'door-lock',
-      label: state.locked ? 'Unlock it' : 'Lock it',
+      label: state.locked ? 'Unlock' : 'Lock',
       run: () => actions.doorOp({ cell, level, op: state.locked ? 'unlock' : 'lock' }),
     });
   }
@@ -320,7 +320,7 @@ function wallItems(input: ContextMenuInput, wallId: string): MenuItem[] {
       hint: 'same segment; it opens, shuts and locks',
       run: () => input.actions.wallToDoor(wallId),
     },
-    { id: 'wall-remove', label: 'Remove the wall', hint: 'Ctrl+Z puts it back', danger: true, run: () => input.actions.removeWall(wallId) },
+    { id: 'wall-remove', label: 'Remove', hint: 'Ctrl+Z puts it back', danger: true, run: () => input.actions.removeWall(wallId) },
   ];
 }
 
@@ -335,8 +335,8 @@ function paintedWallItems(input: ContextMenuInput, cell: string, level: number):
   return [
     {
       id: 'wall-break',
-      label: 'Break the wall here',
-      hint: 'takes out this square; Ctrl+Z puts it back',
+      label: 'Break',
+      hint: 'takes this square out of the wall; Ctrl+Z puts it back',
       danger: true,
       run: () => input.actions.breakWall(cell, level),
     },

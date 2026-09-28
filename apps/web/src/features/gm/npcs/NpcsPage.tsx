@@ -134,8 +134,13 @@ function NpcDetail({ campaignId, npc, sessionLive }: { campaignId: string; npc: 
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <button type="button" className="btn btn-accent px-3 py-1" onClick={() => setTalking((t) => !t)}>
-          {talking ? 'stop talking' : 'talk to them'}
+        <button
+          type="button"
+          className="btn btn-accent px-3 py-1"
+          onClick={() => setTalking((t) => !t)}
+          title={talking ? 'Stop talking' : 'Talk to them'}
+        >
+          {talking ? 'stop' : 'talk'}
         </button>
         <button
           type="button"
@@ -144,7 +149,7 @@ function NpcDetail({ campaignId, npc, sessionLive }: { campaignId: string; npc: 
           title={liveSceneId ? 'A hidden token at the centre of the live scene' : 'No scene is on the table'}
           onClick={placeOnMap}
         >
-          {place.isSuccess ? 'placed (hidden)' : 'place on the map'}
+          {place.isSuccess ? 'placed (hidden)' : 'place'}
         </button>
       </div>
 

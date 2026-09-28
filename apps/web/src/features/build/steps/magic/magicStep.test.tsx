@@ -175,7 +175,7 @@ describe('a magician part way through', () => {
     expect(words(spells)).toContain('10 spells, rituals or preparations');
     expect(words(spells)).toContain('0 of 10 picked, 10 to go');
     expect(words(spells)).toContain('Magic 6 lets this runner know up to 12 of each at creation');
-    const waive = /<button[^>]*aria-describedby="([^"]+)"[^>]*data-testid="grant-spells-waive"[^>]*>waive the rest<\/button>/.exec(spells);
+    const waive = /<button[^>]*aria-describedby="([^"]+)"[^>]*data-testid="grant-spells-waive"[^>]*>waive<\/button>/.exec(spells);
     expect(waive).not.toBeNull();
     expect(spells).toContain(`id="${waive![1]}"`);
     expect(words(spells)).toContain('Gives up the 10 still open');
@@ -404,7 +404,7 @@ describe('read-only', () => {
     const b = addFormula(conceptBuild('street-mage'), { name: 'Invented Bolt', category: 'combat spells' });
     const out = screen({ ...b, magic: { ...b.magic, mentor: 'The Old Heron' } }, { readOnly: true, reviewMode: true });
     expect(out).toContain('aria-readonly="true"');
-    expect(out).not.toContain('waive the rest');
+    expect(out).not.toMatch(/data-testid="grant-[^"]+-waive"/);
     expect(out).not.toMatch(/>remove</);
     expect(out).not.toContain('type="search"');
     expect(out).not.toContain('data-testid="magic-mentor-input"');

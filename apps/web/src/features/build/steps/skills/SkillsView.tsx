@@ -107,8 +107,12 @@ export default function SkillsView(props: SkillsViewProps) {
                 ? 'No skill or group is bought for this runner.'
                 : `No skill or group matches “${filter.query.trim()}”${filter.onlyMine ? ' among this runner’s own' : ''}.`}
             </span>
-            <TextButton onClick={() => onFilter({ query: '', onlyMine: false })} testId="skills-filter-clear">
-              show every skill
+            <TextButton
+              onClick={() => onFilter({ query: '', onlyMine: false })}
+              label="Clear the filter and show every skill"
+              testId="skills-filter-clear"
+            >
+              clear
             </TextButton>
           </div>
         )}

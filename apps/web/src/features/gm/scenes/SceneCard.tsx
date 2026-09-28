@@ -224,8 +224,9 @@ export default function SceneCard(props: SceneCardProps) {
           className={btn}
           data-testid="open-in-grid"
           title="Draw walls, paint fog and place tokens on the canvas"
+          aria-label="Open on the Map"
         >
-          open on the Map ↗
+          open ↗
         </Link>
         <span className="mono-label text-faint">
           walls, fog painting and tokens are canvas work — this screen is the list

@@ -7,7 +7,7 @@
  * could already do and the browser could not reach.
  *
  * A fight is made here as a new empty one to fill by hand. The map's tokens
- * (the Play rail's "Start from the map") and the Generator's parts are the
+ * (the Play rail's "Start") and the Generator's parts are the
  * other two ways in.
  */
 import { useState } from 'react';
@@ -257,11 +257,17 @@ export default function FightMenu({ campaignId, encounter, onPick, onClose }: Fi
                       },
                     )
                   }
+                  aria-label="Yes, delete this fight"
                 >
-                  yes, delete it
+                  delete
                 </button>
-                <button type="button" className="btn px-2.5 py-1" onClick={() => setConfirmDelete(false)}>
-                  keep it
+                <button
+                  type="button"
+                  className="btn px-2.5 py-1"
+                  title="Keep this fight"
+                  onClick={() => setConfirmDelete(false)}
+                >
+                  cancel
                 </button>
               </>
             ) : (
@@ -270,8 +276,10 @@ export default function FightMenu({ campaignId, encounter, onPick, onClose }: Fi
                 className="btn px-2.5 py-1 text-faint hover:text-danger"
                 disabled={busy}
                 onClick={() => setConfirmDelete(true)}
+                title="Delete this fight"
+                aria-label="Delete this fight"
               >
-                Delete this fight
+                Delete
               </button>
             )}
           </section>

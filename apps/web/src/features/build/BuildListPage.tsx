@@ -164,7 +164,7 @@ function DeleteControl({ label, deleting, onDelete }: { label: string; deleting:
         {deleting ? 'deleting…' : 'yes, delete'}
       </button>
       <button type="button" className="btn px-3 py-1" onClick={() => setArmed(false)}>
-        keep it
+        keep
       </button>
     </>
   ) : (
@@ -224,8 +224,8 @@ export function BuildListView(props: BuildListViewProps) {
           <p className="mt-2 text-sm text-dim">
             Runners are built by the players and the GM. This device joined to watch, so there is nothing to make here.
           </p>
-          <Link to={`/c/${campaignId}`} className="btn mt-4 inline-flex px-3 py-1.5">
-            back to the campaign
+          <Link to={`/c/${campaignId}`} className="btn mt-4 inline-flex px-3 py-1.5" title="Back to the campaign">
+            back
           </Link>
         </div>
       </div>
@@ -264,8 +264,14 @@ export function BuildListView(props: BuildListViewProps) {
             aria-label="New runner's street name"
           />
         </label>
-        <button type="submit" className="btn btn-accent shrink-0 px-3 py-1.5" disabled={props.creating}>
-          {props.creating ? 'starting…' : 'start a new runner'}
+        <button
+          type="submit"
+          className="btn btn-accent shrink-0 px-3 py-1.5"
+          disabled={props.creating}
+          title="Start a new runner"
+          aria-label={props.creating ? undefined : 'Start a new runner'}
+        >
+          {props.creating ? 'starting…' : 'start'}
         </button>
         <div className="basis-full">
           <ErrorNote error={props.createError} />

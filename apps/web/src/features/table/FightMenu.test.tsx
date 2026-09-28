@@ -46,8 +46,9 @@ describe('<FightMenu>', () => {
     }
     // The line the row will have reads back before it is added.
     expect(html).toContain('8+1d6 · P10/S10');
-    expect(html).toContain('Delete this fight');
+    expect(html).toContain('aria-label="Delete this fight"');
+    expect(html).toContain('>Delete<');
     // …and the delete needs a second click.
-    expect(html).not.toContain('yes, delete it');
+    expect(html).not.toContain('Yes, delete this fight');
   });
 });

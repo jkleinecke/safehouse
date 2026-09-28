@@ -94,8 +94,9 @@ export function CustomPurchaseView({ value, onChange, onContinue }: CustomPurcha
         {...(hit ? {} : { 'aria-disabled': true })}
         aria-describedby={hintId}
         data-testid="gear-custom-continue"
+        aria-label={hit ? `Continue with ${hit.name}` : undefined}
       >
-        {hit ? `continue with ${hit.name}` : 'name it to continue'}
+        {hit ? 'continue' : 'name it to continue'}
       </button>
     </form>
   );

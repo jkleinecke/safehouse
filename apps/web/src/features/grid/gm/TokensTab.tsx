@@ -59,7 +59,7 @@ export default function TokensTab({
   const templates = useNpcTemplates(campaignId, kind === 'npc_template');
 
   const center = { x: scene.grid.cols / 2, y: scene.grid.rows / 2 };
-  // "Place a token here" on the map's context menu fills this in; it is read
+  // "Place token" on the map's context menu fills this in; it is read
   // once and cleared by the placement, so the next token goes to the centre.
   const placeAt = useGridStore((s) => s.placeAt);
   const dropAt = placeAt ?? center;

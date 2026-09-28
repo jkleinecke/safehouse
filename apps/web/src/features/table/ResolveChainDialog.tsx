@@ -438,12 +438,22 @@ export default function ResolveChainDialog({
           className="btn btn-accent mt-3 w-full"
           onClick={roll}
           disabled={state.status === 'rolling' || !attacker || !defender || attackerId === defenderId}
+          title={
+            state.status === 'rolling'
+              ? undefined
+              : state.result
+                ? 'Reroll the whole chain (new dice on the record)'
+                : 'Roll the exchange'
+          }
+          aria-label={
+            state.status === 'rolling'
+              ? undefined
+              : state.result
+                ? 'Reroll the whole chain (new dice on the record)'
+                : 'Roll the exchange'
+          }
         >
-          {state.status === 'rolling'
-            ? 'Rolling…'
-            : state.result
-              ? 'Reroll whole chain (new dice on the record)'
-              : 'Roll the exchange'}
+          {state.status === 'rolling' ? 'Rolling…' : state.result ? 'Reroll' : 'Roll'}
         </button>
 
         <ChainResultView

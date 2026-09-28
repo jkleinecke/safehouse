@@ -137,9 +137,10 @@ export default function NewPagePrompt({ campaignId, seedTitle }: NewPagePromptPr
           className="btn shrink-0 px-3 py-1.5 disabled:cursor-not-allowed disabled:border-edge disabled:text-faint disabled:opacity-60"
           disabled={Boolean(offReason) || ask.isPending || text.length === 0}
           title={offReason ?? 'The Fixer drafts it; you accept, edit or reject it'}
+          aria-label="Ask the Fixer"
           onClick={submit}
         >
-          {ask.isPending ? '…' : 'ask the fixer'}
+          {ask.isPending ? '…' : 'ask'}
         </button>
       </div>
 

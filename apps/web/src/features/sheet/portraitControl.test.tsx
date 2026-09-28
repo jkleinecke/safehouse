@@ -54,14 +54,14 @@ describe('PortraitControl', () => {
 
   it('lets the owning player add a token image', () => {
     session.current = { userId: 'player-1', role: 'player' };
-    expect(show(character())).toContain('add token image');
+    expect(show(character())).toContain('aria-label="Add a token image"');
   });
 
   it('lets the GM do it for somebody else', () => {
     // The other half of the ask. A GM owns nobody's sheet, so a naive
     // ownership check would lock them out of the feature entirely.
     session.current = { userId: 'the-gm', role: 'gm' };
-    expect(show(character({ ownerUserId: 'player-1' }))).toContain('add token image');
+    expect(show(character({ ownerUserId: 'player-1' }))).toContain('aria-label="Add a token image"');
   });
 
   it('shows another player the picture and no buttons', () => {
@@ -79,7 +79,7 @@ describe('PortraitControl', () => {
     // the control from the person it belongs to and explained nothing. The
     // server still decides; at worst this costs one 403 with a sentence.
     session.current = { userId: undefined as unknown as string, role: 'player' };
-    expect(show(character())).toContain('add token image');
+    expect(show(character())).toContain('aria-label="Add a token image"');
   });
 
   it('still refuses an observer, who cannot own anything', () => {
@@ -107,7 +107,7 @@ describe('PortraitControl', () => {
     expect(html).toContain('/files/att-9');
     expect(html).toContain('replace');
     expect(html).toContain('remove');
-    expect(html).not.toContain('add token image');
+    expect(html).not.toContain('aria-label="Add a token image"');
   });
 
   it('accepts only the image types the server will take', () => {

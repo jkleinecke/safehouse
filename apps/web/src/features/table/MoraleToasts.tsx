@@ -1,7 +1,7 @@
 /**
  * Morale prompts (FR10.9): when a grunt group's triggers outrun its
  * Professional Rating, the GM gets a toast suggesting fall back / cut and
- * run. A suggestion only — the GM decides, and "Log it" is what makes it
+ * run. A suggestion only — the GM decides, and "Log" is what makes it
  * real (the log records the call).
  */
 import { useState } from 'react';
@@ -57,8 +57,9 @@ export default function MoraleToasts({ campaignId, combatants }: MoraleToastsPro
                 void postTableTalk(campaignId, moraleLine(p), 'marker').catch(() => undefined);
                 dismiss(p.key);
               }}
+              title="Post this morale line to the session log"
             >
-              Log it
+              Log
             </button>
           </div>
         </div>

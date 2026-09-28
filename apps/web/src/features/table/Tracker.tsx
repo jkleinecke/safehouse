@@ -45,7 +45,7 @@ export interface TrackerProps {
   campaignId: string;
   /** On the map: show that scene's fight rather than the live one. */
   sceneId?: string | null;
-  /** Under an empty roster: the map's "Start from the map" / "Add new tokens". */
+  /** Under an empty roster: the map's "Start" / "Add" (a fight from the map's tokens). */
   emptyAction?: ReactNode;
 }
 
@@ -364,7 +364,7 @@ export default function Tracker({ campaignId, sceneId = null, emptyAction }: Tra
                 onClick={() => run(() => patchEncounter(encounterId, { state: 'done' }))}
                 title="The fight is over; the tracker and the TV stand down"
               >
-                End the fight
+                End fight
               </button>
             )}
             </span>
@@ -390,8 +390,9 @@ export default function Tracker({ campaignId, sceneId = null, emptyAction }: Tra
                 disabled={busy}
                 onClick={() => run(() => postOrder(encounterId, { sort: 'score' }))}
                 title="Back to the book's order: score, then Edge, Reaction, Intuition (p.159)"
+                aria-label="Sort by score"
               >
-                Sort by score
+                Sort
               </button>
             </>
           )}

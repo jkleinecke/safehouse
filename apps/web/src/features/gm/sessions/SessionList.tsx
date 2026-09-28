@@ -102,7 +102,7 @@ export default function SessionList({ campaignId, selectedId, onSelect }: Sessio
                     onClick={() => start.mutate(session.id)}
                     title="Live mode: presence, log recording, starting fights"
                   >
-                    start session
+                    start
                   </button>
                 ) : (
                   <button
@@ -111,7 +111,7 @@ export default function SessionList({ campaignId, selectedId, onSelect }: Sessio
                     onClick={() => end.mutate(session.id)}
                     title="Closes the log and opens the award/recap flow"
                   >
-                    end session
+                    end
                   </button>
                 )}
               </div>

@@ -56,8 +56,13 @@ export default function GmNoteBanner(props: GmNoteBannerProps) {
           The GM returned this build with a note on step {returnedStep}, {meta.title}.
         </span>
         {onGoTo && (
-          <button type="button" className="chip text-magenta pointer-coarse:min-h-10" onClick={() => onGoTo(returnedStep)}>
-            read it
+          <button
+            type="button"
+            className="chip text-magenta pointer-coarse:min-h-10"
+            onClick={() => onGoTo(returnedStep)}
+            title="Read the note"
+          >
+            read
           </button>
         )}
       </div>

@@ -165,7 +165,7 @@ describe('the panel', () => {
   it('says the column is singular before a GM discovers it the hard way', () => {
     // Rendered only once the picker is open, so read the closed state first.
     const closed = render(<TemplatePanel campaignId="camp-1" page={page([])} isGm />);
-    expect(closed).toContain('link an archetype');
+    expect(closed).toContain('>link<');
     expect(closed).toContain('No archetype points at this page yet');
   });
 

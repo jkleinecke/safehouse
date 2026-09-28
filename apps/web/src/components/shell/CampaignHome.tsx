@@ -63,8 +63,13 @@ export default function CampaignHome() {
               hand you one from their Party roster.
             </p>
             {session?.role === 'player' && (
-              <Link to={`${c}/welcome`} className="btn mt-3 inline-flex px-3 py-1.5" data-testid="choose-runner">
-                choose your runner
+              <Link
+                to={`${c}/welcome`}
+                className="btn mt-3 inline-flex px-3 py-1.5"
+                data-testid="choose-runner"
+                title="Choose your runner"
+              >
+                choose
               </Link>
             )}
           </div>

@@ -72,7 +72,7 @@ function SustainedRowView({
           onClick={() => onRelease(row)}
           aria-label={`Stop sustaining ${row.name}`}
         >
-          Drop it
+          Drop
         </button>
       </div>
 

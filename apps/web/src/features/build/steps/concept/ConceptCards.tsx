@@ -128,8 +128,14 @@ export function ConceptConfirm({ plan, onConfirm, onCancel }: ConceptConfirmProp
           {keptSentence(plan)}
         </p>
         <div className="flex flex-wrap justify-end gap-2 pt-1">
-          <button type="button" className="btn px-3 py-1.5" onClick={onCancel} data-testid="concept-confirm-cancel">
-            keep the build as it is
+          <button
+            type="button"
+            className="btn px-3 py-1.5"
+            onClick={onCancel}
+            title="Keep the build as it is"
+            data-testid="concept-confirm-cancel"
+          >
+            keep
           </button>
           <button type="button" className="btn btn-accent px-3 py-1.5" onClick={onConfirm} data-testid="concept-confirm-go">
             {planGoLabel(plan)}

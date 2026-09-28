@@ -164,9 +164,10 @@ export default function LookEditor({ token, onDone }: { token: Token; onDone?: (
           type="button"
           className="btn px-2 py-1 text-xs text-cyan"
           disabled={!dirty || save.isPending}
+          title="Save the look"
           onClick={() => save.mutate({ tokenId: token.id, look: { ...draft, ...(description.trim() ? { description: description.trim() } : {}) } }, { onSuccess: () => onDone?.() })}
         >
-          {save.isPending ? 'saving…' : 'Save look'}
+          {save.isPending ? 'saving…' : 'Save'}
         </button>
         <button
           type="button"

@@ -21,7 +21,7 @@ export interface PlayRailProps {
   /** The map's scene: the rail shows its fight. */
   sceneId?: string | null;
   sceneName?: string;
-  /** The scene's tokens, for "Add N new tokens". */
+  /** The scene's tokens, for "Add N" (tokens not in the fight yet). */
   tokens?: readonly Token[];
   onCollapse: () => void;
 }

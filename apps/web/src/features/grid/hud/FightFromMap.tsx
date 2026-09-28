@@ -42,9 +42,14 @@ export default function FightFromMap({ campaignId, sceneId, sceneName, tokens, e
           className={`btn px-2 py-0.5 ${count > 0 ? 'border-cyan text-cyan' : ''}`}
           disabled={start.isPending}
           onClick={() => start.mutate({ sceneId, encounterId: fight.id })}
-          title={count > 0 ? 'Tokens placed since the fight was staged join it' : 'Every token on the map is in the fight already'}
+          title={
+            count > 0
+              ? `Add ${count} new token${count === 1 ? '' : 's'} to the fight: tokens placed since it was staged join it`
+              : 'Every token on the map is in the fight already'
+          }
+          aria-label={count > 0 ? `Add ${count} new token${count === 1 ? '' : 's'} to the fight` : 'Add new tokens to the fight'}
         >
-          {count > 0 ? `Add ${count} new token${count === 1 ? '' : 's'}` : 'Add new tokens'}
+          {count > 0 ? `Add ${count}` : 'Add'}
         </button>
       ) : (
         <button
@@ -53,9 +58,10 @@ export default function FightFromMap({ campaignId, sceneId, sceneName, tokens, e
           data-testid="start-fight"
           disabled={start.isPending}
           onClick={() => start.mutate({ sceneId, name: sceneName })}
-          title="Every runner and NPC token on this map becomes a row; hidden tokens stay hidden"
+          title="Start the fight from this map: every runner and NPC token becomes a row; hidden tokens stay hidden"
+          aria-label="Start the fight from the map"
         >
-          Start from the map
+          Start
         </button>
       )}
       {start.isError && <span className="mono-label text-danger">could not stage it, try again</span>}

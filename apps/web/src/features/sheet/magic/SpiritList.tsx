@@ -119,7 +119,7 @@ function SpiritRowView({
           onClick={() => onSpendService(spirit.id)}
           aria-label={spendServiceLabel(spirit)}
         >
-          Spend a service
+          Spend
         </button>
 
         <button
@@ -143,8 +143,9 @@ function SpiritRowView({
             disabled={busy === true}
             onClick={() => onJoin(spirit.id, encounterId)}
             aria-label={`Send ${spirit.name} into ${encounterName ?? 'the fight'} as a combatant`}
+            title={`Send ${spirit.name} into ${encounterName ?? 'the fight'} as a combatant`}
           >
-            Into the fight
+            Join
           </button>
         )}
 

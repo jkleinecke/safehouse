@@ -71,8 +71,8 @@ export default function DisplayTab({ commands }: DisplayTabProps) {
         <div className="mt-2 space-y-2">
           <Toggle
             on={display.blank}
-            label={display.blank ? 'table is blanked' : 'blank the table'}
-            hint="One tap hides everything on the big screen"
+            label={display.blank ? 'unblank' : 'blank'}
+            hint="Blank the table: one tap hides everything on the big screen"
             onClick={() => push({ blank: !display.blank })}
           />
           <Toggle
@@ -97,14 +97,14 @@ export default function DisplayTab({ commands }: DisplayTabProps) {
         <div className="mt-2 space-y-2">
           <Toggle
             on={tool === 'focus'}
-            label={tool === 'focus' ? 'click the map to pull every view' : 'focus here'}
-            hint="Recentres every viewport once; players pan freely afterwards"
+            label="focus"
+            hint="Click the map to pull every view there; recentres every viewport once, players pan freely afterwards"
             onClick={() => setTool(tool === 'focus' ? 'select' : 'focus')}
           />
           <Toggle
             on={tool === 'pointer'}
-            label={tool === 'pointer' ? 'drag to draw a trail' : 'pointer trail'}
-            hint="Streams a fading trail to every screen while you drag"
+            label="point"
+            hint="Drag to draw a pointer trail: streams a fading trail to every screen while you drag"
             onClick={() => setTool(tool === 'pointer' ? 'select' : 'pointer')}
           />
           <p className="mono-label text-faint">

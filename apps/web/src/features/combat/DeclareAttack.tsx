@@ -170,7 +170,7 @@ export default function DeclareAttack({ campaignId, sceneId = null, target, targ
           </p>
         )}
         <button type="button" className="btn btn-accent w-full py-2.5 text-sm" disabled={busy} onClick={submit}>
-          {busy ? 'Opening…' : 'Open the attack'}
+          {busy ? 'Declaring…' : 'Declare'}
         </button>
       </div>
     </Sheet>

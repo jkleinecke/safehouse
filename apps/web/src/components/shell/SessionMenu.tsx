@@ -150,8 +150,9 @@ export default function SessionMenu({ role, campaignId, displayName }: SessionMe
                 setOpen(false);
                 navigate('/', { replace: true });
               }}
+              title="Sign this device out"
             >
-              sign this device out
+              sign out
             </button>
             {sessions.length > 1 && (
               <button

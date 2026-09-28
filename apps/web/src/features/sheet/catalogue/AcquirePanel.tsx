@@ -171,8 +171,8 @@ export default function AcquirePanel(p: AcquirePanelProps) {
         </div>
         <span className="flex items-center gap-2">
           <RefChip refInfo={BUYING_GEAR_REF} />
-          <button type="button" className="mono-label text-faint hover:text-ink" onClick={p.onBack}>
-            back to the list
+          <button type="button" className="mono-label text-faint hover:text-ink" onClick={p.onBack} title="Back to the list">
+            back
           </button>
         </span>
       </div>
@@ -224,7 +224,7 @@ export default function AcquirePanel(p: AcquirePanelProps) {
         <h3 className="mono-label text-cyan">2 · The Availability test</h3>
         <div className="mt-1 flex flex-wrap items-center gap-2">
           <button type="button" className="btn px-3 py-1.5" onClick={() => void roll()} disabled={rolling} data-testid={`${p.testId}-roll`}>
-            {rolling ? 'rolling…' : result ? 'roll it again' : `roll ${searcher().pool + extra} vs ${num(rating, avail.rating)}`}
+            {rolling ? 'rolling…' : result ? 'reroll' : `roll ${searcher().pool + extra} vs ${num(rating, avail.rating)}`}
           </button>
           {result && (
             <span className={`text-xs ${result.outcome.found ? 'text-cyan' : 'text-warn'}`} data-testid={`${p.testId}-result`}>
@@ -244,7 +244,7 @@ export default function AcquirePanel(p: AcquirePanelProps) {
             <input className={`${inputClass} w-32`} inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value)} aria-label="Price paid" data-testid={`${p.testId}-price`} />
           </label>
           <button type="button" className="btn btn-accent px-3 py-1.5" onClick={acquire} data-testid={`${p.testId}-acquire-add`}>
-            add it{finalPrice > 0 ? ` for ${yen(finalPrice)}` : ''}
+            add{finalPrice > 0 ? ` · ${yen(finalPrice)}` : ''}
           </button>
           <span className="mono-label text-faint">
             {finalPrice > 0 ? (p.gm ? 'the spend is recorded on the ledger' : 'the spend is proposed, pending the GM') : 'no spend — a gift, a find, or free'}

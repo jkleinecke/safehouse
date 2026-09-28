@@ -92,8 +92,10 @@ export default function TokenInspector({
             type="button"
             className={'btn flex-1 py-1 ' + (token.hidden ? 'btn-accent' : '')}
             onClick={() => patch.mutate({ tokenId: token.id, patch: { hidden: !token.hidden } })}
+            title={token.hidden ? 'Reveal to players' : 'Hide from players'}
+            aria-label={token.hidden ? 'Reveal to players' : 'Hide from players'}
           >
-            {token.hidden ? 'reveal to players' : 'hide from players'}
+            {token.hidden ? 'reveal' : 'hide'}
           </button>
         </div>
         {layers.length > 0 && (

@@ -102,7 +102,7 @@ describe('the token menu', () => {
     expect(inp.actions.setPose).toHaveBeenCalledWith('Ganger', 'prone');
     items.find((i) => i.id === 'hidden')!.run();
     expect(inp.actions.setHidden).toHaveBeenCalledWith('Ganger', false);
-    expect(items.find((i) => i.id === 'hidden')!.label).toBe('Reveal to players');
+    expect(items.find((i) => i.id === 'hidden')!.label).toBe('Reveal');
   });
 
   it('offers range from the selected token, and the sheet for a character', () => {
@@ -196,7 +196,7 @@ describe('doors and walls', () => {
     expect(ids(contextMenuItems(gm))).toEqual(['door-toggle', 'door-lock', 'door-remove']);
     contextMenuItems(gm)[0]!.run();
     expect(gm.actions.doorOp).toHaveBeenCalledWith({ doorId: 'd1', op: 'open' });
-    expect(contextMenuItems(gm)[1]!.label).toBe('Unlock it');
+    expect(contextMenuItems(gm)[1]!.label).toBe('Unlock');
     // A player's runner beside it (d1 runs along the top edge of square 4,0).
     const beside = [token('Whisper', { x: 4.5, y: 0.5 })];
     expect(
@@ -223,7 +223,7 @@ describe('doors and walls', () => {
     expect(tileDoorState(scene, 0, '3,3')).toEqual({ open: true, locked: false });
     const inp = input({ target: { kind: 'tileDoor', cell: '3,3', level: 0 } });
     const items = contextMenuItems(inp);
-    expect(items[0]!.label).toBe('Close the door');
+    expect(items[0]!.label).toBe('Close');
     items[0]!.run();
     expect(inp.actions.doorOp).toHaveBeenCalledWith({ cell: '3,3', level: 0, op: 'close' });
   });

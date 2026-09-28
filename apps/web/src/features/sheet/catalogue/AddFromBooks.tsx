@@ -168,15 +168,22 @@ export function AddFromBooksView(p: AddFromBooksViewProps) {
                   title="The Availability test and a price of the table's choosing (SR5 p.418)"
                   data-testid={`${p.testId}-find`}
                 >
-                  find &amp; negotiate
+                  find
                 </button>
               </li>
             ))}
           </ul>
         )}
         <div className="mt-3">
-          <button type="button" className="chip text-cyan hover:border-cyan" onClick={() => p.onCustom(!p.custom)} aria-expanded={p.custom} data-testid={`${p.testId}-custom-open`}>
-            {p.custom ? 'hide the form' : 'or write your own'}
+          <button
+            type="button"
+            className="chip text-cyan hover:border-cyan"
+            onClick={() => p.onCustom(!p.custom)}
+            aria-expanded={p.custom}
+            title={p.custom ? 'Hide the form' : 'Write your own item'}
+            data-testid={`${p.testId}-custom-open`}
+          >
+            {p.custom ? 'hide' : 'custom'}
           </button>
           {p.custom && (
             <CustomItemForm

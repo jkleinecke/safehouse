@@ -88,8 +88,10 @@ export default function GmIncoming({ x, row, named }: GmIncomingProps) {
         type="button"
         className={`${small} btn-accent`}
         onClick={() => who && openGmCard({ ...who, kind: 'soak', exchangeId: x.id })}
+        title="Resist damage"
+        aria-label="Resist damage"
       >
-        Resist damage
+        Resist
       </button>
     );
   } else {

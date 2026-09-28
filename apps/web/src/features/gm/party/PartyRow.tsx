@@ -175,8 +175,9 @@ export default function PartyRow({
               className="btn px-2.5 py-1"
               onClick={() => onJumpToToken(token)}
               title={`${token.name} on ${sceneName ?? 'the active scene'} at ${token.x}, ${token.y}`}
+              aria-label="Find on map"
             >
-              find on map
+              find
             </button>
           ) : (
             <span className="mono-label text-faint" title="No token for this PC on the active scene">

@@ -284,8 +284,10 @@ export function ReturnFormView({ notes, step, gate, tried, onNotes, onStep, onSu
             {...(gate.open ? {} : { 'aria-disabled': 'true' as const })}
             {...(gate.reason ? { 'aria-describedby': reasonId } : {})}
             data-testid={`${testId}-send`}
+            title="Return with notes"
+            aria-label="Return with notes"
           >
-            return with notes
+            return
           </button>
           {gate.reason && (
             <p id={reasonId} className={`text-sm ${showReason ? 'text-warn' : 'sr-only'}`} data-testid={`${testId}-reason`}>
@@ -342,8 +344,13 @@ export function ApprovePanelView({
           The runner is in play, with its first revision, its carried Karma and its starting nuyen rolled on the record.
         </p>
         {characterId ? (
-          <Link to={sheetHref(campaignId, characterId)} className="btn btn-accent inline-flex px-3 py-1.5" data-testid={`${testId}-sheet`}>
-            open the character sheet
+          <Link
+            to={sheetHref(campaignId, characterId)}
+            className="btn btn-accent inline-flex px-3 py-1.5"
+            data-testid={`${testId}-sheet`}
+            aria-label="Open the character sheet"
+          >
+            open sheet
           </Link>
         ) : (
           <p className="text-sm text-dim">The new sheet is on the party roster.</p>

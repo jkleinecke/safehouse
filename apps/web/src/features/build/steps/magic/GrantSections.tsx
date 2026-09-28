@@ -114,7 +114,7 @@ function GrantHead({
             onClick={() => update((b) => setWaived(b, state.key, true))}
             data-testid={`grant-${state.key}-waive`}
           >
-            waive the rest
+            waive
           </button>
           <span id={noteId} className="text-xs text-faint">
             Gives up the {state.open} still open; the step then counts this grant as done.
@@ -134,7 +134,7 @@ function GrantHead({
               onClick={() => update((b) => setWaived(b, state.key, false))}
               data-testid={`grant-${state.key}-unwaive`}
             >
-              undo waive
+              undo
             </button>
           )}
         </div>

@@ -185,7 +185,7 @@ function CapInput({
           aria-label={`Reset ${label} to ${LEVEL_NAMES[level]}'s ${formatCap(field, preset)}`}
           onClick={() => onForm(resetCap(form, field))}
         >
-          reset to level
+          reset
         </button>
       </div>
       <p id={defaultId} className="mt-1 text-xs text-faint">
@@ -502,8 +502,9 @@ export function ChargenSettingsView(props: ChargenSettingsViewProps) {
             className="btn btn-accent px-3 py-1.5"
             disabled={!outcome.canSave || props.saving}
             data-testid="chargen-save"
+            title="Save creation settings"
           >
-            {props.saving ? 'saving…' : 'save creation settings'}
+            {props.saving ? 'saving…' : 'save'}
           </button>
           {dirty && (
             <button type="button" className="btn px-3 py-1.5" disabled={props.saving} onClick={props.onDiscard}>

@@ -394,9 +394,10 @@ function DoorFields({
           className="btn flex-1 py-1"
           aria-pressed={door.open}
           data-testid="door-open"
+          title={door.open ? 'Close the door' : 'Open the door'}
           onClick={() => doorOp.mutate({ doorId: door.id, op: door.open ? 'close' : 'open' })}
         >
-          {door.open ? 'shut it' : 'open it'}
+          {door.open ? 'close' : 'open'}
         </button>
         <button
           type="button"
@@ -534,8 +535,14 @@ function PinFields({
             </button>
           </span>
         ) : (
-          <button type="button" className="btn w-full py-1" onClick={() => fileRef.current?.click()}>
-            upload a handout
+          <button
+            type="button"
+            className="btn w-full py-1"
+            title="Upload a handout"
+            aria-label="Upload a handout"
+            onClick={() => fileRef.current?.click()}
+          >
+            upload
           </button>
         )}
       </Row>
@@ -555,10 +562,13 @@ function PinFields({
           className={'btn flex-1 py-1 ' + (isPublic ? 'text-ok' : '')}
           aria-pressed={isPublic}
           data-testid="pin-visibility"
-          title="Public pins reach player and TV screens, once the fog shows the table their spot (live or seen before)"
+          title={
+            (isPublic ? 'Revealed to the table; hide it. ' : 'Private to you; reveal it. ') +
+            'Public pins reach player and TV screens, once the fog shows the table their spot (live or seen before)'
+          }
           onClick={() => onPatch({ visibility: isPublic ? 'gm' : 'public' })}
         >
-          {isPublic ? 'revealed — hide it' : 'private — reveal it'}
+          {isPublic ? 'hide' : 'reveal'}
         </button>
         <DeleteButton onClick={() => remove(removePin(geo, pin.id))} />
       </div>
@@ -672,9 +682,10 @@ function CameraFields({
           data-testid="camera-lens"
           className={'btn px-2 py-0.5 ' + (lensOn ? 'border-cyan text-cyan' : '')}
           onClick={() => setLosTokenId(lensOn ? null : cameraLensId(camera.id))}
-          title="show the map the way this camera sees it"
+          title={lensOn ? 'Stop looking through this camera' : 'Look through it: show the map the way this camera sees it'}
+          aria-label={lensOn ? 'Stop looking through the camera' : 'Look through the camera'}
         >
-          {lensOn ? 'stop looking through it' : 'look through it'}
+          {lensOn ? 'stop' : 'look'}
         </button>
         <DeleteButton
           label="Remove the camera"

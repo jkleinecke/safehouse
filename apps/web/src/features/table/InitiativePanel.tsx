@@ -242,9 +242,10 @@ export default function InitiativePanel({ encounter, isGm, onClose }: Initiative
               className="btn btn-accent px-2 py-1"
               disabled={busyId !== null}
               onClick={start}
-              title={blank > 0 ? 'Blank rows start the turn without a score and join when it comes in (p.160)' : undefined}
+              title={blank > 0 ? 'Blank rows start the turn without a score and join when it comes in (p.160)' : 'Start the turn'}
+              aria-label="Start the turn"
             >
-              Start the turn
+              Start
             </button>
           )}
           {onClose && !gathering && (

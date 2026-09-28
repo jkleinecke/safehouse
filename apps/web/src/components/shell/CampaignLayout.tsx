@@ -31,7 +31,7 @@ function NoSession() {
           door — a GM can start a campaign or pair with a code there.
         </p>
         <Link className="btn btn-accent mt-5 w-full" to="/">
-          go to sign-in
+          sign in
         </Link>
       </div>
     </main>

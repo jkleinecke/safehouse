@@ -122,8 +122,13 @@ function ApprovedFace(props: FinishViewProps) {
           record of how it was made.
         </p>
         {characterId ? (
-          <Link to={sheetHref(campaignId, characterId)} className="btn btn-accent inline-flex px-3 py-1.5" data-testid="finish-character-link">
-            open the character sheet
+          <Link
+            to={sheetHref(campaignId, characterId)}
+            className="btn btn-accent inline-flex px-3 py-1.5"
+            data-testid="finish-character-link"
+            aria-label="Open the character sheet"
+          >
+            open sheet
           </Link>
         ) : (
           <p className="text-sm text-dim">The sheet is on the party roster.</p>

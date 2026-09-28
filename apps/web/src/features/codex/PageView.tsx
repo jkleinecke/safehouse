@@ -265,8 +265,12 @@ export default function PageView({ campaignId, pageId, isGm, onCreatePrompt }: P
         </span>
         {isGm && (
           <>
-            <button className="btn px-3 py-1.5" onClick={() => setEditing((v) => !v)}>
-              {editing ? 'stop editing' : 'edit'}
+            <button
+              className="btn px-3 py-1.5"
+              onClick={() => setEditing((v) => !v)}
+              title={editing ? 'Stop editing' : undefined}
+            >
+              {editing ? 'done' : 'edit'}
             </button>
             {page.visibility !== 'public' ? (
               <>
@@ -280,7 +284,7 @@ export default function PageView({ campaignId, pageId, isGm, onCreatePrompt }: P
                       : 'Share this page with the table and say so in the log'
                   }
                 >
-                  {reveal.isPending || pin.isPending ? 'revealing…' : 'reveal to table'}
+                  {reveal.isPending || pin.isPending ? 'revealing…' : 'reveal'}
                 </button>
                 {secrets.length > 0 && (
                   <button
@@ -300,7 +304,7 @@ export default function PageView({ campaignId, pageId, isGm, onCreatePrompt }: P
                 onClick={() => reveal.mutate({ visibility: 'gm', announce: false })}
                 title="Put it back behind the screen (no announcement)"
               >
-                un-share
+                hide
               </button>
             )}
           </>

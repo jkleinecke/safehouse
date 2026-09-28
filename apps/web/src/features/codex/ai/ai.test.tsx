@@ -326,7 +326,7 @@ describe('the browser pane’s “describe it” control', () => {
     qc.setQueryData(['fixer', 'status'], { enabled: false, models: null });
     const html = render(<NewPagePrompt campaignId={CAMPAIGN} />, qc);
     expect(html).toContain('ganger bar on the docks');
-    expect(html).toContain('ask the fixer');
+    expect(html).toContain('>ask<');
     expect(html).toContain('disabled=""');
     expect(html).toContain('LLM_BASE_URL');
     expect(html).toContain(`/c/${CAMPAIGN}/gm/fixer`);

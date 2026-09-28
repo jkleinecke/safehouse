@@ -226,7 +226,7 @@ describe('REST alone populates the roster (LIVE-1)', () => {
       token: SCENE_BODY.tokens[0]!,
       sceneName: 'Pier 23 Warehouse',
     });
-    expect(withToken).toContain('find on map');
+    expect(withToken).toContain('>find<');
     expect(withToken).toContain('Pier 23 Warehouse');
   });
 });
@@ -382,7 +382,7 @@ describe('PartyRoster', () => {
     expect(html).toContain('1 unclaimed');
     // The scene the table is on, named, because the map jump is on these rows.
     expect(html).toContain('Pier 23 Warehouse');
-    expect(html).toContain('find on map');
+    expect(html).toContain('>find<');
   });
 
   it('prefers the server’s derived numbers when they have landed', () => {

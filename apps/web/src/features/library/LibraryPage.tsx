@@ -104,8 +104,8 @@ export function SharedShelf({ campaignId }: { campaignId: string }) {
             title="No shared books"
             blurb="The GM has not shared a rulebook with the table yet. Once they do, it shows up here and every SR5 p.426 style reference in the app opens straight to that page."
             actions={
-              <Link className="btn btn-accent px-3 py-1.5" to={`/c/${campaignId}`}>
-                back to the table
+              <Link className="btn btn-accent px-3 py-1.5" to={`/c/${campaignId}`} title="Back to the table">
+                back
               </Link>
             }
             hint="Ask the GM to flip a book to shared on their library screen."

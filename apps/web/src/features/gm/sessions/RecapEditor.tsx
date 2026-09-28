@@ -65,7 +65,7 @@ export default function RecapEditor({
           }
           title="Assemble headline events from the session log"
         >
-          draft from log
+          draft
         </button>
       </div>
 
@@ -131,8 +131,9 @@ export default function RecapEditor({
                 ? 'Set the Discord webhook URL in campaign settings first'
                 : 'Post the recap to the table Discord'
             }
+            aria-label="Publish to Discord"
           >
-            publish to Discord
+            publish
           </button>
         )}
 
@@ -162,8 +163,9 @@ export default function RecapEditor({
               className="btn mt-2 px-3 py-1.5"
               disabled={update.isPending}
               onClick={() => update.mutate({ id: session.id, patch: { prepNotesMd: prep } })}
+              title="Save prep notes"
             >
-              save prep notes
+              save
             </button>
           </>
         )}

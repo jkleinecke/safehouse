@@ -128,7 +128,7 @@ describe('a running fight', () => {
     expect(html).toContain('Roll initiative');
     expect(html).toContain('End pass');
     expect(html).toContain('New turn');
-    expect(html).toContain('End the fight');
+    expect(html).toContain('>End fight<');
     expect(html).toContain('TURN 1 · PASS 1');
     expect(html).toContain('data-rolled="yes"');
     expect((html.match(/>ROLL</g) ?? []).length).toBe(2);

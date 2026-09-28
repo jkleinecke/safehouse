@@ -176,8 +176,9 @@ export default function AiSettings({ campaignId }: { campaignId: string }) {
                   disabled={probe.isPending || !/^https?:\/\//i.test(baseUrl.trim())}
                   onClick={() => probe.mutate(baseUrl.trim())}
                   data-testid="ai-probe-check"
+                  title="Check the box at this address"
                 >
-                  {probe.isPending ? 'checking…' : 'check the box'}
+                  {probe.isPending ? 'checking…' : 'check'}
                 </button>
                 <span className="text-[0.7rem] text-dim">
                   Reaches it from this server and lists the models it serves.

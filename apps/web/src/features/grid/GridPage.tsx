@@ -1335,8 +1335,9 @@ export default function GridPage() {
                 data-testid="reload-map"
                 className="btn btn-accent mt-4 px-3 py-1.5"
                 onClick={() => setStageEpoch((n) => n + 1)}
+                title="Reload the map"
               >
-                Reload map
+                Reload
               </button>
             </div>
           </div>
@@ -1412,6 +1413,7 @@ export default function GridPage() {
                 data-testid="activate-scene"
                 disabled={activateScene.isPending}
                 title="Push this scene to every player device and the TV"
+                aria-label="Put this scene on the table"
                 onClick={() =>
                   activateScene.mutate(scene.id, {
                     onSuccess: () => {
@@ -1422,7 +1424,7 @@ export default function GridPage() {
                 }
                 className="chip pointer-events-auto border-cyan bg-panel/90 text-cyan disabled:opacity-50"
               >
-                put on the table →
+                Go live
               </button>
             )}
             {/*

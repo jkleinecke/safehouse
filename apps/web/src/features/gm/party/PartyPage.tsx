@@ -45,11 +45,16 @@ export default function PartyPage() {
         </div>
 
         <div className="mt-4 flex flex-wrap gap-2">
-          <button className="btn btn-accent px-3 py-1.5" onClick={() => setQrOpen(true)}>
-            show join QR
+          <button
+            className="btn btn-accent px-3 py-1.5"
+            onClick={() => setQrOpen(true)}
+            title="Show the join QR"
+            aria-label="Show the join QR"
+          >
+            QR
           </button>
-          <Link className="btn px-3 py-1.5" to={`/c/${campaignId}/gm`}>
-            back to the console
+          <Link className="btn px-3 py-1.5" to={`/c/${campaignId}/gm`} title="Back to the console">
+            back
           </Link>
         </div>
 

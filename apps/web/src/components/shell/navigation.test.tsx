@@ -231,7 +231,7 @@ describe('empty states hand over the control that fixes them', () => {
     // A control, not prose about one.
     expect(html).toMatch(/<button[^>]*>new blank sheet<\/button>/);
     // The native builder sits beside the Chummer import (FR3.9, §6 decision 3).
-    expect(html).toMatch(/<button[^>]*data-testid="build-runner"[^>]*>build a runner<\/button>/);
+    expect(html).toMatch(/<button[^>]*data-testid="build-runner"[^>]*>build<\/button>/);
   });
 
   it('an empty shared library says who can fix it and links back', () => {
@@ -256,7 +256,7 @@ describe('empty states hand over the control that fixes them', () => {
       ],
     });
     expect(html).toContain('data-testid="devices-empty"');
-    expect(html).toMatch(/<button[^>]*>show join QR<\/button>/);
+    expect(html).toMatch(/<button[^>]*aria-label="Show the join QR"[^>]*>QR<\/button>/);
   });
 
   it('the console leads with what is set up and what is not', () => {

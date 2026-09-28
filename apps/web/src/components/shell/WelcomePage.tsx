@@ -136,8 +136,8 @@ export default function WelcomePage() {
         </div>
       </Section>
 
-      <Link to={home} className="mono-label inline-flex min-h-10 items-center text-dim hover:text-cyan">
-        skip for now
+      <Link to={home} className="mono-label inline-flex min-h-10 items-center text-dim hover:text-cyan" title="Skip for now">
+        skip
       </Link>
     </div>
   );

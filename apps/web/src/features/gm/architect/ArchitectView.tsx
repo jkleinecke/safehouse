@@ -150,8 +150,9 @@ export default function ArchitectView(p: ArchitectViewProps) {
             onClick={p.onOutline}
             disabled={p.brief.trim().length < 10 || busy}
             data-testid="architect-outline"
+            title={p.outline ? 'Rough it out again' : 'Rough it out'}
           >
-            {p.outlining ? 'roughing it out…' : p.outline ? 'rough it out again' : 'rough it out'}
+            {p.outlining ? 'outlining…' : p.outline ? 'redo' : 'outline'}
           </button>
           {p.outlining && (
             <button type="button" className="btn px-2.5 py-1 text-danger" onClick={p.onCancel} disabled={p.cancelling} data-testid="architect-cancel">
@@ -259,8 +260,8 @@ export default function ArchitectView(p: ArchitectViewProps) {
           )}
           <div className="mt-3 flex flex-wrap gap-2">
             {p.result.results.some((r) => r.ok && r.landed === 'drafts') && (
-              <Link className="btn px-3 py-1.5" to={`${base}/gm/fixer`} data-testid="architect-to-drafts">
-                open the drafts inbox
+              <Link className="btn px-3 py-1.5" to={`${base}/gm/fixer`} data-testid="architect-to-drafts" title="Open the drafts inbox">
+                open drafts
               </Link>
             )}
             {p.result.results.some((r) => r.landed === 'scenes') && (

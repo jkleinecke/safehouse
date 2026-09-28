@@ -220,7 +220,7 @@ export default function GeneratePanel({
                     onClick={() => onDuplicateTemplate(template)}
                     title="Fork it into a new archetype — tune the copy, keep this one"
                   >
-                    duplicate &amp; edit
+                    fork
                   </button>
                 )}
               </span>
@@ -284,7 +284,7 @@ export default function GeneratePanel({
                 This archetype has no tiers, so there is nothing to roll inside.
                 {template && onEditTemplate && (
                   <button className="btn px-2.5 py-1" onClick={() => onEditTemplate(template)}>
-                    add a tier
+                    add tier
                   </button>
                 )}
               </span>
@@ -392,8 +392,9 @@ export default function GeneratePanel({
                   }),
                 )
               }
+              title="Add the squad to the encounter"
             >
-              add squad to encounter
+              add
             </button>
           </div>
           <div className="panel p-4">
@@ -413,7 +414,7 @@ export default function GeneratePanel({
               templateId={resultTemplate.id}
               templateName={resultTemplate.name}
               gen={resultTemplate.gen}
-              addLabel="add squad to the fight"
+              addLabel="add squad"
               onAddToEncounter={() =>
                 onAddEntry(
                   entryFromGroup(group, {

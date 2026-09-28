@@ -52,8 +52,8 @@ export default function ChargenPage() {
             runners being built
           </Link>{' '}
           ·{' '}
-          <Link className="text-cyan hover:underline" to={`/c/${campaignId}/gm`}>
-            back to the console
+          <Link className="text-cyan hover:underline" to={`/c/${campaignId}/gm`} title="Back to the console">
+            back
           </Link>
         </p>
       </div>

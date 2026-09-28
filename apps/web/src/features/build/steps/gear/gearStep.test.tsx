@@ -298,7 +298,7 @@ describe('the shop, open', () => {
       <CustomPurchaseView value={{ ...EMPTY_CUSTOM, kind: 'augmentation', name: 'Invented Gill Pouch' }} onChange={noop} onContinue={noop} />,
     );
     expect(form).toContain('aria-label="Write in a purchase"');
-    expect(copy(form)).toContain('continue with Invented Gill Pouch');
+    expect(form).toContain('aria-label="Continue with Invented Gill Pouch"');
     expect(form).toContain('data-testid="gear-custom-essence"');
     expect(form).toContain('Cyberware or bioware');
     const empty = renderToStaticMarkup(<CustomPurchaseView value={EMPTY_CUSTOM} onChange={noop} onContinue={noop} />);

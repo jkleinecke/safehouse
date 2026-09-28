@@ -124,8 +124,9 @@ export default function LedgerTab({ character }: TabProps) {
           className="btn btn-accent mt-3 w-full py-2.5 text-sm"
           disabled={!valid || propose.isPending}
           onClick={submit}
+          title="Propose — pending GM approval"
         >
-          {propose.isPending ? 'Sending…' : 'Propose — pending GM approval'}
+          {propose.isPending ? 'Sending…' : 'Propose'}
         </button>
         {propose.isError && (
           <p className="mt-2 text-xs text-danger">

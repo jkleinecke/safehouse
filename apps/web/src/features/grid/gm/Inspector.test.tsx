@@ -67,13 +67,13 @@ describe('<Inspector>', () => {
 
   it('shows a door with open and lock, and says what the lock means', () => {
     const shut = render({ kind: 'door', id: 'd1' });
-    expect(shut).toMatch(/open it/);
+    expect(shut).toMatch(/>open</);
     expect(shut).toContain('data-testid="door-lock-d1"');
     expect(shut).toMatch(/>lock</);
     expect(shut).toMatch(/players can open and shut it/);
 
     const locked = render({ kind: 'door', id: 'd2' });
-    expect(locked).toMatch(/shut it/);
+    expect(locked).toMatch(/>close</);
     expect(locked).toMatch(/>unlock</);
     expect(locked).toMatch(/locked — only you can open it/);
   });
@@ -89,9 +89,9 @@ describe('<Inspector>', () => {
     const html = render({ kind: 'pin', id: 'p1' });
     expect(html).toMatch(/private to you/);
     expect(html).toContain('value="the safe"');
-    expect(html).toMatch(/upload a handout/);
+    expect(html).toMatch(/>upload</);
     expect(html).toContain('data-testid="pin-visibility"');
-    expect(html).toMatch(/private — reveal it/);
+    expect(html).toMatch(/>reveal</);
     expect(html).toMatch(/points at nothing yet/);
   });
 
@@ -102,7 +102,7 @@ describe('<Inspector>', () => {
     expect(html).toContain('value="270"');
     expect(html).toMatch(/>N</);
     expect(html).toContain('data-testid="camera-lens"');
-    expect(html).toMatch(/look through it/);
+    expect(html).toMatch(/>look</);
     // One floor: no floor picker.
     expect(html).not.toMatch(/Camera floor/);
   });

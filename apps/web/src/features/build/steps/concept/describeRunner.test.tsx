@@ -141,7 +141,7 @@ describe('waiting for a description', () => {
     expect(tagWith(html, 'concept-describe-draft')).toContain('disabled');
     const ready = render({ prompt: DESCRIPTION });
     expect(tagWith(ready, 'concept-describe-draft')).not.toContain('disabled');
-    expect(copy(ready)).toContain('draft a runner');
+    expect(ready).toMatch(/data-testid="concept-describe-draft"[^>]*>draft</);
     expect(ready).not.toContain('data-testid="concept-describe-stop"');
   });
 
@@ -208,7 +208,7 @@ describe('the draft, before anything changes', () => {
     expect(html).toContain('data-testid="concept-draft"');
     expect(html).toContain('data-state="proposed"');
     expect(copy(html)).toContain('The Fixer&#x27;s draft'.replace('&#x27;', "'"));
-    expect(copy(html)).toContain('draft again');
+    expect(html).toMatch(/data-testid="concept-describe-draft"[^>]*>redraft</);
   });
 
   it('says what the draft would change, and how much of it', () => {
@@ -253,7 +253,7 @@ describe('the draft, before anything changes', () => {
   });
 
   it('offers taking it and throwing it away, in those words', () => {
-    expect(copy(html)).toContain('use this draft');
+    expect(html).toMatch(/data-testid="concept-draft-accept"[^>]*>use</);
     expect(copy(html)).toContain('discard');
   });
 

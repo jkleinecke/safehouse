@@ -11,14 +11,14 @@
  *
  * The flow is a card's, with the question asked first rather than after:
  *
- * 1. A description, and **draft a runner**. While the model works the button
+ * 1. A description, and **draft**. While the model works the button
  *    says so, a **stop** button stops this build's draft (never the GM's
  *    Fixer), and a status line says a local model can take a minute.
  * 2. The proposal, **before anything changes**: each thing a player weighs a
  *    runner by as "was → would be" (heard as a sentence, not an arrow and a
  *    strike-through), what the rules would flag, and what the Fixer named but
  *    could not find in the campaign's books.
- * 3. **use this draft** — one pure updater through `update`
+ * 3. **use** — one pure updater through `update`
  *   (`acceptProposal`), so the shell recomputes and autosaves it like any
  *    other edit, and Back/undo behave as they always do — or **discard**.
  *
@@ -142,8 +142,9 @@ export function DescribeRunnerView(props: DescribeRunnerViewProps) {
           aria-busy={busy || undefined}
           aria-describedby={statusId}
           data-testid="concept-describe-draft"
+          title={summary ? 'Draft again' : 'Draft a runner'}
         >
-          {busy ? 'drafting…' : summary ? 'draft again' : 'draft a runner'}
+          {busy ? 'drafting…' : summary ? 'redraft' : 'draft'}
         </button>
         {busy && (
           <button type="button" className="btn px-3 py-1.5" onClick={props.onStop} disabled={stopping} data-testid="concept-describe-stop">
@@ -224,8 +225,15 @@ function DraftCard({ summary, onAccept, onDiscard }: { summary: ProposalSummary;
         {DRAFT_KEPT_WORDS}
       </p>
       <div className="flex flex-wrap gap-2">
-        <button type="button" className="btn btn-accent px-3 py-1.5" onClick={onAccept} aria-describedby={keptId} data-testid="concept-draft-accept">
-          use this draft
+        <button
+          type="button"
+          className="btn btn-accent px-3 py-1.5"
+          onClick={onAccept}
+          aria-describedby={keptId}
+          data-testid="concept-draft-accept"
+          title="Use this draft"
+        >
+          use
         </button>
         <button type="button" className="btn px-3 py-1.5" onClick={onDiscard} data-testid="concept-draft-discard">
           discard

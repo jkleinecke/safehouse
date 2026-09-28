@@ -201,6 +201,7 @@ function AwardsPanel({ run, campaignId }: { run: RunRecord; campaignId: string }
         <button
           className="btn btn-accent px-3 py-1.5"
           disabled={award.isPending || picked.length === 0}
+          title="Post as pending, for approval"
           onClick={() => {
             const k = Number.parseInt(karma, 10);
             const n = Number.parseInt(nuyen, 10);
@@ -221,7 +222,7 @@ function AwardsPanel({ run, campaignId }: { run: RunRecord; campaignId: string }
             );
           }}
         >
-          {award.isPending ? 'posting…' : 'post as pending'}
+          {award.isPending ? 'posting…' : 'award'}
         </button>
       </div>
       <p className="mono-label mt-1.5 text-faint">

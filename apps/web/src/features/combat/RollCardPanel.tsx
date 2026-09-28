@@ -294,8 +294,14 @@ function TargetPicker({
       label="Target"
       aside={
         onPickOnMap ? (
-          <button type="button" className="btn px-2 py-0.5 text-xs pointer-coarse:min-h-9" onClick={onPickOnMap}>
-            Tap a token
+          <button
+            type="button"
+            className="btn px-2 py-0.5 text-xs pointer-coarse:min-h-9"
+            onClick={onPickOnMap}
+            title="Tap a token on the map"
+            aria-label="Pick the target on the map"
+          >
+            Pick
           </button>
         ) : undefined
       }
@@ -689,8 +695,10 @@ export default function RollCardPanel(props: RollCardPanelProps) {
             type="button"
             className="btn btn-accent mt-2 w-full py-2"
             onClick={() => onDraft({ ...draft, stage: 'dice' })}
+            title="Done with modifiers, show the dice"
+            aria-label="Next: show the dice"
           >
-            Done, show dice
+            Next
           </button>
         </Section>
       ) : (

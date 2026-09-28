@@ -90,7 +90,7 @@ function DraftRow({ gen, campaignId }: { gen: AiGeneration; campaignId: string }
           {accept.isPending ? 'applying…' : editing ? 'accept edited' : 'accept'}
         </button>
         <button className="btn px-3 py-1.5" onClick={() => setEditing((e) => !e)}>
-          {editing ? 'cancel edit' : 'edit'}
+          {editing ? 'cancel' : 'edit'}
         </button>
         <button
           className="btn px-3 py-1.5 text-danger"

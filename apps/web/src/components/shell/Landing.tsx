@@ -320,8 +320,8 @@ export default function Landing() {
             <p id="pair-help" className="mono-label text-faint">
               The whole join URL works too.
             </p>
-            <button className="btn btn-accent w-full" type="submit">
-              pair this device
+            <button className="btn btn-accent w-full" type="submit" aria-label="Pair this device">
+              pair
             </button>
             {codeError && (
               <p role="alert" className="text-xs text-danger">
@@ -366,8 +366,9 @@ export default function Landing() {
               className="btn btn-accent w-full"
               type="submit"
               disabled={bootstrap.isPending || campaignName.trim().length === 0}
+              aria-label={bootstrap.isPending ? undefined : 'Start a new campaign'}
             >
-              {bootstrap.isPending ? 'building the safehouse…' : 'start a new campaign'}
+              {bootstrap.isPending ? 'building the safehouse…' : 'start'}
             </button>
             <Problem error={bootstrap.error} />
           </form>
@@ -421,8 +422,13 @@ export default function Landing() {
                 </select>
               </label>
             </div>
-            <button className="btn btn-accent w-full" type="submit" disabled={adopt.isPending}>
-              {adopt.isPending ? 'checking the token…' : 'use this token'}
+            <button
+              className="btn btn-accent w-full"
+              type="submit"
+              disabled={adopt.isPending}
+              aria-label={adopt.isPending ? undefined : 'Use this token'}
+            >
+              {adopt.isPending ? 'checking the token…' : 'use'}
             </button>
             {pasteError && (
               <p role="alert" className="text-xs text-danger">

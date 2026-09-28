@@ -176,8 +176,10 @@ export default function PortraitControl({ subject, compact = false }: PortraitCo
                 className="btn px-2 py-1 text-xs"
                 disabled={busy}
                 onClick={() => input.current?.click()}
+                title={portraitId === null ? 'Add a token image' : 'Replace the token image'}
+                aria-label={portraitId === null ? 'Add a token image' : 'Replace the token image'}
               >
-                {portraitId === null ? 'add token image' : 'replace'}
+                {portraitId === null ? 'add' : 'replace'}
               </button>
               {portraitId !== null && (
                 <button

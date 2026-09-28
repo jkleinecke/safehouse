@@ -53,13 +53,14 @@ export function BuildRunnerButton({ campaignId, name, className }: BuildRunnerBu
         data-testid="build-runner"
         disabled={create.isPending}
         title="Walk through the book's nine creation steps, checked as you go"
+        aria-label={create.isPending ? undefined : 'Build a runner'}
         onClick={() =>
           create.mutate(alias ? { alias } : {}, {
             onSuccess: (record) => navigate(buildHref(campaignId, record.id)),
           })
         }
       >
-        {create.isPending ? 'starting…' : 'build a runner'}
+        {create.isPending ? 'starting…' : 'build'}
       </button>
       {create.error && (
         <span className="basis-full text-xs text-danger" role="alert">
@@ -104,8 +105,14 @@ export function PlayerBuildsCard({ campaignId, hasCharacter }: { campaignId: str
           ))}
         </ul>
       )}
-      <Link to={buildListHref(campaignId)} className="btn mt-3 inline-flex px-3 py-1.5" data-testid="player-build-start">
-        {rows.length === 0 ? 'start a new runner' : 'resume or start another'}
+      <Link
+        to={buildListHref(campaignId)}
+        className="btn mt-3 inline-flex px-3 py-1.5"
+        data-testid="player-build-start"
+        title={rows.length === 0 ? 'Start a new runner' : undefined}
+        aria-label={rows.length === 0 ? 'Start a new runner' : undefined}
+      >
+        {rows.length === 0 ? 'start' : 'resume or start another'}
       </Link>
     </div>
   );
