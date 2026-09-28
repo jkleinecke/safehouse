@@ -122,6 +122,11 @@ describe('a token placed on a live fight’s scene', () => {
     expect(row['monitors'].physical.filled).toBe(3);
     expect((await gm('GET', `/api/exchanges/${opened['exchange'].id}`))['exchange'].state).toBe('awaiting_defense');
     expect(await logTexts()).toContain('Late ganger: token removed, still in Dock fight');
+
+    // A token linked by hand is a token again.
+    const standIn = await place({ source: 'prop', name: 'Stand-in' });
+    const linked = await gm('PATCH', `/api/combatants/${lateId}`, { tokenId: standIn });
+    expect(linked['combatant'].tokenRemoved).toBeUndefined();
   });
 });
 

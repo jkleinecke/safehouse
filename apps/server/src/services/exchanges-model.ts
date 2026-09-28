@@ -121,12 +121,18 @@ export async function writeExchange(tx: EventTx, x: Exchange, appliedAt?: Date |
   return toExchange(row);
 }
 
-/** Still open when a new Combat Turn starts: closed with the old one. */
-export async function closeBeforeTurn(tx: EventTx, encounterId: string, turn: number): Promise<Exchange[]> {
+/** Still open when a new Combat Turn starts: closed with the old one. No `turn`: every open one (the fight ended). */
+export async function closeBeforeTurn(tx: EventTx, encounterId: string, turn?: number): Promise<Exchange[]> {
   const before = await tx.db
     .select()
     .from(exchanges)
-    .where(and(eq(exchanges.encounterId, encounterId), inArray(exchanges.state, OPEN_STATES), lt(exchanges.turn, turn)));
+    .where(
+      and(
+        eq(exchanges.encounterId, encounterId),
+        inArray(exchanges.state, OPEN_STATES),
+        turn === undefined ? undefined : lt(exchanges.turn, turn),
+      ),
+    );
   if (before.length === 0) return [];
   await tx.db
     .update(exchanges)

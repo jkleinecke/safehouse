@@ -62,7 +62,7 @@ let encounterId: string;
 let bouncer: string;
 let lark: string;
 
-async function call(method: 'GET' | 'POST', url: string, token: string, payload?: unknown) {
+async function call(method: 'GET' | 'POST' | 'PATCH', url: string, token: string, payload?: unknown) {
   return t.app.inject({
     method,
     url,
@@ -282,5 +282,24 @@ describe('exchanges over the API', () => {
     expect(opened['exchange'].turn).toBe(0);
     await gm('POST', `/api/encounters/${early}/roll-initiative`, {});
     expect((await gm('GET', `/api/exchanges/${opened['exchange'].id}`))['exchange'].state).toBe('cancelled');
+  });
+
+  it('closes what is still open when a fight ends, by hand or by another going live', async () => {
+    const open = async (name: string) => {
+      const fight = (await gm('POST', `/api/campaigns/${boot.campaignId}/encounters`, { name, state: 'live' }))['encounter'].id;
+      const row = (await gm('POST', `/api/encounters/${fight}/combatants`, { source: 'manual', name: 'Thug', monitors }))['combatant'];
+      const x = await gm('POST', '/api/exchanges', { target: { kind: 'combatant', id: row.id }, hits: 2, dv: { value: 6, type: 'P' } });
+      return { fight, id: x['exchange'].id as string };
+    };
+    const state = async (id: string) => (await gm('GET', `/api/exchanges/${id}`))['exchange'].state;
+
+    const alley = await open('Alley');
+    expect((await call('PATCH', `/api/encounters/${alley.fight}`, boot.gmToken, { state: 'done' })).statusCode).toBe(200);
+    expect(await state(alley.id)).toBe('cancelled');
+
+    const roof = await open('Roof');
+    const next = (await gm('POST', `/api/campaigns/${boot.campaignId}/encounters`, { name: 'Stairwell' }))['encounter'].id;
+    expect((await call('PATCH', `/api/encounters/${next}`, boot.gmToken, { state: 'live' })).statusCode).toBe(200);
+    expect(await state(roof.id)).toBe('cancelled');
   });
 });

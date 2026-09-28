@@ -249,6 +249,8 @@ export class EncountersService {
         await tx.db.update(encounters).set(patch).where(eq(encounters.id, id)).returning()
       )[0]!;
       if (row.turn > current.turn) await closeExchangesBefore(tx, id, row.turn);
+      // No exchange stays open on a prep or done fight.
+      if (current.state === 'live' && row.state !== 'live') await closeExchangesBefore(tx, id);
       if (patch.state === 'live') await this.retireOtherLive(tx, row.campaignId, row.id);
       await this.emitUpdated(row, 'updated', tx, fightIsPublic(row) || current.state === 'live');
       return row;
@@ -420,6 +422,7 @@ export class EncountersService {
     if (patch.edge !== undefined) copilot.edge = patch.edge;
     if (patch.grunt !== undefined) copilot.grunt = patch.grunt;
     if (patch.leader !== undefined) copilot.leader = patch.leader;
+    if (patch.tokenId) delete copilot.tokenRemoved;
     // A score entered settles a late entry and is this turn's entry.
     if (patch.initScore !== undefined) {
       delete copilot.lateEntry;
@@ -1062,7 +1065,10 @@ export class EncountersService {
       .where(and(eq(encounters.campaignId, campaignId), eq(encounters.state, 'live'), ne(encounters.id, keepId)))
       .returning();
     // They were live: the table hears that they ended.
-    for (const other of others) await this.emitUpdated(other, 'updated', tx, true);
+    for (const other of others) {
+      await closeExchangesBefore(tx, other.id);
+      await this.emitUpdated(other, 'updated', tx, true);
+    }
   }
 
   /** Interrupt action: deduct its Initiative Score cost immediately (FR4.4). */
@@ -1227,11 +1233,12 @@ export class EncountersService {
   }
 }
 
-/** Open exchanges from before `turn` close with their Combat Turn; turn 0 is before the fight started. */
-async function closeExchangesBefore(tx: EventTx, encounterId: string, turn: number): Promise<void> {
+/** Open exchanges from before `turn` close with their Combat Turn; turn 0 is before the fight started. No `turn`: the fight ended. */
+async function closeExchangesBefore(tx: EventTx, encounterId: string, turn?: number): Promise<void> {
   const closed = await closeBeforeTurn(tx, encounterId, turn);
   for (const x of closed) {
-    const when = x.turn === 0 ? 'closed as the fight started' : 'closed with the Combat Turn';
+    const when =
+      turn === undefined ? 'closed as the fight ended' : x.turn === 0 ? 'closed as the fight started' : 'closed with the Combat Turn';
     await logToGm(tx, `${x.attacker?.name ?? 'Someone'} → ${x.target.name}: ${when}`, x);
   }
   if (closed.length > 0) await announceToPlayers(tx, closed);
