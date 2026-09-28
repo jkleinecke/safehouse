@@ -258,12 +258,18 @@ export const SITUATIONAL_MODIFIERS: readonly SituationalModifier[] = [
     refs: [sr5Page(178, 'Called Shot'), RANGED_TABLE],
   },
   {
+    // Running costs −2 on EVERY action taken while running, not only a shot
+    // (p.162: all actions but a Sprint); the ranged table repeats it for the
+    // shot (p.176, 178). So it rides on `action` too, and a spell, a skill or
+    // an Observe in Detail made on the run can tick it. Two actions leave it
+    // out (actions.ts): Sprint, which the rule excepts, and a melee attack,
+    // where running in makes a charge and the charge ignores this −2 (p.186).
     id: 'attacker_running',
-    label: 'Shooter is running',
-    applies: ['attack.ranged'],
+    label: 'Running this turn',
+    applies: ['attack.ranged', 'action'],
     value: -2,
-    ref: sr5Page(178, 'Attacker Running'),
-    refs: [RUNNING_MODIFIERS, RANGED_TABLE],
+    ref: RUNNING_MODIFIERS,
+    refs: [sr5Page(178, 'Attacker Running'), RANGED_TABLE],
   },
   {
     // Also on the whole pool when firing two guns at once (p.178).

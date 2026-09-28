@@ -71,8 +71,13 @@ export const RULE_REFS = {
   specialization: SR5(129, 'Specializations'),
   /** Rolling a skill you do not have: attribute − 1. */
   defaulting: SR5(130, 'Defaulting'),
-  success: SR5(44, 'Success Tests'),
-  opposed: SR5(45, 'Opposed Tests'),
+  /**
+   * The Success Tests and Opposed Tests write-ups both sit on p.47, after the
+   * limits; p.44 is Hits & Thresholds and p.45 the threshold table, buying
+   * hits and glitches.
+   */
+  success: SR5(47, 'Success Tests'),
+  opposed: SR5(47, 'Opposed Tests'),
   threshold: SR5(45, 'Thresholds'),
   extended: SR5(48, 'Extended Tests'),
   limits: SR5(47, 'Limits'),

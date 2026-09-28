@@ -84,7 +84,7 @@ const SMARTLINK = /smart[\s-]?link/i;
  * smartlink from any augment or piece of gear named for one.
  *
  * Two lines of the compensation table are left out on purpose. Image
- * magnification only works after a Take Aim (p.177), so owning a scope is not
+ * magnification only works after a Take Aim (p.166, 178), so owning a scope is not
  * enough — whoever knows the shooter aimed passes it in. Ultrasound ignores
  * light only within 50 m (p.175), which needs the distance to the target.
  *

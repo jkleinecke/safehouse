@@ -147,7 +147,11 @@ const without = (ids: readonly string[], ...drop: string[]): string[] => ids.fil
 const RANGED = idsIn('attack.ranged', 'action', 'all');
 /** Throwing and bows do not recoil; suppressive fire ignores it (p.179). */
 const RANGED_NO_RECOIL = without(RANGED, 'recoil');
-const MELEE = idsIn('attack.melee', 'action', 'all');
+/**
+ * A melee attack made running is a charge: the charge's own +2 stands in for
+ * running's −2, which the charger ignores (p.186-187).
+ */
+const MELEE = without(idsIn('attack.melee', 'action', 'all'), 'attacker_running');
 const DEFENSE = idsIn('defense', 'all');
 /** Damage resistance takes no wound modifier (p.170). */
 const SOAK = without(idsIn('soak', 'all'), 'wounds');
@@ -155,6 +159,8 @@ const PERCEPTION = idsIn('perception', 'action', 'all');
 /** Casting by sight is subject to visibility (p.281). */
 const CAST = [...idsIn('action', 'all'), 'environment_sight'];
 const SKILL = idsIn('action', 'all');
+/** Running's −2 is on every action but the Sprint itself (p.162). */
+const SPRINT = without(SKILL, 'attacker_running');
 /** Neither is resisting a direct combat spell (p.170). */
 const RESIST_SPELL = without(idsIn('all'), 'wounds');
 const ANY_TEST = idsIn('all');
@@ -518,7 +524,7 @@ export const COMBAT_ACTIONS: readonly CombatAction[] = [
     refs: [sr5Page(162, 'Sprinting')],
     pool: { from: 'skill', skill: 'running', attr: 'str' },
     limit: 'physical',
-    offers: SKILL,
+    offers: SPRINT,
   },
   {
     id: 'use_skill',

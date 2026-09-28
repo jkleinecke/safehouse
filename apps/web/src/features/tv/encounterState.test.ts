@@ -248,6 +248,26 @@ describe('tvRibbonRows', () => {
     expect(rows[1]?.acted).toBe(true);
   });
 
+  it("follows the server's order: a seizer leads on an unchanged score (SR5 p.160-161)", () => {
+    const seized = normalizeTvEncounter(
+      playerView({ turnOrder: ['c-ganger', 'c-wisp'], activeCombatantId: 'c-ganger' }),
+    );
+    expect(tvRibbonRows(seized).map((r) => [r.id, r.order])).toEqual([
+      ['c-ganger', 1],
+      ['c-wisp', 2],
+    ]);
+    // The GM-grade Encounter carries it on the object itself.
+    const gm = tvEncounterFrom(
+      gmEncounter([combatant({ id: 'a', initScore: 20 }), combatant({ id: 'b', initScore: 8 })], {
+        turnOrder: ['b', 'a'],
+      }),
+    );
+    expect(tvRibbonRows(gm).map((r) => r.id)).toEqual(['b', 'a']);
+    // An order that misses a live row is not trusted: the score stands.
+    const partial = normalizeTvEncounter(playerView({ turnOrder: ['c-ganger'] }));
+    expect(tvRibbonRows(partial).map((r) => r.id)).toEqual(['c-wisp', 'c-ganger']);
+  });
+
   it('honours an explicit acting combatant', () => {
     const rows = tvRibbonRows(normalizeTvEncounter(playerView({ activeCombatantId: 'c-ganger' })));
     expect(rows.find((r) => r.acting)?.id).toBe('c-ganger');

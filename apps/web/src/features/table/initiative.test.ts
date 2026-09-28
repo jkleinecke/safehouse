@@ -120,6 +120,38 @@ describe('trackerRows', () => {
     expect(rows.map((r) => r.combatant.id)).toEqual(['c', 'a', 'b']);
   });
 
+  it("draws the server's order: a seizer leads on an unchanged score (SR5 p.160-161)", () => {
+    const rows = trackerRows(
+      encounter(
+        [
+          combatant({ id: 'fast', initScore: 22 }),
+          combatant({ id: 'seizer', initScore: 9, seized: true }),
+          combatant({ id: 'mid', initScore: 14 }),
+          combatant({ id: 'spent', initScore: 0 }),
+        ],
+        { turnOrder: ['seizer', 'fast', 'mid'] },
+      ),
+      GM,
+    );
+    expect(rows.map((r) => r.combatant.id)).toEqual(['seizer', 'fast', 'mid', 'spent']);
+    expect(rows.map((r) => r.order)).toEqual([1, 2, 3, null]);
+  });
+
+  it('falls back to the score, seizers first, when the order misses a live row', () => {
+    const rows = trackerRows(
+      encounter(
+        [
+          combatant({ id: 'fast', initScore: 22 }),
+          combatant({ id: 'seizer', initScore: 9, seized: true }),
+          combatant({ id: 'late', initScore: 30 }),
+        ],
+        { turnOrder: ['seizer', 'fast'] },
+      ),
+      GM,
+    );
+    expect(rows.map((r) => r.combatant.id)).toEqual(['seizer', 'late', 'fast']);
+  });
+
   it('sinks spent rows below live ones without dropping them', () => {
     const rows = trackerRows(
       encounter([

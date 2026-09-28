@@ -91,7 +91,7 @@ export function envRowValue(row: number): number {
  * - `smartlink`: wind shifts one row up. It helps a shot, so it belongs on an
  *   attack and nowhere else (see `eyesOnly`).
  * - `imageMagnification`: range comes one category closer — but only after a
- *   Take Aim (p.177), so it is never read off the sheet; whoever knows the
+ *   Take Aim (p.166, 178), so it is never read off the sheet; whoever knows the
  *   shooter aimed passes it in.
  *
  * Flare compensation, sunglasses, tracer rounds and ultrasound are in the

@@ -136,20 +136,54 @@ export function scoreFromRolled(c: Combatant, rolled: number): number {
   return c.initBase + rolled + computeWoundModifier(c.monitors);
 }
 
-/** Score desc, then initiative base desc, then id — matches the rules engine. */
+/**
+ * Seizers first (SR5 p.160-161), then score desc, then initiative base desc,
+ * then id — the fallback when the server's order is not on hand.
+ */
 function compareOrder(a: Combatant, b: Combatant): number {
-  return b.initScore - a.initScore || b.initBase - a.initBase || (a.id < b.id ? -1 : 1);
+  return (
+    Number(b.seized === true) - Number(a.seized === true) ||
+    b.initScore - a.initScore ||
+    b.initBase - a.initBase ||
+    (a.id < b.id ? -1 : 1)
+  );
 }
 
 /**
- * Project an encounter into ordered tracker rows for one viewer. Spent rows
- * (score ≤ 0) sink below the live ones instead of vanishing — the GM still
- * hand-edits them (FR4.8).
+ * The server's acting order (`Encounter.turnOrder`) as places, when it names
+ * every live row on screen; null otherwise.
+ *
+ * The server is the one that knows the order: the GM's manual places, Seize
+ * the Initiative and ERIC ties (SR5 p.159-161). A seize moves the PLACE and
+ * leaves the score alone, so a tracker sorting by score would keep a seizer
+ * where the dice put them while the server calls them first. An order that
+ * misses a live row (an older server, a frame from before a late joiner) is
+ * not trusted, and the score order stands.
+ */
+function serverPlaces(encounter: Encounter | null | undefined, live: readonly Combatant[]): Map<string, number> | null {
+  const order = encounter?.turnOrder;
+  if (!order || order.length === 0) return null;
+  const places = new Map(order.map((id, i) => [id, i] as const));
+  return live.every((c) => places.has(c.id)) ? places : null;
+}
+
+/**
+ * Project an encounter into ordered tracker rows for one viewer, in the
+ * server's acting order. Spent rows (score ≤ 0) sink below the live ones
+ * instead of vanishing — the GM still hand-edits them (FR4.8).
  */
 export function trackerRows(encounter: Encounter | null | undefined, viewer: Viewer): TrackerRow[] {
   const all = visibleCombatants(encounter?.combatants ?? [], viewer);
+  const places = serverPlaces(
+    encounter,
+    all.filter((c) => c.initScore > 0),
+  );
   const sorted = [...all].sort(
-    (a, b) => Number(a.initScore <= 0) - Number(b.initScore <= 0) || compareOrder(a, b),
+    (a, b) =>
+      Number(a.initScore <= 0) - Number(b.initScore <= 0) ||
+      (places && a.initScore > 0 && b.initScore > 0
+        ? (places.get(a.id) ?? 0) - (places.get(b.id) ?? 0)
+        : compareOrder(a, b)),
   );
   const actingId = encounter?.activeCombatantId ?? nextActor(all)?.id ?? null;
 

@@ -61,6 +61,12 @@ export interface TvEncounter {
   pass: number;
   activeCombatantId: string | null;
   combatants: TvCombatantRow[];
+  /**
+   * The acting order as the server drew it (`turnOrder` in every view and
+   * frame): the GM's manual places, Seize the Initiative and ERIC ties (SR5
+   * p.159-161). Absent when the source did not carry one.
+   */
+  turnOrder?: string[];
 }
 
 /** Server-side coarse condition (`encounters-model.ts conditionOf`). */
@@ -136,6 +142,9 @@ export function normalizeTvEncounter(input: unknown): TvEncounter | null {
 
   const active =
     str(raw['activeCombatantId']) ?? str(body['activeCombatantId']) ?? null;
+  // Like the roster, the order rides beside the encounter object in the
+  // server's views and frames, and inside it on the GM-grade `Encounter`.
+  const turnOrder = idList(raw['turnOrder']) ?? idList(body['turnOrder']);
 
   return {
     id,
@@ -145,7 +154,13 @@ export function normalizeTvEncounter(input: unknown): TvEncounter | null {
     pass: num(body['pass']) ?? 0,
     activeCombatantId: combatants.some((c) => c.id === active) ? active : null,
     combatants,
+    ...(turnOrder ? { turnOrder } : {}),
   };
+}
+
+/** A list of ids, or undefined for anything that is not one. */
+function idList(v: unknown): string[] | undefined {
+  return Array.isArray(v) ? v.filter((id): id is string => typeof id === 'string') : undefined;
 }
 
 /** Convenience for callers already holding a typed `Encounter`. */
@@ -225,7 +240,16 @@ function compareOrder(a: TvCombatantRow, b: TvCombatantRow): number {
   return b.initScore - a.initScore || b.initBase - a.initBase || (a.id < b.id ? -1 : 1);
 }
 
-/** Public combatants in acting order; the acting one is flagged for the glow. */
+/**
+ * Public combatants in acting order; the acting one is flagged for the glow.
+ *
+ * The order is the server's (`turnOrder`) whenever it names every live row:
+ * a Seize the Initiative moves the seizer's PLACE to the top and leaves the
+ * score alone (SR5 p.160-161), and the GM's manual places move no score
+ * either, so a sort by score would put them back where the dice left them.
+ * Without a usable order (an older server, a frame from before a late
+ * joiner) the ribbon falls back to the score.
+ */
 export function tvRibbonRows(
   encounter: TvEncounter | null,
   cap: number = TV_RIBBON_CAP,
@@ -234,7 +258,12 @@ export function tvRibbonRows(
   if (all.length === 0) return [];
   const live = all.filter((c) => c.initScore > 0);
   const pool = live.length > 0 ? live : all;
-  const sorted = [...pool].sort(compareOrder);
+  const order = encounter?.turnOrder ?? [];
+  const places = new Map(order.map((id, i) => [id, i] as const));
+  const byServer = live.length > 0 && live.every((c) => places.has(c.id));
+  const sorted = [...pool].sort(
+    byServer ? (a, b) => (places.get(a.id) ?? 0) - (places.get(b.id) ?? 0) : compareOrder,
+  );
   const actingId =
     encounter?.activeCombatantId ?? sorted.find((c) => !c.actedThisPass)?.id ?? null;
   return sorted.slice(0, Math.max(0, cap)).map((c, i) => ({

@@ -17,6 +17,7 @@ import {
   combatAction,
   defenseModifierFor,
   defenseOptions,
+  offersFor,
   situationalModifier,
 } from '../src/index.js';
 
@@ -41,6 +42,18 @@ describe('the catalogues', () => {
     expect(situationalModifier('cover_partial')?.value).toBe(COVER_DEFENCE_BONUS.partial);
     expect(situationalModifier('cover_good')?.value).toBe(COVER_DEFENCE_BONUS.good);
     expect(COVER_DEFENCE_BONUS.good).toBe(4);
+  });
+
+  it("puts running's -2 on every action but a Sprint, and leaves melee to the charge (p.162, 186)", () => {
+    const running = (id: string) => offersFor(id).some((m) => m.id === 'attacker_running');
+    expect(running('fire_sa')).toBe(true);
+    expect(running('cast_spell')).toBe(true);
+    expect(running('use_skill')).toBe(true);
+    expect(running('observe_in_detail')).toBe(true);
+    expect(running('sprint')).toBe(false);
+    expect(running('melee_attack')).toBe(false);
+    expect(offersFor('melee_attack').some((m) => m.id === 'charging')).toBe(true);
+    expect(running('defense')).toBe(false);
   });
 });
 

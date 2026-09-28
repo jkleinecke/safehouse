@@ -74,7 +74,7 @@ describe('the chips', () => {
     expect(html).toContain('SR5 p.132');
     expect(html).toContain('perception · Physical Active Skills');
     expect(html).toContain('SR5 p.51');
-    expect(html).toContain('SR5 p.44');
+    expect(html).toContain('SR5 p.47');
     expect(html).not.toContain('target="_blank"');
     expect(renderToStaticMarkup(<RollRefs refs={[]} />)).toBe('');
   });
