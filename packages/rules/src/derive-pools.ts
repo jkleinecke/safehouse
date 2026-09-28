@@ -9,6 +9,7 @@ import type {
 } from '@safehouse/contracts';
 import { metatypeRow } from './chargen/metatypes.js';
 import { applyPipeline, baseEntry } from './derive-pipeline.js';
+import { eyesOnly, type EnvironmentCompensation } from './env.js';
 import { lineRef } from './refs.js';
 
 /** Which inherent limit a skill test uses, keyed by the skill's linked attribute. */
@@ -120,14 +121,22 @@ export function deriveArmor(sheet: SheetV1, mods: readonly Modifier[]): PoolBrea
  * A skill row that names a target is keyed `skill.<id>::<target>`
  * (`skillPoolKey`) and answers to `pool.skill.<id>::<target>` as well as the
  * bare `pool.skill.<id>`.
+ *
+ * `envComp` is what the character brings against the environment table (SR5
+ * p.175). A weapon pool gets all of it — a smartlink reads the wind for the
+ * gun — and every other pool only the eyes (`eyesOnly`), so a smartlink never
+ * steadies a Perception Test.
  */
 export function buildPools(
   sheet: SheetV1,
   attrs: Record<string, DerivedValue>,
   limits: LimitsIn,
   mods: readonly Modifier[],
+  envComp: EnvironmentCompensation = {},
 ): Record<string, PoolBreakdown> {
   const pools: Record<string, PoolBreakdown> = {};
+  const sight = { floorZero: true, environment: eyesOnly(envComp) };
+  const shot = { floorZero: true, environment: envComp };
 
   const armor = deriveArmor(sheet, mods);
   pools['armor'] = armor;
@@ -146,7 +155,7 @@ export function buildPools(
       key === `skill.${skill.id}`
         ? [`pool.skill.${skill.id}`, 'pool.all']
         : [`pool.${key}`, `pool.skill.${skill.id}`, 'pool.all'];
-    const res = applyPipeline(av + skill.rating, entries, targets, mods, { floorZero: true });
+    const res = applyPipeline(av + skill.rating, entries, targets, mods, sight);
     const lk = skillLimitKind(skill.attr);
     pools[key] = {
       total: res.value,
@@ -186,7 +195,7 @@ export function buildPools(
       entries,
       [`pool.weapon.${weapon.name}`, `pool.skill.${weapon.skillId}`, 'pool.all'],
       mods,
-      { floorZero: true },
+      shot,
     );
     pools[`weapon.${weapon.name}`] = {
       total: res.value,
@@ -211,7 +220,7 @@ export function buildPools(
       }
       const targets = [`pool.spell.${spell.name}`, 'pool.all'];
       if (casting) targets.push(`pool.skill.${casting.id}`);
-      const res = applyPipeline(base, entries, targets, mods, { floorZero: true });
+      const res = applyPipeline(base, entries, targets, mods, sight);
       pools[`spell.${spell.name}`] = { total: res.value, breakdown: res.breakdown };
     }
   }
@@ -228,7 +237,7 @@ export function buildPools(
       ],
       ['pool.defense', 'pool.all'],
       mods,
-      { floorZero: true },
+      sight,
     );
     pools['defense'] = { total: res.value, breakdown: res.breakdown };
   }

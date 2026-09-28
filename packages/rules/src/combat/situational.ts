@@ -48,6 +48,7 @@
  */
 import type { Ref } from '@safehouse/contracts';
 import { lineRef, sr5Page } from '../refs.js';
+import { COVER_DEFENCE_BONUS } from '../vision/cover.js';
 
 /**
  * Which kind of test a modifier belongs to. `action` is any test made on the
@@ -179,7 +180,7 @@ export const SITUATIONAL_MODIFIERS: readonly SituationalModifier[] = [
     // visibility, light/glare, wind and range, bumped one row when two
     // conditions tie at the worst (p.175, with p.173's "Range is an
     // environmental modifier"). Range belongs INSIDE this line, not on top of
-    // it — the lookup that computes it is design step 4.
+    // it — `environmentLookup` (env.ts) computes it, `columns` included.
     id: 'environment',
     label: 'Environment',
     applies: ['attack.ranged'],
@@ -469,11 +470,12 @@ export const SITUATIONAL_MODIFIERS: readonly SituationalModifier[] = [
   {
     // Cover helps the defender: good is more than half the body hidden,
     // partial a quarter to a half (p.190). Good cover counts against any
-    // attack; partial against ranged attacks and indirect spells.
+    // attack; partial against ranged attacks and indirect spells. The
+    // numbers are the map's own cover table, so the two can never disagree.
     id: 'cover_good',
     label: 'Good cover',
     applies: ['defense'],
-    value: 4,
+    value: COVER_DEFENCE_BONUS.good,
     group: 'cover',
     ref: lineRef('cover'),
     refs: [DEFENSE_TABLE],
@@ -482,7 +484,7 @@ export const SITUATIONAL_MODIFIERS: readonly SituationalModifier[] = [
     id: 'cover_partial',
     label: 'Partial cover',
     applies: ['defense'],
-    value: 2,
+    value: COVER_DEFENCE_BONUS.partial,
     group: 'cover',
     against: ['ranged'],
     ref: lineRef('cover'),

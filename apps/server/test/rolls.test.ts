@@ -184,7 +184,7 @@ describe('authoritative recompute (§10.1)', () => {
       expect(roll.request.pool).toBe(5); // 8 − 1 scene − 2 situational
       expect(roll.faces.length).toBe(5);
       const labels = roll.request.breakdown.map((b) => b.label);
-      expect(labels.some((l) => l.startsWith('environment: light 1'))).toBe(true);
+      expect(labels).toContain('environment: partial light -1');
       expect(labels).toContain('thermal smoke');
       expect(labels).not.toContain('dim light (client copy)');
       // Principle 3: the receipt sums to the pool.

@@ -11,6 +11,7 @@ import type {
 import { AUGMENTATION_BONUS_CAP, applyPipeline, baseEntry } from './derive-pipeline.js';
 import { buildPools } from './derive-pools.js';
 import { lineRef } from './refs.js';
+import { environmentCompensationFor } from './vision/modes.js';
 
 export * from './derive-pipeline.js';
 export { buildPools, deriveArmor, skillLimitKind, skillPoolKey } from './derive-pools.js';
@@ -435,7 +436,10 @@ export function deriveCharacter(sheet: SheetV1, ctx?: DeriveContext): DerivedCha
   );
 
   // --- Pools ---
-  const pools = buildPools(sheet, attributes, limits, mods);
+  // The scene's environment line (and a shot's range band) are read with the
+  // character's own eyes and gear (SR5 p.175): a troll's thermographic sight
+  // takes dim light to partial, an elf's low-light takes it to full.
+  const pools = buildPools(sheet, attributes, limits, mods, environmentCompensationFor(sheet));
 
   return {
     attributes,

@@ -11,6 +11,8 @@ export interface Entry {
   label: string;
   value: number;
   source?: string;
+  /** The environment line's table rows (SR5 p.175), when the line is the environment. */
+  env?: Partial<Record<'visibility' | 'light' | 'glare' | 'wind' | 'range', number>>;
 }
 export interface RollResult {
   faces: number[];

@@ -24,11 +24,15 @@ import type { CoverLevel } from './los.js';
 
 /**
  * Defender dice-pool bonus per cover level. THE numbers to check against the
- * book — see the header.
+ * book — see the header. Checked against SR5 p.190 (and the Defense Modifiers
+ * table on p.189): partial cover, a quarter to half of the body hidden, is +2
+ * against ranged attacks; good cover, more than half, is +4 against any
+ * attack. The map only ever finds partial; good is the GM's call.
  */
 export const COVER_DEFENCE_BONUS: Readonly<Record<CoverLevel, number>> = {
   none: 0,
   partial: 2,
+  good: 4,
   full: 0, // no shot exists; see the header
 };
 
@@ -108,6 +112,7 @@ export interface CoverCall {
 const COVER_WORD: Readonly<Record<CoverLevel, string>> = {
   none: 'no cover',
   partial: 'partial cover',
+  good: 'good cover',
   full: 'full cover — no shot',
 };
 

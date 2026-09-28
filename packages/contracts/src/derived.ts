@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { RefSchema } from './common.js';
+import { EnvRowsSchema, RefSchema } from './common.js';
 
 /** One line of a derived value's receipt (Principle 3: show your work). */
 export const ProvenanceEntrySchema = z.object({
@@ -16,6 +16,14 @@ export const ProvenanceEntrySchema = z.object({
    * "read up" row, and a GM's hand-typed number has no page at all.
    */
   ref: RefSchema.optional(),
+  /**
+   * On the environment line only: the table rows the line was read from, after
+   * the character's eyes and gear had their say (SR5 p.175). A client about to
+   * add a range band to this pool reads them to price the band inside the
+   * environment rather than on top of it (p.173: range is one more
+   * environmental condition).
+   */
+  env: EnvRowsSchema.optional(),
 });
 export type ProvenanceEntry = z.infer<typeof ProvenanceEntrySchema>;
 

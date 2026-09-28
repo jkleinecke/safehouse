@@ -31,8 +31,15 @@
  */
 import type { Point } from '@safehouse/contracts';
 
-/** How obstructed a sightline is. `full` means there is no sightline at all. */
-export type CoverLevel = 'none' | 'partial' | 'full';
+/**
+ * How obstructed a sightline is. `full` means there is no sightline at all.
+ *
+ * `good` (more than half the body hidden, SR5 p.190) is never found by the
+ * map: the trace sees a waist-high counter, not how much of the runner is
+ * behind it or whether they used a Take Cover. It exists for the GM's call
+ * (`coverCall`), which is where the line between partial and good is drawn.
+ */
+export type CoverLevel = 'none' | 'partial' | 'good' | 'full';
 
 /** One traced obstacle, in grid coordinates. */
 export interface SightSegment {

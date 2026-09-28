@@ -1,4 +1,5 @@
 import type { Modifier, ModifierSourceKind, ProvenanceEntry } from '@safehouse/contracts';
+import { envRowsOf, foldEnvironment, type EnvironmentCompensation } from './env.js';
 import { lineRef } from './refs.js';
 
 /**
@@ -49,6 +50,12 @@ export interface PipelineOptions {
    * sources). See `AUGMENTATION_SOURCE_KINDS` for what counts.
    */
   augmentationCap?: number;
+  /**
+   * The character's eyes and gear against the environment table (SR5 p.175):
+   * low-light, thermographic, a smartlink for a shot's wind. Used when the
+   * scene's line (and a shot's range band) are read as one lookup.
+   */
+  environment?: EnvironmentCompensation;
 }
 
 /**
@@ -92,6 +99,15 @@ const countsTowardAugmentationCap = (phase: readonly ModifierSourceKind[]): bool
  * - `add` ops are summed;
  * - `cap` ops apply last; the lowest cap wins and only records a line when
  *   it actually clamps.
+ *
+ * The exception to "adds are summed" is the environment. Every additive
+ * modifier that stands for rows of the environment table (`Modifier.env`: the
+ * active scene, a shot's range band) is read together as ONE lookup and
+ * written as one line, where the first of them would have gone (SR5 p.173:
+ * the worst condition counts, two tied go a row worse, and range is one of
+ * the conditions). So dim light and a medium-range shot cost −3 between them,
+ * not −4, and the character's own eyes (`opts.environment`) are applied to
+ * the rows before the worst one is picked.
  *
  * Every contribution is recorded as a **delta**, so the breakdown always
  * sums exactly to the final value (Principle 3). A modifier that knows its
@@ -162,8 +178,21 @@ export function applyPipeline(
       });
     }
 
+    const envMods = phaseMods.filter((m) => envRowsOf(m) !== undefined);
+    let envFolded = false;
     for (const m of phaseMods) {
       if (m.op !== 'add') continue;
+      if (envMods.includes(m)) {
+        // The scene and the range band: one lookup, one line (see above).
+        if (envFolded) continue;
+        envFolded = true;
+        const line = foldEnvironment(envMods, { compensation: opts?.environment ?? {} });
+        if (!line) continue;
+        value += line.value;
+        if (augmentation && line.value < 0) penalties += line.value;
+        breakdown.push(line);
+        continue;
+      }
       value += m.value;
       if (augmentation && m.value < 0) penalties += m.value;
       breakdown.push({

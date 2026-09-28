@@ -4,7 +4,7 @@
  */
 import { create } from 'zustand';
 import type { Point } from '@safehouse/contracts';
-import { TILESETS, type BrushMark as FogBrushMark, type VisionMode } from '@safehouse/rules';
+import { TILESETS, type BrushMark as FogBrushMark, type CoverLevel, type VisionMode } from '@safehouse/rules';
 import type { CellSet, Clipboard } from './cellSelection.js';
 import {
   PENDING_ROLL_MOD_EVENT,
@@ -158,7 +158,7 @@ export interface GridUiState {
    * not a property of the terrain. A crate that stops being cover permanently
    * is an edit to the map, which the GM makes with the tile tools.
    */
-  coverOverride: 'none' | 'partial' | 'full' | null;
+  coverOverride: CoverLevel | null;
   /** Shared polygon draft: fog regions (FR9.14) and zones (FR9.2). */
   fogDraft: FogDraft | null;
   gmPanelOpen: boolean;
@@ -226,7 +226,7 @@ export interface GridUiState {
   setActiveLevel: (level: number) => void;
   setViewProjection: (view: ViewProjection) => void;
   setLosTokenId: (tokenId: string | null) => void;
-  setCoverOverride: (cover: 'none' | 'partial' | 'full' | null) => void;
+  setCoverOverride: (cover: CoverLevel | null) => void;
   toggleSnap: () => void;
   setGmTab: (tab: GmTab) => void;
   setMode: (mode: GridMode) => void;

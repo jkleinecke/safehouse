@@ -20,10 +20,15 @@ import {
   bulletsForMode,
   computeWoundModifier,
   deriveCharacter,
+  envRowsOf,
+  environmentCompensationFor,
+  eyesOnly,
+  foldEnvironment,
   lineRef,
   recoilLine,
   resolveAttackChain,
   type AttackChainOptions,
+  type EnvironmentCompensation,
   type AttackChainResult,
   type CombatActor,
 } from '@safehouse/rules';
@@ -43,6 +48,8 @@ import {
 /**
  * Scene environment modifiers (FR9.11) as roll-provenance entries, each
  * keeping the page its modifier named (the Environmental Modifiers table).
+ * This is the scene as it stands, for showing — a pool reads it through
+ * `sceneEntries`, which folds in a range band and the character's eyes.
  */
 export function environmentEntries(mods: readonly Modifier[]): ProvenanceEntry[] {
   return mods
@@ -55,11 +62,34 @@ export function environmentEntries(mods: readonly Modifier[]): ProvenanceEntry[]
     }));
 }
 
-/** Total of the `pool.all` add-modifiers (scene/situational) for hand-built pools. */
-function poolAllDelta(mods: readonly Modifier[]): number {
-  return mods
-    .filter((m) => m.active && m.op === 'add' && m.target === 'pool.all')
-    .reduce((sum, m) => sum + m.value, 0);
+/**
+ * The scene's lines for a pool the copilot builds by hand (the chain's attack
+ * and defense, the rack's composure and defaulted perception), read the way
+ * `deriveCharacter` reads them for every other pool (SR5 p.173-175): every
+ * modifier carrying environment-table rows — the scene, and for a shot its
+ * range band — becomes ONE line, the worst row after the character's
+ * compensation, one row worse when two tie. The range band joins the scene's
+ * line; it is never added on top of it. Anything else the GM put on the scene
+ * follows as its own line.
+ */
+export function sceneEntries(
+  mods: readonly Modifier[],
+  compensation: EnvironmentCompensation,
+  range?: Modifier | null,
+): ProvenanceEntry[] {
+  const env = foldEnvironment([...mods, ...(range ? [range] : [])], { compensation });
+  const rest = environmentEntries(mods.filter((m) => envRowsOf(m) === undefined));
+  return [...(env ? [env] : []), ...rest];
+}
+
+/**
+ * What a sheet brings against the environment on a shot (its eyes and its
+ * smartlink) and on anything else (its eyes alone) — `buildPools` splits it
+ * the same way.
+ */
+export function environmentCompensation(sheet: SheetV1): { shot: EnvironmentCompensation; sight: EnvironmentCompensation } {
+  const shot = environmentCompensationFor(sheet);
+  return { shot, sight: eyesOnly(shot) };
 }
 
 // ---------------------------------------------------------------------------
@@ -115,14 +145,12 @@ function attr(derived: DerivedCharacter, code: string): number {
   return derived.attributes[code]?.value ?? 0;
 }
 
-function adjustments(woundModifier: number, envDelta: number): ProvenanceEntry[] {
+function adjustments(woundModifier: number, envLines: readonly ProvenanceEntry[]): ProvenanceEntry[] {
   const out: ProvenanceEntry[] = [];
   if (woundModifier !== 0) {
     out.push({ label: 'Wounds', value: woundModifier, source: 'wound', ref: lineRef('wounds') });
   }
-  if (envDelta !== 0) {
-    out.push({ label: 'Environment', value: envDelta, source: 'scene', ref: lineRef('environment') });
-  }
+  out.push(...envLines);
   return out;
 }
 
@@ -144,7 +172,12 @@ export function buildRack(sheet: SheetV1, ctx: RackContext): QuickRollRack {
   const wounds = { physical: ctx.monitors.physical.filled, stun: ctx.monitors.stun.filled };
   const derived = deriveCharacter(sheet, { wounds, situational });
   const woundModifier = computeWoundModifier(ctx.monitors);
-  const envDelta = poolAllDelta(situational);
+  // Composure and a defaulted Perception are not shots: the eyes count, the
+  // smartlink does not, and there is no range band to fold in.
+  const envLines = sceneEntries(
+    situational.filter((m) => m.target === 'pool.all'),
+    environmentCompensation(sheet).sight,
+  );
   const entries: RackEntry[] = [];
 
   // --- attack per weapon --------------------------------------------------
@@ -228,7 +261,7 @@ export function buildRack(sheet: SheetV1, ctx: RackContext): QuickRollRack {
     const breakdown: ProvenanceEntry[] = [
       { label: 'WIL', value: wil, source: 'attribute' },
       { label: 'CHA', value: cha, source: 'attribute' },
-      ...adjustments(woundModifier, envDelta),
+      ...adjustments(woundModifier, envLines),
     ];
     entries.push({
       key: 'composure',
@@ -257,7 +290,7 @@ export function buildRack(sheet: SheetV1, ctx: RackContext): QuickRollRack {
       const breakdown: ProvenanceEntry[] = [
         { label: 'INT', value: int, source: 'attribute' },
         { label: 'defaulting (no perception)', value: -1, source: 'skill', ref: lineRef('defaulting') },
-        ...adjustments(woundModifier, envDelta),
+        ...adjustments(woundModifier, envLines),
       ];
       entries.push({
         key: 'perception',

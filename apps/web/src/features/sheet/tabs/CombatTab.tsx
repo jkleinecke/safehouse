@@ -16,6 +16,7 @@ import {
 } from '../lib.js';
 import { rollRowLabel } from '../a11y.js';
 import { recoilKey, useSheetPlayStore } from '../playState.js';
+import { rangeChip } from '../rollDialogState.js';
 import { BreakdownButton } from '../components/Provenance.js';
 import { Empty, RefChip, SectionLabel } from '../components/ui.js';
 import AddFromBooks from '../catalogue/AddFromBooks.js';
@@ -173,20 +174,19 @@ function WeaponCard({ weapon, character, derived, roll, patchSheet, overrideFor 
 
   if (!pool) return null;
 
+  // The band is priced inside the pool's environment line, never on top of it
+  // (SR5 p.173-175: the worst condition counts, and range is a condition). In
+  // dim light (−3) a medium-range shot (−1) is still −3, so the chip is worth
+  // nothing extra and the fire buttons below say so.
+  const rangeLine = rangeMod
+    ? rangeChip(rangeMod.id, rangeMod.note ?? 'range', rangeMod.value, rangeMod.env?.range ?? null, pool.breakdown)
+    : null;
+
   const fire = (mode: string) => {
     const bullets = bulletsForMode(mode);
     const penalty = recoilFor(mode, bullets);
     const chips: RollChip[] = [];
-    if (rangeMod) {
-      chips.push({
-        id: rangeMod.id,
-        label: rangeMod.note ?? 'range',
-        value: rangeMod.value,
-        active: true,
-        source: 'range',
-        ...(rangeMod.bookRef ? { ref: rangeMod.bookRef } : {}),
-      });
-    }
+    if (rangeLine) chips.push(rangeLine);
     if (penalty !== 0) {
       chips.push({
         id: `recoil.${weapon.name}`,
@@ -275,7 +275,7 @@ function WeaponCard({ weapon, character, derived, roll, patchSheet, overrideFor 
       {/* Per-mode attack buttons with the recoil-adjusted pool preview */}
       <div className="mt-2 flex flex-wrap gap-1.5">
         {modes.map((mode) => {
-          const penalty = recoilFor(mode, bulletsForMode(mode)) + (rangeMod?.value ?? 0);
+          const penalty = recoilFor(mode, bulletsForMode(mode)) + (rangeLine?.value ?? 0);
           const effective = Math.max(0, pool.total + penalty);
           return (
             <button
@@ -307,8 +307,16 @@ function WeaponCard({ weapon, character, derived, roll, patchSheet, overrideFor 
             aria-label={`distance to target for ${weapon.name}`}
           />
           {rangeMod && (
-            <span className={`chip ${rangeMod.value < 0 ? 'text-magenta' : 'text-dim'}`}>
+            <span
+              className={`chip ${rangeMod.value < 0 ? 'text-magenta' : 'text-dim'}`}
+              title={
+                rangeLine && rangeLine.value !== rangeMod.value
+                  ? `Range is one of the environment's conditions (SR5 p.173): only the worst row counts, one row worse when two tie — so this band costs ${signed(rangeLine.value)} here`
+                  : undefined
+              }
+            >
               {rangeMod.note ?? 'range'} {signed(rangeMod.value)}
+              {rangeLine && rangeLine.value !== rangeMod.value && ` · with the environment ${signed(rangeLine.value)}`}
             </span>
           )}
           {outOfRange && <span className="chip text-danger">beyond extreme</span>}

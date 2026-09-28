@@ -38,7 +38,7 @@ import type {
   SheetSkill,
   Visibility,
 } from '@safehouse/contracts';
-import { lineRef, skillPoolKey } from '@safehouse/rules';
+import { lineRef, rangeInEnvironment, rangeRowOfValue, skillPoolKey } from '@safehouse/rules';
 import type { PendingRollMod } from '../../live/rollHandoff.js';
 import { chipEntries, chipSum, clampPool, type RollChip } from './lib.js';
 
@@ -79,6 +79,12 @@ export const RANGE_CHIP_ID = 'range.measured';
  * A config that already offers its own range chip wins: a weapon roll built
  * from a live target distance knows more than a measurement someone left
  * lying around.
+ *
+ * The band is priced INSIDE the pool's environment line, not on top of it
+ * (SR5 p.173: range is one more environmental condition). The ruler hands
+ * over only the band's own value, which names its row (−1 is medium), so the
+ * chip carries that row and is worth what folding it in changes — nothing at
+ * all for medium range in dim light, which is −3 either way.
  */
 export function withPendingRangeChip(
   config: RollConfig,
@@ -87,19 +93,35 @@ export function withPendingRangeChip(
   if (!pending || pending.value === 0) return config;
   const existing = config.extraChips ?? [];
   if (existing.some((c) => c.source === 'range')) return config;
+  const row = rangeRowOfValue(pending.value);
   return {
     ...config,
-    extraChips: [
-      ...existing,
-      {
-        id: RANGE_CHIP_ID,
-        label: pending.label,
-        value: pending.value,
-        active: true,
-        source: 'range',
-        ref: lineRef('range'),
-      },
-    ],
+    extraChips: [...existing, rangeChip(RANGE_CHIP_ID, pending.label, pending.value, row, config.baseBreakdown)],
+  };
+}
+
+/**
+ * A range chip for a pool (FR9.9): the band's row folded into the pool's
+ * environment line when it has one, so the chip is worth the difference and
+ * says it was folded; a value no band has (a hand-typed number) stays as it
+ * was sent. Shared with the weapon card, which builds its own from the
+ * distance typed beside the gun.
+ */
+export function rangeChip(
+  id: string,
+  label: string,
+  value: number,
+  row: number | null,
+  baseBreakdown: readonly ProvenanceEntry[],
+): RollChip {
+  const chip: RollChip = { id, label, value, active: true, source: 'range', ref: lineRef('range') };
+  if (row === null) return chip;
+  const fold = rangeInEnvironment(baseBreakdown, { range: row });
+  return {
+    ...chip,
+    value: fold.value,
+    env: fold.env,
+    ...(fold.folded ? { label: `${label} — inside the environment line (${fold.combined})` } : {}),
   };
 }
 
@@ -226,7 +248,9 @@ export function chipModifiers(
   const target = chipTarget(poolRef);
   const mods: Modifier[] = [];
   for (const chip of chips) {
-    if (!chip.active || chip.value === 0) continue;
+    // A range band that folds to nothing still goes: the server reads its
+    // row, not its number, and names it on the environment line.
+    if (!chip.active || (chip.value === 0 && !chip.env)) continue;
     if (chip.source === 'scene' || chip.source === 'wound' || chip.source === 'spell') continue;
     mods.push({
       id: chip.id,
@@ -239,6 +263,8 @@ export function chipModifiers(
       // The chip's page goes with it, so the server's recomputed receipt
       // still shows the recoil or range line with its book chip.
       ...(chip.ref ? { bookRef: chip.ref } : {}),
+      // The band's row: the server folds it into the scene's line (p.173).
+      ...(chip.env ? { env: chip.env } : {}),
     });
   }
   if (situational !== 0) {

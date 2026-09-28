@@ -318,7 +318,7 @@ describe('the environment editor shows the consequence, not just the setting', (
     expect(html).toContain('data-testid="environment-editor"');
     // Two axes at the worst level escalate a tier: −6, straight from the engine.
     expect(html).toContain('data-env-value="-6"');
-    expect(html).toContain('environment: light 2, wind 2');
+    expect(html).toContain('environment: dim light -3, moderate wind -3 → 2 tied at -3: -6');
     expect(html).toContain('applied to every roll while this scene is live');
     // And the card summarises it without opening anything.
     expect(html).toContain('data-testid="env-chip"');

@@ -53,7 +53,7 @@ scripts/         playthrough + utilities (run via tsx)
 - `deriveCharacter(sheet: SheetV1, ctx?: { situational?: Modifier[], wounds?: {physical,stun} }): DerivedCharacter`
 - `resolveRoll(req: RollRequest, rng: () => number): RollResult` (Rule of Six on edge, glitch = ones > floor(dice/2), buying hits helper `buyHits(pool)`)
 - `combat` module: `rollInitiative`, `advancePass` (−10 loop, FR4.3), `applyInterrupt`, `applyDamage` (soak → monitor → overflow → wound modifiers), `resolveAttackChain` (FR10.8: attack vs defense → net hits → DV − soak → boxes), `checkMorale(prState, triggers)`
-- `environment(scene): Modifier[]` (SR5 env table tiers −1/−3/−6/−10), `rangeModifier(distM, rangeCat, rangeTables)`
+- `environment(scene): Modifier[]` (SR5 env table tiers −1/−3/−6/−10), `rangeModifier(distM, rangeCat, rangeTables)` — both carry their table rows (`Modifier.env`); `environmentLookup(rows, { compensation, columns })` reads the p.175 table once (worst row, one row worse when two columns tie, glare in the light column), and the pipeline folds the scene and a range band into ONE line with the character's eyes applied (`foldEnvironment`, `environmentCompensationFor(sheet)`) — range is never added on top (p.173)
 - `generator`: `generateNpc(template, tier, seed)`, `generateGruntGroup(...)` — seeded (mulberry32 or similar), output is a valid `SheetV1` subset + persona stub; flavor tables are original content in `packages/rules/src/generator/tables.ts`.
 
 ## Dependency budget (pre-approved; avoid others — note `// INTEGRATION:` if you must)

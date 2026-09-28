@@ -40,8 +40,10 @@ import { hintForCombatant } from '../services/tactical-hints.js';
 import {
   buildRack,
   chainActor,
+  environmentCompensation,
   environmentEntries,
   rackEntry,
+  sceneEntries,
   resolveChain,
 } from '../services/encounters-copilot.js';
 
@@ -551,8 +553,19 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
       : attackerSheet.weapons[0];
     if (!weapon) throw httpError(400, 'bad_request', 'attacker has no such weapon');
 
-    const env = environmentEntries(await service.sceneModifiers(encounter));
-    const attackModifiers: ProvenanceEntry[] = [...env, ...(body.attackModifiers ?? [])];
+    // The environment is ONE line per side (SR5 p.173-175): the worst row of
+    // the scene's conditions — and, for the shot, its range band — after each
+    // side's own eyes, one row worse when two tie. Range used to be added on
+    // top of the scene here, so dim light at medium range cost −4, not −3.
+    const sceneMods = await service.sceneModifiers(encounter);
+    const range =
+      body.distanceM !== undefined && weapon.rangeCat
+        ? rangeModifier(body.distanceM, weapon.rangeCat, attackerSheet.rangeTables)
+        : null;
+    const attackModifiers: ProvenanceEntry[] = [
+      ...sceneEntries(sceneMods, environmentCompensation(attackerSheet).shot, range),
+      ...(body.attackModifiers ?? []),
+    ];
     const attackerActor = chainActor(attackerSheet, attacker.monitors, {
       name: attacker.name,
       weaponName: weapon.name,
@@ -568,17 +581,6 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
       strength: attackerActor.attributes.str ?? 0,
     });
     if (recoil) attackModifiers.push(recoil);
-    if (body.distanceM !== undefined && weapon.rangeCat) {
-      const range = rangeModifier(body.distanceM, weapon.rangeCat, attackerSheet.rangeTables);
-      if (range) {
-        attackModifiers.push({
-          label: range.note ?? 'range',
-          value: range.value,
-          source: 'range',
-          ...(range.bookRef ? { ref: range.bookRef } : {}),
-        });
-      }
-    }
     const outcome = resolveChain(
       attackerActor,
       chainActor(defenderSheet, defender.monitors, { name: defender.name }),
@@ -586,7 +588,10 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
       rng,
       {
         attackModifiers,
-        defenseModifiers: [...env, ...(body.defenseModifiers ?? [])],
+        defenseModifiers: [
+          ...sceneEntries(sceneMods, environmentCompensation(defenderSheet).sight),
+          ...(body.defenseModifiers ?? []),
+        ],
         ...(body.soakModifiers ? { soakModifiers: body.soakModifiers } : {}),
         ...(body.fullDefense !== undefined ? { fullDefense: body.fullDefense } : {}),
         ...(body.dvOverride ? { dvOverride: body.dvOverride } : {}),

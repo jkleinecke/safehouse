@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { RefSchema } from './common.js';
+import { EnvRowsSchema, RefSchema } from './common.js';
 
 /** Where a modifier comes from (DESIGN.md §7.2). */
 export const ModifierSourceKindSchema = z.enum([
@@ -44,5 +44,15 @@ export const ModifierSchema = z.object({
    * its own gets the item's page stamped on by `deriveCharacter`.
    */
   bookRef: RefSchema.optional(),
+  /**
+   * The environment-table rows this modifier stands for (SR5 p.175): the
+   * scene's weather and light, or the range band of a shot. Modifiers that
+   * carry rows are not summed with each other; the rules engine reads them
+   * together as one lookup — the worst row, one row worse when two tie — so a
+   * medium-range shot in dim light costs −3, not −3 and another −1. When rows
+   * are present they are the authority and `value` is only what the rows came
+   * to before they met anything else.
+   */
+  env: EnvRowsSchema.optional(),
 });
 export type Modifier = z.infer<typeof ModifierSchema>;

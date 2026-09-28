@@ -37,8 +37,10 @@ describe('the catalogues', () => {
       expect(m.ref.page, m.id).toBeGreaterThan(0);
     }
     expect(new Set(SITUATIONAL_MODIFIERS.map((m) => m.id)).size).toBe(SITUATIONAL_MODIFIERS.length);
-    // Cover lives in two places until step 4 folds them together; they must agree.
+    // One cover table: the catalogue reads the map's (p.190: +2 partial, +4 good).
     expect(situationalModifier('cover_partial')?.value).toBe(COVER_DEFENCE_BONUS.partial);
+    expect(situationalModifier('cover_good')?.value).toBe(COVER_DEFENCE_BONUS.good);
+    expect(COVER_DEFENCE_BONUS.good).toBe(4);
   });
 });
 

@@ -25,7 +25,7 @@
  * wall or the ambient row changes, like the sight model it is built on.
  */
 import type { Point } from '@safehouse/contracts';
-import { ENVIRONMENT_TIER_VALUES } from '../env.js';
+import { ENVIRONMENT_TIER_VALUES, lowLightRow, oneRowUp } from '../env.js';
 import { tileById } from '../tilesets/catalogue.js';
 import { propCells, propCoverage } from '../tilesets/footprint.js';
 import { levelTiles, migrateTileLayer } from '../tilesets/layers.js';
@@ -703,8 +703,10 @@ export function compensatedLight(row: LightRow, modes: readonly VisionMode[]): L
   let best = row;
   for (const mode of modes) {
     let r: LightRow = row;
-    if (mode === 'lowlight') r = row === 3 ? 3 : 0;
-    else if (mode === 'thermographic') r = Math.max(0, row - 1) as LightRow;
+    // The same two rules the dice read (env.ts), so a light map and a roll
+    // never disagree about what an elf sees in the dim.
+    if (mode === 'lowlight') r = lowLightRow(row) as LightRow;
+    else if (mode === 'thermographic') r = oneRowUp(row) as LightRow;
     else if (mode === 'ultrasound') r = 0;
     if (r < best) best = r;
   }

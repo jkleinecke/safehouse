@@ -19,6 +19,9 @@ const COVER_CHOICES: readonly { value: CoverLevel | 'auto'; label: string }[] = 
   { value: 'auto', label: 'From the map' },
   { value: 'none', label: 'No cover' },
   { value: 'partial', label: 'Partial' },
+  // Good cover (+4, SR5 p.190) is only ever the GM's call: the map cannot
+  // tell how much of a body is behind the crate.
+  { value: 'good', label: 'Good' },
   { value: 'full', label: 'Full — no shot' },
 ];
 

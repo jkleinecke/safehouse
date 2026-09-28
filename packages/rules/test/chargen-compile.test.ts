@@ -209,11 +209,13 @@ describe('compileBuild: what lands on the sheet', () => {
     // The walk saw every skill pool one lower on the approved sheet than in the
     // builder. The builder's preview is compile → derive with no context; the
     // sheet in play adds the active scene's environment (a dim-light scene is
-    // `pool.all −1`). Nothing in compile or derive is off by one.
+    // `pool.all −1`). Nothing in compile or derive is off by one. The scene
+    // here is a light wind rather than the walk's poor light: the samurai is a
+    // troll, and thermographic eyes read partial light as full (SR5 p.175).
     const { sheet } = compileBuild(goldenSamurai(), EXPERIENCED);
     const preview = deriveCharacter(sheet);
     const again = deriveCharacter(SheetV1Schema.parse(JSON.parse(JSON.stringify(sheet))));
-    const dim = deriveCharacter(sheet, { situational: environment({ light: 1, visibility: 0, glare: 0, wind: 0 }) });
+    const dim = deriveCharacter(sheet, { situational: environment({ light: 0, visibility: 0, glare: 0, wind: 1 }) });
     const skills = Object.keys(preview.pools).filter((k) => k.startsWith('skill.'));
     expect(skills.length).toBeGreaterThan(0);
     for (const key of skills) {

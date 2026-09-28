@@ -285,12 +285,15 @@ export async function combat(
   const attackBreakdown = attackCard.data['breakdown'] as Entry[];
   checks.eq('the chain walks attack → defense', ['attack', 'defense'], chain.cards.slice(0, 2).map((c) => c.step));
   checks.eq('the attack is capped by the weapon\'s Accuracy', { kind: 'accuracy', value: 5 }, attackCard.data['limit']);
+  // Range is one of the environment's conditions (SR5 p.173): the scene and
+  // the band are one line, the worst row, one row worse when two tie — never
+  // the band added on top of the scene.
+  const envLines = attackBreakdown.filter((e) => e.env !== undefined);
   checks.record(
-    'the shot carries the scene and the range band in its receipt',
-    'a `scene` −1 and a `range` −1 (medium, heavy pistol)',
-    attackBreakdown.filter((e) => e.source === 'scene' || e.source === 'range').map((e) => `${e.label} ${e.value}`).join(' · ') || 'none',
-    attackBreakdown.some((e) => e.source === 'scene' && e.value === -1) &&
-      attackBreakdown.some((e) => e.source === 'range' && e.value === -1),
+    'the shot reads the scene and the range band as one environment line',
+    'one line carrying the medium band (heavy pistol) beside the scene rows',
+    envLines.map((e) => `${e.label} ${e.value}`).join(' · ') || 'none',
+    envLines.length === 1 && envLines[0]?.env?.range === 1 && !attackBreakdown.some((e) => e.source === 'range' && e !== envLines[0]),
   );
   const attackRoll = attackCard.data['roll'] as RollResult;
   const defenseCard = chain.cards.find((c) => c.step === 'defense')!;

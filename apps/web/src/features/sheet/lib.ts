@@ -5,6 +5,7 @@
  */
 import type {
   EdgeState,
+  EnvRows,
   LedgerEntry,
   Modifier,
   ProvenanceEntry,
@@ -324,6 +325,13 @@ export interface RollChip {
    * Modifier the server recomputes with, so the page survives the round trip.
    */
   ref?: Ref;
+  /**
+   * A range band's row of the environment table (SR5 p.175). A chip with rows
+   * is not a bump on top of the scene: its `value` is only what it changes
+   * once folded into the pool's environment line (`rangeInEnvironment`), and
+   * the rows go to the server so its recompute folds it the same way.
+   */
+  env?: EnvRows;
 }
 
 export function chipSum(chips: readonly RollChip[]): number {

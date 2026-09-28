@@ -406,7 +406,10 @@ export function boxesAfterSoak(
 export interface AttackChainOptions {
   /** Override the attack dice pool entirely (otherwise `attacker.attackPool`). */
   attackPool?: number;
-  /** Situational entries for the attack: range, environment, recoil, … (negative values subtract). */
+  /**
+   * Situational entries for the attack: the environment (ONE line with the range band folded
+   * in — `foldEnvironment`, p.173), recoil, … (negative values subtract).
+   */
   attackModifiers?: ProvenanceEntry[];
   /** Situational entries for the defense roll. */
   defenseModifiers?: ProvenanceEntry[];
