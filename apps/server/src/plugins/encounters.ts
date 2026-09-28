@@ -770,16 +770,8 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
   // --- WS commands (§11) --------------------------------------------------
 
   /**
-   * `encounter.advance`: the one-button FR4.3 loop — mark the acting combatant
-   * done; when the pass is spent, drop every score by 10; when nobody is left
-   * above 0, start a new turn (the server rolls, or with hand rolls the turn
-   * gathers initiative, and the next press starts it). A pass still waiting on
-   * a Delayed Action stops for the GM (SR5 p.161). All of it is
-   * `EncountersService.advance`.
-   *
-   * `expectedActorId` is who the pressing device saw acting (null: nobody);
-   * a press the order has already moved past does nothing and gets a
-   * `stale_actor` error back, so a double tap marks one row done, not two.
+   * `encounter.advance`: the FR4.3 loop (`EncountersService.advance`). `expectedActorId`
+   * is who the device saw acting; a stale press gets `stale_actor`, so a double tap marks one row.
    */
   app.hub.onCommand('encounter.advance', async (msg, ctx) => {
     if (ctx.auth.role !== 'gm') {

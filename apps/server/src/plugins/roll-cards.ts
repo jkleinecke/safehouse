@@ -1,8 +1,4 @@
-/**
- * Guided roll cards: an actor's actions, a card for one, and settling it.
- * The GM may act for anyone; a player only for their own runner, and learns
- * no more of a target than its name.
- */
+/** Guided roll cards: actions, a card, settling it. The GM acts for anyone, a player for their own runner. */
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
@@ -20,6 +16,7 @@ import { assertCampaign, httpError, requireAuth } from '../services/auth.js';
 import { EncountersService } from '../services/encounters.js';
 import { CombatDamageService } from '../services/encounters-damage.js';
 import { ExchangesService } from '../services/exchanges.js';
+import { partiesOf, playerCopy } from '../services/exchanges-model.js';
 import { buildCard, listActions, type CardTarget } from '../services/roll-cards.js';
 import { loadActor, type LoadedActor } from '../services/roll-cards-load.js';
 import { settleCard } from '../services/roll-cards-settle.js';
@@ -86,7 +83,7 @@ export default async function rollCardsPlugin(app: FastifyInstance): Promise<voi
     damage: new CombatDamageService(encounters),
   });
 
-  /** A player reaches only an exchange their runner is in, and answers only one aimed at it. */
+  /** A player reaches only an exchange their runner is in, answers only one aimed at it, and gets their copy. */
   async function exchangeFor(body: CardRequest, loaded: LoadedActor, gm: boolean): Promise<Exchange | null> {
     if (!body.exchangeId) return null;
     const { x, campaignId } = await exchanges.load(body.exchangeId);
@@ -94,14 +91,15 @@ export default async function rollCardsPlugin(app: FastifyInstance): Promise<voi
     if (gm) return x;
     const mine = loaded.row?.combatantId;
     const target = mine !== undefined && x.target.combatantId === mine;
-    if (!target && !(mine !== undefined && x.attacker?.combatantId === mine)) {
-      throw httpError(404, 'not_found', 'unknown exchange');
-    }
+    const attacker = mine !== undefined && x.attacker?.combatantId === mine;
+    if (!target && !attacker) throw httpError(404, 'not_found', 'unknown exchange');
     const answers = combatAction(body.actionId)?.exchange;
     if (!target && (answers === 'defends' || answers === 'soaks')) {
       throw httpError(403, 'forbidden', 'a player answers only an attack on their own runner');
     }
-    return x;
+    // The card names a hidden attacker no more than the copy does.
+    const { hidden } = await partiesOf(app.db, [x]);
+    return playerCopy(x, { attacker, target }, hidden);
   }
 
   app.post('/api/cards/preview', async (req) => {

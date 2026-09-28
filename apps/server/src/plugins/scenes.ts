@@ -846,10 +846,7 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     const token = await app.hub.atomic(scene.campaignId, async (tx) => {
       const txSvc = svc.withDb(tx.db);
       const created = await txSvc.createToken(scene, body);
-      // Judged against the fog as it stands now, inside the transaction,
-      // so a guard placed in a room the GM hid a moment ago stays the GM's.
-      // Read LOCKED (`lockedScene`): a sight pass or a fog op still in
-      // flight is waited for, not read around.
+      // Against the locked scene: a guard placed in fog the GM just hid stays the GM's.
       const current = await lockedScene(tx, scene.id);
       const visibility = tokenVis(created, current);
       await tx.emit({ type: 'token.added', payload: { token: created }, visibility });
@@ -949,9 +946,7 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
     assertCampaign(auth, scene.campaignId);
     await app.hub.atomic(scene.campaignId, async (tx) => {
       const txSvc = svc.withDb(tx.db);
-      // Judged against the scene as it stands inside this transaction, as
-      // the create and the move are, not the row read before it opened;
-      // locked, as theirs is (`lockedScene`).
+      // Against the locked scene, as create and move are.
       const visibility = tokenVis(token, await lockedScene(tx, scene.id));
       // Its rows leave the open fights first: deleting the token nulls their link.
       await leaveFight(tx, id, visibility);

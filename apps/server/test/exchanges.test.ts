@@ -164,7 +164,8 @@ describe('exchanges over the API', () => {
     const theirs = (await as(player.token, 'GET', `/api/encounters/${encounterId}`))['exchanges'] as Exchange[];
     const copy = theirs.find((x) => x.id === id)!;
     expect(copy).toMatchObject({ outcome: 'hit', attackHits: 4 });
-    for (const k of ['defense', 'damage', 'soak', 'boxes']) expect(copy).not.toHaveProperty(k);
+    // netHits would give away the NPC's defense hits.
+    for (const k of ['defense', 'damage', 'soak', 'boxes', 'netHits']) expect(copy).not.toHaveProperty(k);
 
     const applied = await gm('POST', `/api/exchanges/${id}/apply`, {});
     expect(applied['exchange']).toMatchObject({ state: 'done', boxes: 8 });
@@ -209,5 +210,26 @@ describe('exchanges over the API', () => {
     await gm('POST', `/api/encounters/${encounterId}/new-turn`, { roll: false });
     const after = await gm('GET', `/api/exchanges/${open['exchange'].id}`);
     expect(after['exchange'].state).toBe('cancelled');
+  });
+
+  it("a player's defense card does not name a hidden attacker", async () => {
+    const sniper = await gm('POST', `/api/encounters/${encounterId}/combatants`, {
+      source: 'manual',
+      name: 'Sniper',
+      visibility: 'gm',
+      monitors,
+    });
+    const opened = await gm('POST', '/api/exchanges', {
+      target: { kind: 'combatant', id: lark },
+      attacker: { kind: 'combatant', id: sniper['combatant'].id },
+      hits: 3,
+      dv: { value: 6, type: 'P' },
+    });
+    const card = await as(player.token, 'POST', '/api/cards/preview', {
+      actor: { kind: 'combatant', id: lark },
+      actionId: 'defense',
+      exchangeId: opened['exchange'].id,
+    });
+    expect(JSON.stringify(card)).not.toContain('Sniper');
   });
 });

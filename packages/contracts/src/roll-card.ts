@@ -13,17 +13,8 @@ import {
 } from './exchange.js';
 
 /**
- * The guided roll card: one action, its cost, the pool line by line with the
- * page each line comes from, the limit, and the modifiers the roller may tick.
- * The server builds it (DESIGN.md §10.1); the client sends a `CardRequest` and
- * the same request plus `settle` to roll.
- *
- * A GM's card opens on `modifiers` so the ticks come before the dice count
- * (GM decision, 2026-09-28); a player's opens on `dice`.
- *
- * Offers: engine lines (`auto`) arrive ticked, the attack's declared facts
- * (`declaredBy`) arrive ticked and labelled, the rest arrive unticked; a
- * `suggestedBy` hint never ticks itself. Labels are ours, never book text (§14).
+ * The guided roll card, server-built (DESIGN.md §10.1). Engine and declared offers
+ * arrive ticked, `suggestedBy` hints never; the GM's card opens on `modifiers`.
  */
 
 const NonNegInt = z.number().int().min(0);

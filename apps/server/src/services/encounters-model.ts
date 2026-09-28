@@ -249,11 +249,7 @@ export function rowsTiedOnScore(list: readonly Combatant[]): Combatant[] {
 // Views (FR4.9: hidden combatants excluded server-side)
 // ---------------------------------------------------------------------------
 
-/**
- * A row with a token is public exactly while the table has that token
- * (`ScenesService.tokensOnTable`); off the table a runner's stays its owner's.
- * A row without a token keeps its own setting.
- */
+/** A token row is public only while the table has its token (off it, a runner's is its owner's); else its own setting. */
 export function tableVisibility(
   c: { tokenId?: string | null | undefined; source: string; visibility: Visibility },
   onTable: ReadonlySet<string>,
@@ -332,12 +328,8 @@ export interface Viewer {
 }
 
 /**
- * Compose the encounter for one viewer. GMs get everything; everyone else gets
- * turn order, their own monitors, and public condition only; hidden rows are
- * dropped here, never client-side.
- *
- * `tokensOnTable` is the ids of the tokens the table has now: it decides each
- * token row's visibility (`tableVisibility`) and whether the row names its token.
+ * The encounter for one viewer: the GM gets everything, others the order, their own
+ * monitors and public condition; hidden rows (`tableVisibility`) are dropped here.
  */
 export function encounterForViewer(
   row: EncounterRow,

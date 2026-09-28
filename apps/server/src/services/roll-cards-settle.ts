@@ -1,8 +1,6 @@
 /**
- * Settling a roll card: the dice (the site's or the table's), then in the
- * roll's own transaction the tracker's share (an Interrupt's score, Full
- * Defense, defenses since acting, an NPC's Edge) and the exchange's step.
- * Nothing here marks a row done.
+ * Settling a roll card: app or table dice, then in the roll's transaction the
+ * tracker's share and the exchange step. Nothing here marks a row done.
  */
 import { eq, sql, type SQL } from 'drizzle-orm';
 import type {

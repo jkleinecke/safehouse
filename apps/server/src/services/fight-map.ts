@@ -1,8 +1,6 @@
 /**
- * The fight is the map: a fighting token placed on a scene joins the scene's
- * fight, a deleted token leaves it, and a token coming onto or off the table
- * re-sends its fight's frames (row visibility follows the token).
- * Everything runs in the caller's transaction.
+ * The fight is the map: placed tokens join the scene's fight, deleted ones leave,
+ * and rows follow their tokens on and off the table. All in the caller's transaction.
  */
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { Visibility } from '@safehouse/contracts';
@@ -33,11 +31,7 @@ export function joinText(name: string, fight: string, passesGone?: number): stri
   return `${name} joins ${fight} mid-turn: roll Initiative, −${10 * passesGone} for ${passes} gone (p.160)`;
 }
 
-/**
- * A fighting token placed (or flagged) on a scene with a prep or live fight
- * joins it. `visibility` is the token's own event visibility, so the log line
- * tells no one of a token they cannot see.
- */
+/** A fighting token placed or flagged joins the scene's fight; the log line takes the token's visibility. */
 export async function joinFight(
   tx: EventTx,
   scene: SceneRow,

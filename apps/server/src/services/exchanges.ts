@@ -1,8 +1,4 @@
-/**
- * Attack exchanges (SR5 p.173): opened by an attack's settle or by the GM's
- * hand, answered by a defense and a soak, put on the monitor by the GM. Nothing
- * here applies damage or moves the tracker on its own.
- */
+/** Attack exchanges (p.173): opened by a settle or the GM, answered by defense and soak, applied only by the GM. */
 import { eq } from 'drizzle-orm';
 import type {
   DeclaredBy,

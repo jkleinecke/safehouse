@@ -341,11 +341,7 @@ export class RollService {
     });
   }
 
-  /**
-   * A roll card settled: the card's own pool (already server-built), the
-   * site's dice or the table's typed result. A sheet's Edge is debited here;
-   * anyone else's rides in `alsoInTx`, which the caller also uses for the tracker.
-   */
+  /** A roll card settled with app or table dice. A sheet's Edge is debited here, an NPC's in `alsoInTx`. */
   async settleCard(opts: {
     campaignId: string;
     viewer: RollViewer;

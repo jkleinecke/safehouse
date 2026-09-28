@@ -1,9 +1,6 @@
 /**
- * Guided roll cards: one action for one actor, built from the sheet on the
- * server (DESIGN.md §10.1). Pure; `roll-cards-load.ts` reads the db.
- *
- * GM rulings: nothing is refused or hidden for seeming not to apply, only
- * ordered; every number the engine infers is an offer the roller can strike.
+ * Guided roll cards, pure (`roll-cards-load.ts` reads the db). GM rulings: nothing
+ * is refused or hidden, only ordered; every inferred number is a strikable offer.
  */
 import type {
   ActionType,

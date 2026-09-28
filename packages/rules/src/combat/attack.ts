@@ -255,10 +255,7 @@ export interface HitResult {
   outcome: HitOutcome;
 }
 
-/**
- * A tie at 0-0. The book is silent; a miss until the GM rules (a graze is
- * contact, and no hits never reached anyone).
- */
+/** A 0-0 tie: the book is silent, so a miss (no hits touched nobody) until the GM rules. */
 export const ZERO_TIE_IS_MISS: boolean = true;
 
 /**

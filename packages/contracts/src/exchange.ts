@@ -7,11 +7,8 @@ import { z } from 'zod';
  *                                   hit ──▶ awaiting_soak
  *   awaiting_soak ──── soak ─────▶ awaiting_apply ── the GM applies ──▶ done
  *
- * `cancelled` from any open state, and at the end of the Combat Turn. A direct
- * combat spell skips the soak: its boxes are the net hits (p.283).
- *
- * Players get only their own side (the server trims): an attacker learns hit,
- * graze or miss; a target their own defense, damage and boxes.
+ * `cancelled` from any open state and at the turn's end. A direct combat spell
+ * skips the soak (p.283). Players get only their own side (`playerCopy`).
  */
 
 const NonNegInt = z.number().int().min(0);

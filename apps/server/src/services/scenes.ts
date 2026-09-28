@@ -1779,10 +1779,8 @@ export class ScenesService {
   // --- encounter staging (FR9.10) ------------------------------------------
 
   /**
-   * The scene's fighting tokens (`fightsOnMap`, every floor) become rows in a
-   * new fight or in `encounterId`; `tokenIds` limits it to those tokens (one
-   * just placed). Concealed tokens make gm rows. `shown` counts the new rows
-   * the table can see: the only count a public event may carry.
+   * Fighting tokens (every floor, or only `tokenIds`) become rows in a new fight or
+   * `encounterId`. `shown`, the new rows the table sees, is the only count a public event may carry.
    */
   async stageEncounter(
     scene: SceneRow,

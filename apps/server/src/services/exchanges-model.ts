@@ -1,8 +1,4 @@
-/**
- * Exchange rows (migration 0014), the pure steps between states, and each
- * player's copy. The tracker and the damage path call these inside their own
- * transactions.
- */
+/** Exchange rows (0014), the pure steps, and players' copies; callers pass their own transaction. */
 import { and, eq, inArray, isNotNull, lt } from 'drizzle-orm';
 import {
   ExchangeSchema,
@@ -161,7 +157,7 @@ export async function logToGm(tx: EventTx, text: string, x: Exchange): Promise<v
 // Players' copies (Principle 3)
 // ---------------------------------------------------------------------------
 
-const ATTACKER_ONLY = ['weapon', 'attackRollId', 'attackHits', 'netHits'] as const;
+const ATTACKER_ONLY = ['weapon', 'attackRollId', 'attackHits'] as const;
 const TARGET_ONLY = ['defense', 'damage', 'soak', 'boxes', 'track', 'appliedAt'] as const;
 const UNSEEN = 'someone unseen';
 
@@ -170,6 +166,8 @@ export function playerCopy(x: Exchange, sides: { attacker: boolean; target: bool
   const out: Exchange = { ...x };
   if (!sides.attacker) for (const k of ATTACKER_ONLY) delete out[k];
   if (!sides.target) for (const k of TARGET_ONLY) delete out[k];
+  // Net hits give away the other side's dice.
+  if (!(sides.attacker && sides.target)) delete out.netHits;
   const vague = (id?: string) => id !== undefined && hidden.has(id);
   if (!sides.attacker && out.attacker && vague(out.attacker.combatantId)) out.attacker = { name: UNSEEN };
   if (!sides.target && vague(out.target.combatantId)) out.target = { name: UNSEEN };

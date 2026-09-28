@@ -452,13 +452,7 @@ export class EncountersService {
 
   // --- initiative (FR4.2) -------------------------------------------------
 
-  /**
-   * Roll initiative for every combatant (or a subset): each row's recipe
-   * (`buildRecipe`) with the server's dice.
-   *
-   * Rolling initiative on an encounter that has not started IS the start of
-   * turn 1 / pass 1 (FR4.3), so turn and pass are clamped here.
-   */
+  /** Each row's recipe with the server's dice; on a fight not started, this starts turn 1 (FR4.3). */
   async rollInitiativeAll(
     encounterId: string,
     opts: { combatantIds?: string[]; kinds?: Record<string, InitKind>; by?: InitiativeEntry['by'] } = {},
@@ -471,10 +465,11 @@ export class EncountersService {
     const fight =
       encounter.turn < 1 || encounter.pass < 1 ? { turn: Math.max(1, encounter.turn), pass: 1 } : encounter;
     // Reads and dice before the transaction opens (the deadlock rule).
-    const rolled: Array<{ detail: InitiativeDetail; dice: number; entry: InitiativeEntry }> = [];
+    const rolled: Array<{ detail: InitiativeDetail; sheet: boolean; entry: InitiativeEntry }> = [];
     for (const combatant of targets) {
       const kind = opts.kinds?.[combatant.id] ?? combatant.initKind;
-      const recipe = buildRecipe(combatant, await recipeSource(this.read(tx), combatant), fight, kind);
+      const src = await recipeSource(this.read(tx), combatant);
+      const recipe = buildRecipe(combatant, src, fight, kind);
       const rolls = rollDice(recipe.dice);
       const total = rolls.reduce((n, r) => n + r, 0);
       const score = scoreOf(recipe, total);
@@ -490,22 +485,24 @@ export class EncountersService {
           ...(late ? { latePenalty: late } : {}),
           score,
         },
-        dice: recipe.dice,
+        sheet: src.sheet !== null,
         entry: { turn: fight.turn, via: 'app', rolled: total, rolls, score, by: opts.by ?? 'gm' },
       });
     }
     return this.hub.atomicIn(encounter.campaignId, tx, async (itx) => {
       const details: InitiativeDetail[] = [];
       for (const r of rolled) {
+        // A sheetless line already counts its effects: stored, they would count again next roll.
+        const line = r.sheet ? { initDice: r.detail.dice } : {};
         await itx.db
           .update(combatants)
           .set({
             initScore: r.detail.score,
             initKind: r.detail.kind,
-            initBase: r.detail.base,
+            ...(r.sheet ? { initBase: r.detail.base } : {}),
             actedThisPass: false,
             // A roll settles a late entry.
-            copilot: sql`(${combatants.copilot} - 'lateEntry'::text) || ${JSON.stringify({ initDice: r.dice, initEntry: r.entry })}::jsonb`,
+            copilot: sql`(${combatants.copilot} - 'lateEntry'::text) || ${JSON.stringify({ ...line, initEntry: r.entry })}::jsonb`,
           })
           .where(eq(combatants.id, r.detail.combatantId));
         details.push(r.detail);
@@ -536,11 +533,7 @@ export class EncountersService {
     });
   }
 
-  /**
-   * Hand-set a score or line (FR4.2, FR4.8). `rolled` is the table's dice
-   * total and the server adds the recipe's base and modifiers; `score` is
-   * taken as typed.
-   */
+  /** Hand-set a score or line (FR4.2, FR4.8): `rolled` is the table's dice, added to the recipe; `score` is final. */
   async setInitiative(
     combatantId: string,
     input: {
@@ -834,14 +827,15 @@ export class EncountersService {
         // Hand rolls (FR4.2): every score blank, each line refreshed from its
         // recipe (a spell cast last turn counts), the dice come in row by row.
         for (const c of await this.listCombatants(encounterId, itx)) {
-          const recipe = buildRecipe(c, await recipeSource(itx.db, c), row);
+          const src = await recipeSource(itx.db, c);
+          // Only a sheet's line is stored: a sheetless one would count its effects again.
+          const recipe = src.sheet ? buildRecipe(c, src, row) : null;
           await itx.db
             .update(combatants)
             .set({
               initScore: 0,
               actedThisPass: false,
-              initBase: recipe.base,
-              copilot: mergeCopilot({ initDice: recipe.dice }),
+              ...(recipe ? { initBase: recipe.base, copilot: mergeCopilot({ initDice: recipe.dice }) } : {}),
             })
             .where(eq(combatants.id, c.id));
         }
@@ -854,11 +848,7 @@ export class EncountersService {
     });
   }
 
-  /**
-   * Call for initiative: a fight not yet live starts at turn 1, a live one
-   * opens its next Combat Turn, both blank and gathering. Again while
-   * gathering is a no-op.
-   */
+  /** Call for initiative: turn 1, or the next turn if live; blank and gathering. A no-op while gathering. */
   async callInitiative(encounterId: string): Promise<EncounterRow> {
     const head = await this.getEncounter(encounterId);
     return this.hub.atomic(head.campaignId, async (tx) => {
@@ -869,10 +859,7 @@ export class EncountersService {
     });
   }
 
-  /**
-   * Start the turn: gathering ends, and every row still blank joins late
-   * (p.160) whenever its score comes in. A no-op when not gathering.
-   */
+  /** Start the turn: blank rows join late (p.160) when their score comes in. A no-op unless gathering. */
   async startTurn(encounterId: string, tx?: EventTx): Promise<OrderView & { late: string[] }> {
     const head = await this.getEncounter(encounterId, tx);
     return this.hub.atomicIn(head.campaignId, tx, async (itx) => {
@@ -1229,11 +1216,7 @@ export class EncountersService {
   }
 }
 
-/**
- * The ERIC attributes (SR5 p.159) of every row whose score another live row
- * shares: a runner's off their live sheet, an NPC's off the sheet it carries,
- * else only its Edge pool. Most reads have no tie and touch no sheet.
- */
+/** ERIC tie-break attributes (p.159) of rows sharing a score: the sheet's, else the Edge pool. */
 export async function ericForRows(db: Db, list: Combatant[]): Promise<Record<string, EricAttributes>> {
   const tied = rowsTiedOnScore(list);
   if (tied.length === 0) return {};
@@ -1262,10 +1245,8 @@ export async function ericForRows(db: Db, list: Combatant[]): Promise<Record<str
 }
 
 /**
- * `encounter.updated` twice, in the caller's transaction: the whole fight at
- * `gm`, and the table's copy at `public`. Token rows are public exactly while
- * the table has their token (`withTableVisibility`); while a row the table
- * cannot see is acting, the public frame says `gmTurn`.
+ * `encounter.updated` at `gm` and at `public`, in the caller's transaction. Token
+ * rows are public only while on the table; a hidden row acting shows as `gmTurn`.
  */
 export async function emitFightFrames(tx: EventTx, encounter: EncounterRow, reason: string): Promise<Combatant[]> {
   const rows = (await tx.db.select().from(combatants).where(eq(combatants.encounterId, encounter.id))).map(

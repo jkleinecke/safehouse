@@ -138,4 +138,20 @@ describe('calling for initiative', () => {
     expect(next['step']).toBe('start');
     expect((await view())['encounter'].gathering).toBe(false);
   });
+
+  it('counts a sheetless row’s effect once, roll after roll and turn after turn', async () => {
+    const row = (await gm('POST', `/api/encounters/${fightId}/combatants`, { name: 'Jazzed', initBase: 6, initDice: 1 }))[
+      'combatant'
+    ].id as string;
+    const jazz = {
+      id: 'jazz',
+      name: 'Jazz',
+      mods: [{ id: 'jazz.dice', source: { kind: 'status' }, target: 'initiative.dice', op: 'add', value: 1, active: true }],
+    };
+    await gm('PATCH', `/api/combatants/${row}`, { effects: [jazz] });
+    for (let i = 0; i < 2; i += 1) await gm('POST', `/api/encounters/${fightId}/roll-initiative`, { combatantIds: [row] });
+    await gm('POST', `/api/encounters/${fightId}/new-turn`, { roll: false });
+    const rows = (await gm('GET', `/api/encounters/${fightId}/initiative`))['rows'] as Recipe[];
+    expect(rows.find((r) => r.combatantId === row)).toMatchObject({ base: 6, dice: 2 });
+  });
 });
