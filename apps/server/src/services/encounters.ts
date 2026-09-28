@@ -16,6 +16,7 @@ import {
   type Combatant,
   type Encounter,
   type EncounterState,
+  type InitiativeEntry,
   type InitKind,
   type Modifier,
   type SheetV1,
@@ -27,13 +28,11 @@ import {
   advancePass,
   anyActiveScores,
   applyInterrupt,
-  computeWoundModifier,
   DEFAULT_INTERRUPTS,
   delayedRows,
   environment,
   moveInOrder,
   nextActor as nextActorRules,
-  rollInitiative,
   seizeInitiative as seizeInitiativeRules,
   turnOrder,
   type EricAttributes,
@@ -43,11 +42,12 @@ import {
 import { characters, combatants, encounters, rolls, scenes, type Db } from '@safehouse/db';
 import type { EventTx, Hub } from '../hub.js';
 import { httpError } from './auth.js';
-import { rng } from './dice.js';
+import { rollDice } from './dice.js';
 import {
   conditionOf,
   deriveFor,
   ericOf,
+  latePenalty,
   orderOptionsOf,
   parseCopilot,
   parseEffects,
@@ -64,6 +64,7 @@ import {
 } from './encounters-model.js';
 import type { ChainOutcome } from './encounters-copilot.js';
 import { announceToPlayers, closeBeforeTurn, logToGm, openExchanges } from './exchanges-model.js';
+import { buildRecipe, entryThisTurn, recipeSource, scoreOf, withGmLine } from './initiative-recipe.js';
 import { ScenesService } from './scenes.js';
 import {
   recordChainRolls,
@@ -127,10 +128,11 @@ export interface OrderView {
  *  - `waiting`: the acting row is done, nobody else is up, but a row is still
  *    holding a Delayed Action, so the pass waits for the GM (p.161);
  *  - `pass`: the pass is over, every score −10, and someone is still above 0;
- *  - `turn`: nobody was left, so a new Combat Turn began.
+ *  - `turn`: nobody was left, so a new Combat Turn began;
+ *  - `start`: initiative was being gathered, and the turn started.
  */
 export interface AdvanceResult {
-  step: 'next' | 'waiting' | 'pass' | 'turn';
+  step: 'next' | 'waiting' | 'pass' | 'turn' | 'start';
   acted: Combatant | null;
   active: Combatant | null;
   encounter: Encounter;
@@ -142,7 +144,7 @@ export interface AdvanceResult {
  * last for the turn they were made in (SR5 p.160-161), and a Delayed Action in
  * use lasts for one Action Phase. Literal SQL — these are constants, never input.
  */
-const CLEAR_TURN_FLAGS = sql`${combatants.copilot} - 'delayed'::text - 'seized'::text - 'delayedAction'::text - 'lateEntry'::text`;
+const CLEAR_TURN_FLAGS = sql`${combatants.copilot} - 'delayed'::text - 'seized'::text - 'delayedAction'::text - 'lateEntry'::text - 'initEntry'::text`;
 /** The end of a pass, or a row marked done: the Delayed Action in use is spent. */
 const CLEAR_DELAYED_ACTION = sql`${combatants.copilot} - 'delayedAction'::text`;
 /** A row marked done: its phase is over, so is the count of defenses since it last acted (p.189). */
@@ -299,6 +301,11 @@ export class EncountersService {
     let initBase = input.initBase;
     let initDice = input.initDice;
     let visibility: Visibility = input.visibility ?? (source === 'character' ? 'public' : 'gm');
+    // A line typed for a row with a sheet wins over the sheet's (`buildRecipe`).
+    const typedLine =
+      (source === 'character' || input.sheet) && (input.initBase !== undefined || input.initDice !== undefined)
+        ? withGmLine({}, input.initKind ?? 'physical', input.initBase, input.initDice)
+        : undefined;
 
     if (source === 'character') {
       if (!input.sourceId) throw httpError(400, 'bad_request', 'character combatants need sourceId');
@@ -372,6 +379,7 @@ export class EncountersService {
               ...(input.edge ? { edge: input.edge } : {}),
               ...(grunt ? { grunt } : {}),
               ...(input.leader ? { leader: true } : {}),
+              ...(typedLine ? { initLine: typedLine } : {}),
               ...(source === 'character' ? {} : { generator: { professionalRating } }),
             },
           })
@@ -383,21 +391,33 @@ export class EncountersService {
   }
 
   /** Hand-edit anything mid-fight (FR4.8 / Principle 2). */
-  async updateCombatant(id: string, patch: CombatantPatchOptions): Promise<Combatant> {
+  async updateCombatant(
+    id: string,
+    patch: CombatantPatchOptions,
+    extras: { entry?: InitiativeEntry } = {},
+  ): Promise<Combatant> {
     const row = await this.getCombatant(id);
+    const encounter = await this.getEncounter(row.encounterId);
     const copilot = parseCopilot(row.copilot);
     if (patch.initDice !== undefined) copilot.initDice = patch.initDice;
+    // A line the GM types wins over the sheet's.
+    if (patch.initBase !== undefined || patch.initDice !== undefined) {
+      const kind = patch.initKind ?? serializeCombatant(row).initKind;
+      copilot.initLine = withGmLine(copilot, kind, patch.initBase, patch.initDice);
+    }
     if (patch.edge !== undefined) copilot.edge = patch.edge;
     if (patch.grunt !== undefined) copilot.grunt = patch.grunt;
     if (patch.leader !== undefined) copilot.leader = patch.leader;
-    // A score entered settles a late entry.
-    if (patch.initScore !== undefined) delete copilot.lateEntry;
+    // A score entered settles a late entry and is this turn's entry.
+    if (patch.initScore !== undefined) {
+      delete copilot.lateEntry;
+      copilot.initEntry = extras.entry ?? { turn: encounter.turn, via: 'score', score: patch.initScore, by: 'gm' };
+    }
     if (patch.professionalRating !== undefined) {
       const pr = Math.max(0, Math.floor(patch.professionalRating));
       copilot.generator = { ...(copilot.generator ?? {}), professionalRating: pr };
       if (copilot.grunt) copilot.grunt = { ...copilot.grunt, professionalRating: pr };
     }
-    const encounter = await this.getEncounter(row.encounterId);
     return this.hub.atomic(encounter.campaignId, async (tx) => {
       const updated = (
         await tx.db
@@ -433,48 +453,45 @@ export class EncountersService {
   // --- initiative (FR4.2) -------------------------------------------------
 
   /**
-   * Roll initiative for every combatant (or a subset): base + Nd6 through the
-   * CSPRNG dice service, wound modifiers applied to the score.
+   * Roll initiative for every combatant (or a subset): each row's recipe
+   * (`buildRecipe`) with the server's dice.
    *
    * Rolling initiative on an encounter that has not started IS the start of
-   * turn 1 / pass 1 (FR4.3). `turn`/`pass` default to 0 on a fresh row and only
-   * `newTurn` ever bumped them, so the tracker used to read a pass behind for
-   * the whole first turn; this clamps them the moment the dice hit the table.
+   * turn 1 / pass 1 (FR4.3), so turn and pass are clamped here.
    */
   async rollInitiativeAll(
     encounterId: string,
-    opts: { combatantIds?: string[]; kinds?: Record<string, InitKind> } = {},
+    opts: { combatantIds?: string[]; kinds?: Record<string, InitKind>; by?: InitiativeEntry['by'] } = {},
     tx?: EventTx,
   ): Promise<{ encounter: Encounter; combatants: Combatant[]; details: InitiativeDetail[] }> {
     const encounter = await this.getEncounter(encounterId, tx);
     const list = await this.listCombatants(encounterId, tx);
     const ids = opts.combatantIds;
     const targets = ids ? list.filter((c) => ids.includes(c.id)) : list;
-    // Roll everything FIRST. `initiativeLineFor` reads `characters` for a PC
-    // changing init kind, and that read cannot happen once the transaction is
-    // open (the deadlock rule) — so the dice, which need no writes, are thrown
-    // out here and only the resulting scores go inside.
-    const rolled: Array<{ combatantId: string; kind: InitKind; detail: InitiativeDetail }> = [];
+    const fight =
+      encounter.turn < 1 || encounter.pass < 1 ? { turn: Math.max(1, encounter.turn), pass: 1 } : encounter;
+    // Reads and dice before the transaction opens (the deadlock rule).
+    const rolled: Array<{ detail: InitiativeDetail; dice: number; entry: InitiativeEntry }> = [];
     for (const combatant of targets) {
       const kind = opts.kinds?.[combatant.id] ?? combatant.initKind;
-      const line = await this.initiativeLineFor(combatant, kind, tx);
-      const detail = rollInitiative(combatant, kind, rng, {
-        ...(line ? { base: line.base, dice: line.dice } : {}),
-      });
-      const late = latePenalty(combatant, encounter);
+      const recipe = buildRecipe(combatant, await recipeSource(this.read(tx), combatant), fight, kind);
+      const rolls = rollDice(recipe.dice);
+      const total = rolls.reduce((n, r) => n + r, 0);
+      const score = scoreOf(recipe, total);
+      const late = latePenalty(combatant, fight);
       rolled.push({
-        combatantId: combatant.id,
-        kind,
         detail: {
           combatantId: combatant.id,
-          kind: detail.kind,
-          base: detail.base,
-          dice: detail.dice,
-          rolls: detail.rolls,
-          woundModifier: detail.woundModifier,
+          kind,
+          base: recipe.base,
+          dice: recipe.dice,
+          rolls,
+          woundModifier: recipe.modifier - late,
           ...(late ? { latePenalty: late } : {}),
-          score: detail.score + late,
+          score,
         },
+        dice: recipe.dice,
+        entry: { turn: fight.turn, via: 'app', rolled: total, rolls, score, by: opts.by ?? 'gm' },
       });
     }
     return this.hub.atomicIn(encounter.campaignId, tx, async (itx) => {
@@ -484,21 +501,21 @@ export class EncountersService {
           .update(combatants)
           .set({
             initScore: r.detail.score,
-            initKind: r.kind,
+            initKind: r.detail.kind,
             initBase: r.detail.base,
             actedThisPass: false,
             // A roll settles a late entry.
-            copilot: sql`${combatants.copilot} - 'lateEntry'::text`,
+            copilot: sql`(${combatants.copilot} - 'lateEntry'::text) || ${JSON.stringify({ initDice: r.dice, initEntry: r.entry })}::jsonb`,
           })
-          .where(eq(combatants.id, r.combatantId));
+          .where(eq(combatants.id, r.detail.combatantId));
         details.push(r.detail);
       }
       const started =
-        encounter.turn < 1 || encounter.pass < 1
+        fight !== encounter
           ? ((
               await itx.db
                 .update(encounters)
-                .set({ turn: Math.max(1, encounter.turn), pass: 1 })
+                .set({ turn: fight.turn, pass: 1 })
                 .where(eq(encounters.id, encounterId))
                 .returning()
             )[0] ?? encounter)
@@ -520,44 +537,53 @@ export class EncountersService {
   }
 
   /**
-   * Hand-set a score or line (FR4.2 "roll or hand-enter", FR4.8).
-   *
-   * `rolled` is the dice total off a real table — the player rolled 2d6 and
-   * got 9 — and the server adds the base and the wound modifier, so nobody
-   * at the table does arithmetic and a wounded runner's penalty is never
-   * forgotten. `score` remains the blunt override: whatever number the GM
-   * types is the number.
+   * Hand-set a score or line (FR4.2, FR4.8). `rolled` is the table's dice
+   * total and the server adds the recipe's base and modifiers; `score` is
+   * taken as typed.
    */
   async setInitiative(
     combatantId: string,
-    input: { score?: number; base?: number; dice?: number; kind?: InitKind; rolled?: number },
+    input: {
+      score?: number;
+      base?: number;
+      dice?: number;
+      kind?: InitKind;
+      rolled?: number;
+      by?: InitiativeEntry['by'];
+    },
   ): Promise<Combatant> {
+    const current = serializeCombatant(await this.getCombatant(combatantId));
+    const encounter = await this.getEncounter(current.encounterId);
+    const by = input.by ?? 'gm';
     let score = input.score;
+    let entry: InitiativeEntry | undefined;
     if (input.rolled !== undefined) {
-      const current = serializeCombatant(await this.getCombatant(combatantId));
-      const base = input.base ?? current.initBase;
-      const late = latePenalty(current, await this.getEncounter(current.encounterId));
-      score = base + input.rolled + computeWoundModifier(current.monitors) + late;
+      const kind = input.kind ?? current.initKind;
+      // A line edit in the same call counts toward this score.
+      const edited = input.base !== undefined || input.dice !== undefined;
+      const row: Combatant = edited
+        ? {
+            ...current,
+            initBase: input.base ?? current.initBase,
+            initDice: input.dice ?? current.initDice,
+            copilot: { ...current.copilot, initLine: withGmLine(parseCopilot(current.copilot), kind, input.base, input.dice) },
+          }
+        : current;
+      score = scoreOf(buildRecipe(row, await recipeSource(this.db, current), encounter, kind), input.rolled);
+      entry = { turn: encounter.turn, via: 'dice', rolled: input.rolled, score, by };
+    } else if (score !== undefined) {
+      entry = { turn: encounter.turn, via: 'score', score, by };
     }
-    return this.updateCombatant(combatantId, {
-      ...(score !== undefined ? { initScore: score, actedThisPass: false } : {}),
-      ...(input.base !== undefined ? { initBase: input.base } : {}),
-      ...(input.dice !== undefined ? { initDice: input.dice } : {}),
-      ...(input.kind !== undefined ? { initKind: input.kind } : {}),
-    });
-  }
-
-  /** Derived line for a different init kind, when the combatant has a sheet. */
-  private async initiativeLineFor(
-    combatant: Combatant,
-    kind: InitKind,
-    tx?: EventTx,
-  ): Promise<{ base: number; dice: number } | null> {
-    if (kind === combatant.initKind) return null;
-    const sheet = await this.sheetFor(combatant, tx);
-    if (!sheet) return null;
-    const derived = deriveFor(sheet, kind);
-    return { base: derived.base, dice: derived.dice };
+    return this.updateCombatant(
+      combatantId,
+      {
+        ...(score !== undefined ? { initScore: score, actedThisPass: false } : {}),
+        ...(input.base !== undefined ? { initBase: input.base } : {}),
+        ...(input.dice !== undefined ? { initDice: input.dice } : {}),
+        ...(input.kind !== undefined ? { initKind: input.kind } : {}),
+      },
+      entry ? { entry } : {},
+    );
   }
 
   // --- turn engine (FR4.3 / FR4.4) ---------------------------------------
@@ -649,6 +675,7 @@ export class EncountersService {
   /**
    * "Next ▸" — the whole FR4.3 loop behind one button, in ONE transaction:
    *
+   *  0. while initiative is being gathered, it starts the turn (`startTurn`);
    *  1. the acting row is done;
    *  2. if someone else is up, that is it;
    *  3. if nobody is, but a row is still holding a Delayed Action, the pass
@@ -657,9 +684,7 @@ export class EncountersService {
    *     or "Next" again to move on (the delay then carries into the next pass);
    *  4. otherwise the pass ends, every score −10;
    *  5. and when nobody is left above 0, a new Combat Turn begins — rolled by
-   *     the server, or blank for the table's dice when the fight is set to
-   *     hand rolls (`encounters.hand_rolls`). It used to always roll: the hand
-   *     rolls setting lived on one device, and "Next" never saw it.
+   *     the server, or, with hand rolls on, blank and gathering initiative.
    *
    * `expectedActorId` is who the pressing device saw acting (null: nobody).
    * When that is no longer so — the first of two presses already moved the
@@ -679,6 +704,16 @@ export class EncountersService {
       const order = await this.orderOptions(encounter, list, tx);
       const acting = nextActorRules(list, order);
       this.assertExpectedActor(acting, opts.expectedActorId);
+      if (encounter.gathering) {
+        const started = await this.startTurn(encounterId, tx);
+        return {
+          step: 'start',
+          acted: null,
+          active: started.combatants.find((c) => c.id === started.activeCombatantId) ?? null,
+          encounter: started.encounter,
+          combatants: started.combatants,
+        };
+      }
       if (acting) {
         await this.markActedIn(tx, acting.id);
         const marked = list.map((c) => (c.id === acting.id ? { ...c, actedThisPass: true } : c));
@@ -763,21 +798,23 @@ export class EncountersService {
    * any Delayed Action in use.
    *
    * `roll` left out follows the fight's own setting: the server rolls unless
-   * the fight is set to hand rolls, when the turn opens blank.
+   * the fight is set to hand rolls, when the turn opens blank and gathering.
+   * `first` starts a fight that is not live yet: turn 1, not turn + 1.
    */
   async newTurn(
     encounterId: string,
-    opts: { roll?: boolean } = {},
+    opts: { roll?: boolean; first?: boolean } = {},
     tx?: EventTx,
   ): Promise<{ encounter: EncounterRow; combatants: Combatant[] }> {
     const head = await this.getEncounter(encounterId, tx);
     return this.hub.atomicIn(head.campaignId, tx, async (itx) => {
       const encounter = await this.lockEncounter(itx, encounterId);
       const roll = opts.roll ?? !encounter.handRolls;
+      const turn = opts.first ? Math.max(1, encounter.turn) : encounter.turn + 1;
       const row = (
         await itx.db
           .update(encounters)
-          .set({ turn: encounter.turn + 1, pass: 1, state: 'live', manualOrder: null })
+          .set({ turn, pass: 1, state: 'live', manualOrder: null, gathering: !roll })
           .where(eq(encounters.id, encounterId))
           .returning()
       )[0]!;
@@ -794,18 +831,62 @@ export class EncountersService {
       // "the live encounter", and two of them would be a coin toss.
       await this.retireOtherLive(itx, row.campaignId, row.id);
       if (!roll) {
-        // Hand rolls (FR4.2): the turn opens with every score blank, and the
-        // dice come in from the table one row at a time.
-        await itx.db
-          .update(combatants)
-          .set({ initScore: 0, actedThisPass: false })
-          .where(eq(combatants.encounterId, encounterId));
+        // Hand rolls (FR4.2): every score blank, each line refreshed from its
+        // recipe (a spell cast last turn counts), the dice come in row by row.
+        for (const c of await this.listCombatants(encounterId, itx)) {
+          const recipe = buildRecipe(c, await recipeSource(itx.db, c), row);
+          await itx.db
+            .update(combatants)
+            .set({
+              initScore: 0,
+              actedThisPass: false,
+              initBase: recipe.base,
+              copilot: mergeCopilot({ initDice: recipe.dice }),
+            })
+            .where(eq(combatants.id, c.id));
+        }
         const list = await this.emitUpdated(row, 'new-turn', itx);
         return { encounter: row, combatants: list };
       }
       const rolled = await this.rollInitiativeAll(encounterId, {}, itx);
       await this.emitUpdated(row, 'new-turn', itx);
       return { encounter: row, combatants: rolled.combatants };
+    });
+  }
+
+  /**
+   * Call for initiative: a fight not yet live starts at turn 1, a live one
+   * opens its next Combat Turn, both blank and gathering. Again while
+   * gathering is a no-op.
+   */
+  async callInitiative(encounterId: string): Promise<EncounterRow> {
+    const head = await this.getEncounter(encounterId);
+    return this.hub.atomic(head.campaignId, async (tx) => {
+      const encounter = await this.lockEncounter(tx, encounterId);
+      if (encounter.gathering) return encounter;
+      const first = encounter.state !== 'live';
+      return (await this.newTurn(encounterId, { roll: false, first }, tx)).encounter;
+    });
+  }
+
+  /**
+   * Start the turn: gathering ends, and every row still blank joins late
+   * (p.160) whenever its score comes in. A no-op when not gathering.
+   */
+  async startTurn(encounterId: string, tx?: EventTx): Promise<OrderView & { late: string[] }> {
+    const head = await this.getEncounter(encounterId, tx);
+    return this.hub.atomicIn(head.campaignId, tx, async (itx) => {
+      const encounter = await this.lockEncounter(itx, encounterId);
+      if (!encounter.gathering) return { ...(await this.orderViewIn(itx, encounter, 'initiative.started')), late: [] };
+      const blank = (await this.listCombatants(encounterId, itx)).filter((c) => !entryThisTurn(c, encounter));
+      const lateEntry = { turn: encounter.turn, passesGone: Math.max(0, encounter.pass - 1) };
+      for (const c of blank) {
+        await itx.db.update(combatants).set({ copilot: mergeCopilot({ lateEntry }) }).where(eq(combatants.id, c.id));
+      }
+      const row = (
+        await itx.db.update(encounters).set({ gathering: false }).where(eq(encounters.id, encounterId)).returning()
+      )[0]!;
+      return { ...(await this.orderViewIn(itx, row, 'initiative.started')), late: blank.map((c) => c.id) };
     });
   }
 
@@ -1234,10 +1315,4 @@ export async function emitFightFrames(tx: EventTx, encounter: EncounterRow, reas
     visibility: 'public',
   });
   return list;
-}
-
-/** Late entry (p.160): a row that joined this Combat Turn rolls −10 per pass gone by now; else 0. */
-export function latePenalty(c: Pick<Combatant, 'copilot'>, encounter: Pick<EncounterRow, 'turn' | 'pass'>): number {
-  const late = parseCopilot(c.copilot).lateEntry;
-  return late && late.turn === encounter.turn && encounter.pass > 1 ? -10 * (encounter.pass - 1) : 0;
 }

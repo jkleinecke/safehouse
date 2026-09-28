@@ -332,6 +332,8 @@ export const encounters = pgTable(
     manualOrder: jsonb('manual_order').$type<string[] | null>(),
     /** The table rolls initiative with its own dice: a new turn opens blank. */
     handRolls: boolean('hand_rolls').notNull().default(false),
+    /** Initiative called and not yet started: nobody acts until the GM starts the turn (0016). */
+    gathering: boolean('gathering').notNull().default(false),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('encounters_campaign_idx').on(t.campaignId)],

@@ -23,6 +23,7 @@ import {
   CombatantSourceSchema,
   EdgeStateSchema,
   GruntStateSchema,
+  InitiativeEntrySchema,
   InitKindSchema,
   SheetV1Schema,
   StatusEffectSchema,
@@ -104,6 +105,12 @@ const CopilotSchema = z
     defendedSinceAction: z.number().int().min(0).optional(),
     /** Joined mid-turn (p.160): a roll this turn loses 10 per pass gone. `passesGone` is as it joined. */
     lateEntry: z.object({ turn: z.number().int(), passesGone: z.number().int().min(0) }).optional(),
+    /** How this turn's score came in; a new turn clears it. */
+    initEntry: InitiativeEntrySchema.optional(),
+    /** The GM's hand-set line for a row with a sheet: it wins over the sheet's for that kind. */
+    initLine: z
+      .object({ kind: InitKindSchema, base: z.number().int().optional(), dice: z.number().int().min(0).max(5).optional() })
+      .optional(),
   })
   .loose();
 export type CombatantCopilot = z.infer<typeof CopilotSchema>;
@@ -181,6 +188,7 @@ export function serializeEncounter(row: EncounterRow, visible?: ReadonlySet<stri
     activeCombatantId: null,
     manualOrder: manual && visible ? manual.filter((id) => visible.has(id)) : manual,
     handRolls: row.handRolls,
+    gathering: row.gathering,
   };
 }
 
@@ -202,7 +210,12 @@ export function orderOptionsOf(
   row: EncounterRow,
   eric: Readonly<Record<string, EricAttributes>> = {},
 ): TurnOrderOptions {
-  return { manualOrder: manualOrderOf(row), eric, coin: `${row.id}:${row.turn}` };
+  return {
+    manualOrder: manualOrderOf(row),
+    eric,
+    coin: `${row.id}:${row.turn}`,
+    ...(row.gathering ? { gathering: true } : {}),
+  };
 }
 
 /**
@@ -455,7 +468,7 @@ export interface InitiativeDetail {
   score: number;
 }
 
-const INIT_LINE: Record<InitKind, 'physical' | 'astral' | 'matrixAR' | 'vrCold' | 'vrHot'> = {
+export const INIT_LINE: Record<InitKind, 'physical' | 'astral' | 'matrixAR' | 'vrCold' | 'vrHot'> = {
   physical: 'physical',
   astral: 'astral',
   matrix_ar: 'matrixAR',
@@ -479,4 +492,10 @@ export function deriveFor(
       overflow: { max: derived.monitors.overflow.value, filled: 0 },
     },
   };
+}
+
+/** Late entry (p.160): a row that joined this Combat Turn rolls −10 per pass gone by now; else 0. */
+export function latePenalty(c: Pick<Combatant, 'copilot'>, encounter: Pick<EncounterRow, 'turn' | 'pass'>): number {
+  const late = parseCopilot(c.copilot).lateEntry;
+  return late && late.turn === encounter.turn && encounter.pass > 1 ? -10 * (encounter.pass - 1) : 0;
 }

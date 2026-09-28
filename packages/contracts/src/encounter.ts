@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ModifierSchema } from './modifier.js';
-import { VisibilitySchema } from './common.js';
+import { RefSchema, VisibilitySchema } from './common.js';
+import { ProvenanceEntrySchema } from './derived.js';
 import { EdgeStateSchema } from './sheet.js';
 
 const NonNegInt = z.number().int().min(0);
@@ -158,8 +159,52 @@ export const EncounterSchema = z.object({
   turnOrder: z.array(z.string()).optional(),
   /** Player/TV views: someone this viewer may not see is acting ("GM's turn"). */
   gmTurn: z.boolean().optional(),
+  /** Initiative called for this turn and not yet started: nobody acts until the GM starts it. */
+  gathering: z.boolean().optional(),
   /** Present when the API returns the composed view. */
   combatants: z.array(CombatantSchema).optional(),
 });
 export type Encounter = z.infer<typeof EncounterSchema>;
 export type EncounterInput = z.input<typeof EncounterSchema>;
+
+/** How a row's score came in this Combat Turn. */
+export const InitiativeEntrySchema = z.object({
+  turn: z.number().int(),
+  /** App dice, the table's dice total, or a final score. */
+  via: z.enum(['app', 'dice', 'score']),
+  /** The dice total (app or table). */
+  rolled: z.number().int().optional(),
+  /** App rolls only: the faces. */
+  rolls: z.array(z.number().int()).optional(),
+  score: z.number().int(),
+  by: z.enum(['gm', 'player']),
+});
+export type InitiativeEntry = z.infer<typeof InitiativeEntrySchema>;
+
+/** A row's initiative recipe: base + Nd6 + modifiers, each line with its page (p.159). */
+export const InitiativeRecipeSchema = z.object({
+  combatantId: z.string(),
+  name: z.string(),
+  kind: InitKindSchema,
+  base: z.number().int(),
+  dice: z.number().int().min(0).max(5),
+  /** Sum of `modifiers`: wounds, late entry. */
+  modifier: z.number().int(),
+  baseLines: z.array(ProvenanceEntrySchema),
+  diceLines: z.array(ProvenanceEntrySchema),
+  modifiers: z.array(ProvenanceEntrySchema),
+  ref: RefSchema,
+  /** This turn's entry; absent while the row is blank. */
+  entry: InitiativeEntrySchema.optional(),
+});
+export type InitiativeRecipe = z.infer<typeof InitiativeRecipeSchema>;
+
+/** The call for initiative: the fight's state and a recipe per row the viewer may see. */
+export const InitiativeCallSchema = z.object({
+  encounterId: z.string(),
+  turn: z.number().int(),
+  pass: z.number().int(),
+  gathering: z.boolean(),
+  rows: z.array(InitiativeRecipeSchema),
+});
+export type InitiativeCall = z.infer<typeof InitiativeCallSchema>;

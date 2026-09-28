@@ -104,6 +104,8 @@ export interface TurnOrderOptions {
   manualOrder?: readonly string[] | null;
   eric?: Readonly<Record<string, EricAttributes>>;
   coin?: string;
+  /** Initiative is still being gathered: nobody is up until the GM starts the turn. */
+  gathering?: boolean;
 }
 
 /**
@@ -211,6 +213,7 @@ export function turnOrder(combatants: Combatant[], opts: TurnOrderOptions = {}):
  * Delayed Action (p.161).
  */
 export function nextActor(combatants: Combatant[], opts: TurnOrderOptions = {}): Combatant | null {
+  if (opts.gathering) return null;
   return turnOrder(combatants, opts).find((c) => !c.actedThisPass && c.delayed !== true) ?? null;
 }
 

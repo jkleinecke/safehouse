@@ -185,7 +185,8 @@ export function trackerRows(encounter: Encounter | null | undefined, viewer: Vie
         ? (places.get(a.id) ?? 0) - (places.get(b.id) ?? 0)
         : compareOrder(a, b)),
   );
-  const actingId = encounter?.activeCombatantId ?? nextActor(all)?.id ?? null;
+  // Nobody acts while initiative is gathered; "Next" then starts the turn.
+  const actingId = encounter?.activeCombatantId ?? (encounter?.gathering ? null : nextActor(all)?.id) ?? null;
 
   let order = 0;
   return sorted.map((c) => {

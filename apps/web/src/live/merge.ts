@@ -344,6 +344,7 @@ export function normalizeEncounter(raw: unknown, fallbackId?: string): Encounter
   const handRolls = firstDefined(bool(enc['handRolls']), bool(root['handRolls']));
   // Player/TV frames: a row this viewer cannot see is acting.
   const gmTurn = firstDefined(bool(root['gmTurn']), bool(enc['gmTurn']));
+  const gathering = firstDefined(bool(enc['gathering']), bool(root['gathering']));
 
   const out: Encounter = {
     id,
@@ -358,6 +359,7 @@ export function normalizeEncounter(raw: unknown, fallbackId?: string): Encounter
     ...(manualOrder !== undefined ? { manualOrder } : {}),
     ...(handRolls !== undefined ? { handRolls } : {}),
     ...(gmTurn ? { gmTurn } : {}),
+    ...(gathering ? { gathering } : {}),
     // Present only when the source actually carried rows: an encounter list
     // entry has none, and an empty array there would look like "0 combatants"
     // rather than "not asked" (honest empty states).

@@ -41,6 +41,7 @@ import {
   type EncounterRow,
 } from '../services/encounters.js';
 import { CombatDamageService } from '../services/encounters-damage.js';
+import { InitiativeCallService } from '../services/initiative-call.js';
 import { copiesFor, openExchanges } from '../services/exchanges-model.js';
 import { ScenesService } from '../services/scenes.js';
 import { hintForCombatant } from '../services/tactical-hints.js';
@@ -140,6 +141,13 @@ const SetInitiativeBody = z.object({
   rolled: z.number().int().min(0).max(30).optional(),
 });
 
+/** Exactly one: app dice, the table's dice total, or a final score. */
+const EnterInitiativeBody = z.union([
+  z.object({ app: z.literal(true) }).strict(),
+  z.object({ rolled: z.number().int().min(0).max(30) }).strict(),
+  z.object({ score: z.number().int() }).strict(),
+]);
+
 const NewTurnBody = z.object({
   /**
    * False opens the turn with blank scores for hand rolls (FR4.2), true has
@@ -235,6 +243,7 @@ const CommitBody = z.object({
 export default async function encountersPlugin(app: FastifyInstance): Promise<void> {
   const service = new EncountersService(app.db, app.hub);
   const damage = new CombatDamageService(service);
+  const initiative = new InitiativeCallService(service);
 
   /** Load an encounter and check the caller's device is bound to its campaign. */
   async function scope(
@@ -386,7 +395,7 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
       // Their own dice, and nothing else: the full roster (hidden rows, NPC
       // sheets, the manual order) is the GM's. The table sees the result in
       // the public `encounter.updated` frame like everyone else (FR4.9).
-      const out = await service.rollInitiativeAll(id, body);
+      const out = await service.rollInitiativeAll(id, { ...body, by: 'player' });
       return { details: out.details };
     }
     return service.rollInitiativeAll(id, body);
@@ -400,7 +409,47 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
     if (auth.role !== 'gm' && (body.base !== undefined || body.dice !== undefined || body.kind !== undefined)) {
       throw httpError(403, 'forbidden', 'only the GM changes an initiative line');
     }
-    return { combatant: await service.setInitiative(id, body) };
+    return { combatant: await service.setInitiative(id, { ...body, by: auth.role === 'gm' ? 'gm' : 'player' }) };
+  });
+
+  // --- guided initiative: call, recipes, entries, NPCs, start -------------
+
+  /** Call for initiative (fight start or a new Combat Turn): the fight gathers, every row's recipe comes back. */
+  app.post('/api/encounters/:id/initiative/call', async (req) => {
+    const { id } = req.params as { id: string };
+    await scope(req, id);
+    return initiative.call(id);
+  });
+
+  /** The recipes: the GM gets every row, a player only their own runner's. */
+  app.get('/api/encounters/:id/initiative', async (req) => {
+    const { id } = req.params as { id: string };
+    const { encounter, auth } = await scope(req, id, false);
+    if (auth.role === 'gm') return initiative.view(id);
+    const mine = await app.authService.characterOwnedBy(encounter.campaignId, auth.userId);
+    return initiative.view(id, (c) => mine !== null && c.source === 'character' && c.sourceId === mine);
+  });
+
+  /** One row's score: the GM for anyone, a player for their own row. */
+  app.post('/api/combatants/:id/initiative/enter', async (req) => {
+    const { id } = req.params as { id: string };
+    const body = parse(EnterInitiativeBody, req.body);
+    const { auth } = await ownRowScope(req, id);
+    return initiative.enter(id, body, auth.role === 'gm' ? 'gm' : 'player');
+  });
+
+  /** App dice for every NPC row still blank this turn. */
+  app.post('/api/encounters/:id/initiative/roll-npcs', async (req) => {
+    const { id } = req.params as { id: string };
+    await scope(req, id);
+    return initiative.rollNpcs(id);
+  });
+
+  /** Start the turn with whatever is blank; those rows join late (p.160). */
+  app.post('/api/encounters/:id/initiative/start', async (req) => {
+    const { id } = req.params as { id: string };
+    await scope(req, id);
+    return service.startTurn(id);
   });
 
   app.post('/api/encounters/:id/next-actor', async (req) => {
@@ -710,9 +759,10 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
   /**
    * `encounter.advance`: the one-button FR4.3 loop — mark the acting combatant
    * done; when the pass is spent, drop every score by 10; when nobody is left
-   * above 0, start a new turn (the server rolls, or the lines open blank when
-   * the fight is set to hand rolls). A pass still waiting on a Delayed Action
-   * stops for the GM (SR5 p.161). All of it is `EncountersService.advance`.
+   * above 0, start a new turn (the server rolls, or with hand rolls the turn
+   * gathers initiative, and the next press starts it). A pass still waiting on
+   * a Delayed Action stops for the GM (SR5 p.161). All of it is
+   * `EncountersService.advance`.
    *
    * `expectedActorId` is who the pressing device saw acting (null: nobody);
    * a press the order has already moved past does nothing and gets a
