@@ -171,7 +171,7 @@ export async function closeFight(fight: Fight): Promise<void> {
     checks.record('the GM can always apply boxes by hand (Principle 2)', 'monitor moves', `stun ${fallback.combatant.monitors.stun.filled}`, fallback.combatant.monitors.stun.filled >= 3);
   }
   if (!recoilChecked) {
-    checks.skip('a three-round burst pays uncompensated recoil', 'a negative `recoil` entry', 'none of the shooters drew a burst-capable weapon from the loadout table');
+    checks.skip('a three-round burst pays uncompensated recoil', 'a negative `recoil` entry', 'no shooter fired a burst past their recoil compensation (1 + STR÷3 + the gun\'s own, SR5 p.175), or none drew a burst-capable weapon');
   }
   const mirror = await torquePhone.live.next((f) => f.type === 'sheet.updated' && JSON.stringify(f.payload).includes('monitors'));
   const mirrorPayload = mirror.payload as { monitors?: Monitors };

@@ -25,7 +25,7 @@ import {
   type RollRequest,
   type SheetWeapon,
 } from '@safehouse/contracts';
-import { rangeModifier, resolveRoll } from '@safehouse/rules';
+import { bulletsForMode, rangeModifier, recoilLine, resolveRoll } from '@safehouse/rules';
 import { assertCampaign, httpError, requireAuth, requireRole } from '../services/auth.js';
 import { rng } from '../services/dice.js';
 import {
@@ -39,11 +39,9 @@ import { ScenesService } from '../services/scenes.js';
 import { hintForCombatant } from '../services/tactical-hints.js';
 import {
   buildRack,
-  bulletsForMode,
   chainActor,
   environmentEntries,
   rackEntry,
-  recoilEntry,
   resolveChain,
 } from '../services/encounters-copilot.js';
 
@@ -555,8 +553,20 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
 
     const env = environmentEntries(await service.sceneModifiers(encounter));
     const attackModifiers: ProvenanceEntry[] = [...env, ...(body.attackModifiers ?? [])];
-    const bullets = body.bullets ?? bulletsForMode(body.mode ?? weapon.modes[0]);
-    const recoil = recoilEntry(bullets, weapon.recoilComp ?? 0);
+    const attackerActor = chainActor(attackerSheet, attacker.monitors, {
+      name: attacker.name,
+      weaponName: weapon.name,
+    });
+    // Recoil as the sheet reckons it (SR5 p.175): the shooter's Strength is
+    // part of the compensation. No earlier rounds this turn are known here.
+    const mode = body.mode ?? weapon.modes[0] ?? null;
+    const bullets = body.bullets ?? bulletsForMode(mode);
+    const recoil = recoilLine({
+      mode,
+      bullets,
+      recoilComp: weapon.recoilComp ?? 0,
+      strength: attackerActor.attributes.str ?? 0,
+    });
     if (recoil) attackModifiers.push(recoil);
     if (body.distanceM !== undefined && weapon.rangeCat) {
       const range = rangeModifier(body.distanceM, weapon.rangeCat, attackerSheet.rangeTables);
@@ -570,10 +580,7 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
       }
     }
     const outcome = resolveChain(
-      chainActor(attackerSheet, attacker.monitors, {
-        name: attacker.name,
-        weaponName: weapon.name,
-      }),
+      attackerActor,
       chainActor(defenderSheet, defender.monitors, { name: defender.name }),
       weapon,
       rng,

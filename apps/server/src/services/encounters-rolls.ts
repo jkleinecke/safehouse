@@ -118,6 +118,8 @@ export function chainRollInputs(outcome: ChainOutcome, ctx: ChainRollContext): C
       request: request({
         pool: result.defense.pool,
         breakdown: result.defense.breakdown,
+        // [Physical] when a Dodge, Block or Parry brought a skill in (SR5 p.191).
+        limit: result.defense.limit,
         combatantId: defender.id,
         meta: {
           ...shared,
@@ -128,7 +130,7 @@ export function chainRollInputs(outcome: ChainOutcome, ctx: ChainRollContext): C
         },
       }),
       result: result.defense.roll,
-      limit: null,
+      limit: result.defense.limit ?? null,
       meta: {
         ...shared,
         step: 'defense',

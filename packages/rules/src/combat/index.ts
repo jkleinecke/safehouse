@@ -1,6 +1,7 @@
 /**
  * Combat module (FR4.2–4.7, FR10.8–10.9, §10.2): the initiative-pass combat
- * turn, interrupts, damage/wound propagation, the resolved attack chain,
+ * turn, interrupts, damage/wound propagation, the attack exchange as pure
+ * steps (and the one-click chain that composes them), recoil,
  * morale, grunt-group helpers, and the two catalogues the guided roll cards
  * read — combat actions and situational modifiers, each entry with its page.
  * Pure functions and data — no I/O, no mutation.
@@ -35,13 +36,36 @@ export {
 } from './damage.js';
 export {
   parseDamageCode,
+  defensePool,
+  resolveHit,
+  armorAfterAp,
+  damageAfterHit,
+  soakPool,
+  boxesAfterSoak,
   resolveAttackChain,
   type DamageType,
   type ParsedDamageCode,
   type CombatActor,
+  type ActiveDefenseId,
+  type ActiveDefense,
+  type DefenseOptions,
+  type DefensePool,
+  type HitOutcome,
+  type HitResult,
+  type HitDamage,
+  type DamageAfterHitInput,
+  type SoakOptions,
+  type SoakPool,
   type AttackChainOptions,
   type AttackChainResult,
 } from './attack.js';
+export {
+  bulletsForMode,
+  recoilCompensation,
+  recoilLine,
+  recoilPenalty,
+  type RecoilLineOptions,
+} from './recoil.js';
 export {
   checkMorale,
   moraleReport,

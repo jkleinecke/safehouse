@@ -177,37 +177,13 @@ export function setPowerActive(sheet: SheetV1, powerName: string, active: boolea
 // Weapons: fire modes, progressive recoil (FR3.4), ammo.
 // ---------------------------------------------------------------------------
 
-/** Rounds a trigger pull expends per fire mode — assistive default, editable per-roll. */
-export function bulletsForMode(mode: string): number {
-  switch (mode.toUpperCase()) {
-    case 'BF':
-      return 3;
-    case 'FA':
-      return 6;
-    default: // SS, SA, unknown
-      return 1;
-  }
-}
-
 /**
- * Progressive recoil penalty (≤ 0) if `bullets` more rounds are fired after
- * `firedSoFar` this turn: cumulative rounds − 1 (first is free) − recoil comp.
- * Assistive per Principle 2 — the roll dialog lets the GM/user adjust it.
+ * Rounds per fire mode, the progressive recoil penalty and the recoil
+ * compensation sum (SR5 p.175-176, 180) now live in the rules package, where
+ * the GM's quick-roll rack and the resolved chain read the same copy. They
+ * are re-exported here so the weapon card and its tests keep their imports.
  */
-export function recoilPenalty(firedSoFar: number, bullets: number, recoilComp: number, strength = 0): number {
-  const total = Math.max(0, firedSoFar) + Math.max(0, bullets);
-  const uncompensated = Math.max(0, total - recoilCompensation(recoilComp, strength));
-  return uncompensated === 0 ? 0 : -uncompensated; // never -0
-}
-
-/**
- * Recoil compensation as the book totals it (SR5 p.175): one free point,
- * Strength ÷ 3 rounded up, and the weapon's own compensation. Recoil is the
- * shooter's, not the gun's, and single-shot weapons do not accumulate it.
- */
-export function recoilCompensation(recoilComp: number, strength: number): number {
-  return 1 + Math.ceil(Math.max(0, strength) / 3) + Math.max(0, recoilComp);
-}
+export { bulletsForMode, recoilCompensation, recoilPenalty } from '@safehouse/rules';
 
 /**
  * The cast roll's hits for `spell`, from the table log — what decides whether

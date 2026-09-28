@@ -17,9 +17,11 @@ import type {
   SheetWeapon,
 } from '@safehouse/contracts';
 import {
+  bulletsForMode,
   computeWoundModifier,
   deriveCharacter,
   lineRef,
+  recoilLine,
   resolveAttackChain,
   type AttackChainOptions,
   type AttackChainResult,
@@ -29,39 +31,14 @@ import {
 // ---------------------------------------------------------------------------
 // Fire modes and recoil (FR10.7 "mode and recoil aware")
 // ---------------------------------------------------------------------------
-
-/**
- * Bullets fired by one Simple/Complex action per mode. GM-editable per roll via
- * the `bullets` field — these are only the defaults the rack starts from.
- */
-export const MODE_BULLETS: Readonly<Record<string, number>> = {
-  SS: 1,
-  SA: 2,
-  BF: 3,
-  FA: 6,
-};
-
-/** Bullets for a mode string (case-insensitive), 1 when unknown. */
-export function bulletsForMode(mode: string | undefined): number {
-  if (!mode) return 1;
-  return MODE_BULLETS[mode.trim().toUpperCase()] ?? 1;
-}
-
-/**
- * Recoil penalty for firing `bullets` rounds with `recoilComp` compensation:
- * the first bullet is free, every further uncompensated one is −1 die.
- * Returns null when nothing is owed (so the rack stays quiet at single shot).
- */
-export function recoilEntry(bullets: number, recoilComp = 0): ProvenanceEntry | null {
-  const uncompensated = Math.max(0, Math.floor(bullets) - 1 - Math.max(0, recoilComp));
-  if (uncompensated <= 0) return null;
-  return {
-    label: `recoil (${bullets} rounds, ${recoilComp} comp)`,
-    value: -uncompensated,
-    source: 'situational',
-    ref: lineRef('recoil'),
-  };
-}
+//
+// The rack and the chain take their rounds per mode and their recoil line from
+// the rules package (`bulletsForMode`, `recoilLine`) — the same sums the
+// sheet's weapon card uses: one free point, Strength ÷ 3 rounded up and the
+// gun's compensation against every round fired (SR5 p.175), with semi-auto
+// one round a pull and single shot never recoiling (p.176, 180). The copilot
+// used to keep its own shorter table, which left Strength out and fired two
+// rounds in semi-auto.
 
 /**
  * Scene environment modifiers (FR9.11) as roll-provenance entries, each
@@ -175,9 +152,16 @@ export function buildRack(sheet: SheetV1, ctx: RackContext): QuickRollRack {
     const pool = derived.pools[`weapon.${weapon.name}`];
     if (!pool) continue;
     const mode = ctx.modes?.[weapon.name] ?? weapon.modes[0] ?? null;
-    const bullets = ctx.bullets?.[weapon.name] ?? bulletsForMode(mode ?? undefined);
+    const bullets = ctx.bullets?.[weapon.name] ?? bulletsForMode(mode);
     const breakdown = [...pool.breakdown];
-    const recoil = recoilEntry(bullets, weapon.recoilComp ?? 0);
+    // No rounds fired before this one as far as the rack knows: it keeps no
+    // per-turn count, so a second burst in the same turn is the GM's edit.
+    const recoil = recoilLine({
+      mode,
+      bullets,
+      recoilComp: weapon.recoilComp ?? 0,
+      strength: attr(derived, 'str'),
+    });
     if (recoil) breakdown.push(recoil);
     entries.push({
       key: `attack:${weapon.name}`,
@@ -336,6 +320,8 @@ export function chainActor(
     },
     ...(attackPool !== undefined ? { attackPool } : {}),
     armor: derived.pools['armor']?.total ?? 0,
+    // The sheet's own Physical limit, for a Dodge, Block or Parry (SR5 p.191).
+    physicalLimit: derived.limits.physical.value,
     woundModifier: computeWoundModifier(monitors),
     monitors,
   };
