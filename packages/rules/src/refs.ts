@@ -137,6 +137,18 @@ export function lineRef(topic: RuleTopic): Ref {
   return { book: r.book, page: r.page, note: r.topic };
 }
 
+/**
+ * A core-rulebook page in the same shape `lineRef` gives, for a paragraph too
+ * narrow to earn a RULE_REFS topic of its own — Drop Prone on p.164, Blind
+ * Fire on p.178. The action and modifier catalogues (`combat/actions.ts`,
+ * `combat/situational.ts`) point at the paragraph that explains each entry,
+ * and most of those paragraphs are a few lines long. `section` is the
+ * heading as printed, so the chip's tooltip names what it opens.
+ */
+export function sr5Page(page: number, section: string): Ref {
+  return { book: 'SR5', page, note: section };
+}
+
 /** Skill groups as the Skills chapter lays them out, and the page each starts on. */
 export const SKILL_GROUP_REFS = {
   combat: SR5(130, 'Combat Active Skills'),

@@ -1,4 +1,5 @@
-import type { Combatant, InitKind } from '@safehouse/contracts';
+import type { Combatant, InitKind, Ref } from '@safehouse/contracts';
+import { COMBAT_ACTIONS } from './actions.js';
 import { computeWoundModifier } from './damage.js';
 
 /** SR5 hard cap on initiative dice (§10.2, FR4.2). */
@@ -116,20 +117,23 @@ export interface InterruptAction {
   name: string;
   /** Positive number of points deducted from the current score. */
   cost: number;
+  /** Where the book explains it, so a menu can show the page. */
+  ref?: Ref;
 }
 
 /**
  * Default interrupt cost table (FR4.4) — fully editable per campaign; the UI
  * copies it into campaign settings rather than importing it as law.
+ *
+ * A view of the action catalogue (`actions.ts`): every Interrupt there, with
+ * the Initiative Score it costs and its page, in the catalogue's order (Full
+ * Defense, Dodge, Block, Parry, Intercept, Hit the Dirt). There is one list
+ * of what an Interrupt costs, so the tracker's menu and a guided Dodge card
+ * can never disagree about the price.
  */
-export const DEFAULT_INTERRUPTS: readonly InterruptAction[] = [
-  { id: 'full_defense', name: 'Full Defense', cost: 10 },
-  { id: 'dodge', name: 'Dodge', cost: 5 },
-  { id: 'block', name: 'Block', cost: 5 },
-  { id: 'parry', name: 'Parry', cost: 5 },
-  { id: 'intercept', name: 'Intercept', cost: 5 },
-  { id: 'hit_the_dirt', name: 'Hit the Dirt', cost: 5 },
-];
+export const DEFAULT_INTERRUPTS: readonly InterruptAction[] = COMBAT_ACTIONS.filter(
+  (a) => a.type === 'interrupt' && a.initCost !== undefined,
+).map((a) => ({ id: a.id, name: a.name, cost: a.initCost ?? 0, ref: a.ref }));
 
 /** Soft guard for the UI: does the combatant have the score to pay full price? */
 export function canInterrupt(combatant: Combatant, action: number | InterruptAction): boolean {

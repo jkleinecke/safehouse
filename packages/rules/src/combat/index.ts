@@ -1,7 +1,9 @@
 /**
  * Combat module (FR4.2–4.7, FR10.8–10.9, §10.2): the initiative-pass combat
  * turn, interrupts, damage/wound propagation, the resolved attack chain,
- * morale, and grunt-group helpers. Pure functions — no I/O, no mutation.
+ * morale, grunt-group helpers, and the two catalogues the guided roll cards
+ * read — combat actions and situational modifiers, each entry with its page.
+ * Pure functions and data — no I/O, no mutation.
  *
  * Explicit re-exports keep the package surface deliberate (and avoid name
  * collisions with sibling modules under the root barrel).
@@ -59,3 +61,38 @@ export {
   type GruntGroupInit,
 } from './grunts.js';
 export { rollCombatPool } from './roll.js';
+export {
+  ACTION_TYPES,
+  COMBAT_ACTIONS,
+  FIRE_MODE_ACTIONS,
+  FIRE_MODE_CODES,
+  attackActionsFor,
+  combatAction,
+  defenseModifierFor,
+  defenseOptions,
+  directSpellResistance,
+  fireActionsFor,
+  fireModesOf,
+  isMeleeSkill,
+  offersFor,
+  type ActionType,
+  type CombatAction,
+  type ExchangeRole,
+  type FireModeCode,
+  type PoolAttr,
+  type PoolRecipe,
+} from './actions.js';
+export {
+  PERCEPTION_THRESHOLDS,
+  SITUATIONAL_MODIFIERS,
+  situationalFor,
+  situationalModifier,
+  type AttackKind,
+  type EnvColumn,
+  type ModifierAuto,
+  type ModifierGroup,
+  type ModifierScope,
+  type ModifierValue,
+  type PerUnit,
+  type SituationalModifier,
+} from './situational.js';
