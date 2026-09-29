@@ -351,6 +351,8 @@ function safeJson(raw: string): unknown {
 
 export interface FixerChatInput {
   campaignId: string;
+  /** The asking user; the chat is theirs alone. */
+  userId: string;
   message: string;
   conversationId?: string;
   slot?: ModelSlot;
@@ -385,7 +387,7 @@ export async function runFixerChat(
   deps: FixerDeps,
   input: FixerChatInput,
 ): Promise<FixerTurnResult> {
-  const conversation = await loadConversation(deps.db, input.campaignId, {
+  const conversation = await loadConversation(deps.db, input.campaignId, input.userId, {
     kind: 'fixer',
     ...(input.conversationId !== undefined ? { conversationId: input.conversationId } : {}),
   });
@@ -413,6 +415,8 @@ export async function runFixerChat(
 
 export interface NpcConverseInput {
   campaignId: string;
+  /** The asking user; the transcript is theirs alone. */
+  userId: string;
   npcId: string;
   message: string;
   conversationId?: string;
@@ -431,7 +435,7 @@ export async function runNpcConverse(
   input: NpcConverseInput,
 ): Promise<FixerTurnResult> {
   const npc = await getNpcState(deps.db, input.campaignId, input.npcId);
-  const conversation = await loadConversation(deps.db, input.campaignId, {
+  const conversation = await loadConversation(deps.db, input.campaignId, input.userId, {
     kind: 'npc',
     npcRef: npc.id,
     ...(input.conversationId !== undefined ? { conversationId: input.conversationId } : {}),

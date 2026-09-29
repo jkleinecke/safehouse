@@ -531,7 +531,7 @@ users ─┬─ memberships ─── campaigns ──┬─ invites
 | `roll_tables` | id, campaign_id?, kind (`names`\|`quirks`\|`motivations`\|`custom`), title, entries JSONB (weighted), visibility | shipped defaults are original writing (FR2.11, FR10.2) |
 | `books` | id, campaign_id, code (`SR5`\|`RG`\|…), title, attachment_id, page_offset, shared | the rules library (M11); offset maps printed→PDF page |
 | `book_pages` | book_id, printed_page, text, tsv (FTS index) | extracted at seed time; the Fixer's rules-retrieval substrate (FR12.14) |
-| `ai_conversations` | id, campaign_id, kind (`fixer`\|`npc`), npc_ref?, messages JSONB, created_at | GM-only; NPC transcripts linkable to codex pages |
+| `ai_conversations` | id, campaign_id, owner_user_id?, kind (`fixer`\|`npc`), npc_ref?, messages JSONB, memory JSONB, created_at, updated_at | GM-only, and private to the user who started it (no owner: a pre-0018 chat, the campaign owner's); NPC transcripts linkable to codex pages |
 | `ai_generations` | id, campaign_id, kind, target (entity ref), prompt, model, output JSONB, status (`draft`\|`accepted`\|`rejected`), usage JSONB | Principle 8's paper trail (FR12.15); usage feeds the cost meter |
 | `audio_tracks` | id, campaign_id, attachment_id, title, mood_tags[] | GM's local music library, Fixer-tagged (FR12.10) |
 | `wiki_pages` | id, campaign_id, kind, title, content_md, sections JSONB (per-section visibility), tags[], visibility | FR5.1–5.3; `wiki_revisions` mirrors |

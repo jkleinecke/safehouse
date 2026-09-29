@@ -545,6 +545,11 @@ export const aiConversations = pgTable(
       .references(() => campaigns.id, { onDelete: 'cascade' }),
     kind: text('kind').$type<'fixer' | 'npc'>().notNull(),
     npcRef: uuid('npc_ref'),
+    /**
+     * Who started the chat; only they can list or open it (0018). Null is a
+     * chat from before owners, which only the campaign's owner of record sees.
+     */
+    ownerUserId: uuid('owner_user_id').references(() => users.id),
     messages: jsonb('messages').notNull().default([]),
     /** The Fixer's curated memory of this chat — brief, fold point, attachments (fixer/chat/memory.ts). */
     memory: jsonb('memory').notNull().default({}),
@@ -552,7 +557,10 @@ export const aiConversations = pgTable(
     /** Last save — what the chat list sorts by (0017). */
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index('ai_conversations_campaign_updated_idx').on(t.campaignId, t.updatedAt)],
+  (t) => [
+    index('ai_conversations_campaign_updated_idx').on(t.campaignId, t.updatedAt),
+    index('ai_conversations_owner_updated_idx').on(t.campaignId, t.ownerUserId, t.updatedAt),
+  ],
 );
 
 export const aiGenerations = pgTable('ai_generations', {

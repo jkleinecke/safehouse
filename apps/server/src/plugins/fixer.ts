@@ -3,6 +3,7 @@
  *
  * Routes (all GM-only, §13): the streaming chat turn, in-character NPC
  * conversations, the draft queue with accept/reject, and the usage meter.
+ * A chat is private to the user who started it (fixer/conversations.ts).
  * Answers stream to the GM's panel over the hub as gm-visibility ephemeral
  * events (`fixer.delta` / `fixer.tool` / `fixer.done`) while the HTTP call
  * returns the finished turn.
@@ -28,7 +29,13 @@ import {
 import { cancelRun, currentRun, withRun } from '../fixer/activity.js';
 import { runningBuildDrafts } from '../fixer/build-draft.js';
 import { runFixerChat, runNpcConverse } from '../fixer/agent.js';
-import { UUID_RE, deleteConversation, listConversations, loadConversation } from '../fixer/conversations.js';
+import {
+  UUID_RE,
+  assertOwnConversation,
+  deleteConversation,
+  listConversations,
+  loadConversation,
+} from '../fixer/conversations.js';
 import { chatFileIds, removeChatFiles } from '../fixer/chat/attachments.js';
 import { acceptDraft, listDrafts, rejectDraft } from '../fixer/drafts.js';
 import { campaignUsage, persistTurnUsage, usageMeter } from '../fixer/usage.js';
@@ -202,13 +209,18 @@ function upstream(reply: FastifyReply, err: unknown): FastifyReply {
   throw err;
 }
 
-/** GM-only, bound to this campaign (only the GM ever talks to the Fixer). */
-function gmFor(req: FastifyRequest, campaignId: string | undefined): string {
+/** GM-only, bound to this campaign, and who is asking — a chat is theirs alone. */
+function gmUserFor(req: FastifyRequest, campaignId: string | undefined): { campaignId: string; userId: string } {
   const auth = requireRole(req, 'gm');
   const id = campaignId ?? auth.campaignId;
   if (!id) throw httpError(400, 'bad_request', 'campaignId is required');
   assertCampaign(auth, id);
-  return id;
+  return { campaignId: id, userId: auth.userId };
+}
+
+/** GM-only, bound to this campaign (only the GM ever talks to the Fixer). */
+function gmFor(req: FastifyRequest, campaignId: string | undefined): string {
+  return gmUserFor(req, campaignId).campaignId;
 }
 
 /** One turn per campaign at a time — the box has one queue (FR12.16/R11). */
@@ -386,7 +398,7 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
   // --- FR12.1–12.4: the chat turn (streams over WS, returns the result) ----
   app.post('/api/fixer/chat', async (req, reply) => {
     const body = parseBody(ChatBody, req.body);
-    const campaignId = gmFor(req, body.campaignId);
+    const { campaignId, userId } = gmUserFor(req, body.campaignId);
     const llm = await llmOrNull(app.db, campaignId);
     if (!llm) return disabled(reply);
     let result: Awaited<ReturnType<typeof runFixerChat>>;
@@ -396,6 +408,7 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
           { db: app.db, llm, hub: app.hub },
           {
             campaignId,
+            userId,
             message: body.message,
             ...(body.conversationId !== undefined ? { conversationId: body.conversationId } : {}),
             ...(body.slot !== undefined ? { slot: body.slot } : {}),
@@ -433,7 +446,7 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
   // --- The Fixer chat on the AI SDK: a UI message stream --------------------
   app.post('/api/fixer/chat/stream', async (req, reply) => {
     const body = parseBody(ChatStreamBody, req.body);
-    const campaignId = gmFor(req, body.campaignId);
+    const { campaignId, userId } = gmUserFor(req, body.campaignId);
     const saved = resolveLlmConfig(await settingsOf(app.db, campaignId));
     if (!saved) return disabled(reply);
     // The bar's picks, for this turn. One model does everything in a turn —
@@ -447,6 +460,7 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
     try {
       await streamFixerTurn({ db: app.db, hub: app.hub }, reply, {
         campaignId,
+        userId,
         config,
         ...(body.message ? { message: body.message as UIMessage } : {}),
         ...(body.answer ? { answer: body.answer } : {}),
@@ -467,9 +481,9 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
 
   /** A thread as the chat panel draws it: UI messages, and what the Fixer is carrying. */
   app.get('/api/fixer/chat/:id', async (req, reply) => {
-    const campaignId = gmFor(req, undefined);
+    const { campaignId, userId } = gmUserFor(req, undefined);
     const { id } = req.params as { id: string };
-    const conversation = await loadConversation(app.db, campaignId, { kind: 'fixer', conversationId: id });
+    const conversation = await loadConversation(app.db, campaignId, userId, { kind: 'fixer', conversationId: id });
     const memory = readMemory(conversation.memory);
     return reply.send({
       id: conversation.id,
@@ -483,7 +497,7 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
   // --- FR12.6: speak as an NPC --------------------------------------------
   app.post('/api/npcs/:id/converse', async (req, reply) => {
     const body = parseBody(ConverseBody, req.body);
-    const campaignId = gmFor(req, body.campaignId);
+    const { campaignId, userId } = gmUserFor(req, body.campaignId);
     const { id } = req.params as { id: string };
     const llm = await llmOrNull(app.db, campaignId);
     if (!llm) return disabled(reply);
@@ -494,6 +508,7 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
           { db: app.db, llm, hub: app.hub },
           {
             campaignId,
+            userId,
             npcId: id,
             message: body.message,
             ...(body.conversationId !== undefined ? { conversationId: body.conversationId } : {}),
@@ -523,16 +538,16 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
   });
 
   // --- FR12.1: conversation history ---------------------------------------
-  /** Newest save first, a page at a time: `{ conversations, nextCursor }`. */
+  /** The asker's own chats, newest save first, a page at a time: `{ conversations, nextCursor }`. */
   app.get('/api/campaigns/:id/fixer/conversations', async (req, reply) => {
     const { id } = req.params as { id: string };
-    const campaignId = gmFor(req, id);
+    const { campaignId, userId } = gmUserFor(req, id);
     const query = ConversationQuery.safeParse(req.query ?? {});
     if (!query.success) throw httpError(400, 'bad_request', 'invalid query', query.error.issues);
     const { kind, npcRef, limit, cursor } = query.data;
     // An NPC names its own kind.
     return reply.send(
-      await listConversations(app.db, campaignId, { kind: npcRef ? 'npc' : kind, npcRef, limit, cursor }),
+      await listConversations(app.db, campaignId, userId, { kind: npcRef ? 'npc' : kind, npcRef, limit, cursor }),
     );
   });
 
@@ -540,15 +555,17 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
    * Delete a chat, and the files the GM uploaded into it that nothing else
    * uses. A chat the Fixer is still answering in is refused with 409
    * `conversation_running` — cancel first — so a turn never saves into a
-   * chat that is gone. Another campaign's chat is a 404.
+   * chat that is gone. Someone else's chat, or another campaign's, is a 404.
    */
   app.delete('/api/fixer/conversations/:id', async (req, reply) => {
-    const campaignId = gmFor(req, undefined);
+    const { campaignId, userId } = gmUserFor(req, undefined);
     const { id } = req.params as { id: string };
     if (currentRun(campaignId)?.conversationId === id) {
+      // Only the owner learns it is busy; anyone else gets the 404.
+      await assertOwnConversation(app.db, campaignId, userId, id);
       throw httpError(409, 'conversation_running', 'the Fixer is still answering in this chat — cancel it first');
     }
-    const gone = await deleteConversation(app.db, campaignId, id);
+    const gone = await deleteConversation(app.db, campaignId, userId, id);
     const files = await removeChatFiles(app.db, campaignId, chatFileIds(gone.messages, gone.memory));
     // Every GM screen drops it from its list, and a panel showing it starts fresh.
     app.hub.emitEphemeral(campaignId, { type: 'fixer.conversation', payload: { id, deleted: true }, visibility: 'gm' });
@@ -556,9 +573,9 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
   });
 
   app.get('/api/fixer/conversations/:id', async (req, reply) => {
-    const campaignId = gmFor(req, undefined);
+    const { campaignId, userId } = gmUserFor(req, undefined);
     const { id } = req.params as { id: string };
-    const conversation = await loadConversation(app.db, campaignId, {
+    const conversation = await loadConversation(app.db, campaignId, userId, {
       kind: 'fixer',
       conversationId: id,
     });

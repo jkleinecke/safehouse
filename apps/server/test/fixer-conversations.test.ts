@@ -60,7 +60,7 @@ async function until(check: () => boolean | Promise<boolean>, ms = 10_000): Prom
 }
 
 async function newChat(campaignId: string, messages: unknown[] = [], extra: Partial<typeof aiConversations.$inferInsert> = {}) {
-  return (await t.db.insert(aiConversations).values({ campaignId, kind: 'fixer', messages, ...extra }).returning())[0]!.id;
+  return (await t.db.insert(aiConversations).values({ campaignId, kind: 'fixer', ownerUserId: boot.gmUserId, messages, ...extra }).returning())[0]!.id;
 }
 
 const said = (id: string, text: string, role: 'user' | 'assistant' = 'user') => ({ id, role, parts: [{ type: 'text', text }] });

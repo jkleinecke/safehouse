@@ -127,6 +127,13 @@
       "when": 1787905795868,
       "tag": "0017_ai_conversation_updated",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1787905795869,
+      "tag": "0018_ai_conversation_owner",
+      "breakpoints": true
     }
   ]
 }

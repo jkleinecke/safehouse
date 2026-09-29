@@ -100,6 +100,8 @@ export interface ContextStats {
 
 export interface FixerTurnInput {
   campaignId: string;
+  /** The asking user; the chat is theirs alone. */
+  userId: string;
   config: LlmConfig;
   /** A new GM message — or, instead, */
   message?: UIMessage;
@@ -168,9 +170,9 @@ export async function streamFixerTurn(
   const slot = input.slot ?? 'primary';
 
   // Fails as JSON, before the stream exists: busy is a 409 (and leaves no
-  // empty new chat behind), an unknown thread a 404.
+  // empty new chat behind), an unknown thread (or someone else's) a 404.
   assertIdle(campaignId);
-  const conversation = await loadConversation(db, campaignId, {
+  const conversation = await loadConversation(db, campaignId, input.userId, {
     kind: 'fixer',
     ...(input.conversationId !== undefined ? { conversationId: input.conversationId } : {}),
   });

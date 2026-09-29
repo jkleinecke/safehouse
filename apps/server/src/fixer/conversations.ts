@@ -7,9 +7,12 @@
  * follow-up question sees what the earlier round actually read. The system
  * prompt and the situation snapshot are NEVER stored — they are rebuilt every
  * turn so a live snapshot can never go stale (FR12.18).
+ *
+ * A chat is its starter's: every read, list and delete here takes the asking
+ * user, and anyone else's chat is a 404 (0018).
  */
-import { and, desc, eq, sql, type SQL } from 'drizzle-orm';
-import { aiConversations, type Db } from '@safehouse/db';
+import { and, desc, eq, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { aiConversations, campaigns, type Db } from '@safehouse/db';
 import { httpError } from '../services/auth.js';
 import { currentRun } from './activity.js';
 import type { ChatMessage } from './llm.js';
@@ -47,30 +50,57 @@ export function trimHistory(messages: ChatMessage[]): ChatMessage[] {
   return window.slice(start);
 }
 
-/** Load an existing conversation, or open a new one. */
+/**
+ * The chats `userId` may see: their own, and an unowned one (from before
+ * 0018) only if they are the campaign's owner of record.
+ */
+function visibleTo(db: Db, userId: string): SQL {
+  const owned = db.select({ id: campaigns.id }).from(campaigns).where(eq(campaigns.gmUserId, userId));
+  return or(
+    eq(aiConversations.ownerUserId, userId),
+    and(isNull(aiConversations.ownerUserId), inArray(aiConversations.campaignId, owned)),
+  )!;
+}
+
+/** Matches `id` only when it is one of this user's chats in this campaign. */
+function ownChat(db: Db, campaignId: string, userId: string, id: string): SQL {
+  return and(eq(aiConversations.id, id), eq(aiConversations.campaignId, campaignId), visibleTo(db, userId))!;
+}
+
+const unknownConversation = () => httpError(404, 'not_found', 'unknown conversation');
+
+/** 404 unless `id` is one of this user's chats in this campaign. */
+export async function assertOwnConversation(db: Db, campaignId: string, userId: string, id: string): Promise<void> {
+  if (!UUID_RE.test(id)) throw unknownConversation();
+  const row = (
+    await db.select({ id: aiConversations.id }).from(aiConversations).where(ownChat(db, campaignId, userId, id)).limit(1)
+  )[0];
+  if (!row) throw unknownConversation();
+}
+
+/** Load one of this user's conversations, or open a new one for them. */
 export async function loadConversation(
   db: Db,
   campaignId: string,
+  userId: string,
   opts: { kind: 'fixer' | 'npc'; conversationId?: string; npcRef?: string },
 ): Promise<ConversationHandle> {
   if (opts.conversationId) {
-    if (!UUID_RE.test(opts.conversationId)) throw httpError(404, 'not_found', 'unknown conversation');
+    if (!UUID_RE.test(opts.conversationId)) throw unknownConversation();
     const row = (
       await db
         .select()
         .from(aiConversations)
-        .where(eq(aiConversations.id, opts.conversationId))
+        .where(ownChat(db, campaignId, userId, opts.conversationId))
         .limit(1)
     )[0];
-    if (!row || row.campaignId !== campaignId) {
-      throw httpError(404, 'not_found', 'unknown conversation');
-    }
+    if (!row) throw unknownConversation();
     return { id: row.id, kind: row.kind, npcRef: row.npcRef, messages: readMessages(row.messages), memory: row.memory };
   }
   const created = (
     await db
       .insert(aiConversations)
-      .values({ campaignId, kind: opts.kind, npcRef: opts.npcRef ?? null, messages: [] })
+      .values({ campaignId, ownerUserId: userId, kind: opts.kind, npcRef: opts.npcRef ?? null, messages: [] })
       .returning()
   )[0];
   if (!created) throw httpError(500, 'internal', 'conversation insert returned no row');
@@ -165,7 +195,7 @@ function decodeCursor(cursor: string): { at: string; id: string } {
 }
 
 /**
- * A page of the campaign's chats, last saved first. Keyset paging on
+ * A page of this user's chats in the campaign, last saved first. Keyset paging on
  * (updated_at, id), so a chat saved mid-browse moves to the top rather than
  * shifting the page under the reader. Only the first few GM messages leave
  * the database, for the title — a transcript can run to megabytes.
@@ -173,11 +203,16 @@ function decodeCursor(cursor: string): { at: string; id: string } {
 export async function listConversations(
   db: Db,
   campaignId: string,
+  userId: string,
   opts: ListConversationsOptions = {},
 ): Promise<ConversationPage> {
   const limit = Math.min(Math.max(Math.floor(opts.limit ?? 25), 1), 100);
   // An empty chat is a thread that never got its first answer started — not worth a line.
-  const where: SQL[] = [eq(aiConversations.campaignId, campaignId), sql`${aiConversations.messages} <> '[]'::jsonb`];
+  const where: SQL[] = [
+    eq(aiConversations.campaignId, campaignId),
+    visibleTo(db, userId),
+    sql`${aiConversations.messages} <> '[]'::jsonb`,
+  ];
   if (opts.kind) where.push(eq(aiConversations.kind, opts.kind));
   if (opts.npcRef) where.push(eq(aiConversations.npcRef, opts.npcRef));
   if (opts.cursor) {
@@ -223,21 +258,23 @@ export async function listConversations(
 }
 
 /**
- * Remove one of this campaign's conversations — another campaign's, or an
- * unknown id, is a 404. Hands back what it held, so its files can be cleared.
+ * Remove one of this user's conversations — anyone else's, another
+ * campaign's, or an unknown id, is a 404. Hands back what it held, so its
+ * files can be cleared.
  */
 export async function deleteConversation(
   db: Db,
   campaignId: string,
+  userId: string,
   id: string,
 ): Promise<{ messages: unknown; memory: unknown }> {
-  if (!UUID_RE.test(id)) throw httpError(404, 'not_found', 'unknown conversation');
+  if (!UUID_RE.test(id)) throw unknownConversation();
   const row = (
     await db
       .delete(aiConversations)
-      .where(and(eq(aiConversations.id, id), eq(aiConversations.campaignId, campaignId)))
+      .where(ownChat(db, campaignId, userId, id))
       .returning({ messages: aiConversations.messages, memory: aiConversations.memory })
   )[0];
-  if (!row) throw httpError(404, 'not_found', 'unknown conversation');
+  if (!row) throw unknownConversation();
   return row;
 }

@@ -622,7 +622,7 @@ describe('the model reaches the new tools and still cannot apply anything', () =
 
     const result = await runFixerChat(
       { db: t.db as Db, llm: new LlmClient(config) },
-      { campaignId: boot.campaignId, message: 'who are all these gangers?', slot: 'fast' },
+      { campaignId: boot.campaignId, userId: boot.gmUserId, message: 'who are all these gangers?', slot: 'fast' },
     );
     expect(result.tools.map((tool) => tool.name)).toEqual(['identify_tokens']);
     expect(result.tools[0]!.ok).toBe(true);
@@ -644,7 +644,7 @@ describe('the model reaches the new tools and still cannot apply anything', () =
     enableAi(mock.baseUrl);
     await runFixerChat(
       { db: t.db as Db, llm: new LlmClient(llmConfigFromEnv()!) },
-      { campaignId: boot.campaignId, message: 'lay out a branch office', slot: 'fast' },
+      { campaignId: boot.campaignId, userId: boot.gmUserId, message: 'lay out a branch office', slot: 'fast' },
     );
     const sent = mock.requests[0]!;
     const layout = sent.tools?.find((tool) => tool.function.name === 'propose_geometry');
