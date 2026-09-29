@@ -65,7 +65,9 @@ export function useTvScene(sceneId: string | null) {
     queryKey: [...TV_SCENE_KEY, sceneId],
     queryFn: async () => {
       const asOfEventId = useLiveStore.getState().lastEventId;
-      const composed = await apiGet<ComposedSceneRead>(`/api/scenes/${sceneId}`);
+      // The table's copy even for the GM (the sidebar's Preview): the fold
+      // assumes a display's copy, and the preview must show the TV's fog.
+      const composed = await apiGet<ComposedSceneRead>(`/api/scenes/${sceneId}?as=table`);
       return { scene: composed.scene, tokens: composed.tokens ?? [], asOfEventId };
     },
     enabled: Boolean(sceneId),
@@ -84,17 +86,27 @@ export function useTvScene(sceneId: string | null) {
  * for an hour reconnects into a world it has no snapshot of. Re-reading is
  * cheap and unconditionally correct, so the kiosk just does it.
  */
-export function useTvSceneRefresh(campaignId: string | undefined): void {
+export function useTvSceneRefresh(campaignId: string | undefined, asOfEventId?: number): void {
   const qc = useQueryClient();
   const reconnectEpoch = useLiveStore((s) => s.reconnectEpoch);
   // Keyed on the event id, so a stroke that paints thirty cells in six events
   // re-reads once per event and never loops: the id only moves forward.
   const sceneEditId = useLiveStore((s) => lastUnfoldableSceneEventId(s.events));
+  // The buffer has dropped an event newer than the read (`foldOverrun`), so
+  // the fold can no longer replay it: re-read, once per read.
+  const overrunAsOf = useLiveStore((s) =>
+    asOfEventId !== undefined && foldOverrun(asOfEventId, s.floorEventId) ? asOfEventId : null,
+  );
 
   useEffect(() => {
     if (!campaignId || sceneEditId === 0) return;
     void qc.invalidateQueries({ queryKey: TV_SCENE_KEY });
   }, [campaignId, sceneEditId, qc]);
+
+  useEffect(() => {
+    if (!campaignId || overrunAsOf === null) return;
+    void qc.invalidateQueries({ queryKey: TV_SCENE_KEY });
+  }, [campaignId, overrunAsOf, qc]);
 
   useEffect(() => {
     if (!campaignId || reconnectEpoch === 0) return;
@@ -122,6 +134,15 @@ export function useTvSceneRefresh(campaignId: string | undefined): void {
  * table display until the ten-minute drift timer fired.
  */
 const FOLDABLE_SCENE_CHANGES = new Set(['environment']);
+
+/**
+ * Whether the live buffer (capped, `EVENT_BUFFER_SIZE`) has dropped an event
+ * newer than the scene read: the fold would then silently lose it (a fog
+ * switch, a reveal) until the next re-read.
+ */
+export function foldOverrun(asOfEventId: number, floorEventId: number): boolean {
+  return floorEventId > asOfEventId;
+}
 
 /** The newest `scene.updated` carrying a change only a re-read can show. */
 export function lastUnfoldableSceneEventId(events: readonly { id: number; type: string; payload: unknown }[]): number {
@@ -160,7 +181,6 @@ export function useTvWorld(campaignId: string | undefined): TvWorld {
   // Campaign-wide backfill: log (so the GM's standing display steering and the
   // in-game clock survive a reboot), the live encounter, the active scene id.
   const hydration = useLiveHydration(campaignId);
-  useTvSceneRefresh(campaignId);
 
   const events = useLiveStore((s) => s.events);
   const storeSceneId = useLiveStore((s) => s.activeSceneId);
@@ -169,6 +189,7 @@ export function useTvWorld(campaignId: string | undefined): TvWorld {
 
   const sceneId = tvActiveSceneId(events, storeSceneId ?? campaign?.activeSceneId ?? null);
   const sceneQuery = useTvScene(sceneId);
+  useTvSceneRefresh(campaignId, sceneQuery.data?.asOfEventId);
 
   const scene = useMemo(
     () => mergeSceneEvents(sceneQuery.data ?? null, events),

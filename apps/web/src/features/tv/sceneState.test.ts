@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Scene, Token, Visibility, WsEvent } from '@safehouse/contracts';
+import { sceneFogOn, type Scene, type Token, type Visibility, type WsEvent } from '@safehouse/contracts';
 import { cellBitsFrom, encodeCellBits } from '@safehouse/rules';
 // The fog a display device is sent, shared with the server's tests (see the file for why).
 import { FOG_WIRE_UNREVEALED } from '../../../../../packages/contracts/test/fog-fixtures.js';
@@ -329,6 +329,27 @@ describe('the fog on the TV (FR9.13)', () => {
     } finally {
       masks.dispose();
     }
+  });
+
+  it("keeps a copy that says the fog with the GM's switch (`enabled`) as it was through a token move", () => {
+    // The GM's read has `enabled` and no `active`. The rebuild after the
+    // first move dropped the switch, and the GM's Preview opened.
+    const move = () => evt('token.moved', { tokenId: 'wisp', sceneId: 's1', x: 12, y: 5 });
+    const on = snapshot({ scene: scene({ fog: { regions: [], revealed: [], revealedShapes: [], enabled: true } }) });
+    const moved = mergeSceneEvents(on, [move()]);
+    expect(moved).not.toBe(on);
+    expect(sceneFogOn(moved!.scene)).toBe(true);
+    const masks = new CoverMasks('low');
+    try {
+      expect(tvCover(masks, moved!)).toEqual(new Array<number>(squares(moved!)).fill(1));
+    } finally {
+      masks.dispose();
+    }
+
+    // And switched off with a region drawn stays open.
+    const region = { id: 'r1', name: 'east wing', polygon: square(2) };
+    const off = snapshot({ scene: scene({ fog: { regions: [region], revealed: [], revealedShapes: [], enabled: false } }) });
+    expect(sceneFogOn(mergeSceneEvents(off, [move()])!.scene)).toBe(false);
   });
 });
 

@@ -681,6 +681,19 @@ describe('a fogged scene reaches players and the TV covered, and tells them noth
     expect(gmView.fog).not.toHaveProperty('active');
   });
 
+  it("gives the GM's TV preview (`?as=table`) exactly the TV's copy, not the GM's", async () => {
+    const read = (token: string, query = '') =>
+      t.app.inject({ method: 'GET', url: `/api/scenes/${fogSceneId}${query}`, headers: as(token) });
+    const tv = await read(viewers.find((v) => v.role === 'display')!.token);
+    const preview = await read(fb.gmToken, '?as=table');
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json()).toEqual(tv.json());
+    expect((preview.json() as { scene: { fog: unknown } }).scene.fog).toEqual(FOG_WIRE_UNREVEALED);
+    // A player asking for it gets nothing more than their own copy.
+    const phone = viewers.find((v) => v.role === 'player')!.token;
+    expect((await read(phone, '?as=table')).json()).toEqual((await read(phone)).json());
+  });
+
   it('switching the fog off opens the map and keeps every region and reveal for when it goes back on', async () => {
     const fog = await fogOp({ op: 'define', region: { name: VAULT, polygon: VAULT_POLY } });
     vaultId = (fog['regions'] as { id: string }[])[0]!.id;

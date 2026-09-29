@@ -590,7 +590,10 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
   app.get('/api/scenes/:id', async (req) => {
     const { id } = req.params as { id: string };
     const { scene, gm } = await openScene(req, id);
-    return svc.composedScene(scene, gm);
+    // `?as=table`: the table's copy whoever asks, so the GM's TV preview
+    // folds and draws exactly what the TV does.
+    const asTable = (req.query as { as?: unknown } | undefined)?.as === 'table';
+    return svc.composedScene(scene, gm && !asTable);
   });
 
   app.patch('/api/scenes/:id', async (req) => {

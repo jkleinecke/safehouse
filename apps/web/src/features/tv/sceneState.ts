@@ -18,7 +18,7 @@
  * device — the server filtered both before serializing. The `visibility` check
  * in the fold is defence in depth, not the boundary.
  */
-import type { FogBrush, FogRegion, FogRevealAs, FogSight, Point, Scene, Token, WsEvent } from '@safehouse/contracts';
+import { sceneFogOn, type FogBrush, type FogRegion, type FogRevealAs, type FogSight, type Point, type Scene, type Token, type WsEvent } from '@safehouse/contracts';
 import { brushOfEvent, forgetSight, sightOfEvent } from '../grid/fogSight.js';
 import { rec } from '../table/views.js';
 
@@ -300,7 +300,9 @@ export function mergeSceneEvents(
     exploredShapes: (base.scene.fog.exploredShapes ?? []).slice(),
     sight: base.scene.fog.sight,
     brush: base.scene.fog.brush,
-    fogActive: base.scene.fog.active,
+    // A copy without `active` (the GM's says `enabled`) is fixed as read, so
+    // rebuilding the fog below cannot flip it.
+    fogActive: base.scene.fog.active ?? sceneFogOn(base.scene),
     environment: base.scene.environment,
     changed: false,
   };
