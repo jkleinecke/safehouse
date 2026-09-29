@@ -13,8 +13,12 @@
  * Mounted once in CampaignLayout so it follows the GM, floating clear of the
  * bars a screen pins to its bottom edge (`dockPlacement`). Hides entirely for
  * non-GM devices and when no LLM is configured (NG7).
+ *
+ * Closing it never stops the Fixer: the chat stays mounted and the answer
+ * keeps coming. The closed chip pulses while it does, and shows a dot when
+ * an answer finished out of sight, until the dock is opened.
  */
-import { Suspense, lazy, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useLocation } from 'react-router-dom';
 import { getSession } from '../../../api/session.js';
 import { aiDisabledFrom, useFixerStatus } from './api.js';
@@ -62,6 +66,20 @@ export default function FixerDock({ campaignId, sessionLive }: FixerDockProps) {
   const ctx = useAiContext(campaignId);
   const placement = dockPlacement(useLocation().pathname);
   const page = useAiPage(tab === 'page' ? ctx.pageId : undefined);
+  const [answering, setAnswering] = useState(false);
+  const [ready, setReady] = useState(false);
+  const openRef = useRef(open);
+  openRef.current = open;
+  const wasAnswering = useRef(false);
+  const onAnswering = useCallback((now: boolean) => {
+    // An answer that finished while the dock was closed waits on the chip.
+    if (wasAnswering.current && !now && !openRef.current) setReady(true);
+    wasAnswering.current = now;
+    setAnswering(now);
+  }, []);
+  useEffect(() => {
+    if (open) setReady(false);
+  }, [open]);
 
   useEffect(() => {
     try {
@@ -150,9 +168,22 @@ export default function FixerDock({ campaignId, sessionLive }: FixerDockProps) {
         <button
           className={`btn fixed z-40 ${placement}`}
           onClick={toggle}
-          aria-label="Open the Fixer"
-          title="Ask the Fixer about what you are looking at (`)"
+          aria-label={`Open the Fixer${answering ? ' — answering' : ready ? ' — answer ready' : ''}`}
+          title={
+            answering
+              ? 'The Fixer is answering (`)'
+              : ready
+                ? 'The Fixer has answered (`)'
+                : 'Ask the Fixer about what you are looking at (`)'
+          }
+          data-state={answering ? 'answering' : ready ? 'ready' : 'idle'}
+          data-testid="fixer-chip"
         >
+          {answering ? (
+            <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-cyan" aria-hidden />
+          ) : ready ? (
+            <span className="inline-block h-2 w-2 rounded-full bg-magenta shadow-glow-magenta" aria-hidden />
+          ) : null}
           ask the fixer
         </button>
       )}
@@ -207,9 +238,18 @@ export default function FixerDock({ campaignId, sessionLive }: FixerDockProps) {
             looking at · {where}
           </div>
         )}
-        {shown === 'chat' && (
-          <FixerChat campaignId={campaignId} sessionLive={sessionLive} dense fill context={ctx} />
-        )}
+        {/* Kept mounted behind the other tabs, so an answer keeps streaming into it. */}
+        <div className={shown === 'chat' ? 'flex min-h-0 flex-1 flex-col' : 'hidden'}>
+          <FixerChat
+            campaignId={campaignId}
+            sessionLive={sessionLive}
+            dense
+            fill
+            context={ctx}
+            shown={open && shown === 'chat'}
+            onAnswering={onAnswering}
+          />
+        </div>
         {shown === 'page' && page.data && (
           <div className="min-h-0 flex-1 overflow-y-auto">
             <Suspense fallback={<span className="mono-label animate-pulse text-cyan">loading the page workshop</span>}>

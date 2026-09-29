@@ -107,6 +107,8 @@ export interface AiActivityState {
   kind: string;
   label: string;
   since: string;
+  /** The chat a chat run is answering in, once the server has named it. */
+  conversationId?: string;
 }
 
 /**
@@ -167,6 +169,8 @@ export interface LiveState {
   lastPing: PingMarker | null;
   fixerStream: FixerChunk[];
   aiActivity: AiActivityState | null;
+  /** The last Fixer chat deleted (`fixer.conversation`): a panel showing it starts fresh. */
+  chatDeleted: { id: string; seq: number } | null;
   /** The last `build.saved` heard (FR3.9): an open build on another device refetches on it. */
   buildSaved: BuildSavedPing | null;
   /** The last `chargen.updated` heard (FR3.9): the campaign's creation rules moved. */
@@ -227,6 +231,7 @@ const initialState = {
   lastPing: null as PingMarker | null,
   fixerStream: [] as FixerChunk[],
   aiActivity: null as AiActivityState | null,
+  chatDeleted: null as { id: string; seq: number } | null,
   buildSaved: null as BuildSavedPing | null,
   chargenUpdated: null as ChargenUpdatedPing | null,
   lastError: null as LiveErrorFrame | null,
@@ -423,6 +428,7 @@ export const useLiveStore = create<LiveState>()((set, get) => ({
             kind: String(p['kind'] ?? ''),
             label: String(p['label'] ?? ''),
             since: typeof p['since'] === 'string' ? p['since'] : new Date(ts).toISOString(),
+            ...(typeof p['conversationId'] === 'string' ? { conversationId: p['conversationId'] } : {}),
           },
         });
       } else {
@@ -460,6 +466,14 @@ export const useLiveStore = create<LiveState>()((set, get) => ({
       const code = typeof payload['code'] === 'string' ? payload['code'] : 'error';
       const message = typeof payload['message'] === 'string' ? payload['message'] : '';
       set((s) => ({ lastError: { code, message, seq: (s.lastError?.seq ?? 0) + 1 } }));
+      return;
+    }
+
+    if (msg.type === 'fixer.conversation') {
+      const id = payload['id'];
+      if (typeof id === 'string' && payload['deleted'] === true) {
+        set((s) => ({ chatDeleted: { id, seq: (s.chatDeleted?.seq ?? 0) + 1 } }));
+      }
       return;
     }
 

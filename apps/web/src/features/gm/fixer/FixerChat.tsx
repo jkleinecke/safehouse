@@ -17,20 +17,34 @@
  * arrive and the next.
  *
  * The thread survives a reload: its id is kept for the tab, and reopening the
- * panel reloads it from the server exactly as it was drawn.
+ * panel reloads it from the server exactly as it was drawn. An answer still
+ * being written then shows as "answering…" and lands when the server is done;
+ * the answer never depended on this page staying open. Every chat is kept:
+ * the new-chat menu opens an earlier one, or deletes it (ChatMenu.tsx).
  */
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, lastAssistantMessageIsCompleteWithToolCalls, type FileUIPart, type UIMessage } from 'ai';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { apiGet } from '../../../api/client.js';
+import { ApiError, apiGet } from '../../../api/client.js';
 import Icon from '../../../components/Icon.js';
 import { getToken } from '../../../api/session.js';
+import { useLiveStore } from '../../../live/store.js';
 import { fileUrl } from '../../grid/api.js';
 import { fmtLatency, fmtTokens } from '../common.js';
 import { SectionTitle } from '../ui.js';
-import { aiDisabledFrom, useCancelAi, useFixerModels, useFixerStatus } from './api.js';
+import {
+  aiDisabledFrom,
+  invalidateChats,
+  useCancelAi,
+  useFixerModels,
+  useFixerStatus,
+  type ChatFilter,
+  type ChatSummary,
+  type FixerStatus,
+} from './api.js';
 import type { AiContext } from './aiContext.js';
+import ChatMenu from './ChatMenu.js';
 import { useFloorEdits } from './floorEdits.js';
 
 // ---------------------------------------------------------------------------
@@ -123,6 +137,16 @@ function writeThread(campaignId: string, id: string | undefined): void {
   } catch {
     // storage blocked: the thread simply does not survive a reload
   }
+}
+
+const FIXER_CHATS: ChatFilter = { kind: 'fixer' };
+
+/** How often a chat waiting on an answer asks the server, in case the socket missed the end. */
+const WAIT_POLL_MS = 5000;
+
+/** True when the server's run is a chat turn writing into this chat. */
+function answeringIn(activity: FixerStatus['activity'], id: string): boolean {
+  return activity?.kind === 'chat' && activity.conversationId === id;
 }
 
 // ---------------------------------------------------------------------------
@@ -726,12 +750,18 @@ export interface FixerChatProps {
    * can be used twice.
    */
   seed?: { text: string; send: boolean; nonce: number } | null;
+  /** False while the dock shows another tab: the chat stays mounted, out of sight. */
+  shown?: boolean;
+  /** Told when the Fixer starts and stops answering in this chat (the dock's chip). */
+  onAnswering?: (answering: boolean) => void;
 }
 
-export default function FixerChat({ campaignId, dense, fill, context, seed }: FixerChatProps) {
+export default function FixerChat({ campaignId, dense, fill, context, seed, shown = true, onAnswering }: FixerChatProps) {
   const status = useFixerStatus();
   const cancel = useCancelAi(campaignId);
   const [conversationId, setConversationId] = useState<string | undefined>(() => readThread(campaignId));
+  // The server is writing an answer here that this tab is not streaming (after a reload, or from another tab).
+  const [waiting, setWaiting] = useState(false);
   // The bar's effort pick, kept per browser; absent means the saved setting.
   const [effortPick, setEffortPick] = useState<string | undefined>(() => readPick('effort', campaignId));
   const effort = effortPick ?? status.data?.effort ?? 'default';
@@ -826,39 +856,149 @@ export default function FixerChat({ campaignId, dense, fill, context, seed }: Fi
     },
     onError: () => setWorking(null),
   });
-  const { messages, sendMessage, status: chatStatus, setMessages, stop, error, addToolOutput } = chat;
+  const { messages, sendMessage, status: chatStatus, setMessages, stop, error, clearError, addToolOutput } = chat;
   const busy = chatStatus === 'submitted' || chatStatus === 'streaming';
-  const question = busy ? null : waitingQuestion(messages);
+  const answering = busy || waiting;
+  const question = answering ? null : waitingQuestion(messages);
   const answer = (toolCallId: string, out: AskGmOutput) => {
     void addToolOutput({ tool: 'ask_gm', toolCallId, output: out } as never);
   };
 
-  // A thread kept for this tab comes back as it was drawn — and what came
-  // back is history: its floor edits were painted (or undone) the first time.
-  const reopened = useRef(false);
+  // A thread comes back as it was drawn — and what came back is history: its
+  // floor edits were painted (or undone) the first time. The exception is an
+  // answer that landed while this tab waited: it was never painted here.
   const historic = useRef(new Set<string>());
-  useEffect(() => {
-    if (reopened.current || !conversationId || messages.length > 0) return;
-    reopened.current = true;
-    apiGet<{ messages: FixerUIMessage[] }>(`/api/fixer/chat/${conversationId}`)
-      .then((thread) => {
-        for (const m of thread.messages) historic.current.add(m.id);
+  const loads = useRef(0);
+  const loadThread = useCallback(
+    async (id: string, after: 'open' | 'wait') => {
+      const seq = ++loads.current;
+      try {
+        const [thread, st] = await Promise.all([
+          apiGet<{ messages: FixerUIMessage[] }>(`/api/fixer/chat/${id}`),
+          apiGet<FixerStatus>('/api/fixer/status').catch(() => null),
+        ]);
+        if (seq !== loads.current) return;
+        const last = thread.messages[thread.messages.length - 1];
+        for (const m of thread.messages) {
+          if (after === 'wait' && m === last && m.role === 'assistant') continue;
+          historic.current.add(m.id);
+        }
         setMessages(thread.messages);
-      })
-      .catch(() => {
+        setWaiting(answeringIn(st?.activity, id));
+      } catch (err) {
+        if (seq !== loads.current) return;
+        // A wait that could not reach the server tries again on its next look.
+        if (after === 'wait' && !(err instanceof ApiError && err.status === 404)) return;
         // Gone (another campaign, deleted): start fresh.
+        setMessages([]);
         setConversationId(undefined);
         writeThread(campaignId, undefined);
-      });
-  }, [conversationId, messages.length, setMessages, campaignId]);
+        setWaiting(false);
+      }
+    },
+    [campaignId, setMessages],
+  );
+
+  // The thread kept for this tab, once, when the panel first mounts.
+  const reopened = useRef(false);
+  useEffect(() => {
+    if (reopened.current) return;
+    reopened.current = true;
+    if (conversationId && messages.length === 0) void loadThread(conversationId, 'open');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // The answer names its chat as it starts: kept for the tab then, so a reload mid-answer finds it.
+  const streamedId = busy ? messages[messages.length - 1]?.metadata?.conversationId : undefined;
+  useEffect(() => {
+    if (!streamedId || streamedId === conversationId) return;
+    setConversationId(streamedId);
+    writeThread(campaignId, streamedId);
+  }, [streamedId, conversationId, campaignId]);
+
+  // A chat run this tab did not start, in this chat, is one to wait on.
+  const liveRun = useLiveStore((s) => s.aiActivity);
+  const ownRuns = useRef(new Set<string>());
+  useEffect(() => {
+    if (!liveRun || liveRun.kind !== 'chat') return;
+    if (busy) ownRuns.current.add(liveRun.runId);
+    else if (conversationId && !ownRuns.current.has(liveRun.runId) && liveRun.conversationId === conversationId) {
+      setWaiting(true);
+    }
+  }, [liveRun, busy, conversationId]);
+
+  // While waiting: ask again on every word from the socket about the AI, and
+  // every few seconds in case it missed the end. Done, the thread reloads.
+  const liveKey = liveRun ? `${liveRun.runId}:${liveRun.state}` : 'idle';
+  useEffect(() => {
+    if (!waiting || !conversationId) return undefined;
+    const id = conversationId;
+    let gone = false;
+    let loading = false;
+    const check = async () => {
+      if (loading) return;
+      const st = await apiGet<FixerStatus>('/api/fixer/status').catch(() => null);
+      if (gone || loading || !st || answeringIn(st.activity, id)) return;
+      loading = true;
+      await loadThread(id, 'wait');
+      loading = false;
+    };
+    void check();
+    const timer = window.setInterval(() => void check(), WAIT_POLL_MS);
+    return () => {
+      gone = true;
+      window.clearInterval(timer);
+    };
+  }, [waiting, conversationId, liveKey, loadThread]);
+
+  /** A fresh chat; the one on screen stays on the server, in the menu. */
+  const startFresh = () => {
+    loads.current += 1; // a load still in flight must not land over it
+    setMessages([]);
+    setSnapshot(null);
+    setPending([]);
+    setWaiting(false);
+    clearError();
+    setConversationId(undefined);
+    writeThread(campaignId, undefined);
+  };
+
+  const openChat = (c: ChatSummary) => {
+    setMessages([]);
+    setSnapshot(null);
+    setPending([]);
+    clearError();
+    setConversationId(c.id);
+    writeThread(campaignId, c.id);
+    setWaiting(c.running);
+    void loadThread(c.id, 'open');
+  };
+
+  // Deleted on some GM screen: every list refetches, and a panel showing it starts fresh.
+  const chatDeleted = useLiveStore((s) => s.chatDeleted);
+  const shownId = useRef(conversationId);
+  shownId.current = conversationId;
+  useEffect(() => {
+    if (!chatDeleted) return;
+    invalidateChats(campaignId);
+    if (chatDeleted.id === shownId.current) startFresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatDeleted?.seq]);
+
+  // The dock's chip follows the answer.
+  const tell = useRef(onAnswering);
+  tell.current = onAnswering;
+  useEffect(() => {
+    tell.current?.(answering);
+  }, [answering]);
 
   // The Fixer's floor edits go onto the map as they arrive.
-  useFloorEdits(messages, historic.current, busy);
+  useFloorEdits(messages, historic.current, answering);
 
   useEffect(() => {
     const el = scroller.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [messages]);
+    if (el && shown) el.scrollTop = el.scrollHeight;
+  }, [messages, waiting, shown]);
 
   const disabled = aiDisabledFrom(status.data, status.error);
 
@@ -880,7 +1020,7 @@ export default function FixerChat({ campaignId, dense, fill, context, seed }: Fi
   const submit = (text?: unknown) => {
     const message = (typeof text === 'string' ? text : draft).trim();
     const files = pending.flatMap((p) => (p.part ? [p.part] : []));
-    if ((!message && files.length === 0) || disabled || busy || uploading) return;
+    if ((!message && files.length === 0) || disabled || answering || uploading) return;
     // A question is waiting: what the GM typed is their answer to it.
     if (question && message) {
       setDraft('');
@@ -971,23 +1111,19 @@ export default function FixerChat({ campaignId, dense, fill, context, seed }: Fi
     >
       <div className="flex flex-wrap items-center gap-2">
         <SectionTitle>The Fixer</SectionTitle>
-        <button
-          className="btn ml-auto px-2 py-1"
-          onClick={() => {
-            if (busy) return;
-            setMessages([]);
-            setSnapshot(null);
-            setPending([]);
-            setConversationId(undefined);
-            writeThread(campaignId, undefined);
+        <ChatMenu
+          campaignId={campaignId}
+          filter={FIXER_CHATS}
+          currentId={conversationId}
+          locked={answering ? 'Wait for the answer, or stop it' : undefined}
+          newTitle="Start a fresh chat — this one is kept, with its brief and files"
+          onNew={startFresh}
+          onOpen={openChat}
+          onDeleted={(id) => {
+            if (id === conversationId) startFresh();
           }}
-          disabled={busy}
-          title="New thread — the Fixer forgets this one's brief and files"
-          aria-label="New thread"
-          data-testid="fixer-new-thread"
-        >
-          <Icon name="add_comment" size={18} />
-        </button>
+          testId="fixer-new-thread"
+        />
       </div>
 
       {snapshot && (
@@ -1009,6 +1145,14 @@ export default function FixerChat({ campaignId, dense, fill, context, seed }: Fi
             {...(question ? { onAnswer: answer } : {})}
           />
         ))}
+        {waiting && (
+          <div className="max-w-[95%]" data-testid="fixer-answering">
+            <div className="mono-label text-magenta">fixer</div>
+            <p className="mt-1 animate-pulse text-sm text-cyan" title="The answer lands here when the Fixer is done">
+              answering…
+            </p>
+          </div>
+        )}
         {errorLine && (
           <div className="rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
             {errorLine}
@@ -1056,7 +1200,9 @@ export default function FixerChat({ campaignId, dense, fill, context, seed }: Fi
               working ??
               (busy
                 ? 'the Fixer is thinking…'
-                : question
+                : waiting
+                  ? 'the Fixer is answering…'
+                  : question
                   ? 'Answer the question above — or type your own answer here'
                   : 'Ask the Fixer — or have it lay out this floor')
             }
@@ -1076,12 +1222,12 @@ export default function FixerChat({ campaignId, dense, fill, context, seed }: Fi
               }
             }}
           />
-          {busy ? (
+          {answering ? (
             <button
               type="button"
               className="shrink-0 text-ink hover:text-danger"
               onClick={() => {
-                void stop();
+                if (busy) void stop();
                 cancel.mutate();
               }}
               disabled={cancel.isPending}

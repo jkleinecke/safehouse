@@ -3,10 +3,10 @@
  * ephemerals), drafts inbox over `ai_generations` (FR12.15), and the
  * 503 `ai_disabled` detection (NG7: no LLM_BASE_URL → features hide).
  */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { create } from 'zustand';
 import type { AiSettingsView, AiSettingsWrite } from '@safehouse/contracts';
-import { ApiError, apiGet, apiPost, apiPut, queryClient } from '../../../api/client.js';
+import { ApiError, apiDelete, apiGet, apiPost, apiPut, queryClient } from '../../../api/client.js';
 import type { AiContext } from './aiContext.js';
 
 /** True when the server said AI is off (503 ai_disabled). */
@@ -28,8 +28,8 @@ export interface FixerStatus {
   effortSupport?: 'levels' | 'none';
   /** Cap on tool rounds per turn (FR12.17). */
   maxToolRounds?: number;
-  /** What the AI is doing right now, if anything (fixer/activity.ts). */
-  activity?: { runId: string; kind: string; label: string; since: string } | null;
+  /** What the AI is doing right now, if anything (fixer/activity.ts); a chat run names its chat. */
+  activity?: { runId: string; kind: string; label: string; since: string; conversationId?: string } | null;
 }
 
 export function useFixerStatus() {
@@ -270,6 +270,69 @@ export function useCancelAi(campaignId: string) {
 /** True when the server said the GM stopped it (499 ai_cancelled). */
 export function isAiCancelled(err: unknown): boolean {
   return err instanceof ApiError && err.code === 'ai_cancelled';
+}
+
+// ---------------------------------------------------------------------------
+// Saved chats — the list behind the "new chat" menu
+// ---------------------------------------------------------------------------
+
+/** A saved chat as the list shows it (server fixer/conversations.ts). */
+export interface ChatSummary {
+  id: string;
+  kind: 'fixer' | 'npc';
+  npcRef: string | null;
+  title: string;
+  messageCount: number;
+  createdAt: string;
+  updatedAt: string;
+  /** The Fixer is answering in it right now. */
+  running: boolean;
+}
+
+interface ChatPage {
+  conversations: ChatSummary[];
+  nextCursor: string | null;
+}
+
+/** Which chats a list shows: the Fixer's, or one NPC's. */
+export type ChatFilter = { kind: 'fixer' } | { kind: 'npc'; npcRef: string };
+
+const chatsKey = (campaignId: string) => ['fixer', 'chats', campaignId] as const;
+
+/** Last used first, a page at a time. */
+export function useChats(campaignId: string, filter: ChatFilter) {
+  const npcRef = filter.kind === 'npc' ? filter.npcRef : null;
+  return useInfiniteQuery({
+    queryKey: [...chatsKey(campaignId), filter.kind, npcRef],
+    queryFn: ({ pageParam }) => {
+      const q = new URLSearchParams({ kind: filter.kind, limit: '20' });
+      if (npcRef) q.set('npcRef', npcRef);
+      if (pageParam) q.set('cursor', pageParam);
+      return apiGet<ChatPage>(`/api/campaigns/${campaignId}/fixer/conversations?${q.toString()}`);
+    },
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.nextCursor,
+    staleTime: 0,
+    retry: 0,
+  });
+}
+
+/** Every chat list refetches when next shown (a chat was deleted, or saved). */
+export function invalidateChats(campaignId: string): void {
+  void queryClient.invalidateQueries({ queryKey: chatsKey(campaignId) });
+}
+
+/** DELETE /api/fixer/conversations/:id — the chat, and its uploads nothing else uses. */
+export function useDeleteChat(campaignId: string) {
+  return useMutation({
+    mutationFn: (id: string) => apiDelete<{ deleted: string; files: string[] }>(`/api/fixer/conversations/${id}`),
+    onSettled: () => invalidateChats(campaignId),
+  });
+}
+
+/** 409 `conversation_running`: the Fixer is still answering in that chat. */
+export function isChatRunning(err: unknown): boolean {
+  return err instanceof ApiError && err.code === 'conversation_running';
 }
 
 export interface AiPendingState {

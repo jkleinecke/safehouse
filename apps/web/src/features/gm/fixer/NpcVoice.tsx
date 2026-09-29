@@ -5,10 +5,15 @@
  * has been on the server since M10; this is its first surface
  * (docs/UX_AUDIT.md, "built server-side, no UI entry point"). Nothing here
  * reaches the table: a line is for the GM to read aloud, or not.
+ *
+ * Every chat with an NPC is kept on the server; the new-chat menu lists that
+ * NPC's, to open one again or delete it (ChatMenu.tsx).
  */
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { NpcTemplate } from '@safehouse/contracts';
+import { apiGet } from '../../../api/client.js';
+import { useLiveStore } from '../../../live/store.js';
 import { fmtLatency, fmtTokens } from '../common.js';
 import { useNpcTemplates } from '../generator/api.js';
 import { ErrorNote, SectionTitle, inputClass } from '../ui.js';
@@ -18,8 +23,10 @@ import {
   useCancelAi,
   useFixerStatus,
   useNpcConverse,
+  type ChatSummary,
   type NpcConverseAck,
 } from './api.js';
+import ChatMenu from './ChatMenu.js';
 
 export interface VoiceLine {
   who: 'gm' | 'npc';
@@ -37,6 +44,15 @@ export function hasVoice(t: NpcTemplate): boolean {
 export function voiceOrder(list: readonly NpcTemplate[]): NpcTemplate[] {
   return [...list].sort(
     (a, b) => Number(hasVoice(b)) - Number(hasVoice(a)) || a.name.localeCompare(b.name),
+  );
+}
+
+/** A saved NPC chat as the panel draws it: the GM's lines and the NPC's, nothing else. */
+export function linesOf(messages: ReadonlyArray<{ role: string; content?: unknown }>): VoiceLine[] {
+  return messages.flatMap((m): VoiceLine[] =>
+    (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim()
+      ? [{ who: m.role === 'user' ? 'gm' : 'npc', text: m.content, ts: 0 }]
+      : [],
   );
 }
 
@@ -80,11 +96,38 @@ export default function NpcVoice({ campaignId, npcId: initialNpcId }: NpcVoicePr
     if (el) el.scrollTop = el.scrollHeight;
   }, [lines.length]);
 
+  const loads = useRef(0);
   const reset = () => {
+    loads.current += 1; // a chat still loading must not land over the fresh one
     setLines([]);
     setConversationId(undefined);
     setLast(null);
   };
+
+  /** An earlier chat with this NPC, back on screen. */
+  const openChat = (chat: ChatSummary) => {
+    const seq = ++loads.current;
+    setLines([]);
+    setLast(null);
+    setConversationId(chat.id);
+    apiGet<{ messages: Array<{ role: string; content?: unknown }> }>(`/api/fixer/conversations/${chat.id}`)
+      .then((c) => {
+        if (seq === loads.current) setLines(linesOf(c.messages));
+      })
+      .catch(() => {
+        if (seq === loads.current) reset();
+      });
+  };
+
+  // Deleted on some GM screen: if it is this one, start fresh.
+  const chatDeleted = useLiveStore((s) => s.chatDeleted);
+  const shownId = useRef(conversationId);
+  shownId.current = conversationId;
+  useEffect(() => {
+    if (chatDeleted && chatDeleted.id === shownId.current) reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatDeleted?.seq]);
+
   const choose = (id: string) => {
     setNpcId(id);
     reset();
@@ -131,13 +174,21 @@ export default function NpcVoice({ campaignId, npcId: initialNpcId }: NpcVoicePr
         <SectionTitle>
           Speak as an NPC
         </SectionTitle>
-        <button
-          className="btn ml-auto px-2.5 py-1"
-          onClick={reset}
-          title="Start the conversation over (history lives server-side)"
-        >
-          new thread
-        </button>
+        {picked && (
+          <ChatMenu
+            campaignId={campaignId}
+            filter={{ kind: 'npc', npcRef: picked.id }}
+            currentId={conversationId}
+            locked={send.isPending ? `Wait for ${picked.name}, or cancel` : undefined}
+            newTitle={`Start a fresh chat with ${picked.name} — this one is kept`}
+            onNew={reset}
+            onOpen={openChat}
+            onDeleted={(id) => {
+              if (id === conversationId) reset();
+            }}
+            testId="npc-voice-chats"
+          />
+        )}
       </div>
 
       {templates.data && list.length === 0 && (
