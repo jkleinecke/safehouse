@@ -7,10 +7,13 @@
  * reaches the table: a line is for the GM to read aloud, or not.
  *
  * Every chat with an NPC is kept on the server; the new-chat menu lists that
- * NPC's, to open one again or delete it (ChatMenu.tsx).
+ * NPC's, to open one again or delete it (ChatMenu.tsx). The panel's state is
+ * kept per campaign and NPC for the tab (chatSessions.ts): leaving the map
+ * and coming back finds the conversation, and a line still coming, as it was.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
+import { createStore, useStore, type StoreApi } from 'zustand';
 import type { NpcTemplate } from '@safehouse/contracts';
 import { apiGet } from '../../../api/client.js';
 import { useLiveStore } from '../../../live/store.js';
@@ -27,6 +30,7 @@ import {
   type NpcConverseAck,
 } from './api.js';
 import ChatMenu from './ChatMenu.js';
+import { keyed } from './chatSessions.js';
 
 export interface VoiceLine {
   who: 'gm' | 'npc';
@@ -74,6 +78,41 @@ export interface NpcVoiceProps {
   npcId?: string | undefined;
 }
 
+interface VoiceState {
+  npcId: string;
+  draft: string;
+  lines: VoiceLine[];
+  conversationId: string | undefined;
+  last: NpcConverseAck | null;
+  speaking: boolean;
+  error: unknown;
+}
+
+interface VoiceSession {
+  store: StoreApi<VoiceState>;
+  loads: number;
+  deletedSeq: number | undefined;
+}
+
+const voiceSessions = keyed<VoiceSession>();
+
+/** One per campaign and starting NPC, kept for the tab. */
+function voiceSession(campaignId: string, npcId: string): VoiceSession {
+  return voiceSessions(`${campaignId}:${npcId}`, () => ({
+    store: createStore<VoiceState>(() => ({
+      npcId,
+      draft: '',
+      lines: [],
+      conversationId: undefined,
+      last: null,
+      speaking: false,
+      error: null,
+    })),
+    loads: 0,
+    deletedSeq: undefined,
+  }));
+}
+
 export default function NpcVoice({ campaignId, npcId: initialNpcId }: NpcVoiceProps) {
   const templates = useNpcTemplates(campaignId);
   const status = useFixerStatus();
@@ -81,76 +120,72 @@ export default function NpcVoice({ campaignId, npcId: initialNpcId }: NpcVoicePr
   const cancel = useCancelAi(campaignId);
   const list = voiceOrder(templates.data ?? []);
 
-  const [npcId, setNpcId] = useState(initialNpcId ?? '');
-  const [draft, setDraft] = useState('');
-  const [lines, setLines] = useState<VoiceLine[]>([]);
-  const [conversationId, setConversationId] = useState<string | undefined>(undefined);
-  const [last, setLast] = useState<NpcConverseAck | null>(null);
+  const session = voiceSession(campaignId, initialNpcId ?? '');
+  const set = session.store.setState;
+  const { npcId, draft, lines, conversationId, last, speaking, error } = useStore(session.store);
   const scroller = useRef<HTMLDivElement | null>(null);
 
   const picked = list.find((t) => t.id === npcId) ?? list[0];
-  const disabled = aiDisabledFrom(status.data, status.error, send.error);
+  const disabled = aiDisabledFrom(status.data, status.error, error);
 
   useEffect(() => {
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [lines.length]);
 
-  const loads = useRef(0);
   const reset = () => {
-    loads.current += 1; // a chat still loading must not land over the fresh one
-    setLines([]);
-    setConversationId(undefined);
-    setLast(null);
+    session.loads += 1; // a chat still loading must not land over the fresh one
+    set({ lines: [], conversationId: undefined, last: null });
   };
 
   /** An earlier chat with this NPC, back on screen. */
   const openChat = (chat: ChatSummary) => {
-    const seq = ++loads.current;
-    setLines([]);
-    setLast(null);
-    setConversationId(chat.id);
+    const seq = ++session.loads;
+    set({ lines: [], last: null, conversationId: chat.id });
     apiGet<{ messages: Array<{ role: string; content?: unknown }> }>(`/api/fixer/conversations/${chat.id}`)
       .then((c) => {
-        if (seq === loads.current) setLines(linesOf(c.messages));
+        if (seq === session.loads) set({ lines: linesOf(c.messages) });
       })
       .catch(() => {
-        if (seq === loads.current) reset();
+        if (seq === session.loads) reset();
       });
   };
 
-  // Deleted on some GM screen: if it is this one, start fresh.
+  // Deleted on some GM screen: if it is this one, start fresh. Once per delete.
   const chatDeleted = useLiveStore((s) => s.chatDeleted);
-  const shownId = useRef(conversationId);
-  shownId.current = conversationId;
   useEffect(() => {
-    if (chatDeleted && chatDeleted.id === shownId.current) reset();
+    if (!chatDeleted || chatDeleted.seq === session.deletedSeq) return;
+    session.deletedSeq = chatDeleted.seq;
+    if (chatDeleted.id === session.store.getState().conversationId) reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatDeleted?.seq]);
+  }, [chatDeleted?.seq, session]);
 
   const choose = (id: string) => {
-    setNpcId(id);
+    set({ npcId: id });
     reset();
   };
 
+  // The reply lands in the session, so it arrives even if the panel has gone.
   const submit = () => {
     const message = draft.trim();
-    if (!message || !picked || disabled || send.isPending) return;
-    setLines((l) => [...l, { who: 'gm', text: message, ts: Date.now() }]);
-    setDraft('');
-    send.mutate(
-      {
+    if (!message || !picked || disabled || speaking) return;
+    const seq = session.loads;
+    set((s) => ({ lines: [...s.lines, { who: 'gm', text: message, ts: Date.now() }], draft: '', speaking: true, error: null }));
+    send
+      .mutateAsync({
         npcId: picked.id,
         body: { campaignId, message, ...(conversationId ? { conversationId } : {}) },
-      },
-      {
-        onSuccess: (ack) => {
-          setConversationId(ack.conversationId);
-          setLast(ack);
-          setLines((l) => [...l, { who: 'npc', text: ack.line, ts: Date.now() }]);
-        },
-      },
-    );
+      })
+      .then((ack) => {
+        if (seq !== session.loads) return;
+        set((s) => ({
+          conversationId: ack.conversationId,
+          last: ack,
+          lines: [...s.lines, { who: 'npc', text: ack.line, ts: Date.now() }],
+        }));
+      })
+      .catch((err: unknown) => set({ error: err }))
+      .finally(() => set({ speaking: false }));
   };
 
   if (disabled) {
@@ -179,7 +214,7 @@ export default function NpcVoice({ campaignId, npcId: initialNpcId }: NpcVoicePr
             campaignId={campaignId}
             filter={{ kind: 'npc', npcRef: picked.id }}
             currentId={conversationId}
-            locked={send.isPending ? `Wait for ${picked.name}, or cancel` : undefined}
+            locked={speaking ? `Wait for ${picked.name}, or cancel` : undefined}
             newTitle={`Start a fresh chat with ${picked.name} — this one is kept`}
             onNew={reset}
             onOpen={openChat}
@@ -246,7 +281,7 @@ export default function NpcVoice({ campaignId, npcId: initialNpcId }: NpcVoicePr
             </div>
           ),
         )}
-        {send.isPending && (
+        {speaking && (
           <p className="flex items-center gap-2 mono-label text-cyan" data-testid="npc-working">
             <span className="animate-pulse">{picked?.name ?? 'npc'} is thinking…</span>
             <button
@@ -270,7 +305,7 @@ export default function NpcVoice({ campaignId, npcId: initialNpcId }: NpcVoicePr
           placeholder={picked ? `say something to ${picked.name}…` : 'pick an archetype first'}
           disabled={!picked}
           aria-label="Your line"
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => set({ draft: e.target.value })}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
               e.preventDefault();
@@ -283,16 +318,16 @@ export default function NpcVoice({ campaignId, npcId: initialNpcId }: NpcVoicePr
         <button
           className="btn btn-accent shrink-0 px-3 py-2"
           onClick={submit}
-          disabled={!picked || send.isPending || draft.trim().length === 0}
+          disabled={!picked || speaking || draft.trim().length === 0}
         >
-          {send.isPending ? 'speaking…' : 'speak'}
+          {speaking ? 'speaking…' : 'speak'}
         </button>
       </div>
       <p className="mono-label mt-1 text-faint">ctrl+enter speaks</p>
-      {isAiCancelled(send.error) ? (
+      {isAiCancelled(error) ? (
         <p className="mt-2 text-xs text-warn">Cancelled — {picked?.name ?? 'the NPC'} said nothing.</p>
       ) : (
-        <ErrorNote error={send.error} />
+        <ErrorNote error={error} />
       )}
 
       {last && (

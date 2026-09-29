@@ -16,16 +16,19 @@
  * chat for its whole life; images are shown to the model on the turn they
  * arrive and the next.
  *
- * The thread survives a reload: its id is kept for the tab, and reopening the
+ * The chat, its stream and the draft live in a session per campaign kept for
+ * the tab (chatSessions.ts), so moving between pages never reloads it. The
+ * thread also survives a reload: its id is kept for the tab, and reopening the
  * panel reloads it from the server exactly as it was drawn. An answer still
  * being written then shows as "answering…" and lands when the server is done;
  * the answer never depended on this page staying open. Every chat is kept:
  * the new-chat menu opens an earlier one, or deletes it (ChatMenu.tsx).
  */
-import { useChat } from '@ai-sdk/react';
+import { Chat, useChat } from '@ai-sdk/react';
 import { DefaultChatTransport, lastAssistantMessageIsCompleteWithToolCalls, type FileUIPart, type UIMessage } from 'ai';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { createStore, useStore, type StoreApi } from 'zustand';
 import { ApiError, apiGet } from '../../../api/client.js';
 import Icon from '../../../components/Icon.js';
 import { getToken } from '../../../api/session.js';
@@ -45,6 +48,7 @@ import {
 } from './api.js';
 import type { AiContext } from './aiContext.js';
 import ChatMenu from './ChatMenu.js';
+import { keyed, readScroll, restoreScroll, type SavedScroll } from './chatSessions.js';
 import { useFloorEdits } from './floorEdits.js';
 
 // ---------------------------------------------------------------------------
@@ -136,6 +140,25 @@ function writeThread(campaignId: string, id: string | undefined): void {
     else sessionStorage.removeItem(THREAD_KEY(campaignId));
   } catch {
     // storage blocked: the thread simply does not survive a reload
+  }
+}
+
+const DRAFT_KEY = (campaignId: string) => `safehouse:fixer-draft:${campaignId}`;
+
+function readDraft(campaignId: string): string {
+  try {
+    return sessionStorage.getItem(DRAFT_KEY(campaignId)) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function writeDraft(campaignId: string, text: string): void {
+  try {
+    if (text) sessionStorage.setItem(DRAFT_KEY(campaignId), text);
+    else sessionStorage.removeItem(DRAFT_KEY(campaignId));
+  } catch {
+    // storage blocked: the draft lasts until the page reloads
   }
 }
 
@@ -731,6 +754,180 @@ async function uploadForChat(campaignId: string, file: File): Promise<FileUIPart
 }
 
 // ---------------------------------------------------------------------------
+// The session: one per campaign, kept for the tab (chatSessions.ts)
+// ---------------------------------------------------------------------------
+
+interface FixerChatState {
+  conversationId: string | undefined;
+  /** The server is writing an answer here that this tab is not streaming (after a reload, or from another tab). */
+  waiting: boolean;
+  snapshot: string | null;
+  working: string | null;
+  draft: string;
+  pending: Pending[];
+}
+
+interface FixerSession {
+  campaignId: string;
+  chat: Chat<FixerUIMessage>;
+  store: StoreApi<FixerChatState>;
+  /** Read by the transport at send time; the panel refreshes it every render. */
+  live: { context: AiContext | undefined; effortPick: string | undefined; modelChoice: string | undefined };
+  /** Messages that came back from the server: their floor edits were painted the first time. */
+  historic: Set<string>;
+  /** Chat runs this tab started. */
+  ownRuns: Set<string>;
+  loads: number;
+  opened: boolean;
+  deletedSeq: number | undefined;
+  scroll: SavedScroll | null;
+}
+
+const busyStatus = (s: string) => s === 'submitted' || s === 'streaming';
+
+function makeFixerSession(campaignId: string): FixerSession {
+  const store = createStore<FixerChatState>(() => ({
+    conversationId: readThread(campaignId),
+    waiting: false,
+    snapshot: null,
+    working: null,
+    draft: readDraft(campaignId),
+    pending: [],
+  }));
+  store.subscribe((s, prev) => {
+    if (s.conversationId !== prev.conversationId) writeThread(campaignId, s.conversationId);
+    if (s.draft !== prev.draft) writeDraft(campaignId, s.draft);
+  });
+  const live: FixerSession['live'] = { context: undefined, effortPick: undefined, modelChoice: undefined };
+
+  const transport = new DefaultChatTransport<FixerUIMessage>({
+    api: '/api/fixer/chat/stream',
+    headers: (): Record<string, string> => {
+      const token = getToken();
+      return token ? { Authorization: `Bearer ${token}` } : {};
+    },
+    // Only what is new goes: the server holds the transcript. That is the
+    // GM's message — or, when the reply stopped at a question, just the
+    // answer, which the server fills into the question it has stored.
+    prepareSendMessagesRequest: ({ messages }) => {
+      const last = messages[messages.length - 1];
+      const conversationId = store.getState().conversationId;
+      const common = {
+        campaignId,
+        ...(conversationId ? { conversationId } : {}),
+        ...(live.context ? { context: live.context } : {}),
+        ...(live.effortPick ? { effort: live.effortPick } : {}),
+        ...(live.modelChoice ? { model: live.modelChoice } : {}),
+      };
+      if (last?.role === 'assistant') {
+        const answered = [...last.parts].reverse().find(
+          (p) => p.type === 'tool-ask_gm' && (p as { state?: string }).state === 'output-available',
+        ) as { toolCallId: string; output: AskGmOutput } | undefined;
+        if (answered) {
+          return {
+            body: {
+              ...common,
+              answer: {
+                toolCallId: answered.toolCallId,
+                answer: answered.output.answer,
+                ...(answered.output.chosen ? { chosen: answered.output.chosen } : {}),
+              },
+            },
+          };
+        }
+      }
+      return { body: { ...common, message: last } };
+    },
+  });
+
+  const chat = new Chat<FixerUIMessage>({
+    transport,
+    // An answered question carries the same reply on, without a send button.
+    sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
+    onData: (part) => {
+      if (part.type === 'data-snapshot') store.setState({ snapshot: (part.data as { text: string }).text });
+      if (part.type === 'data-status') store.setState({ working: (part.data as { text: string }).text });
+    },
+    onFinish: ({ message }) => {
+      const id = message.metadata?.conversationId;
+      store.setState({ working: null, ...(id ? { conversationId: id } : {}) });
+    },
+    onError: () => store.setState({ working: null }),
+  });
+
+  const session: FixerSession = {
+    campaignId,
+    chat,
+    store,
+    live,
+    historic: new Set(),
+    ownRuns: new Set(),
+    loads: 0,
+    opened: false,
+    deletedSeq: undefined,
+    scroll: null,
+  };
+  // A run this tab streams is its own, heard even while the panel is unmounted.
+  useLiveStore.subscribe((s) => {
+    const run = s.aiActivity;
+    if (run?.kind === 'chat' && busyStatus(chat.status)) session.ownRuns.add(run.runId);
+  });
+  return session;
+}
+
+const fixerSessions = keyed<FixerSession>();
+
+function fixerSession(campaignId: string): FixerSession {
+  return fixerSessions(campaignId, () => makeFixerSession(campaignId));
+}
+
+/**
+ * A thread back from the server, as it was drawn — and what came back is
+ * history: its floor edits were painted (or undone) the first time. The
+ * exception is an answer that landed while this tab waited: it was never
+ * painted here.
+ */
+async function loadThread(session: FixerSession, id: string, after: 'open' | 'wait'): Promise<void> {
+  const seq = ++session.loads;
+  try {
+    const [thread, st] = await Promise.all([
+      apiGet<{ messages: FixerUIMessage[] }>(`/api/fixer/chat/${id}`),
+      apiGet<FixerStatus>('/api/fixer/status').catch(() => null),
+    ]);
+    if (seq !== session.loads) return;
+    const last = thread.messages[thread.messages.length - 1];
+    for (const m of thread.messages) {
+      if (after === 'wait' && m === last && m.role === 'assistant') continue;
+      session.historic.add(m.id);
+    }
+    session.chat.messages = thread.messages;
+    session.store.setState({ waiting: answeringIn(st?.activity, id) });
+  } catch (err) {
+    if (seq !== session.loads) return;
+    // A wait that could not reach the server tries again on its next look.
+    if (after === 'wait' && !(err instanceof ApiError && err.status === 404)) return;
+    // Gone (another campaign, deleted): start fresh.
+    session.chat.messages = [];
+    session.store.setState({ conversationId: undefined, waiting: false });
+  }
+}
+
+/** A fresh chat; the one on screen stays on the server, in the menu. */
+function startFresh(session: FixerSession): void {
+  session.loads += 1; // a load still in flight must not land over it
+  session.chat.messages = [];
+  session.chat.clearError();
+  session.store.setState({ snapshot: null, pending: [], waiting: false, conversationId: undefined });
+}
+
+function openChat(session: FixerSession, c: ChatSummary): void {
+  session.chat.messages = [];
+  session.chat.clearError();
+  session.store.setState({ snapshot: null, pending: [], conversationId: c.id, waiting: c.running });
+  void loadThread(session, c.id, 'open');
+}
+
+// ---------------------------------------------------------------------------
 // The panel
 // ---------------------------------------------------------------------------
 
@@ -759,9 +956,11 @@ export interface FixerChatProps {
 export default function FixerChat({ campaignId, dense, fill, context, seed, shown = true, onAnswering }: FixerChatProps) {
   const status = useFixerStatus();
   const cancel = useCancelAi(campaignId);
-  const [conversationId, setConversationId] = useState<string | undefined>(() => readThread(campaignId));
-  // The server is writing an answer here that this tab is not streaming (after a reload, or from another tab).
-  const [waiting, setWaiting] = useState(false);
+  // Everything a remount must not lose lives in the session, not in this component.
+  const session = fixerSession(campaignId);
+  const { store } = session;
+  const set = store.setState;
+  const { conversationId, waiting, snapshot, working, draft, pending } = useStore(store);
   // The bar's effort pick, kept per browser; absent means the saved setting.
   const [effortPick, setEffortPick] = useState<string | undefined>(() => readPick('effort', campaignId));
   const effort = effortPick ?? status.data?.effort ?? 'default';
@@ -773,14 +972,12 @@ export default function FixerChat({ campaignId, dense, fill, context, seed, show
     modelPick && (served.data === undefined || served.data.models.some((m) => m.id === modelPick)) ? modelPick : undefined;
   const model = modelChoice ?? savedModel;
   const effortSupport = status.data?.effortSupport ?? 'none';
-  const [snapshot, setSnapshot] = useState<string | null>(null);
-  const [working, setWorking] = useState<string | null>(null);
-  const [draft, setDraft] = useState('');
-  const [pending, setPending] = useState<Pending[]>([]);
   const [dragging, setDragging] = useState(false);
   const scroller = useRef<HTMLDivElement | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const box = useRef<HTMLTextAreaElement | null>(null);
+  const setDraft = (text: string) => set({ draft: text });
+  const setPending = (f: (p: Pending[]) => Pending[]) => set((s) => ({ pending: f(s.pending) }));
 
   // The box grows with what is typed, so the whole message is in view; past
   // a dozen lines or so it scrolls instead of pushing the chat off screen.
@@ -791,141 +988,43 @@ export default function FixerChat({ campaignId, dense, fill, context, seed, show
     el.style.height = `${el.scrollHeight}px`;
   }, [draft]);
 
-  // The transport reads these at send time, so it never needs rebuilding.
-  const live = useRef({ campaignId, conversationId, context, effortPick, modelChoice });
-  live.current = { campaignId, conversationId, context, effortPick, modelChoice };
+  // The transport reads these at send time: the context follows the page.
+  Object.assign(session.live, { context, effortPick, modelChoice });
 
-  const transport = useMemo(
-    () =>
-      new DefaultChatTransport<FixerUIMessage>({
-        api: '/api/fixer/chat/stream',
-        headers: (): Record<string, string> => {
-          const token = getToken();
-          return token ? { Authorization: `Bearer ${token}` } : {};
-        },
-        // Only what is new goes: the server holds the transcript. That is the
-        // GM's message — or, when the reply stopped at a question, just the
-        // answer, which the server fills into the question it has stored.
-        prepareSendMessagesRequest: ({ messages }) => {
-          const last = messages[messages.length - 1];
-          const common = {
-            campaignId: live.current.campaignId,
-            ...(live.current.conversationId ? { conversationId: live.current.conversationId } : {}),
-            ...(live.current.context ? { context: live.current.context } : {}),
-            ...(live.current.effortPick ? { effort: live.current.effortPick } : {}),
-            ...(live.current.modelChoice ? { model: live.current.modelChoice } : {}),
-          };
-          if (last?.role === 'assistant') {
-            const answered = [...last.parts].reverse().find(
-              (p) => p.type === 'tool-ask_gm' && (p as { state?: string }).state === 'output-available',
-            ) as { toolCallId: string; output: AskGmOutput } | undefined;
-            if (answered) {
-              return {
-                body: {
-                  ...common,
-                  answer: {
-                    toolCallId: answered.toolCallId,
-                    answer: answered.output.answer,
-                    ...(answered.output.chosen ? { chosen: answered.output.chosen } : {}),
-                  },
-                },
-              };
-            }
-          }
-          return { body: { ...common, message: last } };
-        },
-      }),
-    [],
-  );
-
-  const chat = useChat<FixerUIMessage>({
-    transport,
-    // An answered question carries the same reply on, without a send button.
-    sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
-    onData: (part) => {
-      if (part.type === 'data-snapshot') setSnapshot((part.data as { text: string }).text);
-      if (part.type === 'data-status') setWorking((part.data as { text: string }).text);
-    },
-    onFinish: ({ message }) => {
-      setWorking(null);
-      const id = message.metadata?.conversationId;
-      if (id) {
-        setConversationId(id);
-        writeThread(campaignId, id);
-      }
-    },
-    onError: () => setWorking(null),
+  const { messages, sendMessage, status: chatStatus, stop, error, addToolOutput } = useChat<FixerUIMessage>({
+    chat: session.chat,
   });
-  const { messages, sendMessage, status: chatStatus, setMessages, stop, error, clearError, addToolOutput } = chat;
-  const busy = chatStatus === 'submitted' || chatStatus === 'streaming';
+  const busy = busyStatus(chatStatus);
   const answering = busy || waiting;
   const question = answering ? null : waitingQuestion(messages);
   const answer = (toolCallId: string, out: AskGmOutput) => {
     void addToolOutput({ tool: 'ask_gm', toolCallId, output: out } as never);
   };
 
-  // A thread comes back as it was drawn — and what came back is history: its
-  // floor edits were painted (or undone) the first time. The exception is an
-  // answer that landed while this tab waited: it was never painted here.
-  const historic = useRef(new Set<string>());
-  const loads = useRef(0);
-  const loadThread = useCallback(
-    async (id: string, after: 'open' | 'wait') => {
-      const seq = ++loads.current;
-      try {
-        const [thread, st] = await Promise.all([
-          apiGet<{ messages: FixerUIMessage[] }>(`/api/fixer/chat/${id}`),
-          apiGet<FixerStatus>('/api/fixer/status').catch(() => null),
-        ]);
-        if (seq !== loads.current) return;
-        const last = thread.messages[thread.messages.length - 1];
-        for (const m of thread.messages) {
-          if (after === 'wait' && m === last && m.role === 'assistant') continue;
-          historic.current.add(m.id);
-        }
-        setMessages(thread.messages);
-        setWaiting(answeringIn(st?.activity, id));
-      } catch (err) {
-        if (seq !== loads.current) return;
-        // A wait that could not reach the server tries again on its next look.
-        if (after === 'wait' && !(err instanceof ApiError && err.status === 404)) return;
-        // Gone (another campaign, deleted): start fresh.
-        setMessages([]);
-        setConversationId(undefined);
-        writeThread(campaignId, undefined);
-        setWaiting(false);
-      }
-    },
-    [campaignId, setMessages],
-  );
-
-  // The thread kept for this tab, once, when the panel first mounts.
-  const reopened = useRef(false);
+  // The thread kept for this tab, once per session.
   useEffect(() => {
-    if (reopened.current) return;
-    reopened.current = true;
-    if (conversationId && messages.length === 0) void loadThread(conversationId, 'open');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (session.opened) return;
+    session.opened = true;
+    const id = session.store.getState().conversationId;
+    if (id && session.chat.messages.length === 0) void loadThread(session, id, 'open');
+  }, [session]);
 
   // The answer names its chat as it starts: kept for the tab then, so a reload mid-answer finds it.
   const streamedId = busy ? messages[messages.length - 1]?.metadata?.conversationId : undefined;
   useEffect(() => {
     if (!streamedId || streamedId === conversationId) return;
-    setConversationId(streamedId);
-    writeThread(campaignId, streamedId);
-  }, [streamedId, conversationId, campaignId]);
+    set({ conversationId: streamedId });
+  }, [streamedId, conversationId, set]);
 
   // A chat run this tab did not start, in this chat, is one to wait on.
   const liveRun = useLiveStore((s) => s.aiActivity);
-  const ownRuns = useRef(new Set<string>());
   useEffect(() => {
     if (!liveRun || liveRun.kind !== 'chat') return;
-    if (busy) ownRuns.current.add(liveRun.runId);
-    else if (conversationId && !ownRuns.current.has(liveRun.runId) && liveRun.conversationId === conversationId) {
-      setWaiting(true);
+    if (busy) session.ownRuns.add(liveRun.runId);
+    else if (conversationId && !session.ownRuns.has(liveRun.runId) && liveRun.conversationId === conversationId) {
+      set({ waiting: true });
     }
-  }, [liveRun, busy, conversationId]);
+  }, [liveRun, busy, conversationId, session, set]);
 
   // While waiting: ask again on every word from the socket about the AI, and
   // every few seconds in case it missed the end. Done, the thread reloads.
@@ -940,7 +1039,7 @@ export default function FixerChat({ campaignId, dense, fill, context, seed, show
       const st = await apiGet<FixerStatus>('/api/fixer/status').catch(() => null);
       if (gone || loading || !st || answeringIn(st.activity, id)) return;
       loading = true;
-      await loadThread(id, 'wait');
+      await loadThread(session, id, 'wait');
       loading = false;
     };
     void check();
@@ -949,41 +1048,18 @@ export default function FixerChat({ campaignId, dense, fill, context, seed, show
       gone = true;
       window.clearInterval(timer);
     };
-  }, [waiting, conversationId, liveKey, loadThread]);
+  }, [waiting, conversationId, liveKey, session]);
 
-  /** A fresh chat; the one on screen stays on the server, in the menu. */
-  const startFresh = () => {
-    loads.current += 1; // a load still in flight must not land over it
-    setMessages([]);
-    setSnapshot(null);
-    setPending([]);
-    setWaiting(false);
-    clearError();
-    setConversationId(undefined);
-    writeThread(campaignId, undefined);
-  };
-
-  const openChat = (c: ChatSummary) => {
-    setMessages([]);
-    setSnapshot(null);
-    setPending([]);
-    clearError();
-    setConversationId(c.id);
-    writeThread(campaignId, c.id);
-    setWaiting(c.running);
-    void loadThread(c.id, 'open');
-  };
-
-  // Deleted on some GM screen: every list refetches, and a panel showing it starts fresh.
+  // Deleted on some GM screen: every list refetches, and a panel showing it
+  // starts fresh. Once per delete, not again on a remount.
   const chatDeleted = useLiveStore((s) => s.chatDeleted);
-  const shownId = useRef(conversationId);
-  shownId.current = conversationId;
   useEffect(() => {
-    if (!chatDeleted) return;
+    if (!chatDeleted || chatDeleted.seq === session.deletedSeq) return;
+    session.deletedSeq = chatDeleted.seq;
     invalidateChats(campaignId);
-    if (chatDeleted.id === shownId.current) startFresh();
+    if (chatDeleted.id === session.store.getState().conversationId) startFresh(session);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatDeleted?.seq]);
+  }, [chatDeleted?.seq, session]);
 
   // The dock's chip follows the answer.
   const tell = useRef(onAnswering);
@@ -993,12 +1069,20 @@ export default function FixerChat({ campaignId, dense, fill, context, seed, show
   }, [answering]);
 
   // The Fixer's floor edits go onto the map as they arrive.
-  useFloorEdits(messages, historic.current, answering);
+  useFloorEdits(messages, session.historic, answering);
 
-  useEffect(() => {
+  // Mounted: back where the GM left it. After that, new lines scroll into view.
+  const placed = useRef<FixerSession | null>(null);
+  useLayoutEffect(() => {
     const el = scroller.current;
-    if (el && shown) el.scrollTop = el.scrollHeight;
-  }, [messages, waiting, shown]);
+    if (!el) return;
+    if (placed.current !== session) {
+      placed.current = session;
+      el.scrollTop = restoreScroll(session.scroll, el);
+    } else if (shown) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [session, messages, waiting, shown]);
 
   const disabled = aiDisabledFrom(status.data, status.error);
 
@@ -1027,9 +1111,7 @@ export default function FixerChat({ campaignId, dense, fill, context, seed, show
       answer(question.toolCallId, { answer: message });
       return;
     }
-    setDraft('');
-    setPending([]);
-    setWorking(null);
+    set({ draft: '', pending: [], working: null });
     void sendMessage({ text: message || 'Here are some files.', ...(files.length > 0 ? { files } : {}) });
   };
 
@@ -1117,10 +1199,10 @@ export default function FixerChat({ campaignId, dense, fill, context, seed, show
           currentId={conversationId}
           locked={answering ? 'Wait for the answer, or stop it' : undefined}
           newTitle="Start a fresh chat — this one is kept, with its brief and files"
-          onNew={startFresh}
-          onOpen={openChat}
+          onNew={() => startFresh(session)}
+          onOpen={(c) => openChat(session, c)}
           onDeleted={(id) => {
-            if (id === conversationId) startFresh();
+            if (id === conversationId) startFresh(session);
           }}
           testId="fixer-new-thread"
         />
@@ -1136,6 +1218,9 @@ export default function FixerChat({ campaignId, dense, fill, context, seed, show
       <div
         ref={scroller}
         className={`mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1 ${fill ? '' : dense ? 'max-h-80' : 'max-h-[60vh]'}`}
+        onScroll={(e) => {
+          session.scroll = readScroll(e.currentTarget);
+        }}
       >
         {messages.map((m) => (
           <MessageView
