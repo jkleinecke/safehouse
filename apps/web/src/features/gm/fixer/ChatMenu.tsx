@@ -67,7 +67,9 @@ export function ChatRows({ chats, currentId, locked, now, onOpen, onDelete, dele
             </button>
             <ConfirmButton
               label="×"
-              confirmLabel="Delete?"
+              question="Delete this chat?"
+              detail={`“${c.title || 'Untitled'}” and the files uploaded into it.`}
+              action="Delete"
               title="Delete this chat and the files uploaded into it"
               className="shrink-0 rounded border border-transparent px-1.5 py-0.5 text-sm leading-none opacity-70 hover:opacity-100"
               disabled={deleting === c.id}

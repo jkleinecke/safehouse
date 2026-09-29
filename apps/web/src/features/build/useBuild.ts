@@ -192,24 +192,13 @@ export async function submitWhenSaved(steps: {
 /**
  * The page's edges as event handlers (§4.4 "Autosave on every change"):
  * hiding the tab or leaving the page sends what is pending at once, with
- * `keepalive` so the browser finishes it; leaving over an edit no save can
- * carry (a failed save, or typing while a save flies) asks the browser to
- * confirm first.
+ * `keepalive` so the browser finishes it.
  */
-export function leaveHandlers(session: Pick<BuildSession, 'flush' | 'shouldWarnOnLeave'>): {
+export function leaveHandlers(session: Pick<BuildSession, 'flush'>): {
   onHidden: () => void;
-  onBeforeUnload: (event: { preventDefault: () => void; returnValue?: unknown }) => void;
 } {
   return {
     onHidden: () => void session.flush(),
-    onBeforeUnload: (event) => {
-      void session.flush();
-      if (session.shouldWarnOnLeave()) {
-        event.preventDefault();
-        // Older browsers still read the return value.
-        event.returnValue = '';
-      }
-    },
   };
 }
 
@@ -284,11 +273,9 @@ export function useBuild(buildId: string | undefined, options: UseBuildOptions =
       if (document.visibilityState === 'hidden') edges.onHidden();
     };
     window.addEventListener('pagehide', edges.onHidden);
-    window.addEventListener('beforeunload', edges.onBeforeUnload);
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
       window.removeEventListener('pagehide', edges.onHidden);
-      window.removeEventListener('beforeunload', edges.onBeforeUnload);
       document.removeEventListener('visibilitychange', onVisibility);
       void store.flush();
       store.dispose();

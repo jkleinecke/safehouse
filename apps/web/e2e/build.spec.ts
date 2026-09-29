@@ -29,7 +29,7 @@
  *    new street knowledge skill taking the free knowledge points.
  * 6. Gear: a Restricted pistol and a coat off the harness book's shelves; a
  *    commlink and a Forbidden fake SIN written in; the low lifestyle the card
- *    kept; Next names the nuyen that will not carry over.
+ *    kept.
  * 7. Karma: an Edge raise and a knowledge rank bring Karma down to the 7 that
  *    carries; two named contacts spend the contact pool.
  * 8. Finish: a background, the server's check agreeing, submit.
@@ -117,15 +117,6 @@ async function next(page: Page, to: string): Promise<Locator> {
   await expect(button).toBeEnabled();
   await button.click();
   return onStep(page, to);
-}
-
-/** Press Next on Gear, answer the carry-over question it asks, and land on Karma. */
-async function nextPastLostNuyen(page: Page): Promise<Locator> {
-  await page.getByRole('button', { name: 'next →' }).click();
-  const question = page.getByRole('group', { name: /^Only a little nuyen carries into play/ });
-  await expect(question).toContainText('over the 5,000¥ carry-over will be lost');
-  await question.getByRole('button', { name: 'I meant to — next' }).click();
-  return onStep(page, 'Karma & contacts');
 }
 
 /** Press + on a stepper `times` times. */
@@ -298,7 +289,7 @@ async function playerBuilds(page: Page, world: World, device: Device, alias: str
   }
   await expect(gear.getByRole('list', { name: 'Lifestyles kept' }).getByRole('textbox', { name: 'Name of lifestyle 1' })).toHaveValue('Low');
   await noSidewaysScroll(page, 'step 7');
-  const karma = await nextPastLostNuyen(page);
+  const karma = await next(page, 'Karma & contacts');
 
   // 8 — Karma: Edge 1 → 2 (10) and a knowledge rank (3) leave the 7 that carries; two contacts.
   await raise(karma.getByRole('region', { name: 'Attributes' }), 'Edge');
@@ -401,7 +392,7 @@ async function playerFixes(page: Page, world: World, alias: string): Promise<voi
   await writeIn(page, gear, { name: 'Heavy pistol rounds', kind: 'ammunition', price: '100', avail: '2', qty: 2 });
   await expect(ticked(gear, 'ammunition'), 'the checklist ticks ammunition').toBeVisible();
 
-  await nextPastLostNuyen(page);
+  await next(page, 'Karma & contacts');
   const again = await next(page, 'Finish');
   await expect(again.getByRole('region', { name: "The server's check" }).getByRole('status')).toContainText(
     'The server agrees with this page: nothing to fix, 3 items for the GM.',
@@ -460,7 +451,6 @@ async function walk(page: Page, api: Api, world: World, browser: Browser, device
     await expect(decisions).toContainText('3 approved · 0 denied · 0 open');
     const approve = second.getByRole('region', { name: 'Approve' });
     await approve.getByRole('button', { name: 'approve', exact: true }).click();
-    await approve.getByRole('button', { name: 'approve now' }).click();
     await expect(second.getByRole('region', { name: 'Approved' }).getByRole('link', { name: 'open the character sheet' })).toBeVisible({
       timeout: 20_000,
     });

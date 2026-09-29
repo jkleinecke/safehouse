@@ -447,24 +447,6 @@ describe('flush says whether it saved', () => {
   });
 });
 
-describe('leaving the page', () => {
-  it('warns only when an edit no save carries would be dropped', async () => {
-    const h = harness({ manual: true });
-    expect(h.session.shouldWarnOnLeave()).toBe(false);
-    h.session.update(setAlias('Kestrel'));
-    // A flush at the edge carries this one (keepalive): no warning needed.
-    void h.session.flush();
-    expect(h.pending()).toBe(1);
-    expect(h.session.shouldWarnOnLeave()).toBe(false);
-    // Typed while that save flies: nothing carries it yet.
-    h.session.update(setAlias('Kestrel Vane'));
-    expect(h.session.shouldWarnOnLeave()).toBe(true);
-    await h.settle(new ApiError(500, 'internal', 'the host fell over'));
-    expect(h.session.getState().status).toBe('error');
-    expect(h.session.shouldWarnOnLeave()).toBe(true);
-  });
-});
-
 describe('identity is kept when nothing changed', () => {
   it("a save's answer and the cache's echo of it keep the draft object", async () => {
     let stored: BuildRecord | null = null;
@@ -531,13 +513,12 @@ describe('two devices never overwrite each other in silence (rule 7)', () => {
     expect(s.error).toBe(STALE_MESSAGE);
     expect(s.draft?.identity.alias).toBe('Mine');
     expect(s.server?.build.identity.alias).toBe('Theirs');
-    // Read-only until the player chooses; nothing more is sent, and leaving would lose the typing.
+    // Read-only until the player chooses; nothing more is sent.
     expect(h.session.isWritable()).toBe(false);
     h.session.update(setAlias('Mine, more'));
     expect(h.session.getState().draft?.identity.alias).toBe('Mine');
     await vi.advanceTimersByTimeAsync(DELAY * 4);
     expect(h.saves).toHaveLength(1);
-    expect(h.session.shouldWarnOnLeave()).toBe(true);
 
     // The refetch the conflict asks for brings an even newer row: it becomes the server's, the typing stays.
     h.session.receive(theirs('Theirs again', '2026-09-14T10:00:09.000Z'));

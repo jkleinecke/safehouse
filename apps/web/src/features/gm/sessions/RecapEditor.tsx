@@ -1,8 +1,7 @@
 /**
  * Recap editor + Discord publish (FR6.3). The session log is already in the
  * live buffer, so "draft from log" assembles the headline events into a
- * Markdown skeleton the GM edits. Publishing is an explicit, confirmed GM
- * action — the webhook is the only outbound traffic in the whole system.
+ * Markdown skeleton the GM edits. Publish saves, then posts — the webhook is the only outbound traffic in the whole system.
  */
 import { useEffect, useMemo, useState } from 'react';
 import { useLiveStore } from '../../../live/store.js';
@@ -32,14 +31,12 @@ export default function RecapEditor({
   const [text, setText] = useState(session.recapMd ?? '');
   const [prep, setPrep] = useState(session.prepNotesMd ?? '');
   const [showPrep, setShowPrep] = useState(false);
-  const [confirming, setConfirming] = useState(false);
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
 
   useEffect(() => {
     if (loadedFor !== session.id) {
       setText(session.recapMd ?? '');
       setPrep(session.prepNotesMd ?? '');
-      setConfirming(false);
       setLoadedFor(session.id);
     }
   }, [session, loadedFor]);
@@ -99,43 +96,24 @@ export default function RecapEditor({
           {update.isPending ? 'saving…' : 'save recap'}
         </button>
 
-        {confirming ? (
-          <>
-            <span className="mono-label text-warn">post this to Discord?</span>
-            <button
-              className="btn btn-accent px-3 py-1.5"
-              disabled={publish.isPending}
-              onClick={() =>
-                update.mutate(
-                  { id: session.id, patch: { recapMd: text } },
-                  {
-                    onSuccess: () =>
-                      publish.mutate(session.id, { onSuccess: () => setConfirming(false) }),
-                  },
-                )
-              }
-            >
-              {publish.isPending ? 'posting…' : 'yes, publish'}
-            </button>
-            <button className="btn px-3 py-1.5" onClick={() => setConfirming(false)}>
-              cancel
-            </button>
-          </>
-        ) : (
-          <button
-            className="btn px-3 py-1.5 text-cyan"
-            disabled={!text.trim()}
-            onClick={() => setConfirming(true)}
-            title={
-              webhookConfigured === false
-                ? 'Set the Discord webhook URL in campaign settings first'
-                : 'Post the recap to the table Discord'
-            }
-            aria-label="Publish to Discord"
-          >
-            publish
-          </button>
-        )}
+        <button
+          className="btn px-3 py-1.5 text-cyan"
+          disabled={!text.trim() || publish.isPending}
+          onClick={() =>
+            update.mutate(
+              { id: session.id, patch: { recapMd: text } },
+              { onSuccess: () => publish.mutate(session.id) },
+            )
+          }
+          title={
+            webhookConfigured === false
+              ? 'Set the Discord webhook URL in campaign settings first'
+              : 'Save and post the recap to the table Discord'
+          }
+          aria-label="Publish to Discord"
+        >
+          {publish.isPending ? 'posting…' : 'publish'}
+        </button>
 
         {publish.isSuccess && <span className="mono-label text-ok">published</span>}
         {webhookConfigured === false && (

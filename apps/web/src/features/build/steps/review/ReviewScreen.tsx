@@ -20,9 +20,8 @@
  *    (the first step with an error, by default), through
  *    `actions.returnWithNotes`.
  * 4. **Approve** — shut, with the sentence, while errors or undecided items
- *    remain (`approveGate`, the server's own rule); open, it asks once more
- *    what approving does, then runs `actions.approve` and offers the new
- *    character's sheet.
+ *    remain (`approveGate`, the server's own rule); open, one press runs
+ *    `actions.approve` and offers the new character's sheet.
  * 5. **The runner in play** — the same sheet preview the player saw.
  * 6. **The build, step by step** — each step's mark as the player's checklist
  *    shows it and its key numbers, with a button to open that step (review
@@ -30,7 +29,7 @@
  *
  * `ReviewView` takes every piece of state as props, so each face renders to
  * static markup in a node test; `ReviewScreen` is the thin live wrapper that
- * owns the note, the picked step and the confirmation.
+ * owns the note and the picked step.
  */
 import { useId, useMemo, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
@@ -307,32 +306,25 @@ export function ReturnFormView({ notes, step, gate, tried, onNotes, onStep, onSu
 export interface ApprovePanelViewProps {
   campaignId: string;
   gate: ApproveGate;
-  confirming: boolean;
   busy: boolean;
   /** The character approval created, once known. */
   characterId: string | null;
   approved: boolean;
   onPress: () => void;
-  onConfirm: () => void;
-  onCancel: () => void;
   testId?: string;
 }
 
 export function ApprovePanelView({
   campaignId,
   gate,
-  confirming,
   busy,
   characterId,
   approved,
   onPress,
-  onConfirm,
-  onCancel,
   testId = 'review-approve',
 }: ApprovePanelViewProps) {
   const headingId = useId();
   const reasonId = useId();
-  const confirmId = useId();
 
   if (approved) {
     return (
@@ -368,42 +360,26 @@ export function ApprovePanelView({
         Approving creates the character: its sheet, its contacts and bonded magic, the Karma it carries, and a starting-nuyen roll made on
         the record. The build cannot change after that.
       </p>
-      {confirming && gate.open ? (
-        <div role="group" aria-labelledby={confirmId} className="rounded-md border border-cyan-dim/60 bg-deck p-3" data-testid={`${testId}-confirm`}>
-          <p id={confirmId} className="text-sm text-ink">
-            Approve this build and create the character now?
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          className={`btn px-4 py-1.5 ${gate.open ? 'btn-accent' : 'cursor-not-allowed opacity-60'}`}
+          onClick={() => {
+            if (gate.open) onPress();
+          }}
+          {...(gate.open ? {} : { 'aria-disabled': 'true' as const })}
+          {...(gate.reason ? { 'aria-describedby': reasonId } : {})}
+          aria-busy={busy}
+          data-testid={`${testId}-button`}
+        >
+          {busy ? 'approving…' : 'approve'}
+        </button>
+        {gate.reason && (
+          <p id={reasonId} className={`text-sm ${gate.errors + gate.undecided > 0 ? 'text-warn' : 'text-dim'}`} data-testid={`${testId}-reason`}>
+            {gate.reason}
           </p>
-          <div className="mt-2 flex flex-wrap justify-end gap-2">
-            <button type="button" className="btn px-3 py-1.5" onClick={onCancel} data-testid={`${testId}-cancel`}>
-              not yet
-            </button>
-            <button type="button" className="btn btn-accent px-3 py-1.5" onClick={onConfirm} data-testid={`${testId}-go`}>
-              approve now
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            className={`btn px-4 py-1.5 ${gate.open ? 'btn-accent' : 'cursor-not-allowed opacity-60'}`}
-            onClick={() => {
-              if (gate.open) onPress();
-            }}
-            {...(gate.open ? {} : { 'aria-disabled': 'true' as const })}
-            {...(gate.reason ? { 'aria-describedby': reasonId } : {})}
-            aria-busy={busy}
-            data-testid={`${testId}-button`}
-          >
-            {busy ? 'approving…' : 'approve'}
-          </button>
-          {gate.reason && (
-            <p id={reasonId} className={`text-sm ${gate.errors + gate.undecided > 0 ? 'text-warn' : 'text-dim'}`} data-testid={`${testId}-reason`}>
-              {gate.reason}
-            </p>
-          )}
-        </div>
-      )}
+        )}
+      </div>
     </section>
   );
 }
@@ -416,7 +392,6 @@ export interface ReviewState {
   notes: string;
   returnStep: string;
   triedReturn: boolean;
-  confirming: boolean;
 }
 
 export interface ReviewHandlers {
@@ -425,8 +400,6 @@ export interface ReviewHandlers {
   onReturn: () => void;
   onDecide: (write: Record<string, ApprovalDecision | null>) => void;
   onApprovePress: () => void;
-  onApproveConfirm: () => void;
-  onApproveCancel: () => void;
   onPrint?: () => void;
 }
 
@@ -463,13 +436,10 @@ export function ReviewView(props: ReviewViewProps) {
       <ApprovePanelView
         campaignId={campaignId}
         gate={approve}
-        confirming={props.confirming}
         busy={actions.busy === 'approve'}
         characterId={props.characterId}
         approved={approved}
         onPress={props.onApprovePress}
-        onConfirm={props.onApproveConfirm}
-        onCancel={props.onApproveCancel}
       />
       <SheetPreview preview={preview} build={build} background="always" {...(props.onPrint ? { onPrint: props.onPrint } : {})} />
       <ChoicesSummary summaries={summaries} onGoTo={goTo} />
@@ -485,7 +455,7 @@ export interface ReviewScreenProps extends StepProps {
   onPrint?: () => void;
 }
 
-/** The live review: the note, the picked step and the confirmation are this screen's; the rest is props. */
+/** The live review: the note and the picked step are this screen's; the rest is props. */
 export default function ReviewScreen(props: ReviewScreenProps) {
   const { build, settings, allIssues, actions, onApproved, ...rest } = props;
   const items = useMemo(() => approvalItems(build, settings), [build, settings]);
@@ -495,15 +465,13 @@ export default function ReviewScreen(props: ReviewScreenProps) {
     return step === null ? '' : String(step);
   });
   const [triedReturn, setTriedReturn] = useState(false);
-  const [confirming, setConfirming] = useState(false);
 
   const onReturn = () => {
     setTriedReturn(true);
     if (!returnGate({ notes, busy: actions.busy }).open) return;
     actions.returnWithNotes(notes.trim(), stepFromOption(returnStep)).catch(() => undefined);
   };
-  const onApproveConfirm = () => {
-    setConfirming(false);
+  const onApprove = () => {
     if (!approveGate({ allIssues, items, busy: actions.busy }).open) return;
     actions.approve().then(onApproved, () => undefined);
   };
@@ -519,16 +487,13 @@ export default function ReviewScreen(props: ReviewScreenProps) {
       notes={notes}
       returnStep={returnStep}
       triedReturn={triedReturn}
-      confirming={confirming}
       onNotes={setNotes}
       onReturnStep={setReturnStep}
       onReturn={onReturn}
       onDecide={(write) => {
         actions.setApprovals(write).catch(() => undefined);
       }}
-      onApprovePress={() => setConfirming(true)}
-      onApproveConfirm={onApproveConfirm}
-      onApproveCancel={() => setConfirming(false)}
+      onApprovePress={onApprove}
     />
   );
 }

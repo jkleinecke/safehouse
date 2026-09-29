@@ -22,7 +22,6 @@ import { sceneLevels } from '@safehouse/rules';
 import { usePaintTiles, useSwitchTileset, useTilesets } from '../api.js';
 import { useGridStore } from '../store.js';
 import { paintedCells, paintedTilesetToAdopt, resolveTileset } from '../tilesetChoice.js';
-import ConfirmButton from '../gm/ConfirmButton.js';
 import CalibrateMenu from './CalibrateMenu.js';
 
 export default function TilesetBar({ scene }: { scene: Scene }) {
@@ -98,20 +97,14 @@ export default function TilesetBar({ scene }: { scene: Scene }) {
         ))}
       </select>
       <CalibrateMenu scene={scene} />
-      {/*
-        A bin, not the words "Clear floor": the row is icons either side of it
-        and the tooltip carries the name. Armed, it says in words what is
-        about to go — an icon cannot, and "did I just bin forty squares?" is
-        the one question this button must never leave open.
-      */}
-      <ConfirmButton
-        label="🗑"
-        confirmLabel={`Clear ${paintedCount} cells?`}
-        testId="clear-floor"
+      {/* A bin: the tooltip carries the name; Ctrl+Z undoes it. */}
+      <button
+        type="button"
+        data-testid="clear-floor"
         disabled={paintedCount === 0 || paint.isPending}
         title={`Clear floor — erase all ${paintedCount} painted squares`}
         className="min-h-9 rounded border border-edge px-2 py-1 text-xs leading-none disabled:opacity-40"
-        onConfirm={() =>
+        onClick={() =>
           // The scene's own set, not the control's: clearing a layer painted
           // with another set must not also change which set it is filed under.
           paint.mutate({
@@ -122,7 +115,9 @@ export default function TilesetBar({ scene }: { scene: Scene }) {
             clear: true,
           })
         }
-      />
+      >
+        🗑
+      </button>
       {notice && (
         <span className="mono-label max-w-56 truncate text-cyan" data-testid="tiles-switched">
           {notice}

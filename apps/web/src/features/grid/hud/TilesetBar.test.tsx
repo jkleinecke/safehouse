@@ -86,7 +86,7 @@ describe('clearing the floor', () => {
     expect(clearButton(render(scene()))).toContain('disabled=""');
   });
 
-  it('is offered once something is painted, and counts it in the confirm', () => {
+  it('is offered once something is painted', () => {
     const html = render(scene({ tilesetId: DEFAULT_TILESET_ID, cells: {}, ground: cells(7), structure: {}, object: {} }));
     expect(clearButton(html)).not.toContain('disabled=""');
     expect(html).toContain('Clear floor');

@@ -59,7 +59,7 @@ import {
   type RailPoolKey,
 } from './lib.js';
 import type { BuildUpdater } from './session.js';
-import { nextConfirmFor, stepMetaFor, stepScreen } from './steps/index.js';
+import { stepMetaFor, stepScreen } from './steps/index.js';
 import { introFor } from './steps/meta.js';
 import type { BuildActions, StepProps } from './steps/types.js';
 import { useBuild, useBuildActions, type GmEditSwitch, type SaveControls } from './useBuild.js';
@@ -224,7 +224,6 @@ export function BuildPageView(props: BuildPageViewProps) {
       actions,
     ],
   );
-  const nextConfirm = useMemo(() => nextConfirmFor(status), [status]);
   const barPools = stepPoolRows(analysis.budgets, meta.pools);
 
   const intro = introFor(step, build.state, reviewMode);
@@ -330,7 +329,6 @@ export function BuildPageView(props: BuildPageViewProps) {
             panelId={panelId}
             onBack={back !== null ? () => goTo(back) : null}
             onNext={next !== null ? () => goTo(next) : null}
-            nextConfirm={nextConfirm}
             {...(intro ? { intro } : {})}
             banner={
               <>

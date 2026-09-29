@@ -216,11 +216,11 @@ showing one category at a time with the tileset's five or six materials.
 
 Reserve the accent button for the three actions that reach other people:
 *activate for the table*, *start a fight*, *reveal* (fog). Everything else on
-the panel is the plain button. Destructive actions undo cannot take back (clear
-a floor, delete a fight, delete a scene) stay muted and confirm on a second
-click — the tracker's ✕ already does this. Removing a wall, door, zone, pin,
-camera or note is one click, or the Delete key (2026-09-11): it is an undo
-step, and a "sure?" on something Ctrl+Z can fix is a tax. Von Restorff: the
+the panel is the plain button. Every action runs on its first press
+(2026-09-28). Only the GM's chosen few (remove a floor, delete a scene) ask
+first, and they ask in a popup, never by a second press of the same button.
+Removing a wall, door, zone, pin, camera or note is one click, or the Delete
+key: a "sure?" on something Ctrl+Z can fix is a tax. Von Restorff: the
 button that changes what the players see is the one that looks different.
 
 ### 3.7 No label that lists what the thing already shows

@@ -149,27 +149,11 @@ function BuildRow({
   );
 }
 
-/** A delete that asks once more before it goes. */
+/** Deletes on one press. */
 function DeleteControl({ label, deleting, onDelete }: { label: string; deleting: boolean; onDelete: () => void }) {
-  const [armed, setArmed] = useState(false);
-  return armed ? (
-    <>
-      <button
-        type="button"
-        className="btn px-3 py-1 text-danger"
-        disabled={deleting}
-        onClick={onDelete}
-        aria-label={`Delete ${label} for good`}
-      >
-        {deleting ? 'deleting…' : 'yes, delete'}
-      </button>
-      <button type="button" className="btn px-3 py-1" onClick={() => setArmed(false)}>
-        keep
-      </button>
-    </>
-  ) : (
-    <button type="button" className="btn px-3 py-1 text-dim" onClick={() => setArmed(true)} aria-label={`Delete ${label}`}>
-      delete
+  return (
+    <button type="button" className="btn px-3 py-1 text-danger" disabled={deleting} onClick={onDelete} aria-label={`Delete ${label}`}>
+      {deleting ? 'deleting…' : 'delete'}
     </button>
   );
 }

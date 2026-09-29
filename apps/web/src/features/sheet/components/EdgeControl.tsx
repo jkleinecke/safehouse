@@ -2,8 +2,7 @@
  * Current Edge with spend / regain / burn (FR2.3, FR3.4), plus the two
  * initiative-moving Edge actions (FR2.3/FR4.4).
  *
- * Burning Edge is a distinct, loudly-confirmed action — two taps with an
- * explicit warning. Seize the Initiative and Blitz appear only while this
+ * Burning Edge asks first, in a popup. Seize the Initiative and Blitz appear only while this
  * character actually has a seat in a running encounter, because both of them
  * move a position in the initiative order and there is nothing to move
  * otherwise; `GET /api/characters/:id/derived` supplies that `combatantId`.
@@ -11,6 +10,7 @@
  * is offered next to the glitch instead (see CloseCallOffer).
  */
 import { useState } from 'react';
+import ConfirmDialog from '../../../components/ConfirmDialog.js';
 import type { EdgeState } from '@safehouse/contracts';
 import { edgeTrackLabel } from '../a11y.js';
 import { EDGE_ACTION_HINTS, EDGE_ACTION_LABELS } from '../edgeActions.js';
@@ -67,63 +67,48 @@ export default function EdgeControl({
           )}
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          {confirmBurn ? (
-            <>
-              <span className="text-xs text-danger" role="alert">
-                Burn permanently?
-              </span>
-              <button
-                type="button"
-                className="chip border-danger text-danger"
-                disabled={busy}
-                onClick={() => {
-                  setConfirmBurn(false);
-                  onOp('burn');
-                }}
-              >
-                Burn it
-              </button>
-              <button
-                type="button"
-                className="chip text-dim"
-                onClick={() => setConfirmBurn(false)}
-              >
-                Keep
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                type="button"
-                className="chip text-dim hover:border-cyan hover:text-cyan disabled:opacity-40"
-                disabled={busy || edge.current >= edge.max}
-                onClick={() => onOp('regain')}
-                aria-label="Regain a point of Edge"
-              >
-                +
-              </button>
-              <button
-                type="button"
-                className="chip border-warn/50 text-warn disabled:opacity-40"
-                disabled={busy || edge.current <= 0}
-                onClick={() => onOp('spend')}
-                aria-label="Spend a point of Edge"
-              >
-                Spend
-              </button>
-              <button
-                type="button"
-                className="chip text-faint hover:border-danger hover:text-danger disabled:opacity-40"
-                disabled={busy || edge.max <= 0}
-                onClick={() => setConfirmBurn(true)}
-                aria-label="Burn a point of Edge permanently"
-              >
-                Burn
-              </button>
-            </>
-          )}
+          <button
+            type="button"
+            className="chip text-dim hover:border-cyan hover:text-cyan disabled:opacity-40"
+            disabled={busy || edge.current >= edge.max}
+            onClick={() => onOp('regain')}
+            aria-label="Regain a point of Edge"
+          >
+            +
+          </button>
+          <button
+            type="button"
+            className="chip border-warn/50 text-warn disabled:opacity-40"
+            disabled={busy || edge.current <= 0}
+            onClick={() => onOp('spend')}
+            aria-label="Spend a point of Edge"
+          >
+            Spend
+          </button>
+          <button
+            type="button"
+            className="chip text-faint hover:border-danger hover:text-danger disabled:opacity-40"
+            disabled={busy || edge.max <= 0}
+            onClick={() => setConfirmBurn(true)}
+            aria-haspopup="dialog"
+            aria-label="Burn a point of Edge permanently"
+          >
+            Burn
+          </button>
         </div>
       </div>
+      <ConfirmDialog
+        open={confirmBurn}
+        title="Burn a point of Edge?"
+        detail="Your Edge maximum drops by one for good."
+        action="Burn"
+        busy={busy}
+        onCancel={() => setConfirmBurn(false)}
+        onConfirm={() => {
+          setConfirmBurn(false);
+          onOp('burn');
+        }}
+      />
 
       {actions?.combatantId && (
         <div

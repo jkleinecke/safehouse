@@ -34,9 +34,7 @@
  *    leaving the page (`flush` on unmount, on a hidden tab and on
  *    `pagehide`), so closing a tab a moment after an edit does not drop it.
  *    The PATCH goes out with `keepalive` (`patchBuild`), so the browser lets
- *    it finish after the page is gone; the window that remains — edits typed
- *    while a save is already flying, or a save that failed — is what
- *    `shouldWarnOnLeave` asks the browser to confirm.
+ *    it finish after the page is gone.
  * 5. **A build that stopped being editable says so.** When the server
  *    refuses a save because the build was submitted, approved, deleted or is
  *    not this device's to write (409, 423, 403, 404), autosave stops and the
@@ -158,13 +156,6 @@ export interface BuildSession {
    * row; `'theirs'` replaces the draft with the newer row. A no-op otherwise.
    */
   resolveStale(choice: 'mine' | 'theirs'): Promise<FlushResult>;
-  /**
-   * Whether leaving now would drop edits no save carries: a save failed, or
-   * edits were typed while a save was already flying (`keepalive` carries the
-   * flying save and one a flush starts at the edge, not a second queued
-   * behind it).
-   */
-  shouldWarnOnLeave(): boolean;
   /** Cancel the pending timer. The session stays usable (StrictMode remounts). */
   dispose(): void;
 }
@@ -589,13 +580,6 @@ export function createBuildSession(deps: BuildSessionDeps): BuildSession {
         ...rebase(server),
       });
       return flush();
-    },
-
-    shouldWarnOnLeave() {
-      // Typing a stale refusal holds on screen goes nowhere until the player chooses.
-      if (state.stale && unsaved()) return true;
-      if (!unsaved() || !writable()) return false;
-      return state.status === 'error' || (inFlight !== null && state.revision > inFlightRevision);
     },
 
     dispose() {

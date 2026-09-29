@@ -32,8 +32,7 @@
  * - `RatingPicker` — a rated item's rating inside the book's range, refusing
  *   past it with a sentence (over `LimitStepper`).
  *
- * The refusing stepper itself is `../components/LimitStepper.tsx`; losses at
- * Next are `../steps/confirm.ts`.
+ * The refusing stepper itself is `../components/LimitStepper.tsx`.
  */
 export { default as CataloguePicker, CataloguePickerView, pickerCountLine, pickerRowGate } from './CataloguePicker.js';
 export type { CataloguePickerProps, CataloguePickerViewProps, PickerCaps } from './CataloguePicker.js';

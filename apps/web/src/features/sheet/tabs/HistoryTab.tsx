@@ -180,8 +180,10 @@ export function HistoryPanel({ characterId, canEdit }: { characterId: string; ca
             {canEdit && picked !== current && (
               <ConfirmButton
                 className="btn ml-auto px-2.5 py-1"
-                label={`roll back to r${picked}`}
-                confirmLabel={`roll back to r${picked}?`}
+                label="Roll back"
+                question={`Roll back to r${picked}?`}
+                detail="Restores that sheet as a new revision. Nothing is deleted."
+                action="Roll back"
                 disabled={rollback.isPending}
                 onConfirm={() => rollback.mutate(picked, { onSuccess: () => setPicked(null) })}
                 testId="rollback"
@@ -218,7 +220,7 @@ export function ReimportPanel({ characterId, canEdit }: { characterId: string; c
     setPending(null);
     preview.mutate({ file: f, confirm: false }, { onSuccess: setPending });
   };
-  const confirm = () => {
+  const applyReimport = () => {
     if (!file) return;
     apply.mutate(
       { file, confirm: true },
@@ -279,14 +281,16 @@ export function ReimportPanel({ characterId, canEdit }: { characterId: string; c
                   {pending.diff.length} change{pending.diff.length === 1 ? '' : 's'}
                 </span>
                 <span className="mono-label text-faint">against the sheet as it is now</span>
-                <ConfirmButton
+                <button
+                  type="button"
                   className="btn ml-auto px-3 py-1.5"
-                  label="apply re-import"
-                  confirmLabel="apply — as a new revision?"
-                  onConfirm={confirm}
+                  onClick={applyReimport}
                   disabled={apply.isPending}
-                  testId="reimport-apply"
-                />
+                  data-testid="reimport-apply"
+                  title="Apply the re-import as a new revision"
+                >
+                  Apply
+                </button>
               </div>
               {lines.length > 0 && (
                 <ul className="mt-2 space-y-0.5 text-xs text-warn" data-testid="reimport-report">

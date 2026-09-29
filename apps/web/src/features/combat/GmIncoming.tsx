@@ -36,7 +36,6 @@ export interface GmIncomingProps {
 export default function GmIncoming({ x, row, named }: GmIncomingProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [sure, setSure] = useState(false);
   const [boxes, setBoxes] = useState<number | null>(null);
   const targetId = x.target.combatantId;
   const who = targetId
@@ -132,17 +131,12 @@ export default function GmIncoming({ x, row, named }: GmIncomingProps) {
         {actions}
         <button
           type="button"
-          className={`${small} ml-auto ${sure ? 'border-danger text-danger' : 'text-faint'}`}
+          className={`${small} ml-auto text-faint`}
           disabled={busy}
-          onBlur={() => setSure(false)}
-          onClick={() => {
-            if (!sure) return setSure(true);
-            setSure(false);
-            run(() => cancelExchange(x.id));
-          }}
-          title={sure ? 'Click again to cancel this attack' : 'Cancel this attack'}
+          onClick={() => run(() => cancelExchange(x.id))}
+          title="Cancel this attack"
         >
-          {sure ? 'Cancel it?' : 'Cancel'}
+          Cancel
         </button>
       </div>
       {error && (

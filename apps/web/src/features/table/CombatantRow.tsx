@@ -201,16 +201,9 @@ export default function CombatantRow({
   const c = row.combatant;
   const who = { actor: { kind: 'combatant' as const, id: c.id }, title: c.name, runner: c.source === 'character' };
   const [menuOpen, setMenuOpen] = useState(false);
-  // Removing a row takes two clicks: the second one is the confirmation.
-  const [confirmRemove, setConfirmRemove] = useState(false);
   // Damage is the GM's to apply (the server takes `damage.apply` from the GM only).
   const canDamage = isGm;
   const remove = () => {
-    if (!confirmRemove) {
-      setConfirmRemove(true);
-      return;
-    }
-    setConfirmRemove(false);
     removeCombatantLocal(c.id);
     deleteCombatant(c.id).catch(() => undefined);
   };
@@ -461,13 +454,12 @@ export default function CombatantRow({
           {isGm && (
             <button
               type="button"
-              className={`chip ${confirmRemove ? 'border-danger text-danger' : 'border-edge-bright text-faint'} hover:border-danger hover:text-danger`}
+              className="chip border-edge-bright text-faint hover:border-danger hover:text-danger"
               onClick={remove}
-              onBlur={() => setConfirmRemove(false)}
               aria-label={`Remove ${c.name} from the fight`}
-              title={confirmRemove ? 'Click again to remove this row' : 'Remove this row from the fight'}
+              title="Remove this row from the fight"
             >
-              {confirmRemove ? 'remove?' : '✕'}
+              ✕
             </button>
           )}
           {menuOpen && (

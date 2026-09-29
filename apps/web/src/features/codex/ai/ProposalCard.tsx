@@ -5,9 +5,7 @@
  * Everything that makes this safe is visible on the card:
  *  - a line diff of the page as it IS against the page as it WOULD BE, so
  *    "accept" is never a leap of faith;
- *  - the FR12.19 spoiler-guard flags, which must be acknowledged before the
- *    accept button unlocks — the guard exists precisely for the draft the GM
- *    was about to reveal to the table;
+ *  - the FR12.19 spoiler-guard flags, shown as a warning above the diff;
  *  - `edit`, because a draft the GM improved is still the GM's page (P2);
  *  - where it lands: replace the page, append a section, or splice back one
  *    section. The model does not get to choose how much of the page it takes.
@@ -107,7 +105,6 @@ export default function ProposalCard({
     proposal.mode === 'section' && !proposal.sectionId ? 'replace' : proposal.mode,
   );
   const [sectionId, setSectionId] = useState(proposal.sectionId ?? sections[0]?.id ?? '');
-  const [acknowledged, setAcknowledged] = useState(false);
 
   const flagged = proposal.spoilerFlags.length > 0;
   const merged = useMemo(
@@ -115,7 +112,7 @@ export default function ProposalCard({
     [currentMd, text, mode, sectionId],
   );
   const empty = text.trim().length === 0;
-  const blocked = busy === true || empty || (flagged && !acknowledged);
+  const blocked = busy === true || empty;
 
   const modes: MergeMode[] =
     sections.length > 0 ? ['replace', 'append', 'section'] : ['replace', 'append'];
@@ -160,14 +157,6 @@ export default function ProposalCard({
               <li key={i}>— {f}</li>
             ))}
           </ul>
-          <label className="mono-label mt-2 flex items-center gap-2 text-warn">
-            <input
-              type="checkbox"
-              checked={acknowledged}
-              onChange={(e) => setAcknowledged(e.target.checked)}
-            />
-            I have read these and I still want this text
-          </label>
         </div>
       )}
 
@@ -235,11 +224,7 @@ export default function ProposalCard({
           type="button"
           className="btn btn-accent px-3 py-1.5 disabled:cursor-not-allowed disabled:border-edge disabled:text-faint disabled:opacity-60"
           disabled={blocked}
-          title={
-            flagged && !acknowledged
-              ? 'Acknowledge the spoiler-guard flags first'
-              : 'Write this into the page'
-          }
+          title="Write this into the page"
           onClick={() =>
             onAccept({
               contentMd: text,

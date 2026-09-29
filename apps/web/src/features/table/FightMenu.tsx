@@ -48,7 +48,6 @@ export default function FightMenu({ campaignId, encounter, onPick, onClose }: Fi
   const [error, setError] = useState<string | null>(null);
   const [newName, setNewName] = useState('');
   const [name, setName] = useState(encounter?.name ?? '');
-  const [confirmDelete, setConfirmDelete] = useState(false);
   const [row, setRow] = useState<HandCombatantInput>({
     name: '',
     initBase: 8,
@@ -240,48 +239,24 @@ export default function FightMenu({ campaignId, encounter, onPick, onClose }: Fi
           </section>
 
           <section className="flex items-center gap-2">
-            {confirmDelete ? (
-              <>
-                <span className="text-xs text-danger">Delete “{encounter.name}” and every row in it?</span>
-                <button
-                  type="button"
-                  className="btn px-2.5 py-1 text-danger"
-                  disabled={busy}
-                  onClick={() =>
-                    run(
-                      () => deleteEncounter(id),
-                      () => {
-                        onPick(null);
-                        setConfirmDelete(false);
-                        onClose();
-                      },
-                    )
-                  }
-                  aria-label="Yes, delete this fight"
-                >
-                  delete
-                </button>
-                <button
-                  type="button"
-                  className="btn px-2.5 py-1"
-                  title="Keep this fight"
-                  onClick={() => setConfirmDelete(false)}
-                >
-                  cancel
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                className="btn px-2.5 py-1 text-faint hover:text-danger"
-                disabled={busy}
-                onClick={() => setConfirmDelete(true)}
-                title="Delete this fight"
-                aria-label="Delete this fight"
-              >
-                Delete
-              </button>
-            )}
+            <button
+              type="button"
+              className="btn px-2.5 py-1 text-faint hover:text-danger"
+              disabled={busy}
+              onClick={() =>
+                run(
+                  () => deleteEncounter(id),
+                  () => {
+                    onPick(null);
+                    onClose();
+                  },
+                )
+              }
+              title="Delete this fight and every row in it"
+              aria-label="Delete this fight"
+            >
+              Delete
+            </button>
           </section>
         </>
       )}

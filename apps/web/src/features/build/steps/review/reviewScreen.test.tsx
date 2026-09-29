@@ -11,7 +11,7 @@
  *   sentence tied to it;
  * - a decided item: its decision pressed, Approve open; a denied one keeps
  *   Approve shut and says to return the build;
- * - the confirmation before approving, and the way to the new sheet after;
+ * - the busy state while approving, and the way to the new sheet after;
  * - Return's note is required: the reason shows once the GM tries, tied to
  *   the field; the picker defaults to the first step with an error;
  * - a build with nothing to decide says so.
@@ -29,22 +29,19 @@ import { approvalItems } from './review.js';
 const noop = () => undefined;
 
 function review(build: CharacterBuild, over: Partial<Omit<ReviewViewProps, 'actions'>> & FinishPropsOver = {}): ReviewViewProps {
-  const { notes = '', returnStep = '', triedReturn = false, confirming = false, characterId = null, items, ...rest } = over;
+  const { notes = '', returnStep = '', triedReturn = false, characterId = null, items, ...rest } = over;
   return {
     ...finishProps(build, { readOnly: true, reviewMode: true, role: 'gm', mode: 'free', ...rest }),
     items: items ?? approvalItems(build, SETTINGS),
     notes,
     returnStep,
     triedReturn,
-    confirming,
     characterId,
     onNotes: noop,
     onReturnStep: noop,
     onReturn: noop,
     onDecide: noop,
     onApprovePress: noop,
-    onApproveConfirm: noop,
-    onApproveCancel: noop,
   };
 }
 
@@ -140,14 +137,6 @@ describe('ReviewView — approving', () => {
     const base = submitted();
     return { ...base, approvals: { [restrictedCode(base)]: 'approved' as const } };
   };
-
-  it('asks once more before approving', () => {
-    const html = render(review(approvedBuild(), { confirming: true }));
-    expect(html).toMatch(/role="group" aria-labelledby="[^"]+" class="[^"]*" data-testid="review-approve-confirm"/);
-    expect(copy(html)).toContain('Approve this build and create the character now?');
-    expect(html).toContain('data-testid="review-approve-go"');
-    expect(html).toContain('data-testid="review-approve-cancel"');
-  });
 
   it('says it is approving while it runs', () => {
     const p = review(approvedBuild());

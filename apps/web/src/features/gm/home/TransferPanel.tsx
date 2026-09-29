@@ -3,14 +3,13 @@
  * /api/campaigns/:id/transfer-ownership` has done its five writes under one
  * transaction since M1; nothing on screen called it (docs/UX_AUDIT.md,
  * "built server-side, no UI entry point"). The device that does this becomes
- * a player at the same table, so the panel says so before the click and as
- * the click's own label, and then moves this tab to the player's side.
+ * a player at the same table, so the panel says so before the click, and
+ * then moves this tab to the player's side.
  */
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCampaign } from '../../../api/campaigns.js';
 import { clearSession, getSession, saveSession } from '../../../api/session.js';
-import ConfirmButton from '../../grid/gm/ConfirmButton.js';
 import { ErrorNote, SectionTitle, inputClass } from '../ui.js';
 import { ownerOptions, type OwnerOption } from './PartyPanel.js';
 import { useDevices, useTransferOwnership } from './api.js';
@@ -85,15 +84,16 @@ export default function TransferPanel({ campaignId }: { campaignId: string }) {
               ))}
             </select>
           </label>
-          <ConfirmButton
+          <button
+            type="button"
             className="btn px-3 py-1.5"
-            label={`make ${picked?.label ?? 'them'} the GM`}
-            confirmLabel="yes — I become a player"
-            onConfirm={hand}
+            onClick={hand}
             disabled={!picked || transfer.isPending}
-            testId="transfer-confirm"
-            title="Two clicks: this one arms it, the next one does it"
-          />
+            data-testid="transfer-confirm"
+            title={`Make ${picked?.label ?? 'them'} the GM; you become a player`}
+          >
+            transfer
+          </button>
         </div>
       )}
       <ErrorNote error={transfer.error} />

@@ -8,12 +8,9 @@
  */
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { ChargenSettingsSchema, type CharacterBuild } from '@safehouse/contracts';
-import { analyseBuild } from '../analysis.js';
 import GmNoteBanner, { noteDisplay } from './GmNoteBanner.js';
 import SaveIndicator, { saveAnnouncement, saveText } from './SaveIndicator.js';
-import StepFrame, { NextConfirmPanel, nextPress } from './StepFrame.js';
-import { nextConfirmFor } from '../steps/confirm.js';
+import StepFrame from './StepFrame.js';
 import { stepMeta, stepMetaFor } from '../steps/meta.js';
 import { analysisOf, blankBuild, conceptBuild } from '../testing.js';
 
@@ -149,72 +146,6 @@ describe('the frame’s copy for the build’s method', () => {
     );
     expect(html).toContain('rows may repeat');
     expect(html).not.toContain('Each row can hold one column');
-  });
-});
-
-describe('a loss acknowledged before Next', () => {
-  it("asks on step 2 when Sum to Ten leaves priority points unspent, in the engine's words and page", () => {
-    const settings = ChargenSettingsSchema.parse({ allowSumToTen: true });
-    // B 3 + C 2 + E 0 + D 1 + E 0: six of the ten points.
-    const under: CharacterBuild = {
-      ...blankBuild(),
-      method: 'sumToTen',
-      priorities: { metatype: 'B', attributes: 'C', magic: 'E', skills: 'D', resources: 'E' },
-    };
-    const status = analyseBuild(under, settings).steps[1]!;
-    const warning = status.warnings.find((w) => w.code === 'sum-to-ten-under');
-    expect(warning?.message).toBe('4 priority points left unspent.');
-    const confirm = nextConfirmFor(status)!;
-    expect(confirm.lead).toContain('Priority points do not carry over');
-    expect(confirm.message).toBe(warning!.message);
-    expect(confirm.ref).toEqual({ book: 'RF', page: 62 });
-    expect(confirm.confirmLabel).toBe('I meant to — next');
-    // All ten spent, or the priority table: nothing to ask.
-    const spent = { ...under, priorities: { metatype: 'A', attributes: 'A', magic: 'E', skills: 'C', resources: 'E' } } as CharacterBuild;
-    expect(nextConfirmFor(analyseBuild(spent, settings).steps[1]!)).toBeNull();
-    expect(nextConfirmFor(analysisOf(conceptBuild('face')).steps[1]!)).toBeNull();
-  });
-
-  it("asks on step 3 when special points are unspent, in the engine's words", () => {
-    const build = conceptBuild('face');
-    expect(build.special.edg).toBeGreaterThan(0);
-    const unspent = { ...build, special: { ...build.special, edg: 0 } };
-    const status = analysisOf(unspent).steps[2]!;
-    const warning = status.warnings.find((w) => w.code === 'special-points-unspent');
-    expect(warning).toBeDefined();
-    const confirm = nextConfirmFor(status)!;
-    expect(confirm.message).toBe(warning!.message);
-    expect(confirm.ref).toEqual(warning!.ref);
-    // The loss is at the end of creation, not on leaving the step (Back reopens it).
-    expect(confirm.lead).toBe('Special points do not carry over: any left unspent when the runner is finished are gone.');
-
-    // Open Next asks first; asked once, the next press goes.
-    expect(nextPress(true, true, confirm, false)).toBe('confirm');
-    expect(nextPress(true, true, confirm, true)).toBe('go');
-    // Shut or last: nothing to ask.
-    expect(nextPress(false, true, confirm, false)).toBe('none');
-    expect(nextPress(true, false, confirm, false)).toBe('none');
-    expect(nextPress(true, true, null, false)).toBe('go');
-
-    const panel = renderToStaticMarkup(<NextConfirmPanel confirm={confirm} onConfirm={noop} onStay={noop} />);
-    expect(panel).toContain('data-testid="step-next-confirm"');
-    expect(panel).toContain('I meant to — next');
-    expect(panel).toContain('stay here');
-    expect(panel).toContain('SR5 p.66');
-  });
-
-  it('does not ask when nothing is about to be lost, or on a step with no such loss', () => {
-    const a = analysisOf(conceptBuild('face'));
-    expect(a.steps[2]!.warnings.some((w) => w.code === 'special-points-unspent')).toBe(false);
-    expect(nextConfirmFor(a.steps[2]!)).toBeNull();
-    expect(nextConfirmFor(a.steps[5]!)).toBeNull();
-    // Step 7's loss is nuyen above the carry-over.
-    expect(
-      nextConfirmFor({
-        step: 7,
-        warnings: [{ code: 'nuyen-carry-lost', severity: 'warning', step: 7, message: '3,000¥ will not carry over.', ref: { book: 'SR5', page: 94 } }],
-      })?.message,
-    ).toBe('3,000¥ will not carry over.');
   });
 });
 

@@ -328,31 +328,18 @@ describe('Priorities — the method switch', () => {
   const method = methodModel(face, SUM_TO_TEN_SETTINGS, []);
   const budgets = analyseBuild(face, SUM_TO_TEN_SETTINGS).budgets;
 
-  it('a campaign that allows Sum to Ten offers it, closed until asked', () => {
+  it('a campaign that allows Sum to Ten offers it', () => {
     const html = renderToStaticMarkup(
-      <MethodSwitchView method={method} budgets={budgets} onSwitch={noop} confirming={false} onAsk={noop} onCancel={noop} />,
+      <MethodSwitchView method={method} budgets={budgets} onSwitch={noop} />,
     );
     expect(text(html)).toContain('The priority table: each column takes a different row');
     expect(text(html)).toContain('use Sum to Ten');
-    expect(html).not.toContain('data-testid="priority-method-confirm"');
     expect(html).not.toContain('data-pool="priorityPoints"');
-  });
-
-  it('asks before switching, saying what the switch does to these rows', () => {
-    const html = renderToStaticMarkup(
-      <MethodSwitchView method={method} budgets={budgets} onSwitch={noop} confirming onAsk={noop} onCancel={noop} />,
-    );
-    const confirm = element(html, 'div', 'data-testid="priority-method-confirm"');
-    expect(confirm).toContain('role="group"');
-    expect(text(confirm)).toContain('The rows you have now stay where they are.');
-    expect(text(html)).toContain('keep the priority table');
-    expect(text(element(html, 'button', 'data-testid="priority-method-go"'))).toContain('use Sum to Ten');
-    expect(html).not.toContain('data-testid="priority-method-switch"');
   });
 
   it('read-only shows the method but offers no switch', () => {
     const html = renderToStaticMarkup(
-      <MethodSwitchView method={method} budgets={budgets} onSwitch={noop} readOnly confirming={false} onAsk={noop} onCancel={noop} />,
+      <MethodSwitchView method={method} budgets={budgets} onSwitch={noop} readOnly />,
     );
     expect(html).toContain('data-testid="priority-method"');
     expect(html).not.toContain('<button');
@@ -361,7 +348,7 @@ describe('Priorities — the method switch', () => {
   it('renders nothing where the campaign does not allow it and the build does not use it', () => {
     const hidden = methodModel(face, SETTINGS, []);
     expect(
-      renderToStaticMarkup(<MethodSwitchView method={hidden} budgets={budgets} onSwitch={noop} confirming={false} onAsk={noop} onCancel={noop} />),
+      renderToStaticMarkup(<MethodSwitchView method={hidden} budgets={budgets} onSwitch={noop} />),
     ).toBe('');
   });
 });

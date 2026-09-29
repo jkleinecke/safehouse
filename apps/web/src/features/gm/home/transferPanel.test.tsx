@@ -1,7 +1,7 @@
 /**
  * Handing the campaign over (FR1.2): only joined people who are not already
- * the owner are offered, a kiosk never is, the click is armed before it
- * fires, and an empty table says why there is nobody to hand it to.
+ * the owner are offered, a kiosk never is, and an empty table says why
+ * there is nobody to hand it to.
  */
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -37,7 +37,7 @@ describe('who can take the campaign', () => {
 });
 
 describe('the panel', () => {
-  it('offers the candidates and an armed button that names the consequence', () => {
+  it('offers the candidates and a button that names the consequence', () => {
     const html = render(<TransferPanel campaignId="c1" />, (qc) => {
       qc.setQueryData(['campaign', 'c1'], { id: 'c1', name: 'Neon Rain', gmUserId: 'gm-1' });
       qc.setQueryData(['campaign', 'c1', 'devices'], DEVICES);
@@ -48,8 +48,7 @@ describe('the panel', () => {
     expect(html).not.toContain('value="gm-1"');
     expect(html).not.toContain('value="tv-1"');
     expect(html).toContain('data-testid="transfer-confirm"');
-    expect(html).toContain('data-armed="no"');
-    expect(html).toContain('make Torque the GM');
+    expect(html).toContain('Make Torque the GM');
     expect(html).toContain('You keep a seat as a player');
   });
 

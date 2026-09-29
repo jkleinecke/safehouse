@@ -8,7 +8,6 @@
  * the book over whatever is on screen.
  */
 import { useState } from 'react';
-import ConfirmButton from '../../grid/gm/ConfirmButton.js';
 import { Sheet } from '../../sheet/components/ui.js';
 import { ErrorNote, inputClass } from '../ui.js';
 import {
@@ -147,13 +146,14 @@ export default function LibraryPanel({ campaignId, canEdit, books }: LibraryPane
                       <button type="button" className="btn px-2 py-1" onClick={() => startEdit(b)}>
                         edit
                       </button>
-                      <ConfirmButton
+                      <button
+                        type="button"
                         className="btn px-2 py-1 text-danger"
-                        label="remove"
-                        confirmLabel="remove?"
-                        onConfirm={() => remove.mutate(b.id)}
-                        testId={`remove-bookmark-${b.id}`}
-                      />
+                        onClick={() => remove.mutate(b.id)}
+                        data-testid={`remove-bookmark-${b.id}`}
+                      >
+                        remove
+                      </button>
                     </span>
                   </td>
                 )}

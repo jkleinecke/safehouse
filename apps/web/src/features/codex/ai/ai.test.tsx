@@ -11,8 +11,7 @@
  *  2. **AI off is honest, not invisible.** With `LLM_BASE_URL` unset the status
  *     endpoint says `enabled: false`; the buttons stay on screen, disabled,
  *     carrying the reason and a link to the setting (NG7).
- *  3. **The spoiler guard is on the card, before accept** (FR12.19) — and it
- *     holds the accept button until the GM has acknowledged it.
+ *  3. **The spoiler guard is on the card, before accept** (FR12.19).
  *  4. **The draft is grounded in THIS campaign** (R12/FR12.17): the prompt
  *     carries the page's kind, title, neighbours and body, and forbids link
  *     targets that do not exist.
@@ -392,7 +391,7 @@ describe('the proposal card', () => {
     expect(html).toContain('replace this section');
   });
 
-  it('shows the spoiler guard and holds accept until it is acknowledged', () => {
+  it('shows the spoiler guard as a warning', () => {
     const html = render(
       <ProposalCard
         proposal={proposal({
@@ -408,8 +407,6 @@ describe('the proposal card', () => {
     expect(html).toContain('spoiler guard — reveal or cut?');
     expect(html).toContain('Mr. Kessler');
     expect(html).toContain('the hidden sniper');
-    expect(html).toContain('I have read these');
-    expect(html).toContain('disabled=""');
   });
 
   it('says so when no draft row backs the text, rather than looking checked', () => {

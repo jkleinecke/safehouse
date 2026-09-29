@@ -19,7 +19,6 @@ import type { StepProps } from './types.js';
 
 export { STEP_META, stepMeta, stepMetaFor, type StepMeta } from './meta.js';
 export { inertActions, type BuildActions, type StepProps } from './types.js';
-export { nextConfirmFor, type NextConfirm } from './confirm.js';
 
 export type StepScreen = LazyExoticComponent<ComponentType<StepProps>>;
 

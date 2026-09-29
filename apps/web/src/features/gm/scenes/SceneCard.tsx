@@ -16,6 +16,7 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import type { Scene } from '@safehouse/contracts';
 import type { RegionFashion } from '@safehouse/rules';
+import ConfirmDialog from '../../../components/ConfirmDialog.js';
 import { fileUrl } from './api.js';
 import { cssFilter, normalizeRotation, parseMapImageRef } from '../../grid/mapImage.js';
 import EnvironmentEditor from './EnvironmentEditor.js';
@@ -380,6 +381,7 @@ export default function SceneCard(props: SceneCardProps) {
           className={btn + ' py-1 ml-auto border-danger/50 text-danger'}
           disabled={anyBusy}
           onClick={props.onAskDelete}
+          aria-haspopup="dialog"
         >
           delete
         </button>
@@ -389,27 +391,16 @@ export default function SceneCard(props: SceneCardProps) {
         <p className="mono-label text-faint">{archiveBlocked}</p>
       )}
 
-      {confirmingDelete && (
-        <div
-          className="rounded-md border border-danger/50 bg-danger/10 p-2.5"
-          data-testid="delete-confirm"
-        >
-          <p className="text-xs text-danger">{deleteWarning(summary)}</p>
-          <div className="mt-2 flex items-center gap-2">
-            <button
-              type="button"
-              className={btn + ' py-1 border-danger/60 text-danger'}
-              disabled={busy === 'delete'}
-              onClick={props.onConfirmDelete}
-            >
-              {busy === 'delete' ? 'deleting…' : 'delete permanently'}
-            </button>
-            <button type="button" className={btn + ' py-1'} onClick={props.onCancelDelete}>
-              keep it
-            </button>
-          </div>
-        </div>
-      )}
+      <ConfirmDialog
+        open={confirmingDelete}
+        title={`Delete “${scene.name}”?`}
+        detail={deleteWarning(summary)}
+        action="Delete"
+        busy={busy === 'delete'}
+        onConfirm={props.onConfirmDelete}
+        onCancel={props.onCancelDelete}
+        testId="delete-confirm"
+      />
 
       {props.error && (
         <p className="text-xs text-danger" data-testid="scene-error">

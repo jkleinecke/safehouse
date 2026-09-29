@@ -48,7 +48,5 @@ describe('<FightMenu>', () => {
     expect(html).toContain('8+1d6 · P10/S10');
     expect(html).toContain('aria-label="Delete this fight"');
     expect(html).toContain('>Delete<');
-    // …and the delete needs a second click.
-    expect(html).not.toContain('Yes, delete this fight');
   });
 });

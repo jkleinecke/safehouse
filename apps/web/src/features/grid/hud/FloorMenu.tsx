@@ -207,13 +207,14 @@ export default function FloorMenu({ scene }: { scene: Scene }) {
               </button>
               {/*
                 The ground floor has no bin: it is `scene.tiles` itself. Every
-                storey above it does, and it asks first, because the paint
-                goes with the floor.
+                storey above it does, behind a popup: the paint goes with it.
               */}
               {i > 0 && (
                 <ConfirmButton
                   label="🗑"
-                  confirmLabel="remove?"
+                  question={`Remove ${name}?`}
+                  detail="Everything painted on it goes too. Undo can't bring it back."
+                  action="Remove"
                   testId={`floor-remove-${i}`}
                   disabled={save.isPending}
                   title={`Remove ${name} and everything painted on it`}

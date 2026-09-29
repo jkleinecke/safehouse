@@ -133,27 +133,13 @@ describe('submitWhenSaved', () => {
 });
 
 describe('leaveHandlers', () => {
-  it('hiding sends what is pending; leaving warns only over an edit nothing carries', () => {
+  it('hiding or leaving sends what is pending', () => {
     const flush = vi.fn(async () => ({ saved: true, status: 'saved' as const, error: null }));
-    let warn = false;
-    const edges = leaveHandlers({ flush, shouldWarnOnLeave: () => warn });
-
-    edges.onHidden();
+    leaveHandlers({ flush }).onHidden();
     expect(flush).toHaveBeenCalledTimes(1);
-
-    const quiet = { preventDefault: vi.fn(), returnValue: undefined as unknown };
-    edges.onBeforeUnload(quiet);
-    expect(flush).toHaveBeenCalledTimes(2);
-    expect(quiet.preventDefault).not.toHaveBeenCalled();
-
-    warn = true;
-    const ask = { preventDefault: vi.fn(), returnValue: undefined as unknown };
-    edges.onBeforeUnload(ask);
-    expect(ask.preventDefault).toHaveBeenCalled();
-    expect(ask.returnValue).toBe('');
   });
 
-  it('with the real session: a pending edit is sent at once when the page goes, so no warning is needed', () => {
+  it('with the real session: a pending edit is sent at once when the page goes', () => {
     const bodies: unknown[] = [];
     const session = createBuildSession({
       buildId: BUILD_ID,
@@ -165,14 +151,8 @@ describe('leaveHandlers', () => {
     });
     session.receive(recordOf(blankBuild()));
     session.update(setAlias('Kestrel'));
-    const event = { preventDefault: vi.fn(), returnValue: undefined as unknown };
-    leaveHandlers(session).onBeforeUnload(event);
+    leaveHandlers(session).onHidden();
     // Sent without waiting for the debounce.
     expect(bodies).toHaveLength(1);
-    expect(event.preventDefault).not.toHaveBeenCalled();
-    // A second edit behind that flight has nothing to carry it.
-    session.update(setAlias('Kestrel Vane'));
-    leaveHandlers(session).onBeforeUnload(event);
-    expect(event.preventDefault).toHaveBeenCalled();
   });
 });

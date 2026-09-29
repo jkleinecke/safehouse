@@ -30,7 +30,7 @@
  * - **Fog everything** starts over, as one op on the server (`refog`): the
  *   fog on, every reveal hidden, the brush cleared and the party's memory
  *   forgotten, so the map is dark again but for what the runners see now.
- *   It takes two presses (`ConfirmButton`), since nothing puts it back.
+ *   One press does it.
  * - **See as players** is the party lens (`PARTY_LENS`): the map exactly as
  *   the phones and the TV show it: their opaque fog, their dimmed ground
  *   seen before, their tokens (`stage3d/masks.ts` `drawsTableView`). While
@@ -50,7 +50,6 @@ import type { BrushMark } from '@safehouse/rules';
 import { usePatchScene } from '../api.js';
 import type { GridCommands } from '../commands.js';
 import { FOG_BRUSH_MAX, FOG_BRUSH_MIN, FOG_BRUSH_MODES, fogBarHint, seeAsPlayersLabel } from '../fogBar.js';
-import ConfirmButton from '../gm/ConfirmButton.js';
 import { useGridStore } from '../store.js';
 import { PARTY_LENS } from '../useShroud.js';
 import { toolTitle } from './Toolbar.js';
@@ -302,14 +301,15 @@ export default function FogBar({ scene, commands }: { scene: Scene; commands: Gr
       <Divider />
 
       <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Start over and check">
-        <ConfirmButton
-          label="Fog everything"
-          confirmLabel="Fog everything?"
-          testId="fog-bar-refog"
+        <button
+          type="button"
+          data-testid="fog-bar-refog"
           title="Start over: hide every reveal, clear the brush and forget what the party has seen. What the runners see now stays."
           className="btn min-h-9 shrink-0 px-2 py-1 text-xs"
-          onConfirm={() => commands.fogRefog(scene.id)}
-        />
+          onClick={() => commands.fogRefog(scene.id)}
+        >
+          Fog everything
+        </button>
         <Toggle
           on={asPlayers}
           // The mockup's words: while the lens is on, the button says how to leave it.

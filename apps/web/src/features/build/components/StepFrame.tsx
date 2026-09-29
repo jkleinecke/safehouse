@@ -11,11 +11,9 @@
  *   `aria-describedby`, with a "why?" chip to the page. The button stays
  *   focusable (`aria-disabled`), so a keyboard or screen-reader user finds
  *   the reason by reaching the button rather than by guessing.
- * - **Back always works.**
- * - **A loss is acknowledged, once.** When the step has a warning the book
- *   makes final (unspent special points, nuyen above the carry-over — the
- *   registry is `steps/confirm.ts`), an open Next first shows the engine's
- *   sentence with "I meant to — next" and "stay here"; only the first goes on.
+ * - **Back always works.** Next goes on its first press; losses the book
+ *   makes final (unspent points, nuyen past the carry-over) stay in the
+ *   issues list as warnings.
  *
  * Focus follows the step. When the step changes the heading takes focus (it
  * is `tabIndex=-1`, so it is reachable by script, not by Tab), so a keyboard
@@ -34,11 +32,10 @@
  * engine skipped the step (a mundane's Magic step), and any banner the page
  * pins here (the GM's note).
  */
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
 import type { BuildMode } from '@safehouse/contracts';
 import { RefChip } from '../../gm/books/RefChip.js';
 import { gatingReason, type StepGate } from '../lib.js';
-import type { NextConfirm } from '../steps/confirm.js';
 import type { StepMeta } from '../steps/meta.js';
 
 export interface StepFrameProps {
@@ -60,59 +57,7 @@ export interface StepFrameProps {
   banner?: ReactNode;
   /** The panel id the free-mode tabs control. */
   panelId?: string;
-  /** A loss to acknowledge before Next goes (`nextConfirmFor`); null when Next simply goes. */
-  nextConfirm?: NextConfirm | null;
   children: ReactNode;
-}
-
-/** What pressing Next does: go, ask first, or nothing (shut, or no step after this one). */
-export function nextPress(
-  nextOpen: boolean,
-  hasNext: boolean,
-  confirm: NextConfirm | null,
-  confirming: boolean,
-): 'go' | 'confirm' | 'none' {
-  if (!nextOpen || !hasNext) return 'none';
-  return confirm && !confirming ? 'confirm' : 'go';
-}
-
-export interface NextConfirmPanelProps {
-  confirm: NextConfirm;
-  onConfirm: () => void;
-  onStay: () => void;
-}
-
-/** The acknowledgement under Next: our lead-in, the engine's sentence and page, go on or stay. */
-export function NextConfirmPanel({ confirm, onConfirm, onStay }: NextConfirmPanelProps) {
-  const titleId = useId();
-  const goRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    goRef.current?.focus();
-  }, []);
-  return (
-    <div
-      role="group"
-      aria-labelledby={titleId}
-      className="w-full max-w-sm rounded-md border border-warn/50 bg-deck p-3 text-left"
-      data-testid="step-next-confirm"
-    >
-      <p id={titleId} className="text-sm text-ink">
-        {confirm.lead}
-      </p>
-      <p className="mt-1 flex flex-wrap items-center gap-1.5 text-sm text-warn">
-        <span>{confirm.message}</span>
-        {confirm.ref && <RefChip refValue={confirm.ref} />}
-      </p>
-      <div className="mt-2 flex flex-wrap justify-end gap-2">
-        <button type="button" className="btn px-3 py-1.5" onClick={onStay} data-testid="step-next-stay">
-          stay here
-        </button>
-        <button ref={goRef} type="button" className="btn btn-accent px-3 py-1.5" onClick={onConfirm} data-testid="step-next-go">
-          {confirm.confirmLabel}
-        </button>
-      </div>
-    </div>
-  );
 }
 
 export default function StepFrame({
@@ -125,7 +70,6 @@ export default function StepFrame({
   intro,
   banner,
   panelId,
-  nextConfirm = null,
   children,
 }: StepFrameProps) {
   const reasonId = useId();
@@ -137,9 +81,6 @@ export default function StepFrame({
   const nextOpen = !guided || readOnly || status.complete;
   const hasNext = onNext !== null;
   const firstBlocking = status.blocking[0];
-  const confirm = readOnly ? null : nextConfirm;
-  const [confirmingStep, setConfirmingStep] = useState<number | null>(null);
-  const confirming = confirmingStep === meta.step && confirm !== null;
 
   // Focus the new step's heading when the step changes — not on first paint,
   // where focus belongs to wherever the player came from.
@@ -150,14 +91,8 @@ export default function StepFrame({
     headingRef.current?.focus({ preventScroll: true });
   }, [meta.step]);
 
-  const go = () => {
-    setConfirmingStep(null);
-    onNext?.();
-  };
   const pressNext = () => {
-    const action = nextPress(nextOpen, hasNext, confirm, confirming);
-    if (action === 'confirm') setConfirmingStep(meta.step);
-    else if (action === 'go') go();
+    if (nextOpen) onNext?.();
   };
 
   return (
@@ -220,7 +155,6 @@ export default function StepFrame({
               data-open={nextOpen ? 'yes' : 'no'}
               {...(nextOpen ? {} : { 'aria-disabled': 'true' as const })}
               {...(reason && !readOnly ? { 'aria-describedby': reasonId } : {})}
-              {...(confirming ? { 'aria-expanded': true } : {})}
               onClick={pressNext}
             >
               next →
@@ -243,12 +177,6 @@ export default function StepFrame({
             </p>
           )}
         </div>
-        {confirming && confirm && (
-          // Full width under the whole nav row: on a phone, inside Next's column it split Back and Next onto two lines.
-          <div className="flex w-full justify-end">
-            <NextConfirmPanel confirm={confirm} onConfirm={go} onStay={() => setConfirmingStep(null)} />
-          </div>
-        )}
       </footer>
     </section>
   );

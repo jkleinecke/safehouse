@@ -1,8 +1,8 @@
 /**
  * The History tab (FR3.8, FR3.1): revisions listed newest first with the
  * current one marked, a diff that reads field · now · after, a re-import
- * that will not apply without a second click, and nothing offered to a
- * device that may not edit. Static markup, as everywhere in this package.
+ * that shows its diff before it applies, and nothing offered to a device
+ * that may not edit. Static markup, as everywhere in this package.
  */
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';

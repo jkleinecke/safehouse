@@ -34,10 +34,6 @@
  *   screen of steppers validates each candidate once per draft, not per
  *   render. Whether an introduced *overspend* refuses or is allowed (and
  *   shown red on the rail) is the step's design call; a cap never is.
- * - **Losses at Next are the registry's.** A warning the player must
- *   acknowledge before leaving (unspent special points, nuyen above the
- *   carry-over) is `nextConfirmFor` in `./confirm.ts`, keyed by the
- *   validator's warning code; the frame asks, the step does not.
  * - **`readOnly` means render, do not offer edits** (a submitted build, a
  *   GM's review, an observer). `update` is already a no-op then; a step that
  *   hides its controls is kinder than one whose buttons silently do nothing.

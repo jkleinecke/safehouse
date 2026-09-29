@@ -1,16 +1,19 @@
 /**
- * A destructive action that takes two clicks (docs/UX_MAP_BUILDER.md §3.6):
- * the first arms it and says so, the second does it. The tracker's ✕ already
- * worked this way; a browser `confirm()` dialog is the thing this replaces —
- * it steals focus, reads as an error, and cannot be styled to say what is
- * about to go. Arming wears off on its own, or when the button loses focus.
+ * A button whose action the GM asked to confirm: the press opens the
+ * "are you sure?" popup (`ConfirmDialog`), and its own button does it.
+ * Never two presses on the same button.
  */
-import { useEffect, useState } from 'react';
+import { useState, type ReactNode } from 'react';
+import ConfirmDialog from '../../../components/ConfirmDialog.js';
 
 export interface ConfirmButtonProps {
   label: string;
-  /** What the armed button says; defaults to the label with a question. */
-  confirmLabel?: string;
+  /** The popup's question: "Remove Floor 2?" */
+  question: string;
+  /** The popup's sentence on what goes. */
+  detail?: ReactNode;
+  /** One word for the popup's confirm button. */
+  action: string;
   onConfirm: () => void;
   className?: string;
   title?: string;
@@ -18,36 +21,32 @@ export interface ConfirmButtonProps {
   testId?: string;
 }
 
-const ARMED_MS = 4000;
-
 export default function ConfirmButton(p: ConfirmButtonProps) {
-  const [armed, setArmed] = useState(false);
-  useEffect(() => {
-    if (!armed) return undefined;
-    const t = window.setTimeout(() => setArmed(false), ARMED_MS);
-    return () => window.clearTimeout(t);
-  }, [armed]);
+  const [open, setOpen] = useState(false);
   return (
-    <button
-      type="button"
-      data-testid={p.testId}
-      data-armed={armed ? 'yes' : 'no'}
-      disabled={p.disabled}
-      title={armed ? 'Click again to confirm' : p.title}
-      onBlur={() => setArmed(false)}
-      onClick={() => {
-        if (armed) {
-          setArmed(false);
+    <>
+      <button
+        type="button"
+        data-testid={p.testId}
+        disabled={p.disabled}
+        title={p.title}
+        aria-haspopup="dialog"
+        onClick={() => setOpen(true)}
+        className={(p.className ?? 'btn py-1') + ' text-danger'}
+      >
+        {p.label}
+      </button>
+      <ConfirmDialog
+        open={open}
+        title={p.question}
+        detail={p.detail}
+        action={p.action}
+        onCancel={() => setOpen(false)}
+        onConfirm={() => {
+          setOpen(false);
           p.onConfirm();
-        } else {
-          setArmed(true);
-        }
-      }}
-      className={
-        (p.className ?? 'btn py-1') + (armed ? ' border-danger bg-danger/10 text-danger' : ' text-danger')
-      }
-    >
-      {armed ? (p.confirmLabel ?? `${p.label}?`) : p.label}
-    </button>
+        }}
+      />
+    </>
   );
 }
