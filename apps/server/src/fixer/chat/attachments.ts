@@ -15,11 +15,30 @@
  * Everything is scoped to the campaign: a file id from another campaign is
  * treated as missing.
  */
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import type { UIMessage } from 'ai';
-import type { Db } from '@safehouse/db';
+import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import type { PgTable } from 'drizzle-orm/pg-core';
+import {
+  aiConversations,
+  aiGenerations,
+  attachments,
+  audioTracks,
+  books,
+  builds,
+  characters,
+  gameSessions,
+  npcTemplates,
+  runs,
+  scenes,
+  tokens,
+  wikiPages,
+  wikiRevisions,
+  type Db,
+} from '@safehouse/db';
 import { ScenesService } from '../../services/scenes.js';
-import { attachmentIdOf, estimateTokens, type AttachedFile, type ConversationMemory } from './memory.js';
+import { UUID_RE } from '../conversations.js';
+import { attachmentIdOf, estimateTokens, readMemory, type AttachedFile, type ConversationMemory } from './memory.js';
 
 /** More text than this is cut when a file is read in — a novel is not a handout. */
 const MAX_TEXT_CHARS = 400_000;
@@ -80,6 +99,68 @@ export async function imageDataUrl(db: Db, campaignId: string, id: string, media
   const bytes = await readAttachment(db, campaignId, id);
   if (!bytes || bytes.length > MAX_IMAGE_BYTES) return null;
   return `data:${mediaType};base64,${bytes.toString('base64')}`;
+}
+
+/** The files a chat carries: those its memory registered and those on the GM's own messages. */
+export function chatFileIds(messages: unknown, memory: unknown): string[] {
+  const ids = new Set(Object.keys(readMemory(memory).files));
+  for (const m of Array.isArray(messages) ? messages : []) {
+    const msg = m as { role?: unknown; parts?: unknown } | null;
+    if (msg?.role !== 'user' || !Array.isArray(msg.parts)) continue;
+    for (const p of msg.parts as Array<{ type?: unknown; url?: unknown } | null>) {
+      const id = p?.type === 'file' && typeof p.url === 'string' ? attachmentIdOf(p.url) : null;
+      if (id) ids.add(id);
+    }
+  }
+  return [...ids].filter((id) => UUID_RE.test(id));
+}
+
+/**
+ * Is the file named anywhere else in the campaign? Whole rows are searched
+ * as text, so a link in any column or JSON field counts — a scene's map, a
+ * token's art, a wiki handout, a sheet's portrait, another chat.
+ */
+async function fileInUse(db: Db, campaignId: string, id: string): Promise<boolean> {
+  const named = (table: PgTable): SQL => sql`${table}::text like ${`%${id}%`}`;
+  const ownScenes = db.select({ id: scenes.id }).from(scenes).where(eq(scenes.campaignId, campaignId));
+  const ownPages = db.select({ id: wikiPages.id }).from(wikiPages).where(eq(wikiPages.campaignId, campaignId));
+  const checks: Array<() => Promise<unknown[]>> = [
+    () => db.select({ id: books.id }).from(books).where(eq(books.attachmentId, id)).limit(1),
+    () => db.select({ id: audioTracks.id }).from(audioTracks).where(eq(audioTracks.attachmentId, id)).limit(1),
+    () => db.select({ id: tokens.id }).from(tokens).where(and(inArray(tokens.sceneId, ownScenes), named(tokens))).limit(1),
+    () =>
+      db
+        .select({ seq: wikiRevisions.seq })
+        .from(wikiRevisions)
+        .where(and(inArray(wikiRevisions.wikiPageId, ownPages), named(wikiRevisions)))
+        .limit(1),
+  ];
+  for (const table of [aiConversations, scenes, wikiPages, characters, builds, npcTemplates, aiGenerations, runs, gameSessions]) {
+    checks.push(() =>
+      db.select({ one: sql`1` }).from(table).where(and(eq(table.campaignId, campaignId), named(table))).limit(1),
+    );
+  }
+  for (const check of checks) if ((await check()).length > 0) return true;
+  return false;
+}
+
+/**
+ * Clear a deleted chat's files: the chat's own uploads (handouts of this
+ * campaign) that nothing else names. Row first, then the bytes, so a failed
+ * unlink leaves a stray file rather than a row pointing at nothing.
+ */
+export async function removeChatFiles(db: Db, campaignId: string, ids: readonly string[]): Promise<string[]> {
+  const svc = new ScenesService(db);
+  const removed: string[] = [];
+  for (const id of ids) {
+    const row = await svc.attachment(id).catch(() => null);
+    if (!row || row.campaignId !== campaignId || row.kind !== 'handout') continue;
+    if (await fileInUse(db, campaignId, id)) continue;
+    await db.delete(attachments).where(eq(attachments.id, id));
+    await rm(svc.attachmentPath(row), { force: true }).catch(() => undefined);
+    removed.push(id);
+  }
+  return removed;
 }
 
 /**

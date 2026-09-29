@@ -28,7 +28,8 @@ import {
 import { cancelRun, currentRun, withRun } from '../fixer/activity.js';
 import { runningBuildDrafts } from '../fixer/build-draft.js';
 import { runFixerChat, runNpcConverse } from '../fixer/agent.js';
-import { listConversations, loadConversation } from '../fixer/conversations.js';
+import { UUID_RE, deleteConversation, listConversations, loadConversation } from '../fixer/conversations.js';
+import { chatFileIds, removeChatFiles } from '../fixer/chat/attachments.js';
 import { acceptDraft, listDrafts, rejectDraft } from '../fixer/drafts.js';
 import { campaignUsage, persistTurnUsage, usageMeter } from '../fixer/usage.js';
 import { visionCapability } from '../fixer/vision.js';
@@ -107,6 +108,14 @@ const ConverseBody = z.object({
   conversationId: z.string().optional(),
   slot: z.enum(['primary', 'fast']).optional(),
   temperature: z.number().min(0).max(2).optional(),
+});
+
+/** The chat list: a kind (and an NPC for `npc`), a page size, and the cursor the last page handed back. */
+const ConversationQuery = z.object({
+  kind: z.enum(['fixer', 'npc']).optional(),
+  npcRef: z.string().regex(UUID_RE).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  cursor: z.string().max(400).optional(),
 });
 
 const DraftQuery = z.object({
@@ -514,10 +523,36 @@ export default async function fixerPlugin(app: FastifyInstance): Promise<void> {
   });
 
   // --- FR12.1: conversation history ---------------------------------------
+  /** Newest save first, a page at a time: `{ conversations, nextCursor }`. */
   app.get('/api/campaigns/:id/fixer/conversations', async (req, reply) => {
     const { id } = req.params as { id: string };
     const campaignId = gmFor(req, id);
-    return reply.send({ conversations: await listConversations(app.db, campaignId) });
+    const query = ConversationQuery.safeParse(req.query ?? {});
+    if (!query.success) throw httpError(400, 'bad_request', 'invalid query', query.error.issues);
+    const { kind, npcRef, limit, cursor } = query.data;
+    // An NPC names its own kind.
+    return reply.send(
+      await listConversations(app.db, campaignId, { kind: npcRef ? 'npc' : kind, npcRef, limit, cursor }),
+    );
+  });
+
+  /**
+   * Delete a chat, and the files the GM uploaded into it that nothing else
+   * uses. A chat the Fixer is still answering in is refused with 409
+   * `conversation_running` — cancel first — so a turn never saves into a
+   * chat that is gone. Another campaign's chat is a 404.
+   */
+  app.delete('/api/fixer/conversations/:id', async (req, reply) => {
+    const campaignId = gmFor(req, undefined);
+    const { id } = req.params as { id: string };
+    if (currentRun(campaignId)?.conversationId === id) {
+      throw httpError(409, 'conversation_running', 'the Fixer is still answering in this chat — cancel it first');
+    }
+    const gone = await deleteConversation(app.db, campaignId, id);
+    const files = await removeChatFiles(app.db, campaignId, chatFileIds(gone.messages, gone.memory));
+    // Every GM screen drops it from its list, and a panel showing it starts fresh.
+    app.hub.emitEphemeral(campaignId, { type: 'fixer.conversation', payload: { id, deleted: true }, visibility: 'gm' });
+    return reply.send({ deleted: id, files });
   });
 
   app.get('/api/fixer/conversations/:id', async (req, reply) => {

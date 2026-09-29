@@ -536,18 +536,24 @@ export const bookItems = pgTable(
 // AI (M12)
 // ---------------------------------------------------------------------------
 
-export const aiConversations = pgTable('ai_conversations', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  campaignId: uuid('campaign_id')
-    .notNull()
-    .references(() => campaigns.id, { onDelete: 'cascade' }),
-  kind: text('kind').$type<'fixer' | 'npc'>().notNull(),
-  npcRef: uuid('npc_ref'),
-  messages: jsonb('messages').notNull().default([]),
-  /** The Fixer's curated memory of this chat — brief, fold point, attachments (fixer/chat/memory.ts). */
-  memory: jsonb('memory').notNull().default({}),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-});
+export const aiConversations = pgTable(
+  'ai_conversations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    campaignId: uuid('campaign_id')
+      .notNull()
+      .references(() => campaigns.id, { onDelete: 'cascade' }),
+    kind: text('kind').$type<'fixer' | 'npc'>().notNull(),
+    npcRef: uuid('npc_ref'),
+    messages: jsonb('messages').notNull().default([]),
+    /** The Fixer's curated memory of this chat — brief, fold point, attachments (fixer/chat/memory.ts). */
+    memory: jsonb('memory').notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /** Last save — what the chat list sorts by (0017). */
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('ai_conversations_campaign_updated_idx').on(t.campaignId, t.updatedAt)],
+);
 
 export const aiGenerations = pgTable('ai_generations', {
   id: uuid('id').primaryKey().defaultRandom(),

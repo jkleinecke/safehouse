@@ -29,6 +29,8 @@ export interface AiRun {
   label: string;
   startedAt: number;
   controller: AbortController;
+  /** The chat a chat run is answering in, once known — the chat list marks it. */
+  conversationId?: string;
 }
 
 export interface AiActivity {
@@ -37,6 +39,7 @@ export interface AiActivity {
   label: string;
   /** ISO — when it started, so a client can show elapsed time from its own clock. */
   since: string;
+  conversationId?: string;
 }
 
 const runs = new Map<string, AiRun>();
@@ -44,7 +47,13 @@ const runs = new Map<string, AiRun>();
 export function currentRun(campaignId: string): AiActivity | null {
   const run = runs.get(campaignId);
   if (!run) return null;
-  return { runId: run.id, kind: run.kind, label: run.label, since: new Date(run.startedAt).toISOString() };
+  return {
+    runId: run.id,
+    kind: run.kind,
+    label: run.label,
+    since: new Date(run.startedAt).toISOString(),
+    ...(run.conversationId ? { conversationId: run.conversationId } : {}),
+  };
 }
 
 function announce(hub: ActivityHub | undefined, campaignId: string, payload: Record<string, unknown>): void {
@@ -78,6 +87,18 @@ export function isCancelled(err: unknown, signal?: AbortSignal): boolean {
   return false;
 }
 
+/** 409 `ai_busy` when the campaign's AI is already running — before a route writes anything. */
+export function assertIdle(campaignId: string): void {
+  const existing = runs.get(campaignId);
+  if (existing) {
+    throw httpError(409, 'ai_busy', `the Fixer is still ${existing.label} — cancel it or wait`, {
+      runId: existing.id,
+      kind: existing.kind,
+      label: existing.label,
+    });
+  }
+}
+
 /**
  * Run one AI job for a campaign: the lock, the signal, the announcements.
  * Rejects with 409 `ai_busy` if one is already running, 499 `ai_cancelled`
@@ -90,14 +111,7 @@ export async function withRun<T>(
   label: string,
   fn: (signal: AbortSignal, run: AiRun) => Promise<T>,
 ): Promise<T> {
-  const existing = runs.get(campaignId);
-  if (existing) {
-    throw httpError(409, 'ai_busy', `the Fixer is still ${existing.label} — cancel it or wait`, {
-      runId: existing.id,
-      kind: existing.kind,
-      label: existing.label,
-    });
-  }
+  assertIdle(campaignId);
   const run: AiRun = { id: randomUUID(), campaignId, kind, label, startedAt: Date.now(), controller: new AbortController() };
   runs.set(campaignId, run);
   announce(hub, campaignId, { state: 'busy', ...currentRun(campaignId) });

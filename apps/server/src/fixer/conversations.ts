@@ -8,10 +8,14 @@
  * prompt and the situation snapshot are NEVER stored — they are rebuilt every
  * turn so a live snapshot can never go stale (FR12.18).
  */
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql, type SQL } from 'drizzle-orm';
 import { aiConversations, type Db } from '@safehouse/db';
 import { httpError } from '../services/auth.js';
+import { currentRun } from './activity.js';
 import type { ChatMessage } from './llm.js';
+
+/** A uuid-shaped id; anything else is "not found" rather than a Postgres cast error. */
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** History replayed into each turn (older turns stay in the db, unsent). */
 export const HISTORY_WINDOW = 40;
@@ -50,6 +54,7 @@ export async function loadConversation(
   opts: { kind: 'fixer' | 'npc'; conversationId?: string; npcRef?: string },
 ): Promise<ConversationHandle> {
   if (opts.conversationId) {
+    if (!UUID_RE.test(opts.conversationId)) throw httpError(404, 'not_found', 'unknown conversation');
     const row = (
       await db
         .select()
@@ -73,7 +78,7 @@ export async function loadConversation(
 }
 
 export async function saveConversation(db: Db, id: string, messages: ChatMessage[]): Promise<void> {
-  await db.update(aiConversations).set({ messages }).where(eq(aiConversations.id, id));
+  await db.update(aiConversations).set({ messages, updatedAt: new Date() }).where(eq(aiConversations.id, id));
 }
 
 /**
@@ -82,15 +87,16 @@ export async function saveConversation(db: Db, id: string, messages: ChatMessage
  * `messages` alone when the memory has not changed.
  */
 export async function saveChat(db: Db, id: string, messages: unknown[], memory?: unknown): Promise<void> {
+  const updatedAt = new Date();
   await db
     .update(aiConversations)
-    .set(memory === undefined ? { messages } : { messages, memory })
+    .set(memory === undefined ? { messages, updatedAt } : { messages, memory, updatedAt })
     .where(eq(aiConversations.id, id));
 }
 
 /** Just the memory — calibration after a turn, without re-writing the transcript. */
 export async function saveMemory(db: Db, id: string, memory: unknown): Promise<void> {
-  await db.update(aiConversations).set({ memory }).where(eq(aiConversations.id, id));
+  await db.update(aiConversations).set({ memory, updatedAt: new Date() }).where(eq(aiConversations.id, id));
 }
 
 /**
@@ -122,28 +128,116 @@ export interface ConversationSummary {
   messageCount: number;
   title: string;
   createdAt: string;
+  /** Last save; the list is newest first by this. */
+  updatedAt: string;
+  /** The Fixer is answering in this chat right now. */
+  running: boolean;
 }
 
+export interface ConversationPage {
+  conversations: ConversationSummary[];
+  /** Hand back as `cursor` for the next page; null on the last one. */
+  nextCursor: string | null;
+}
+
+export interface ListConversationsOptions {
+  kind?: 'fixer' | 'npc' | undefined;
+  npcRef?: string | undefined;
+  limit?: number | undefined;
+  cursor?: string | undefined;
+}
+
+/** A save time to the microsecond, as Postgres keeps it — a JS Date would round it off. */
+const CURSOR_AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
+
+function encodeCursor(at: string, id: string): string {
+  return Buffer.from(JSON.stringify([at, id])).toString('base64url');
+}
+
+function decodeCursor(cursor: string): { at: string; id: string } {
+  try {
+    const [at, id] = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as unknown[];
+    if (typeof at === 'string' && CURSOR_AT.test(at) && typeof id === 'string' && UUID_RE.test(id)) return { at, id };
+  } catch {
+    // falls through to the 400
+  }
+  throw httpError(400, 'bad_request', 'invalid cursor');
+}
+
+/**
+ * A page of the campaign's chats, last saved first. Keyset paging on
+ * (updated_at, id), so a chat saved mid-browse moves to the top rather than
+ * shifting the page under the reader. Only the first few GM messages leave
+ * the database, for the title — a transcript can run to megabytes.
+ */
 export async function listConversations(
   db: Db,
   campaignId: string,
-  limit = 25,
-): Promise<ConversationSummary[]> {
+  opts: ListConversationsOptions = {},
+): Promise<ConversationPage> {
+  const limit = Math.min(Math.max(Math.floor(opts.limit ?? 25), 1), 100);
+  // An empty chat is a thread that never got its first answer started — not worth a line.
+  const where: SQL[] = [eq(aiConversations.campaignId, campaignId), sql`${aiConversations.messages} <> '[]'::jsonb`];
+  if (opts.kind) where.push(eq(aiConversations.kind, opts.kind));
+  if (opts.npcRef) where.push(eq(aiConversations.npcRef, opts.npcRef));
+  if (opts.cursor) {
+    const { at, id } = decodeCursor(opts.cursor);
+    where.push(sql`(${aiConversations.updatedAt}, ${aiConversations.id}) < (${at}::timestamptz, ${id}::uuid)`);
+  }
+  const messages = aiConversations.messages;
   const rows = await db
-    .select()
+    .select({
+      id: aiConversations.id,
+      kind: aiConversations.kind,
+      npcRef: aiConversations.npcRef,
+      createdAt: aiConversations.createdAt,
+      updatedAt: aiConversations.updatedAt,
+      at: sql<string>`to_char(${aiConversations.updatedAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+      count: sql<number>`case when jsonb_typeof(${messages}) = 'array' then jsonb_array_length(${messages}) else 0 end`,
+      firstUsers: sql<unknown>`case when jsonb_typeof(${messages}) = 'array' then (
+        select jsonb_agg(u.value) from (
+          select e.value from jsonb_array_elements(${messages}) e where e.value->>'role' = 'user' limit 3
+        ) u
+      ) end`,
+    })
     .from(aiConversations)
-    .where(eq(aiConversations.campaignId, campaignId))
-    .orderBy(desc(aiConversations.createdAt))
-    .limit(Math.min(Math.max(limit, 1), 100));
-  return rows.map((row) => {
-    const messages = readMessages(row.messages);
-    return {
+    .where(and(...where))
+    .orderBy(desc(aiConversations.updatedAt), desc(aiConversations.id))
+    .limit(limit + 1);
+  const running = currentRun(campaignId)?.conversationId;
+  const page = rows.slice(0, limit);
+  const last = page[page.length - 1];
+  return {
+    conversations: page.map((row) => ({
       id: row.id,
       kind: row.kind,
       npcRef: row.npcRef,
-      messageCount: messages.length,
-      title: firstUserText(row.messages).slice(0, 120),
+      messageCount: Number(row.count),
+      title: firstUserText(row.firstUsers).slice(0, 120),
       createdAt: row.createdAt.toISOString(),
-    };
-  });
+      updatedAt: row.updatedAt.toISOString(),
+      running: row.id === running,
+    })),
+    nextCursor: rows.length > limit && last ? encodeCursor(last.at, last.id) : null,
+  };
+}
+
+/**
+ * Remove one of this campaign's conversations — another campaign's, or an
+ * unknown id, is a 404. Hands back what it held, so its files can be cleared.
+ */
+export async function deleteConversation(
+  db: Db,
+  campaignId: string,
+  id: string,
+): Promise<{ messages: unknown; memory: unknown }> {
+  if (!UUID_RE.test(id)) throw httpError(404, 'not_found', 'unknown conversation');
+  const row = (
+    await db
+      .delete(aiConversations)
+      .where(and(eq(aiConversations.id, id), eq(aiConversations.campaignId, campaignId)))
+      .returning({ messages: aiConversations.messages, memory: aiConversations.memory })
+  )[0];
+  if (!row) throw httpError(404, 'not_found', 'unknown conversation');
+  return row;
 }

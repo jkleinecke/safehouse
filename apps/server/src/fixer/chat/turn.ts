@@ -22,13 +22,12 @@ import {
   createIdGenerator,
   createUIMessageStream,
   isStepCount,
-  pipeUIMessageStreamToResponse,
   streamText,
   toUIMessageStream,
   type UIMessage,
 } from 'ai';
 import type { Db } from '@safehouse/db';
-import { withRun, type ActivityHub } from '../activity.js';
+import { assertIdle, updateRun, withRun, type ActivityHub } from '../activity.js';
 import { httpError } from '../../services/auth.js';
 import { FIXER_SYSTEM_PROMPT, buildSituationSnapshot, toolsFor } from '../agent.js';
 import { joinSnapshot, whereTheGmIs, type AiContext } from '../context.js';
@@ -51,6 +50,7 @@ import {
 } from './memory.js';
 import { contextWindowFor, languageModelFor, modelIdFor, providerOptionsFor } from './model.js';
 import { newFloorTurn } from './floor-draft.js';
+import { pipeTurnToResponse } from './pipe.js';
 import { RetryLedger, chatTools, toolDefinitionChars } from './tools.js';
 
 /**
@@ -167,7 +167,9 @@ export async function streamFixerTurn(
   const { campaignId, config } = input;
   const slot = input.slot ?? 'primary';
 
-  // Fails as JSON, before the stream exists: an unknown thread is a 404.
+  // Fails as JSON, before the stream exists: busy is a 409 (and leaves no
+  // empty new chat behind), an unknown thread a 404.
+  assertIdle(campaignId);
   const conversation = await loadConversation(db, campaignId, {
     kind: 'fixer',
     ...(input.conversationId !== undefined ? { conversationId: input.conversationId } : {}),
@@ -182,10 +184,15 @@ export async function streamFixerTurn(
     : [...history, input.message!];
   const asked = [...messages].reverse().find((m) => m.role === 'user') ?? messages[messages.length - 1]!;
 
-  await withRun(deps.hub, campaignId, 'chat', 'answering the Fixer chat', async (signal) => {
+  await withRun(deps.hub, campaignId, 'chat', 'answering the Fixer chat', async (signal, run) => {
+    // Named on the run, so the chat list can mark the chat that is busy.
+    run.conversationId = conversation.id;
+    updateRun(deps.hub, run, run.label);
     let memory: ConversationMemory = input.message
       ? await registerAttachments(db, campaignId, input.message, readMemory(conversation.memory))
       : readMemory(conversation.memory);
+    // The question is kept at once, so a chat reopened mid-answer shows it.
+    await saveChat(db, conversation.id, messages, memory);
 
     const window = await contextWindowFor(config);
     const model = languageModelFor(config, slot, window);
@@ -366,8 +373,10 @@ export async function streamFixerTurn(
       },
     });
 
+    // The browser may go mid-answer (the GM closed the panel): the turn still
+    // runs to its end and is saved (pipe.ts).
     reply.hijack();
-    await pipeUIMessageStreamToResponse({ response: reply.raw, stream });
+    await pipeTurnToResponse(reply.raw, stream);
 
     // After the stream: the meter, and the tokens-per-character calibration.
     const result = captured.result;
