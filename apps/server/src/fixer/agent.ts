@@ -61,7 +61,7 @@ export const FIXER_SYSTEM_PROMPT = [
 export interface FixerHub {
   emitEphemeral(
     campaignId: string,
-    input: { type: string; payload: unknown; visibility?: Visibility },
+    input: { type: string; payload: unknown; visibility?: Visibility; toUserId?: string },
   ): void;
 }
 
@@ -162,6 +162,8 @@ export async function buildSituationSnapshot(db: Db, campaignId: string): Promis
 
 interface LoopOptions {
   campaignId: string;
+  /** The chat's owner: its live stream reaches their sockets alone. */
+  userId: string;
   conversation: ConversationHandle;
   systemPrompt: string;
   snapshot: string | null;
@@ -210,6 +212,7 @@ async function runLoop(deps: FixerDeps, opts: LoopOptions): Promise<FixerTurnRes
       type,
       payload: { conversationId, mode: opts.mode, ...payload },
       visibility: 'gm',
+      toUserId: opts.userId,
     });
   };
 
@@ -400,6 +403,7 @@ export async function runFixerChat(
   const slot = input.slot ?? 'primary';
   return runLoop(deps, {
     campaignId: input.campaignId,
+    userId: input.userId,
     conversation,
     systemPrompt: FIXER_SYSTEM_PROMPT,
     snapshot,
@@ -447,6 +451,7 @@ export async function runNpcConverse(
   const systemPrompt = npcSystemPrompt(npc.name, npc.persona, recent.map((e) => `${e.type} @ ${e.ts}`));
   return runLoop(deps, {
     campaignId: input.campaignId,
+    userId: input.userId,
     conversation,
     systemPrompt,
     snapshot: null,

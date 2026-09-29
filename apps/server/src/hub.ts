@@ -48,6 +48,8 @@ export interface EmitInput {
   visibility?: Visibility;
   /** Required for `gm_owner` visibility: the owning user. */
   ownerUserId?: string | null;
+  /** Ephemeral only: this user's sockets alone (a private chat's stream). */
+  toUserId?: string;
 }
 
 /**
@@ -390,6 +392,7 @@ export class Hub {
     const ownerUserId = input.ownerUserId ?? null;
     const frame = JSON.stringify({ type: input.type, payload: input.payload, ephemeral: true });
     for (const client of this.rooms.get(campaignId) ?? []) {
+      if (input.toUserId !== undefined && client.auth.userId !== input.toUserId) continue;
       if (canSee(client.auth, { visibility, ownerUserId })) this.sendRaw(client, frame);
     }
   }

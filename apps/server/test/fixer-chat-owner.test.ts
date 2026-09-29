@@ -12,7 +12,7 @@ import { aiConversations, devices, npcTemplates, users } from '@safehouse/db';
 import { MockLlmServer } from '../src/fixer/mock-llm.js';
 import { resetRunsForTests } from '../src/fixer/activity.js';
 import { hashToken, mintToken } from '../src/services/auth.js';
-import { bootstrapCampaign, joinAs, makeTestApp, type BootstrapResult, type TestApp } from './core-helpers.js';
+import { bootstrapCampaign, joinAs, makeTestApp, wsUrl, WsTestClient, type BootstrapResult, type TestApp } from './core-helpers.js';
 import { disableAi, enableAi } from './fixer-helpers.js';
 
 let t: TestApp;
@@ -22,6 +22,7 @@ const mocks: MockLlmServer[] = [];
 
 beforeAll(async () => {
   t = await makeTestApp('fixer-chat-owner');
+  await t.app.listen({ port: 0, host: '127.0.0.1' });
   boot = await bootstrapCampaign(t.app, 'Two Chairs');
   const user = (await t.db.insert(users).values({ displayName: 'Nightjar' }).returning())[0]!;
   const token = mintToken();
@@ -118,6 +119,30 @@ describe('a Fixer chat', () => {
     expect(await listed(boot.gmToken, boot.campaignId, `?npcRef=${npcId}`)).toEqual([]);
     expect((await converse(boot.gmToken, theirs)).statusCode).toBe(404);
     expect((await converse(other.token, theirs)).statusCode).toBe(200);
+  });
+
+  it("streams live to its starter's sockets alone", async () => {
+    await box();
+    const npcId = (await t.db.select({ id: npcTemplates.id }).from(npcTemplates).where(eq(npcTemplates.campaignId, boot.campaignId)).limit(1))[0]!.id;
+    const mineSock = await WsTestClient.connect(wsUrl(t.app, boot.campaignId, boot.gmToken));
+    const theirSock = await WsTestClient.connect(wsUrl(t.app, boot.campaignId, other.token));
+    try {
+      const res = await t.app.inject({
+        method: 'POST',
+        url: `/api/npcs/${npcId}/converse`,
+        headers: auth(other.token),
+        payload: { campaignId: boot.campaignId, message: 'Who sent you?' },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      await theirSock.next((f) => f.type === 'fixer.done');
+      expect(theirSock.frames.some((f) => f.type === 'fixer.delta')).toBe(true);
+      // The run's idle notice follows the stream on every GM socket.
+      await mineSock.next((f) => f.type === 'ai.activity' && (f.payload as { state?: string }).state === 'idle');
+      expect(mineSock.frames.filter((f) => f.type.startsWith('fixer.'))).toEqual([]);
+    } finally {
+      mineSock.close();
+      theirSock.close();
+    }
   });
 });
 
