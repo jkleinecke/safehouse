@@ -34,6 +34,7 @@ import {
   tokens,
   wikiPages,
   wikiRevisions,
+  wsEvents,
   type Db,
 } from '@safehouse/db';
 import { ScenesService } from '../../services/scenes.js';
@@ -134,6 +135,19 @@ async function fileInUse(db: Db, campaignId: string, id: string): Promise<boolea
         .from(wikiRevisions)
         .where(and(inArray(wikiRevisions.wikiPageId, ownPages), named(wikiRevisions)))
         .limit(1),
+    // Shown to the table once, even if hidden again: the table's feed still names it.
+    () =>
+      db
+        .select({ id: wsEvents.id })
+        .from(wsEvents)
+        .where(
+          and(
+            eq(wsEvents.campaignId, campaignId),
+            eq(wsEvents.type, 'handout.revealed'),
+            sql`${wsEvents.payload}->>'attachmentId' = ${id}`,
+          ),
+        )
+        .limit(1),
   ];
   for (const table of [aiConversations, scenes, wikiPages, characters, builds, npcTemplates, aiGenerations, runs, gameSessions]) {
     checks.push(() =>
@@ -145,8 +159,8 @@ async function fileInUse(db: Db, campaignId: string, id: string): Promise<boolea
 }
 
 /**
- * Clear a deleted chat's files: the chat's own uploads (handouts of this
- * campaign) that nothing else names. Row first, then the bytes, so a failed
+ * Clear a deleted chat's files: the chat's own uploads (GM-only handouts of
+ * this campaign) that nothing else names. Row first, then the bytes, so a failed
  * unlink leaves a stray file rather than a row pointing at nothing.
  */
 export async function removeChatFiles(db: Db, campaignId: string, ids: readonly string[]): Promise<string[]> {
@@ -154,7 +168,8 @@ export async function removeChatFiles(db: Db, campaignId: string, ids: readonly 
   const removed: string[] = [];
   for (const id of ids) {
     const row = await svc.attachment(id).catch(() => null);
-    if (!row || row.campaignId !== campaignId || row.kind !== 'handout') continue;
+    // A handout revealed to the players is theirs too (their handouts list): kept.
+    if (!row || row.campaignId !== campaignId || row.kind !== 'handout' || row.visibility !== 'gm') continue;
     if (await fileInUse(db, campaignId, id)) continue;
     await db.delete(attachments).where(eq(attachments.id, id));
     await rm(svc.attachmentPath(row), { force: true }).catch(() => undefined);

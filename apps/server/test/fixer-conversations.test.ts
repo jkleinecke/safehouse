@@ -217,6 +217,25 @@ describe('deleting a chat', () => {
     expect(again.statusCode).toBe(404);
   });
 
+  it('keeps an upload that was shown to the table, even one hidden again', async () => {
+    const shown = await upload(boot.campaignId);
+    const rehidden = await upload(boot.campaignId);
+    const reveal = (id: string, visibility: 'public' | 'gm') =>
+      t.app.inject({ method: 'POST', url: `/api/handouts/${id}/reveal`, headers: auth(), payload: { visibility } });
+    expect((await reveal(shown.id, 'public')).statusCode).toBe(200);
+    expect((await reveal(rehidden.id, 'public')).statusCode).toBe(200);
+    expect((await reveal(rehidden.id, 'gm')).statusCode).toBe(200);
+    const chatId = await newChat(boot.campaignId, [
+      { id: 'u2', role: 'user', parts: [fileOf(shown.id), fileOf(rehidden.id)] },
+    ]);
+
+    const res = await t.app.inject({ method: 'DELETE', url: `/api/fixer/conversations/${chatId}`, headers: auth() });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toEqual({ deleted: chatId, files: [] });
+    expect(await onDisk(shown.id)).toBe(true);
+    expect(await onDisk(rehidden.id)).toBe(true);
+  });
+
   it("refuses another campaign's chat", async () => {
     const created = await t.app.inject({ method: 'POST', url: '/api/campaigns', headers: auth(), payload: { name: 'Elsewhere' } });
     const away = created.json() as { campaignId: string };
