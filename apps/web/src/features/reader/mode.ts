@@ -99,7 +99,8 @@ export function bookRangeUrl(code: string): string {
  */
 export function nativeBookHref(code: string, pdfPage: number, token?: string | null): string {
   const q = token ? `?token=${encodeURIComponent(token)}` : '';
-  return `${bookRangeUrl(code)}${q}#page=${Math.max(1, Math.round(pdfPage) || 1)}`;
+  // zoom=50 matches the in-app reader's opening zoom.
+  return `${bookRangeUrl(code)}${q}#page=${Math.max(1, Math.round(pdfPage) || 1)}&zoom=50`;
 }
 
 /** The route DESIGN §12 names for the viewer: `/read/:bookCode?p=426`. */

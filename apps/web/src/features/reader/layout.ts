@@ -24,6 +24,8 @@ export const MOBILE_VIEWPORT_WIDTH = 390;
 
 export const MIN_ZOOM = 0.5;
 export const MAX_ZOOM = 6;
+/** Zoom a book opens at: half the column width, so more of the page shows. */
+export const OPEN_ZOOM = 0.5;
 /** One tap of the +/− buttons. */
 export const ZOOM_STEP = 1.25;
 

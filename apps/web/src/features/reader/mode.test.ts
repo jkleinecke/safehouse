@@ -126,9 +126,9 @@ describe('urls', () => {
 
   it('only the iframe fallback carries a token, because it cannot send a header', () => {
     expect(nativeBookHref('SR5', 431, 'dev-token')).toBe(
-      '/files/books/SR5?token=dev-token#page=431',
+      '/files/books/SR5?token=dev-token#page=431&zoom=50',
     );
-    expect(nativeBookHref('SR5', 431)).toBe('/files/books/SR5#page=431');
+    expect(nativeBookHref('SR5', 431)).toBe('/files/books/SR5#page=431&zoom=50');
     expect(nativeBookHref('SR5', 0)).toContain('#page=1');
   });
 

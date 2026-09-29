@@ -123,7 +123,7 @@ describe('the native fallback frame', () => {
     const markup = renderToStaticMarkup(
       <NativeBookFrame code="SR5" pdfPage={SR5_426.pdf} printedPage={426} token="dev-token" />,
     );
-    expect(markup).toContain('src="/files/books/SR5?token=dev-token#page=431"');
+    expect(markup).toContain('src="/files/books/SR5?token=dev-token#page=431&amp;zoom=50"');
     expect(markup).toContain('title="SR5 p.426"');
   });
 

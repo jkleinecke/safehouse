@@ -16,7 +16,7 @@ import { getSession, getToken } from '../../api/session.js';
 import { recordRecentRef, useAddBookmark, useReadInfo } from '../gm/books/api.js';
 import NativeBookFrame from './NativeBookFrame.js';
 import ReaderShell, { type ReaderCalibration } from './ReaderShell.js';
-import { nextZoom } from './layout.js';
+import { OPEN_ZOOM, nextZoom } from './layout.js';
 import {
   resolveReaderMode,
   setNativePreference,
@@ -75,7 +75,9 @@ export default function ReaderCore({
     () => initialMode ?? resolveReaderMode(null, storage()),
   );
   const [pageCount, setPageCount] = useState<number | undefined>(undefined);
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(OPEN_ZOOM);
+  // A different book opens at the opening zoom again.
+  useEffect(() => setZoom(OPEN_ZOOM), [code]);
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [fatal, setFatal] = useState<string | null>(null);

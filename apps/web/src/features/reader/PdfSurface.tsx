@@ -116,6 +116,11 @@ export default function PdfSurface({
     return () => ro.disconnect();
   }, []);
 
+  // A jump or page turn starts at the top of the new page.
+  useEffect(() => {
+    scrollRef.current?.scrollTo?.({ top: 0 });
+  }, [pdfPage, code]);
+
   // --- render the page --------------------------------------------------------
   useEffect(() => {
     const doc = docRef.current;
