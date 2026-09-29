@@ -65,7 +65,7 @@ export function useTvScene(sceneId: string | null) {
     queryKey: [...TV_SCENE_KEY, sceneId],
     queryFn: async () => {
       const asOfEventId = useLiveStore.getState().lastEventId;
-      // The table's copy even for the GM (the sidebar's Preview): the fold
+      // The table's copy even for the GM (the sidebar's TV view): the fold
       // assumes a display's copy, and the preview must show the TV's fog.
       const composed = await apiGet<ComposedSceneRead>(`/api/scenes/${sceneId}?as=table`);
       return { scene: composed.scene, tokens: composed.tokens ?? [], asOfEventId };

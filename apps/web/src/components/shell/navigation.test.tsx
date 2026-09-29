@@ -167,10 +167,12 @@ describe('no dead links', () => {
     expect(html).toContain(`href="/c/${CAMPAIGN}/gm/party"`);
   });
 
-  it('names the display invite instead of only linking the kiosk', () => {
+  it('offers the TV view, which shows only what the players know, and pairing for a separate screen', () => {
     const html = sidebar();
+    expect(html).toContain('data-nav="tv-view"');
+    expect(html).toContain('TV view');
+    expect(html).toMatch(/only what the players know/i);
     expect(html).toContain('data-nav="display-qr"');
-    expect(html).toMatch(/its own display invite/i);
   });
 });
 

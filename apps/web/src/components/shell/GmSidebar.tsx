@@ -3,11 +3,9 @@
  * every screen the GM has appears here, in the order a GM works, and nothing
  * appears here that is not a screen.
  *
- * The old rail hid the party entirely (there was no roster route at all) and
- * offered "TV view ↗", which opened `/tv/:id` on the GM's own laptop where a GM
- * session counts as bound — so the kiosk drew "Standing by / RECONNECTING"
- * instead of telling anyone that the table display needs its own display-role
- * invite. It now says so, and hands over the QR that fixes it.
+ * "TV view ↗" opens `/tv/:id`, which always draws the table's view (only what
+ * the players know), whoever is signed in; "Pair" hands a separate screen its
+ * display invite.
  */
 import { NavLink } from 'react-router-dom';
 import BuildBadge from './BuildBadge.js';
@@ -123,17 +121,17 @@ export default function GmSidebar({
               Pair
             </button>
             <p className="px-3 pt-1 text-[0.7rem] leading-snug text-faint">
-              The TV needs its own display invite — open the kiosk on that screen and scan.
+              Shows only what the players know. A separate screen can pair instead.
             </p>
             <a
               href={`/tv/${campaignId}`}
               target="_blank"
               rel="noreferrer"
-              data-nav="tv-preview"
+              data-nav="tv-view"
               className="block rounded-md px-3 py-1.5 font-label text-xs uppercase tracking-widest text-dim transition-colors hover:bg-panel hover:text-ink"
-              title="Preview the kiosk"
+              title="Open the TV view: only what the players know"
             >
-              Preview ↗
+              TV view ↗
             </a>
           </Section>
         </nav>

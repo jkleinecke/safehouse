@@ -333,7 +333,7 @@ describe('the fog on the TV (FR9.13)', () => {
 
   it("keeps a copy that says the fog with the GM's switch (`enabled`) as it was through a token move", () => {
     // The GM's read has `enabled` and no `active`. The rebuild after the
-    // first move dropped the switch, and the GM's Preview opened.
+    // first move dropped the switch, and the GM's TV view opened.
     const move = () => evt('token.moved', { tokenId: 'wisp', sceneId: 's1', x: 12, y: 5 });
     const on = snapshot({ scene: scene({ fog: { regions: [], revealed: [], revealedShapes: [], enabled: true } }) });
     const moved = mergeSceneEvents(on, [move()]);
