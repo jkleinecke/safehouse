@@ -22,7 +22,8 @@ export interface Size {
 /** The phone width every player view is designed against (§15). */
 export const MOBILE_VIEWPORT_WIDTH = 390;
 
-export const MIN_ZOOM = 0.5;
+/** Below the opening zoom, so − still zooms out from where a book opens. */
+export const MIN_ZOOM = 0.25;
 export const MAX_ZOOM = 6;
 /** Zoom a book opens at: half the column width, so more of the page shows. */
 export const OPEN_ZOOM = 0.5;
