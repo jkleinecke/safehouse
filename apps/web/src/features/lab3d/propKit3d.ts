@@ -35,7 +35,7 @@ import type { Point } from '@safehouse/contracts';
 import type { TileProp } from '@safehouse/rules';
 import { CELL, heightRise, ISO_HALF_H, ISO_HALF_W, type SceneMetrics } from '../grid/geometry.js';
 import { parseColor, shade } from '../grid/stage/colors.js';
-import { DESIGNS, GLASS, PropKit, propPlacement, type PropPen, type PropPlacement, type PropTones } from '../grid/stage/props.js';
+import { DESIGNS, GLASS, PropKit, propPlacement, turnOffset, type PropPen, type PropPlacement, type PropTones } from '../grid/stage/props.js';
 import type { TileDrawDef } from '../grid/types.js';
 import { polygonNormal, type MeshBuilder, type V3 } from './geometry3d.js';
 
@@ -60,6 +60,8 @@ export interface BuildPropOptions {
    * Default on; off shows what the props look like as bare solids.
    */
   hairlines?: boolean;
+  /** Degrees clockwise the design stands at (a multiple of 45), about its footprint (rules: footprint.ts). */
+  angle?: number;
 }
 
 /** Below this opacity a fill is shading — a shadow, a scuff, a light pool — which real lighting replaces, so it is dropped. Glass is kept at any opacity. */
@@ -314,12 +316,10 @@ class PropKit3D extends PropKit {
 
   /** Cell space to world units — the transform `at()` applies, in 3D. */
   world(p: P3): V3 {
-    const { anchor, centre, su, sv, up } = this.place;
-    return [
-      this.col + centre[0] + (p[0] - anchor[0]) * su,
-      this.baseY + (p[2] * up - this.sink) * this.storey,
-      this.row + centre[1] + (p[1] - anchor[1]) * sv,
-    ];
+    const { anchor, centre, su, sv, up, angle } = this.place;
+    // Turned about the footprint centre; `centre` is already the turned one.
+    const [du, dv] = turnOffset((p[0] - anchor[0]) * su, (p[1] - anchor[1]) * sv, angle);
+    return [this.col + centre[0] + du, this.baseY + (p[2] * up - this.sink) * this.storey, this.row + centre[1] + dv];
   }
 
   override at(p: P3): Point {
@@ -533,7 +533,7 @@ export function buildProp(b: MeshBuilder, def: TileDrawDef, col: number, row: nu
     row,
     tonesOf(base, accent),
     cellSeed(col, row),
-    propPlacement(prop, unitM),
+    propPlacement(prop, unitM, opts.angle ?? 0),
     { ...ctx, unitM },
     glow,
     opts.sink ?? 0,

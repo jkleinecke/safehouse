@@ -62,6 +62,7 @@ export function sightModelFor(scene: SightSceneInput, level = 0): SightModel {
         scene.grid?.unitM ?? 1,
         (v) => byId.get(v)?.prop,
         true,
+        layers.angles,
       );
       const objectCells: Record<string, string> = {};
       for (const [key, anchor] of covered) {

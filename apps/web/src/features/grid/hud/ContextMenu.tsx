@@ -88,6 +88,7 @@ export default function ContextMenu({ x, y, about, items, onClose }: ContextMenu
           type="button"
           role="menuitem"
           data-testid={`ctx-${item.id}`}
+          {...(item.title ? { title: item.title } : {})}
           className={
             'block w-full px-3 py-1.5 text-left text-sm hover:bg-deck focus:bg-deck focus:outline-none ' +
             (item.danger ? 'text-danger' : 'text-ink')

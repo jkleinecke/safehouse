@@ -45,6 +45,7 @@ const TOOL_DEFS: Record<GridTool, Omit<ToolDef, 'id'>> = {
   'tile-room': { label: 'Room', glyph: '▣' },
   'tile-area': { label: 'Area', glyph: '▭' },
   tile: { label: 'Brush', glyph: '🖌' },
+  line: { label: 'Line', glyph: '╱' },
   arc: { label: 'Arc wall', glyph: '◠' },
   token: { label: 'Token', glyph: '●' },
   'tile-erase': { label: 'Erase', glyph: '⌫' },

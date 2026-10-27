@@ -321,7 +321,15 @@ export default function Tracker({ campaignId, sceneId = null, emptyAction }: Tra
                   disabled={busy}
                   // Who this screen shows acting: a second press after the order
                   // moved on is refused, instead of skipping the next row.
-                  onClick={() => run(() => postAdvance(encounterId, acting?.combatant.id ?? null))}
+                  onClick={() =>
+                    run(() =>
+                      postAdvance(
+                        encounterId,
+                        acting?.combatant.id ?? null,
+                        encounter ? { turn: encounter.turn, pass: encounter.pass } : undefined,
+                      ),
+                    )
+                  }
                   title="The acting combatant is done; on to the next"
                 >
                   Next ▸

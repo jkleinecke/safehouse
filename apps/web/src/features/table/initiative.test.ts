@@ -15,6 +15,7 @@ import {
   scoreFromRolled,
   stepIndex,
   trackerRows,
+  turnQueue,
   visibleCombatants,
   type Viewer,
 } from './initiative.js';
@@ -371,5 +372,29 @@ describe('the order strip', () => {
     expect(rows[0]).toMatchObject({ rolled: false, state: 'blank', late: true });
     expect(isManualOrder(encounter([], { manualOrder: [] }))).toBe(true);
     expect(isManualOrder(encounter([], { manualOrder: null }))).toBe(false);
+  });
+});
+
+describe('turnQueue', () => {
+  it('lists the acting row, the rest of the pass, holders, then later passes with their scores', () => {
+    const a = combatant({ id: 'a', initScore: 24, actedThisPass: true });
+    const b = combatant({ id: 'b', initScore: 18 });
+    const c = combatant({ id: 'c', initScore: 12, delayed: true });
+    const d = combatant({ id: 'd', initScore: 7 });
+    const enc = encounter([a, b, c, d], { turnOrder: ['a', 'b', 'c', 'd'], activeCombatantId: 'b' });
+    const q = turnQueue(enc, GM).map((e) => `${e.combatant.id}:${e.pass}:${e.score}:${e.state}`);
+    expect(q).toEqual(['b:1:18:acting', 'd:1:7:next', 'c:1:12:holding', 'a:2:14:queued', 'b:2:8:queued', 'c:2:2:queued', 'a:3:4:queued']);
+  });
+
+  it('puts the next pass on deck when this one is ending, and trackerRows agrees', () => {
+    const a = combatant({ id: 'a', initScore: 21, actedThisPass: true });
+    const b = combatant({ id: 'b', initScore: 9 });
+    const enc = encounter([a, b], { turnOrder: ['a', 'b'], activeCombatantId: 'b' });
+    expect(turnQueue(enc, GM).find((e) => e.state === 'next')).toMatchObject({ pass: 2, score: 11, combatant: { id: 'a' } });
+    expect(trackerRows(enc, GM).find((r) => r.combatant.id === 'a')?.state).toBe('next');
+  });
+
+  it('is empty while initiative is gathered', () => {
+    expect(turnQueue(encounter([combatant({ id: 'a' })], { gathering: true }), GM)).toEqual([]);
   });
 });

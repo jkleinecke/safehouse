@@ -401,9 +401,10 @@ export const useGridStore = create<GridUiState>()((set) => ({
       // walls. Leaving the ground tool while one is armed drops back to the
       // brush, because "a rectangle of chairs" is nothing a GM ever meant
       // and a click on a wall with the room tool would build a one-cell hut.
+      // The line lays whatever the brush would, so it stays in hand.
       ...toolPatch(
         s,
-        (s.tool === 'tile-area' || s.tool === 'tile-room') && tileCategory === 'ground'
+        s.tool === 'line' || ((s.tool === 'tile-area' || s.tool === 'tile-room') && tileCategory === 'ground')
           ? s.tool
           : 'tile',
       ),

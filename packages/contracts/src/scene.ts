@@ -325,6 +325,13 @@ export const TileLayerSchema = z.object({
   doors: z.record(z.string(), TileDoorStateSchema).optional(),
   /** Walls at any angle and curved walls (`ArcWallSchema`). */
   arcs: z.array(ArcWallSchema).max(500).optional(),
+  /**
+   * How far painted props are turned, in degrees clockwise — a multiple of 45
+   * from 45 to 315 — keyed by the prop's anchor cell in the `object` layer
+   * ("col,row"). Absent means unturned. The anchor is the top-left square of
+   * the turned prop's bounding box (rules: footprint.ts `propShape`).
+   */
+  angles: z.record(z.string(), z.number().int().multipleOf(45).min(45).max(315)).optional(),
 });
 export type TileLayer = z.infer<typeof TileLayerSchema>;
 

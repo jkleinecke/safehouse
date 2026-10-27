@@ -68,11 +68,15 @@ export default function TilesetBar({ scene }: { scene: Scene }) {
     const painted = sceneLevels(scene).some(
       (floor) => floor.tiles !== undefined && paintedCells(floor.tiles as unknown as Scene['tiles']) > 0,
     );
-    if (!painted) return;
+    // Sent even with nothing painted: the scene must hold the choice, or the
+    // Fixer's floor tools (which read the scene) draw in the old set and the
+    // control snaps back to it when their paint lands.
     switchSet.mutate(
       { sceneId: scene.id, tilesetId: to.id },
       {
-        onSuccess: () => say(`drawn in ${to.name} — undo puts it back`),
+        onSuccess: () => {
+          if (painted) say(`drawn in ${to.name} — undo puts it back`);
+        },
         onError: () => say(`could not switch to ${to.name} — try again`),
       },
     );

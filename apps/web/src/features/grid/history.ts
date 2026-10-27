@@ -164,8 +164,11 @@ export function historyFor(sceneId: string | null | undefined): {
 export type TileLayerName = 'ground' | 'structure' | 'object';
 export const TILE_LAYER_NAMES: readonly TileLayerName[] = ['ground', 'structure', 'object'];
 
-/** What one square held, per layer — the state a stroke's undo restores. */
-export type CellSnapshot = Partial<Record<TileLayerName, string>>;
+/**
+ * What one square held, per layer — the state a stroke's undo restores —
+ * and the angle of the prop anchored there, when it is turned.
+ */
+export type CellSnapshot = Partial<Record<TileLayerName, string>> & { angle?: number };
 
 /** The body a paint request sends, minus the scene it goes to. */
 export interface PaintBody {
@@ -175,6 +178,8 @@ export interface PaintBody {
   clear?: boolean;
   level?: number;
   layer?: TileLayerName;
+  /** Degrees clockwise the props anchored at these squares are turned, a multiple of 45 (0 unturns). */
+  angles?: Record<string, number>;
 }
 
 /**
@@ -198,6 +203,8 @@ export function snapshotBefore(scene: Scene, body: PaintBody): Record<string, Ce
       const id = tiles?.[layer]?.[key];
       if (id !== undefined) cell[layer] = id;
     }
+    const angle = tiles?.angles?.[key];
+    if (angle !== undefined && angle !== 0 && cell.object !== undefined) cell.angle = angle;
     out[key] = cell;
   }
   return out;
@@ -230,6 +237,20 @@ export function restoreBodies(
     }
     return paint;
   };
+  // The angles ride with the object layer's paint: a square repainted without
+  // one goes back unturned, so only the turned ones need saying.
+  const anglesOf = (): Record<string, number> | undefined => {
+    const angles: Record<string, number> = {};
+    for (const key of keys) {
+      const t = before[key]?.angle;
+      if (t !== undefined && before[key]?.object !== undefined) angles[key] = t;
+    }
+    return Object.keys(angles).length > 0 ? angles : undefined;
+  };
+  const withAngles = (layer: TileLayerName, body: PaintBody): PaintBody => {
+    const angles = layer === 'object' ? anglesOf() : undefined;
+    return angles ? { ...body, angles } : body;
+  };
   if (wipe) {
     // The whole floor went (a set switch, or a clear): rebuild it under the
     // set it had, ground first — under another set that first stroke is the
@@ -237,7 +258,7 @@ export function restoreBodies(
     bodies.push({ tilesetId, paint: paintOf('ground'), erase: [], clear: true, level });
     for (const layer of ['structure', 'object'] as const) {
       const paint = paintOf(layer);
-      if (Object.keys(paint).length > 0) bodies.push({ tilesetId, paint, erase: [], level });
+      if (Object.keys(paint).length > 0) bodies.push(withAngles(layer, { tilesetId, paint, erase: [], level }));
     }
     return bodies;
   }
@@ -245,7 +266,7 @@ export function restoreBodies(
   bodies.push({ tilesetId, paint: {}, erase: keys, level });
   for (const layer of TILE_LAYER_NAMES) {
     const paint = paintOf(layer);
-    if (Object.keys(paint).length > 0) bodies.push({ tilesetId, paint, erase: [], level });
+    if (Object.keys(paint).length > 0) bodies.push(withAngles(layer, { tilesetId, paint, erase: [], level }));
   }
   return bodies;
 }
@@ -256,6 +277,8 @@ export function describePaint(body: PaintBody): string {
   const painted = Object.keys(body.paint).length;
   const erased = body.erase.length;
   const n = (k: number, w: string) => `${k} ${w}${k === 1 ? '' : 's'}`;
+  const turned = Object.keys(body.angles ?? {}).length;
+  if (turned > 0 && erased === 0 && turned === painted) return `turn ${n(turned, 'prop')}`;
   if (painted > 0 && erased > 0) return `paint ${n(painted, 'square')} and erase ${n(erased, 'square')}`;
   if (erased > 0) return `erase ${n(erased, 'square')}`;
   return `paint ${n(painted, 'square')}`;

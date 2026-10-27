@@ -5,6 +5,7 @@ import { getSession } from '../../api/session.js';
 import ActionList from './ActionList.js';
 import { useActorActions, type ActionSummary } from './cardApi.js';
 import CardFlow from './CardFlow.js';
+import YourTurn from './YourTurn.js';
 
 export interface SheetActionsProps {
   campaignId: string;
@@ -23,6 +24,8 @@ export default function SheetActions({ campaignId, characterId, characterName, s
 
   return (
     <section className="mt-4" aria-label="Actions">
+      {/* The runner's turn in the live fight: Done from the sheet, the actions right below. */}
+      {!gm && <YourTurn campaignId={campaignId} variant="sheet" />}
       <div className="mono-label mb-2">Actions</div>
       {actions.data ? (
         <ActionList actions={actions.data} onPick={setPicked} />

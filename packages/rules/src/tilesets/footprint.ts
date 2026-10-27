@@ -60,19 +60,111 @@ export function propStandsOnFootprint(prop: TileProp): boolean {
   return !OVERHEAD.has(prop);
 }
 
-/** Squares a design covers on a grid of `unitM` metres a square: across, then down. Never less than one. */
-export function propCells(prop: TileProp, unitM: number): readonly [across: number, down: number] {
-  const [w, d] = PROP_SIZE_M[prop];
-  const m = unitM > 0 ? unitM : 1;
-  return [Math.max(1, Math.round(w / m)), Math.max(1, Math.round(d / m))];
+/**
+ * How far a prop is turned, in degrees clockwise, normalised to a multiple of
+ * 45 in 0..315. A painted prop's angle is kept by its anchor in the floor's
+ * `angles` map; absent is 0.
+ */
+export function normAngle(angle: number | undefined): number {
+  if (angle === undefined || !Number.isFinite(angle)) return 0;
+  const step = Math.round(angle / 45);
+  return (((step % 8) + 8) % 8) * 45;
 }
 
-/** The squares, as `"col,row"` keys, a design anchored at `col,row` covers. */
-export function propCoverage(prop: TileProp, col: number, row: number, unitM: number): string[] {
-  const [w, d] = propCells(prop, unitM);
-  const out: string[] = [];
-  for (let r = row; r < row + d; r += 1) for (let c = col; c < col + w; c += 1) out.push(`${c},${r}`);
-  return out;
+/** Whether an angle (already normalised) lies on a diagonal: 45, 135, 225 or 315. */
+export function isDiagonalAngle(angle: number): boolean {
+  return angle % 90 !== 0;
+}
+
+/**
+ * The squares a design covers, turned: its bounding box in squares, and the
+ * squares inside it it stands on, as offsets right and down from the box's
+ * top-left square — the anchor.
+ */
+export interface PropShape {
+  /** The bounding box, in squares across and down. Never less than one. */
+  across: number;
+  down: number;
+  /** The squares covered, `[dc, dr]` from the anchor, top to bottom and left to right. */
+  cells: ReadonlyArray<readonly [number, number]>;
+  /** The square under the shape's centre, from the anchor. Always one of `cells`. */
+  centre: readonly [number, number];
+}
+
+const shapes = new Map<string, PropShape>();
+
+/**
+ * A design's shape on a grid of `unitM` metres a square, turned `angle`
+ * degrees clockwise about its centre (`normAngle`).
+ *
+ * Square angles keep the rounded footprint: 0 and 180 as drawn, 90 and 270
+ * with across and down swapped, every square of the box covered. On a
+ * diagonal the design's true size (`PROP_SIZE_M` over `unitM`) is turned
+ * about its centre; the box is the square that holds it, ceil((w + d) / √2)
+ * squares a side, and the squares covered are those whose centre lies inside
+ * the turned rectangle — always at least the square under its centre, so even
+ * a stool turned on the diagonal stands somewhere.
+ *
+ * The anchor is the box's top-left square at every angle, so turning a prop
+ * never moves its anchor (and its selection); the shape may shift a little
+ * about it instead.
+ */
+export function propShape(prop: TileProp, unitM: number, angle?: number): PropShape {
+  const m = unitM > 0 ? unitM : 1;
+  const a = normAngle(angle);
+  const id = `${prop}|${m}|${a}`;
+  const hit = shapes.get(id);
+  if (hit !== undefined) return hit;
+  const [wm, dm] = PROP_SIZE_M[prop];
+  const w = wm / m;
+  const d = dm / m;
+  let shape: PropShape;
+  if (!isDiagonalAngle(a)) {
+    const across0 = Math.max(1, Math.round(w));
+    const down0 = Math.max(1, Math.round(d));
+    const [across, down] = a % 180 === 90 ? [down0, across0] : [across0, down0];
+    const cells: Array<readonly [number, number]> = [];
+    for (let r = 0; r < down; r += 1) for (let c = 0; c < across; c += 1) cells.push([c, r]);
+    shape = { across, down, cells, centre: [Math.floor(across / 2), Math.floor(down / 2)] };
+  } else {
+    const side = Math.max(1, Math.ceil((w + d) / Math.SQRT2 - 1e-9));
+    const half = side / 2;
+    const rad = (a * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    const centre: readonly [number, number] = [Math.floor(half), Math.floor(half)];
+    const cells: Array<readonly [number, number]> = [];
+    const EPS = 1e-9;
+    for (let r = 0; r < side; r += 1) {
+      for (let c = 0; c < side; c += 1) {
+        // The square's centre from the shape's, turned back into the design's own frame.
+        const x = c + 0.5 - half;
+        const y = r + 0.5 - half;
+        const u = x * cos + y * sin;
+        const v = -x * sin + y * cos;
+        const inside = Math.abs(u) <= w / 2 + EPS && Math.abs(v) <= d / 2 + EPS;
+        if (inside || (c === centre[0] && r === centre[1])) cells.push([c, r]);
+      }
+    }
+    shape = { across: side, down: side, cells, centre };
+  }
+  shapes.set(id, shape);
+  return shape;
+}
+
+/**
+ * Squares a design's bounding box spans on a grid of `unitM` metres a square,
+ * turned `angle` degrees (`propShape`): across, then down. Never less than
+ * one. The box reaches right and down from the anchor.
+ */
+export function propCells(prop: TileProp, unitM: number, angle?: number): readonly [across: number, down: number] {
+  const s = propShape(prop, unitM, angle);
+  return [s.across, s.down];
+}
+
+/** The squares, as `"col,row"` keys, a design anchored at `col,row` (turned `angle` degrees) covers. */
+export function propCoverage(prop: TileProp, col: number, row: number, unitM: number, angle?: number): string[] {
+  return propShape(prop, unitM, angle).cells.map(([dc, dr]) => `${col + dc},${row + dr}`);
 }
 
 /**
@@ -89,12 +181,21 @@ export function propCoverage(prop: TileProp, col: number, row: number, unitM: nu
  * `standingOnly` leaves out what hangs overhead — the squares under a
  * tree's crown or a ceiling light — for the questions a floor answers:
  * can I step here, can I see past it.
+ *
+ * `angles` is the floor's map of turned props, keyed by anchor: a turned prop
+ * covers its turned shape (`propShape`). A prop turned on the diagonal has
+ * its anchor at the corner of its box, which may be bare floor: for the
+ * floor's questions (`standingOnly`) that anchor is not its square unless
+ * the shape covers it, and if it hangs overhead it stands on the square
+ * under its centre instead. Picking it (not `standingOnly`) still finds it
+ * by its anchor, so a selection made of the anchor holds.
  */
 export function objectCoverage(
   objects: Readonly<Record<string, string>> | undefined,
   unitM: number,
   propOf: (value: string) => TileProp | undefined,
   standingOnly = false,
+  angles?: Readonly<Record<string, number>>,
 ): Map<string, string> {
   const out = new Map<string, string>();
   if (!objects) return out;
@@ -105,12 +206,26 @@ export function objectCoverage(
     })
     .filter((a) => Number.isFinite(a.c) && Number.isFinite(a.r))
     .sort((a, b) => a.r - b.r || a.c - b.c);
-  for (const a of anchors) out.set(a.key, a.key);
+  const diagonal = (a: { key: string }, prop: TileProp | undefined): boolean =>
+    prop !== undefined && isDiagonalAngle(normAngle(angles?.[a.key]));
+  for (const a of anchors) {
+    if (standingOnly && diagonal(a, propOf(objects[a.key]!))) continue;
+    out.set(a.key, a.key);
+  }
   for (const a of anchors) {
     const prop = propOf(objects[a.key]!);
     if (prop === undefined) continue;
-    if (standingOnly && !propStandsOnFootprint(prop)) continue;
-    for (const k of propCoverage(prop, a.c, a.r, unitM)) {
+    const angle = angles?.[a.key];
+    if (standingOnly && !propStandsOnFootprint(prop)) {
+      // Overhead: its anchor alone — or, turned on the diagonal, the square under its centre.
+      if (diagonal(a, prop)) {
+        const [dc, dr] = propShape(prop, unitM, angle).centre;
+        const k = `${a.c + dc},${a.r + dr}`;
+        if (!out.has(k)) out.set(k, a.key);
+      }
+      continue;
+    }
+    for (const k of propCoverage(prop, a.c, a.r, unitM, angle)) {
       if (!out.has(k)) out.set(k, a.key);
     }
   }

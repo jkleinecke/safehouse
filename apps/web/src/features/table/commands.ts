@@ -12,6 +12,7 @@ import { pickEncounterId } from '../grid/hydration.js';
 import { getSession } from '../../api/session.js';
 import { getLiveSocket } from '../../live/socket.js';
 import { useLiveStore } from '../../live/store.js';
+import { withViewerRows } from '../../live/merge.js';
 
 /** Send a typed WS command on the campaign's live socket. */
 export function sendCommand(campaignId: string, cmd: WsCommandInput): boolean {
@@ -82,8 +83,29 @@ export function patchEncounter(
  * "Next ▸" over REST, so the button can wait for the answer. `expectedActorId`
  * is who this screen shows acting: a second press after the order moved on is refused.
  */
-export function postAdvance(encounterId: string, expectedActorId: string | null): Promise<unknown> {
-  return apiPost(`/api/encounters/${encounterId}/advance`, { expectedActorId });
+export function postAdvance(
+  encounterId: string,
+  expectedActorId: string | null,
+  /** The turn and pass on screen: the same row can act at the end of one pass and the start of the next. */
+  at?: { turn: number; pass: number },
+): Promise<unknown> {
+  return apiPost(`/api/encounters/${encounterId}/advance`, { expectedActorId, ...seenAt(at) });
+}
+
+const seenAt = (at?: { turn: number; pass: number }) =>
+  at ? { expectedTurn: at.turn, expectedPass: at.pass } : {};
+
+/**
+ * "Done": end the acting row's Action Phase — the GM for anyone, a runner for
+ * their own row while it acts. The same loop as Next, with the same stale
+ * guard, so a double press ends one turn.
+ */
+export function postEndTurn(
+  encounterId: string,
+  expectedActorId: string,
+  at?: { turn: number; pass: number },
+): Promise<unknown> {
+  return apiPost(`/api/encounters/${encounterId}/end-turn`, { expectedActorId, ...seenAt(at) });
 }
 
 /** The GM's levers on the order: a place, never a score (SR5 p.159-161). */
@@ -329,6 +351,22 @@ export function useTrackerEncounter(
     void qc.invalidateQueries({ queryKey: liveKeys.encounter(campaignId) });
   }, [campaignId, liveId, rest, qc, pickedId]);
 
+  // A player's live roster is the shared public frame: what only their own
+  // read knows (which row is theirs, its boxes, the token links) is laid back
+  // on by id, and a frame the read cannot explain asks the server again.
+  const scope = useLiveStore((s) => s.encounterScope);
+  const viewerLive = useMemo(
+    () => (live && scope !== 'gm' && live.combatants && live.combatants.length > 0 ? withViewerRows(live, rest) : null),
+    [live, rest, scope],
+  );
+  const rereadFor = useRef<string | null>(null);
+  const reread = viewerLive?.reread ?? null;
+  useEffect(() => {
+    if (!campaignId || !reread || rereadFor.current === reread) return;
+    rereadFor.current = reread;
+    void qc.invalidateQueries({ queryKey: liveKeys.encounter(campaignId) });
+  }, [campaignId, reread, qc]);
+
   const encounter = useMemo<Encounter | null>(() => {
     // A picked fight (or the scene's) is the one on screen whatever the socket is announcing.
     const target = pickedId ?? (sceneId ? (rest?.id ?? null) : null);
@@ -336,12 +374,12 @@ export function useTrackerEncounter(
     // A scene with no fight yet shows none, not another scene's prep fight off the socket.
     if (sceneId && !pickedId && !rest && live && live.sceneId !== sceneId && live.state !== 'live') return null;
     if (!live) return rest;
-    if (live.combatants && live.combatants.length > 0) return live;
+    if (live.combatants && live.combatants.length > 0) return viewerLive?.encounter ?? live;
     if (rest && rest.id === live.id) {
       return { ...rest, ...live, ...(rest.combatants ? { combatants: rest.combatants } : {}) };
     }
     return live;
-  }, [live, rest, pickedId, sceneId]);
+  }, [live, rest, pickedId, sceneId, viewerLive]);
 
   return {
     encounter,

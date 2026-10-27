@@ -228,6 +228,11 @@ function setOf(id: string): Tileset {
   return set;
 }
 
+/** The set a draft's floor is drawn in on the scene now; the draft's own when the scene names none. */
+function setNow(scene: Awaited<ReturnType<typeof sceneOf>>, draft: FloorDraft): string {
+  return levelTiles(scene, draft.level)?.tilesetId ?? scene.tiles?.tilesetId ?? draft.tilesetId;
+}
+
 async function sceneOf(ctx: ToolContext, sceneId: string) {
   const row = await new ScenesService(ctx.db).sceneRow(sceneId).catch(() => null);
   if (!row || row.campaignId !== ctx.campaignId) {
@@ -300,10 +305,14 @@ export function floorTools(deps: FloorToolDeps, guarded: Guarded): ToolSet {
   ): Promise<FloorEditOutput> => {
     const scene = await sceneOf(ctx, draft.sceneId);
     const grid = { cols: scene.grid.cols, rows: scene.grid.rows, unitM: scene.grid.unitM };
+    // The set the scene is drawn in NOW, not the one the draft began in: the
+    // GM may have switched sets between turns, and painting with the old id
+    // would switch the floor back.
+    const tilesetId = setNow(scene, draft);
     const before = previous ? compileFloorPlan(previous.plan, previous.grid, setOf(previous.tilesetId), { draft: true }) : null;
-    const after = compileFloorPlan(next, grid, setOf(draft.tilesetId), { draft: true });
+    const after = compileFloorPlan(next, grid, setOf(tilesetId), { draft: true });
     const diff = diffFloor(before?.layers ?? null, after.layers, levelTiles(scene, draft.level));
-    memory.floors = { ...memory.floors, [key]: { ...draft, grid, plan: next } };
+    memory.floors = { ...memory.floors, [key]: { ...draft, tilesetId, grid, plan: next } };
     memory.activeFloor = key;
     turn.key = key;
     const seen = new Set(before?.warnings ?? []);
@@ -312,7 +321,7 @@ export function floorTools(deps: FloorToolDeps, guarded: Guarded): ToolSet {
       kind: 'floor-edit',
       sceneId: draft.sceneId,
       level: draft.level,
-      tilesetId: draft.tilesetId,
+      tilesetId,
       title: next.title,
       diff,
       warnings: after.warnings.filter((w) => !seen.has(w)),
@@ -584,8 +593,8 @@ export function floorTools(deps: FloorToolDeps, guarded: Guarded): ToolSet {
       serial(() =>
         guarded('view_floor', async () => {
           const { draft } = current();
-          const set = setOf(draft.tilesetId);
           const scene = await sceneOf(ctx, draft.sceneId);
+          const set = setOf(setNow(scene, draft));
           const grid = { cols: scene.grid.cols, rows: scene.grid.rows, unitM: scene.grid.unitM };
           return { summary: floorPicture(compileFloorPlan(draft.plan, grid, set, { draft: true }), grid, set) };
         }),

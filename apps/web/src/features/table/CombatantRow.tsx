@@ -207,9 +207,12 @@ export default function CombatantRow({
     removeCombatantLocal(c.id);
     deleteCombatant(c.id).catch(() => undefined);
   };
-  // Who may put a number on this row: the GM on any, a runner on their own (FR4.2).
-  const canRoll = live && (isGm || row.own);
-  const enterDice = live && ((isGm && handRolls) || (!isGm && row.own));
+  // Who may put a number on this row: the GM on any, any time; a runner on
+  // their own only while it has no score this turn (a late joiner) — once the
+  // turn runs on it, a change is the GM's (the server refuses it too).
+  const runnerMay = !isGm && row.own && !row.rolled;
+  const canRoll = live && (isGm || runnerMay);
+  const enterDice = live && ((isGm && handRolls) || runnerMay);
 
   /** Drop a status effect (FR4.7) — optimistic, the next event is truth. */
   const removeEffect = (effectId: string) => {

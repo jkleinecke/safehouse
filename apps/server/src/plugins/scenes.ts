@@ -280,6 +280,17 @@ const TilePaintBody = z.object({
    * outcome a GM cannot see happening.
    */
   level: z.number().int().min(0).max(MAX_LEVELS - 1).default(0),
+  /**
+   * Degrees clockwise the props anchored at these cells are turned — a
+   * multiple of 45, 0 for unturned. Only the keys sent change; an object
+   * painted in this stroke with no entry here goes down unturned.
+   */
+  angles: z
+    .record(CellKeySchema, z.number().int().multipleOf(45).min(0).max(315))
+    .refine((p) => Object.keys(p).length <= MAX_STROKE_CELLS, {
+      message: `at most ${MAX_STROKE_CELLS} cells per stroke`,
+    })
+    .optional(),
 });
 
 const TokenCreateBody = z.object({
@@ -1135,6 +1146,23 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
         for (const name of eraseFrom) delete layers[name][key];
       }
 
+      // Props' angles, keyed by anchor. A square whose object went or was
+      // painted afresh loses its angle unless the stroke says it again; an
+      // angle is never left behind on a square with no object in it.
+      const angles: Record<string, number> = { ...((layers as { angles?: Record<string, number> }).angles ?? {}) };
+      if (body.clear && (body.layer === undefined || body.layer === 'object')) {
+        for (const k of Object.keys(angles)) delete angles[k];
+      }
+      if (eraseFrom.includes('object')) for (const key of body.erase) delete angles[key];
+      for (const [key, ref] of Object.entries(body.paint)) {
+        if (layerOf(tileById(body.tilesetId, ref)!) === 'object') delete angles[key];
+      }
+      for (const [key, angle] of Object.entries(body.angles ?? {})) {
+        if (angle === 0) delete angles[key];
+        else angles[key] = angle;
+      }
+      for (const k of Object.keys(angles)) if (layers.object[k] === undefined) delete angles[k];
+
       const painted =
         Object.keys(layers.ground).length +
         Object.keys(layers.structure).length +
@@ -1145,7 +1173,7 @@ export default async function scenesPlugin(app: FastifyInstance): Promise<void> 
 
       // `cells` is written empty on purpose: the legacy field drains as soon
       // as a scene is touched, so the migration is self-retiring.
-      const tiles = { ...layers, cells: {} };
+      const tiles = { ...layers, cells: {}, angles };
       // Level 0 lives in `scene.tiles`; anything above it in `scene.levels`.
       // The split is what keeps every one-floor scene exactly as it was.
       const patch =

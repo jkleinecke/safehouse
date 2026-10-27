@@ -8,7 +8,7 @@ import type { Scene } from '@safehouse/contracts';
 import { useDeleteToken, usePaintBatch, usePaintTiles, usePatchGeometry } from '../api.js';
 import { copySet, eraseBodies, setOfObject } from '../cellSelection.js';
 import { brushSizeStep } from '../fogBar.js';
-import { objectForSelection } from '../paintedObjects.js';
+import { objectForSelection, rotateDelta } from '../paintedObjects.js';
 import { removeSelection } from '../geometryEdit.js';
 import { historyFor, useHistory } from '../history.js';
 import { useGridStore } from '../store.js';
@@ -113,6 +113,21 @@ export function useGridShortcuts(
         }
         e.preventDefault();
         return;
+      }
+      // R turns the selected piece of furniture 45° clockwise, Shift+R
+      // back. Only while a designed prop is selected: otherwise R is still
+      // the room tool.
+      if (isGm && scene && (e.key === 'r' || e.key === 'R') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const s = useGridStore.getState();
+        if (s.selected?.kind === 'painted' && !s.cellSelection) {
+          const obj = objectForSelection(scene, s.activeLevel, s.selected.id);
+          const d = obj ? rotateDelta(obj, e.shiftKey ? -1 : 1) : null;
+          if (obj && d) {
+            paintTiles({ sceneId: scene.id, tilesetId: obj.tilesetId, level: s.activeLevel, ...d });
+            e.preventDefault();
+            return;
+          }
+        }
       }
       // Undo and redo, the keys every editor taught: Ctrl+Z, Ctrl+Shift+Z or
       // Ctrl+Y (Cmd on a Mac). Only a step of the scene on screen.

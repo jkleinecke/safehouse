@@ -100,10 +100,11 @@ import type { Point, Scene, Token } from '@safehouse/contracts';
 import { TILESETS, WALL_THICKNESS, levelTiles, sceneLevels, type LightMap, type LightRow, type VisionMode } from '@safehouse/rules';
 import { LAYERS, allCells, type CellSet } from '../cellSelection.js';
 import { metricsFor, metricsKey, type SceneMetrics } from '../geometry.js';
-import { handlesOf, objectForSelection } from '../paintedObjects.js';
+import { handlesOf, objectForSelection, rotatableId, rotateDelta } from '../paintedObjects.js';
 import type { Stage3DHooks } from '../stageLoader.js';
 import {
   tileDefsFromSets,
+  type MovementRange,
   type MovementThresholds,
   type StageApi,
   type StageOptions,
@@ -113,7 +114,16 @@ import {
   type TileDrawDef,
   type TileRectMode,
 } from '../types.js';
-import { drawAoe, drawArcDraft, drawBrushRing, drawFogDraft, drawRectDraft, drawRuler, drawSegmentDraft } from '../stage/fx.js';
+import {
+  drawAoe,
+  drawArcDraft,
+  drawBrushRing,
+  drawFogDraft,
+  drawMovementRange,
+  drawRectDraft,
+  drawRuler,
+  drawSegmentDraft,
+} from '../stage/fx.js';
 import { brushAnchor, brushCentre, brushRadius } from '../fogBar.js';
 import { C } from '../stage/colors.js';
 import { aoeKey, fogDraftKey, fogKey, fogRegionKey, geometryKey, mapImagesKey, paintedSelectionKey } from '../stage/keys.js';
@@ -137,6 +147,7 @@ import { CoverMasks, drawsTableView, type FogDetail } from './masks.js';
 import { pickStanding, type StandingPick } from './picking.js';
 import { SelectionBoxes, SelectionHandles, boxTops, type BoxView } from './selection.js';
 import { TracedWalls, type TracedLine } from './tracedWalls.js';
+import { RotateButtons } from './rotateButtons.js';
 
 /** How long an un-terminated remote drag ghost keeps overriding a position (the 2D stage's rule). */
 const GHOST_TTL_MS = 4000;
@@ -174,6 +185,8 @@ const ORDER = {
   cameraCones: -17,
   lightReach: -16,
   notes: -15,
+  // A token's walk and run range in a fight: on the floor, under the figures.
+  movementRange: -14,
   markers: 5,
   fog: 10,
   aoe: 11,
@@ -206,6 +219,7 @@ const COVER: Record<Exclude<keyof typeof ORDER, 'fx' | 'markers' | 'paintedSel' 
   cameraCones: 'fog',
   lightReach: 'fog',
   notes: 'fog',
+  movementRange: 'fog',
   fog: 'none',
   aoe: 'none',
   fogDraft: 'none',
@@ -372,6 +386,7 @@ class Stage3D implements StageApi, PointerHost {
   private readonly fogInk: FloorInk;
   private readonly fogLabels: DomLabels;
   private readonly aoeInk: FloorInk;
+  private readonly movementRangeInk: FloorInk;
   private readonly fogDraftInk: FloorInk;
   private readonly segmentInk: FloorInk;
   private readonly rectInk: FloorInk;
@@ -386,6 +401,8 @@ class Stage3D implements StageApi, PointerHost {
   private readonly ghostBoxes: SelectionBoxes;
   /** The selected object's handles, over the canvas where the pointer's hit test looks for them. */
   private readonly handles: SelectionHandles;
+  /** ↺ ↻ beside the selected piece of furniture (`rotateButtons.ts`). */
+  private readonly rotateButtons: RotateButtons;
   /** Bumped whenever the palette changes: the boxes' heights are read from it. */
   private defsVersion = 0;
   /** The camera's forward direction, for the boxes' edges (`boxView`). */
@@ -439,6 +456,8 @@ class Stage3D implements StageApi, PointerHost {
   private lastMapKey = '';
   private lastLightMap: LightMap | null = null;
   private lastLightMapMetrics = '';
+  private lastMovementRange: MovementRange | null = null;
+  private lastMovementRangeMetrics = '';
   private wasPasting = false;
 
   /** The root's size in px, for picking and for placing plates. */
@@ -535,6 +554,7 @@ class Stage3D implements StageApi, PointerHost {
     this.geoInk = this.ink('geometry');
     this.fogInk = this.ink('fog');
     this.aoeInk = this.ink('aoe');
+    this.movementRangeInk = this.ink('movementRange');
     this.fogDraftInk = this.ink('fogDraft');
     this.segmentInk = this.ink('segment');
     this.rectInk = this.ink('rect');
@@ -545,6 +565,7 @@ class Stage3D implements StageApi, PointerHost {
     this.ghostBoxes = new SelectionBoxes({ floorY, renderOrder: ORDER.ghost, style: GHOST_STYLE });
     rt.threeScene.add(this.selBoxes.group, this.ghostBoxes.group);
     this.handles = new SelectionHandles(overlay);
+    this.rotateButtons = new RotateButtons(overlay, (dir) => this.rotateSelected(dir));
     this.marks = new FloorMarks({
       cell: () => this.m.cell,
       floorY: () => this.rt.floor * this.rt.storey,
@@ -990,7 +1011,23 @@ class Stage3D implements StageApi, PointerHost {
       cells === null
         ? this.ghostBoxes.clear()
         : this.ghostBoxes.draw(boxTops(cells, fill ?? [], this.defs, this.rt.storey), this.boxView());
+    // The rotate buttons step aside while something is on its way.
+    this.rotateButtons.setSuppressed(cells !== null);
     if (changed) this.rt.requestRender();
+  }
+
+  /**
+   * The rotate buttons were pressed: turn the selected piece of furniture 45°
+   * as R does — one edit, through the same callback a drag sends, which keeps
+   * it selected (its anchor does not move).
+   */
+  private rotateSelected(dir: 1 | -1): void {
+    const s = this.sceneState;
+    if (this.inert || s.role !== 'gm' || !s.paintEdit || s.selection?.kind !== 'painted') return;
+    const obj = objectForSelection(s.scene, clampLevel(s.scene, s.level ?? 0), s.selection.id);
+    const id = rotatableId(obj);
+    const delta = obj ? rotateDelta(obj, dir) : null;
+    if (obj && id !== null && delta) this.callbacks.onPaintedEdit?.(delta, id, obj.tilesetId);
   }
 
   /** Clear one overlay and show that it is gone. */
@@ -1215,6 +1252,17 @@ class Stage3D implements StageApi, PointerHost {
       drawLightMap(this.lightMapInk, m, lightMap);
     }
 
+    // A fighter's walk and run range (display only): the page hands over the
+    // same object until the token, its turn's start, its pace or the walls
+    // change, so identity is the key, as for the light map. Drawn only on
+    // the floor the token stands on.
+    const movementRange = next.movementRange?.level === level ? next.movementRange : null;
+    if (movementRange !== this.lastMovementRange || mk !== this.lastMovementRangeMetrics) {
+      this.lastMovementRange = movementRange;
+      this.lastMovementRangeMetrics = mk;
+      drawMovementRange(this.movementRangeInk, m, movementRange);
+    }
+
     const ak = aoeKey(next);
     if (ak !== this.lastAoeKey) {
       this.lastAoeKey = ak;
@@ -1252,13 +1300,17 @@ class Stage3D implements StageApi, PointerHost {
       if (multiSet && multi) {
         this.selBoxes.draw(boxTops(multi, fillsOfSet(scene, multiSet), this.defs, this.rt.storey), this.boxView());
         this.handles.set([]);
+        this.rotateButtons.set(null);
       } else if (psel) {
         const fill: GhostFill[] = [{ tilesetId: psel.tilesetId, slots: psel.slots }];
         this.selBoxes.draw(boxTops(psel.covers ?? psel.cells, fill, this.defs, this.rt.storey), this.boxView());
         this.handles.set(handlesOf(psel).map((h) => h.at));
+        // A single designed prop, for the GM: the rotate buttons by its box.
+        this.rotateButtons.set(next.role === 'gm' && rotatableId(psel) !== null ? psel : null);
       } else {
         this.selBoxes.clear();
         this.handles.set([]);
+        this.rotateButtons.set(null);
       }
     }
 
@@ -1482,6 +1534,7 @@ class Stage3D implements StageApi, PointerHost {
     this.badges.layout(this.projectWorld, at);
     // The handles sit where the pointer's hit test projects them: on the floor.
     this.handles.layout((grid) => this.camera.project(grid));
+    this.rotateButtons.layout((grid) => this.camera.project(grid));
     const moved = this.viewMoved();
     if (moved) this.fogLabels.layout((grid) => this.camera.project(grid), true);
     // The markers' names: the zones' and notes' with the floor, the rest with their marks.
@@ -1558,6 +1611,7 @@ class Stage3D implements StageApi, PointerHost {
     this.selBoxes.dispose();
     this.ghostBoxes.dispose();
     this.handles.dispose();
+    this.rotateButtons.dispose();
     this.mapPlane.dispose();
     this.materials.dispose();
     this.belowMaterials.dispose();

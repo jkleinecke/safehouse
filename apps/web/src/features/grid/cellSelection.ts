@@ -45,6 +45,8 @@ export interface Clipboard {
   h: number;
   /** Relative `"dc,dr"` → stored slot, per layer. */
   cells: Record<TileLayerName, Record<string, string>>;
+  /** Relative `"dc,dr"` → degrees the props anchored there are turned (object layer). */
+  angles?: Record<string, number>;
 }
 
 const empty = (): Record<TileLayerName, string[]> => ({ ground: [], structure: [], object: [] });
@@ -53,6 +55,11 @@ function layerMap(scene: Scene, level: number): Record<TileLayerName, Record<str
   const t = levelTiles(scene, level);
   if (!t) return null;
   return { ground: t.ground ?? {}, structure: t.structure ?? {}, object: t.object ?? {} };
+}
+
+/** How far the floor's props are turned, keyed by anchor. */
+function anglesOf(scene: Scene, level: number): Readonly<Record<string, number>> {
+  return levelTiles(scene, level)?.angles ?? {};
 }
 
 export function tilesetOf(scene: Scene, level: number): string | null {
@@ -163,18 +170,30 @@ export function moveBodies(scene: Scene, sel: CellSet, dc: number, dr: number): 
   const tilesetId = tilesetOf(scene, sel.level);
   if (!layers || !tilesetId || (dc === 0 && dr === 0)) return [];
   const bodies: PaintBody[] = [];
+  const was = anglesOf(scene, sel.level);
   for (const l of LAYERS) {
     const cells = sel.cells[l];
     if (cells.length === 0) continue;
     const paint: Record<string, string> = {};
+    // A turned prop keeps its angle where it lands.
+    const angles: Record<string, number> = {};
     for (const k of cells) {
       const slot = layers[l][k];
       if (slot === undefined) continue;
       const { col, row } = parseKey(k);
       paint[key(col + dc, row + dr)] = slot;
+      const t = l === 'object' ? was[k] : undefined;
+      if (t !== undefined && t !== 0) angles[key(col + dc, row + dr)] = t;
     }
     const erase = cells.filter((k) => !(k in paint));
-    bodies.push({ tilesetId, level: sel.level, layer: l, paint, erase });
+    bodies.push({
+      tilesetId,
+      level: sel.level,
+      layer: l,
+      paint,
+      erase,
+      ...(Object.keys(angles).length > 0 ? { angles } : {}),
+    });
   }
   return bodies;
 }
@@ -203,15 +222,19 @@ export function copySet(scene: Scene, sel: CellSet): Clipboard | null {
   const c1 = Math.max(...pts.map((p) => p.col));
   const r1 = Math.max(...pts.map((p) => p.row));
   const cells: Clipboard['cells'] = { ground: {}, structure: {}, object: {} };
+  const was = anglesOf(scene, sel.level);
+  const angles: Record<string, number> = {};
   for (const l of LAYERS) {
     for (const k of sel.cells[l]) {
       const slot = layers[l][k];
       if (slot === undefined) continue;
       const { col, row } = parseKey(k);
       cells[l][key(col - c0, row - r0)] = slot;
+      const t = l === 'object' ? was[k] : undefined;
+      if (t !== undefined && t !== 0) angles[key(col - c0, row - r0)] = t;
     }
   }
-  return { w: c1 - c0 + 1, h: r1 - r0 + 1, cells };
+  return { w: c1 - c0 + 1, h: r1 - r0 + 1, cells, ...(Object.keys(angles).length > 0 ? { angles } : {}) };
 }
 
 /** Where a paste at `at` (the clipboard's top-left) lands, per layer. */
@@ -235,11 +258,16 @@ export function pasteBodies(clip: Clipboard, at: CellRef, level: number, tileset
   const bodies: PaintBody[] = [];
   for (const l of LAYERS) {
     const paint: Record<string, string> = {};
+    const angles: Record<string, number> = {};
     for (const [rk, slot] of Object.entries(clip.cells[l])) {
       const { col, row } = parseKey(rk);
       paint[key(at.col + col, at.row + row)] = slot;
+      const t = l === 'object' ? clip.angles?.[rk] : undefined;
+      if (t !== undefined && t !== 0) angles[key(at.col + col, at.row + row)] = t;
     }
-    if (Object.keys(paint).length > 0) bodies.push({ tilesetId, level, paint, erase: [] });
+    if (Object.keys(paint).length > 0) {
+      bodies.push({ tilesetId, level, paint, erase: [], ...(Object.keys(angles).length > 0 ? { angles } : {}) });
+    }
   }
   return bodies;
 }

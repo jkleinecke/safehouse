@@ -956,7 +956,8 @@ function buildStanding(ctx: LevelCtx, cell: TileCell): void {
     // The kit's sink is in storeys; the water's drop is in squares.
     const sink = ctx.plan.water.water.has(`${cell.col},${cell.row}`) && ctx.storey > 0 ? WATER_DROP / ctx.storey : 0;
     try {
-      buildProp(at.chunk(cell.col, cell.row), def, cell.col, cell.row, { unitM: ctx.unitM, storey: ctx.storey, baseY: ctx.y }, sink > 0 ? { sink } : undefined);
+      const opts = { ...(sink > 0 ? { sink } : {}), ...(cell.angle !== undefined ? { angle: cell.angle } : {}) };
+      buildProp(at.chunk(cell.col, cell.row), def, cell.col, cell.row, { unitM: ctx.unitM, storey: ctx.storey, baseY: ctx.y }, opts);
     } catch {
       // One broken design must not cost the whole floor.
       ctx.propFailures += 1;

@@ -13,6 +13,7 @@ import { trackerRows, type TrackerRow, type Viewer } from '../../table/initiativ
 import Tracker from '../../table/Tracker.js';
 import '../../table/table.css';
 import FightFromMap from './FightFromMap.js';
+import TurnStrip from './TurnStrip.js';
 
 /** The chip's words: the turn, who is up, who is next; or what the fight is waiting on. */
 export function orderSummary(encounter: Encounter | null, rows: readonly TrackerRow[]): { text: string; warn: boolean } {
@@ -23,9 +24,12 @@ export function orderSummary(encounter: Encounter | null, rows: readonly Tracker
     const mine = rows.some((r) => r.own && !r.rolled);
     return { text: mine ? 'roll initiative' : 'initiative', warn: mine };
   }
-  const up = rows.find((r) => r.acting)?.combatant.name ?? (encounter.gmTurn ? 'GM’s turn' : null);
-  const next = rows.find((r) => r.state === 'next')?.combatant.name;
+  const actingRow = rows.find((r) => r.acting);
   const turn = `T${Math.max(1, encounter.turn)}·P${Math.max(1, encounter.pass)}`;
+  if (actingRow?.own) return { text: `${turn} · your turn`, warn: true };
+  const up = actingRow?.combatant.name ?? (encounter.gmTurn ? 'GM’s turn' : null);
+  const nextRow = rows.find((r) => r.state === 'next');
+  const next = nextRow ? (nextRow.own ? 'you' : nextRow.combatant.name) : undefined;
   return { text: [turn, up, next ? `next ${next}` : null].filter(Boolean).join(' · '), warn: false };
 }
 
@@ -85,6 +89,7 @@ export default function OrderChip({ campaignId, sceneId, sceneName, tokens }: Or
               </button>
             </div>
             <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+              <TurnStrip campaignId={campaignId} sceneId={sceneId} />
               <Tracker campaignId={campaignId} sceneId={sceneId} emptyAction={start} />
             </div>
           </div>,

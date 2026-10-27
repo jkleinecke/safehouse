@@ -14,6 +14,7 @@ import {
   arcCells,
   canWalk,
   walkMapFor,
+  walkReach,
   walkStep,
   walkToward,
   type ArcLike,
@@ -399,5 +400,23 @@ describe('walkToward: the drag stops at the wall', () => {
         }
       }
     }
+  });
+});
+
+describe("walkReach (display only: the map's walk and run range)", () => {
+  it('measures open floor as the ruler does and walks the long way round a wall', () => {
+    const s = scene(['.....', '###..', '.....']);
+    const at = (reach: ReturnType<typeof walkReach>, col: number, row: number) =>
+      reach.find((r) => r.col === col && r.row === row)?.distance;
+    const reach = walkReach(s, 0, sq(0, 0), 10);
+    expect(at(reach, 0, 0)).toBe(0);
+    expect(at(reach, 2, 0)).toBe(2);
+    // A straight line it can walk: the ruler's distance, not the octile one.
+    expect(at(walkReach(scene(['.....', '.....']), 0, sq(0, 0), 10), 4, 1)).toBeCloseTo(Math.hypot(4, 1));
+    // Behind the wall: right along the top, down past its end, back along the bottom.
+    expect(at(reach, 0, 2)).toBeCloseTo(8);
+    expect(at(reach, 0, 1)).toBeUndefined(); // the wall itself
+    // Out of range is not listed.
+    expect(at(walkReach(s, 0, sq(0, 0), 7), 0, 2)).toBeUndefined();
   });
 });

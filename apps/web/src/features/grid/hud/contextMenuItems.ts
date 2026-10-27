@@ -21,6 +21,8 @@ export interface MenuItem {
   label: string;
   /** Second line, quieter: what the verb does or why it is here. */
   hint?: string;
+  /** Tooltip: the detail a one-word label leaves out (its shortcut, say). */
+  title?: string;
   danger?: boolean;
   run: () => void;
 }
@@ -55,6 +57,8 @@ export interface ContextMenuActions {
   wallToDoor(wallId: string): void;
   /** Take one square out of a painted wall, splitting it in two. */
   breakWall(cell: string, level: number): void;
+  /** Turn a designed prop 45°, `dir` 1 clockwise; `id` is its painted selection id. */
+  rotateProp(id: string, level: number, dir: 1 | -1): void;
   removeWall(wallId: string): void;
   removeDoor(doorId: string): void;
 }
@@ -343,6 +347,25 @@ function paintedWallItems(input: ContextMenuInput, cell: string, level: number):
   ];
 }
 
+/** A designed piece of furniture, while building: turn it 45° either way, as R and Shift+R do. */
+function paintedPropItems(input: ContextMenuInput, id: string, level: number): MenuItem[] {
+  if (input.role !== 'gm') return [];
+  return [
+    {
+      id: 'prop-rotate-right',
+      label: 'Rotate ↻',
+      title: 'Rotate right (R)',
+      run: () => input.actions.rotateProp(id, level, 1),
+    },
+    {
+      id: 'prop-rotate-left',
+      label: 'Rotate ↺',
+      title: 'Rotate left (Shift+R)',
+      run: () => input.actions.rotateProp(id, level, -1),
+    },
+  ];
+}
+
 /** The menu for this pointer, this viewer, this target. Empty means: no menu. */
 export function contextMenuItems(input: ContextMenuInput): MenuItem[] {
   if (input.role === 'observer' || input.role === 'display') return [];
@@ -360,6 +383,8 @@ export function contextMenuItems(input: ContextMenuInput): MenuItem[] {
       return wallItems(input, t.id);
     case 'paintedWall':
       return paintedWallItems(input, t.cell, t.level);
+    case 'paintedProp':
+      return paintedPropItems(input, t.id, t.level);
     case 'floor':
       return floorItems(input);
     default:

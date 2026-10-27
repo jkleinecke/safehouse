@@ -24,7 +24,7 @@
  * position. `delta()` below is the one place that rule lives.
  */
 import type { Scene } from '@safehouse/contracts';
-import { levelTiles, objectCoverage, propCoverage, tileById } from '@safehouse/rules';
+import { levelTiles, normAngle, objectCoverage, propCoverage, tileById } from '@safehouse/rules';
 
 export type PaintedRole = 'wall' | 'door' | 'prop';
 export type PaintedLayer = 'structure' | 'object';
@@ -50,6 +50,8 @@ export interface PaintedObject {
    * so a move or a delete touches only what is really there.
    */
   covers?: string[];
+  /** Degrees clockwise a piece of furniture is turned (a multiple of 45, 0..315); set for designed props only. */
+  angle?: number;
   /** The line a wall or door runs along; props have none. */
   axis?: Axis;
   /** Bounding box, inclusive, in cells. */
@@ -66,6 +68,8 @@ export interface PaintDelta {
   paint: Record<string, string>;
   erase: string[];
   layer: PaintedLayer;
+  /** Degrees the props anchored at these cells are turned (0 unturns); the server's `angles`. */
+  angles?: Record<string, number>;
 }
 
 export const key = (col: number, row: number): string => `${col},${row}`;
@@ -90,12 +94,13 @@ interface Floor {
   tilesetId: string;
   structure: Record<string, string>;
   object: Record<string, string>;
+  angles: Readonly<Record<string, number>>;
 }
 
 function floorOf(scene: Scene, level: number): Floor | null {
   const t = levelTiles(scene, level);
   if (!t) return null;
-  return { tilesetId: t.tilesetId, structure: t.structure ?? {}, object: t.object ?? {} };
+  return { tilesetId: t.tilesetId, structure: t.structure ?? {}, object: t.object ?? {}, angles: t.angles ?? {} };
 }
 
 function kindAt(floor: Floor, layer: Record<string, string>, k: string): string | null {
@@ -200,7 +205,7 @@ export function pickPainted(
   // Furniture covers as many squares as it is big, and a click on any of
   // them is a click on it.
   const unitM = scene.grid.unitM ?? 1;
-  const at = objectCoverage(floor.object, unitM, (v) => tileById(floor.tilesetId, v)?.prop).get(k);
+  const at = objectCoverage(floor.object, unitM, (v) => tileById(floor.tilesetId, v)?.prop, false, floor.angles).get(k);
   const objectSlot = at === undefined ? undefined : floor.object[at];
   if (at !== undefined && objectSlot !== undefined && prefer !== 'structure') {
     const prop = tileById(floor.tilesetId, objectSlot)?.prop;
@@ -208,8 +213,9 @@ export function pickPainted(
       // A designed piece is ONE piece, however many like it stand beside it:
       // two desks side by side are two desks.
       const a = parseKey(at);
-      const covers = propCoverage(prop, a.col, a.row, unitM);
-      return { ...objectFrom(floor, 'prop', 'object', [at], undefined), covers, ...bounds(covers) };
+      const angle = normAngle(floor.angles[at]);
+      const covers = propCoverage(prop, a.col, a.row, unitM, angle);
+      return { ...objectFrom(floor, 'prop', 'object', [at], undefined), covers, ...bounds(covers), angle };
     }
     // Every cell of the same tile touching this one, 4-connected.
     const start = parseKey(at);
@@ -477,7 +483,10 @@ export function applyEdit(
         const { col, row } = parseKey(k);
         return key(col + mc, row + mr);
       });
-      return { ...result, cells: ghost, delta: delta(obj.layer, before, after) };
+      const d = delta(obj.layer, before, after);
+      // It keeps its angle where it lands (the server unturns a square painted without one).
+      if (obj.angle !== undefined && obj.angle !== 0) d.angles = { [key(result.anchor.col, result.anchor.row)]: obj.angle };
+      return { ...result, cells: ghost, delta: d };
     }
     if (op.kind === 'slide' && !result.noop) {
       const { paint, erase } = followConnected(scene, level, obj, mc, mr, after);
@@ -541,4 +550,31 @@ export function applyEdit(
     anchor: parseKey(at(newLo)),
     noop: newLo === lo && newHi === hi,
   };
+}
+
+/** How far one press of rotate turns a prop, in degrees. */
+export const ROTATE_STEP = 45;
+
+/**
+ * Turn a designed prop 45°: `dir` 1 clockwise, -1 counter-clockwise. The
+ * same slot painted back on its anchor with its new angle, so it is one
+ * request and one undo step like any other edit. The anchor stays put (the
+ * shape turns about the box it spans from there), so the selection holds.
+ * Null for anything that is not a designed prop. Never refused: a turned
+ * footprint may overlap something, and that is the GM's call.
+ */
+export function rotateDelta(obj: PaintedObject, dir: 1 | -1): PaintDelta | null {
+  if (obj.layer !== 'object' || obj.covers === undefined) return null;
+  const anchor = obj.cells[0];
+  const slot = anchor === undefined ? undefined : obj.slots[anchor];
+  if (anchor === undefined || slot === undefined) return null;
+  const angle = normAngle((obj.angle ?? 0) + dir * ROTATE_STEP);
+  return { paint: { [anchor]: slot }, erase: [], layer: 'object', angles: { [anchor]: angle } };
+}
+
+/** The selection id of a designed prop (its anchor), or null when `obj` is not one. */
+export function rotatableId(obj: PaintedObject | null): string | null {
+  if (obj === null || obj.layer !== 'object' || obj.covers === undefined) return null;
+  const anchor = obj.cells[0];
+  return anchor === undefined ? null : paintedId('object', parseKey(anchor));
 }

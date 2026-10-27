@@ -690,6 +690,8 @@ export interface TilePaint {
   level?: number;
   /** Which layer `erase`/`clear` act on; absent means all three. */
   layer?: 'ground' | 'structure' | 'object';
+  /** Degrees clockwise the props anchored at these squares are turned, a multiple of 45 (0 unturns). */
+  angles?: Record<string, number>;
   /** What the selection should be after this edit is undone or redone. Never sent. */
   restore?: SelectionRestore;
 }

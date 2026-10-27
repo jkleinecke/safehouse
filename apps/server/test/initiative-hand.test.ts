@@ -92,7 +92,10 @@ describe('typing the dice, not the sum', () => {
 });
 
 describe('a runner rolls their own row from their phone (FR4.2)', () => {
-  it('may enter or roll their own initiative, and nobody else’s', async () => {
+  it('may enter or roll their own initiative while it is called, and nobody else’s', async () => {
+    // The GM's score is in and nobody called for initiative: a phone may not roll it again.
+    expect((await call('POST', `/api/combatants/${ownRow}/initiative`, player.token, { rolled: 6 })).statusCode).toBe(409);
+    await gm('POST', `/api/encounters/${encounterId}/initiative/call`, {});
     const mine = await call('POST', `/api/combatants/${ownRow}/initiative`, player.token, { rolled: 6 });
     expect(mine.statusCode).toBe(200);
     expect(await score(ownRow)).toBe(14); // 9 + 6 − 1 (still wounded)
@@ -109,6 +112,22 @@ describe('a runner rolls their own row from their phone (FR4.2)', () => {
       (await call('POST', `/api/encounters/${encounterId}/roll-initiative`, player.token, { combatantIds: [ownRow, otherRow] }))
         .statusCode,
     ).toBe(403);
+  });
+
+  it('ends their own turn with Done, once, and never anyone else’s', async () => {
+    await gm('POST', `/api/encounters/${encounterId}/initiative/start`, {});
+    // Started: their score is in, so the dice are the GM's now.
+    expect((await call('POST', `/api/combatants/${ownRow}/initiative`, player.token, { rolled: 6 })).statusCode).toBe(409);
+    const view = await gm('GET', `/api/encounters/${encounterId}`);
+    expect(view['activeCombatantId']).toBe(ownRow);
+    expect((await call('POST', `/api/encounters/${encounterId}/end-turn`, player.token, { expectedActorId: otherRow })).statusCode).toBe(403);
+    // Static is the only row with a score: Done ends pass 1 and Static opens pass 2.
+    const seen = { expectedActorId: ownRow, expectedTurn: view['turn'], expectedPass: view['pass'] };
+    const done = await call('POST', `/api/encounters/${encounterId}/end-turn`, player.token, seen);
+    expect(done.statusCode).toBe(200);
+    expect(Object.keys(done.json() as object)).toEqual(['step']);
+    // A double press ends one turn, even with the same row acting again.
+    expect((await call('POST', `/api/encounters/${encounterId}/end-turn`, player.token, seen)).statusCode).toBe(409);
   });
 });
 

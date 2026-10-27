@@ -222,11 +222,12 @@ export function lightSourcesFor(
         let at: Point = { x: cell.col + 0.5, y: cell.row + 0.5 };
         let own: string[] | undefined;
         if (name === 'object' && hit.tile.prop !== undefined) {
-          const [cw, ch] = propCells(hit.tile.prop, unitM);
+          const angle = layers.angles?.[key];
+          const [cw, ch] = propCells(hit.tile.prop, unitM, angle);
           at = { x: cell.col + cw / 2, y: cell.row + ch / 2 };
           // Its middle is a grid line or corner when a side is even, so the
           // square under it is only one of several the fixture fills.
-          if (cw > 1 || ch > 1) own = propCoverage(hit.tile.prop, cell.col, cell.row, unitM);
+          if (cw > 1 || ch > 1) own = propCoverage(hit.tile.prop, cell.col, cell.row, unitM, angle);
         }
         // A lamp pool painted under a street lamp is two lights in one
         // square; ids stay unique so neither is lost to the other.

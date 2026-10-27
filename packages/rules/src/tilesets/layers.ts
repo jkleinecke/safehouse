@@ -36,6 +36,8 @@ export interface LayeredTiles {
   doors?: Record<string, TileDoorStateLike> | undefined;
   /** Walls at any angle and curved walls (arcs.ts). */
   arcs?: readonly ArcLike[] | undefined;
+  /** Degrees clockwise painted props are turned, keyed by anchor (footprint.ts `propShape`). */
+  angles?: Readonly<Record<string, number>> | undefined;
 }
 
 /** A painted door's state once resolved: both switches answered. */
@@ -51,6 +53,7 @@ export interface ResolvedTileLayers {
   object: Record<string, string>;
   doors?: Record<string, TileDoorState> | undefined;
   arcs?: ArcLike[] | undefined;
+  angles?: Record<string, number> | undefined;
 }
 
 /**
@@ -76,6 +79,8 @@ export function migrateTileLayer(tiles: LayeredTiles): ResolvedTileLayers {
     ...(tiles.doors !== undefined ? { doors: resolveDoors(tiles.doors) } : {}),
     // Arcs are the floor's too, and travel with it untouched.
     ...(tiles.arcs !== undefined ? { arcs: [...tiles.arcs] } : {}),
+    // So do the props' angles, keyed by anchor.
+    ...(tiles.angles !== undefined ? { angles: { ...tiles.angles } } : {}),
   };
 
   const set = tilesetById(tiles.tilesetId);

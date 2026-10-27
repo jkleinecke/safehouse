@@ -47,6 +47,7 @@ import {
   objectForSelection,
   paintedId,
   pickPainted,
+  rotatableId,
   type EditOp,
   type EditResult,
   type PaintedObject,
@@ -54,6 +55,7 @@ import {
 import { allCells, containsCell, moveSelection, pastedSet, pasteBodies, tilesetOf } from '../cellSelection.js';
 import { brushAnchor, brushCentre, brushSquares } from '../fogBar.js';
 import { walkDragTarget } from './walkDrag.js';
+import { snappedLineCells } from './lineTool.js';
 
 type Mode =
   | 'idle'
@@ -65,6 +67,8 @@ type Mode =
   | 'segment'
   | 'painting'
   | 'rect'
+  // The Line tool: a straight run of squares, painted on release.
+  | 'line'
   | 'painted'
   | 'marquee'
   | 'group'
@@ -315,6 +319,11 @@ export class PointerController {
   private rectFrom: Cell = { col: 0, row: 0 };
   private rectTo: Cell = { col: 0, row: 0 };
 
+  // the Line tool (Build) — where the drag began, and the squares its ghost
+  // shows, which are exactly what the release paints
+  private lineFrom: Cell = { col: 0, row: 0 };
+  private lineCells: string[] = [];
+
   // pinch
   private pinchDist = 0;
 
@@ -323,6 +332,13 @@ export class PointerController {
   private readonly onUp = (e: PointerEvent) => this.handleUp(e);
   private readonly onWheel = (e: WheelEvent) => this.handleWheel(e);
   private readonly onContext = (e: Event) => e.preventDefault();
+  /** Escape mid-line takes the line away: nothing has been sent yet. */
+  private readonly onKey = (e: KeyboardEvent) => {
+    if (e.key !== 'Escape' || this.mode !== 'line') return;
+    this.host.drawPaintedGhost?.(null);
+    this.lineCells = [];
+    this.mode = 'idle';
+  };
 
   constructor(
     private readonly el: HTMLElement,
@@ -335,6 +351,7 @@ export class PointerController {
     el.addEventListener('pointerleave', this.onUp);
     el.addEventListener('wheel', this.onWheel, { passive: false });
     el.addEventListener('contextmenu', this.onContext);
+    if (typeof window !== 'undefined') window.addEventListener('keydown', this.onKey);
   }
 
   destroy(): void {
@@ -345,6 +362,7 @@ export class PointerController {
     this.el.removeEventListener('pointerleave', this.onUp);
     this.el.removeEventListener('wheel', this.onWheel);
     this.el.removeEventListener('contextmenu', this.onContext);
+    if (typeof window !== 'undefined') window.removeEventListener('keydown', this.onKey);
     this.cancelLongPress();
     this.pointers.clear();
   }
@@ -728,6 +746,12 @@ export class PointerController {
         this.host.drawRect?.(this.rectMode, this.rectFrom, this.rectTo);
         return;
       }
+      case 'line':
+        // Like the rectangle, nothing is sent until release.
+        this.mode = 'line';
+        this.lineFrom = this.cellAt(grid);
+        this.lineTo(grid, e.shiftKey);
+        return;
       case 'tile':
       case 'tile-erase':
         // Painting continues while the button is held: a floor is a drag, not
@@ -1117,6 +1141,9 @@ export class PointerController {
         this.host.drawRect?.(this.rectMode, this.rectFrom, this.rectTo);
         return;
       }
+      case 'line':
+        this.lineTo(grid, e.shiftKey);
+        return;
       case 'marquee': {
         if (!this.moved) return;
         this.boxTo = this.cellAt(grid);
@@ -1177,6 +1204,22 @@ export class PointerController {
     // A drag that started and ended off the map has nothing to fill.
     if (c0 > c1 || r0 > r1) return null;
     return { c0, r0, c1, r1 };
+  }
+
+  /**
+   * The Line tool's run to the square under `grid`: snapped to the eight
+   * directions (`snappedLineCells`), or at any angle with Shift (Bresenham),
+   * kept to the map, and shown as a ghost of the squares it will paint.
+   */
+  private lineTo(grid: Point, free: boolean): void {
+    const to = this.cellAt(grid);
+    const from = this.lineFrom;
+    const run = free ? [from, ...cellsBetween(from, to)] : snappedLineCells(from, to);
+    const m = this.host.metrics();
+    this.lineCells = run
+      .filter((c) => c.col >= 0 && c.row >= 0 && c.col < m.cols && c.row < m.rows)
+      .map((c) => `${c.col},${c.row}`);
+    this.host.drawPaintedGhost?.(this.lineCells.length > 0 ? this.lineCells : null);
   }
 
   /**
@@ -1297,6 +1340,19 @@ export class PointerController {
           obj.tilesetId,
         );
       }
+    } else if (this.mode === 'line') {
+      // The whole run goes as one brush stroke — each square painted as the
+      // brush would paint it, flushed as one request, one undo step.
+      this.host.drawPaintedGhost?.(null);
+      const cells = this.lineCells;
+      this.lineCells = [];
+      if (cells.length > 0) {
+        for (const key of cells) {
+          const [col, row] = key.split(',').map(Number) as [number, number];
+          this.host.callbacks.onTilePaint?.(col, row, false);
+        }
+        this.host.callbacks.onTileStrokeEnd?.();
+      }
     } else if (this.mode === 'rect') {
       this.host.clearRect?.();
       const b = this.rectBounds();
@@ -1348,6 +1404,9 @@ export class PointerController {
       // whole cell and every thinner target above had to miss first.
       if (state.paintEdit) {
         const c = this.thingCell(screen, grid);
+        // Furniture first, as a click picks it: the bench, not the wall behind it.
+        const propId = c === null ? null : rotatableId(pickPainted(state.scene, level, c, 'object'));
+        if (propId !== null) return { kind: 'paintedProp', id: propId, level };
         const obj = c === null ? null : pickPainted(state.scene, level, c, 'structure');
         if (c !== null && obj?.role === 'wall') return { kind: 'paintedWall', cell: `${c.col},${c.row}`, level };
       }
@@ -1392,6 +1451,10 @@ export class PointerController {
     // A rectangle is abandoned, not filled: unlike a stroke it has laid
     // nothing down yet, so letting go of it simply takes it away.
     if (this.mode === 'rect') this.host.clearRect?.();
+    if (this.mode === 'line') {
+      this.host.drawPaintedGhost?.(null);
+      this.lineCells = [];
+    }
     if (this.mode === 'painted' || this.mode === 'group') {
       this.host.drawPaintedGhost?.(null);
       this.paintedObj = null;

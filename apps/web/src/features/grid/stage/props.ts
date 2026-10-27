@@ -28,7 +28,7 @@
  * the cell sort uses, applied inside one cell.
  */
 import type { Point } from '@safehouse/contracts';
-import { PROP_SIZE_M, propCells, type TileProp } from '@safehouse/rules';
+import { normAngle, PROP_SIZE_M, propCells, type TileProp } from '@safehouse/rules';
 import { groundRadius, worldFromGrid, type SceneMetrics } from '../geometry.js';
 import { C, FACE_FOOT, FACE_SHADE, shade } from './colors.js';
 import type { InkFill, InkStroke } from './ink.js';
@@ -136,9 +136,10 @@ export class PropKit {
    * across and down to its real size, and up from the floor.
    */
   at(p: P3): Point {
-    const { anchor, centre, su, sv, up } = this.place;
-    const u = centre[0] + (p[0] - anchor[0]) * su;
-    const v = centre[1] + (p[1] - anchor[1]) * sv;
+    const { anchor, centre, su, sv, up, angle } = this.place;
+    const [du, dv] = turnOffset((p[0] - anchor[0]) * su, (p[1] - anchor[1]) * sv, angle);
+    const u = centre[0] + du;
+    const v = centre[1] + dv;
     const w = worldFromGrid(this.m, { x: this.col + u, y: this.row + v });
     return { x: w.x, y: w.y - (p[2] * up - this.sink) * this.unit };
   }
@@ -427,6 +428,37 @@ export interface PropPlacement {
   sv: number;
   /** Scale up from the floor. */
   up: number;
+  /**
+   * Degrees clockwise about the footprint centre, a multiple of 45 (0 when
+   * absent). The design is drawn turned, and `centre` is already the centre
+   * of the turned shape's bounding box (rules: footprint.ts `propShape`).
+   */
+  angle?: number;
+}
+
+/**
+ * A design-space offset from the footprint centre, already scaled, turned
+ * `angle` degrees clockwise (x right, y down — so across becomes down).
+ * Square angles are exact; the rest go through cos and sin.
+ */
+export function turnOffset(du: number, dv: number, angle: number | undefined): readonly [number, number] {
+  switch (angle) {
+    case undefined:
+    case 0:
+      return [du, dv];
+    case 90:
+      return [-dv, du];
+    case 180:
+      return [-du, -dv];
+    case 270:
+      return [dv, -du];
+    default: {
+      const rad = (angle * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      return [du * cos - dv * sin, du * sin + dv * cos];
+    }
+  }
 }
 
 const UNIT_PLACEMENT: PropPlacement = { anchor: [0.5, 0.5], centre: [0.5, 0.5], su: 1, sv: 1, up: 1 };
@@ -440,10 +472,12 @@ const UNIT_PLACEMENT: PropPlacement = { anchor: [0.5, 0.5], centre: [0.5, 0.5], 
  * towering over the room it is parked beside. It does shrink with the
  * footprint, so a chair on a 3 m grid is a small chair and not a spike.
  */
-export function propPlacement(prop: TileProp, unitM: number): PropPlacement {
+export function propPlacement(prop: TileProp, unitM: number, angle = 0): PropPlacement {
   const [u0, v0, u1, v1] = FOOTPRINTS[prop];
   const [wm, dm] = PROP_SIZE_M[prop];
-  const [cw, ch] = propCells(prop, unitM);
+  const t = normAngle(angle);
+  // Centred on the bounding box of its turned shape, so it turns about that.
+  const [cw, ch] = propCells(prop, unitM, t);
   const m = unitM > 0 ? unitM : 1;
   const su = wm / m / Math.max(0.05, u1 - u0);
   const sv = dm / m / Math.max(0.05, v1 - v0);
@@ -453,6 +487,7 @@ export function propPlacement(prop: TileProp, unitM: number): PropPlacement {
     su,
     sv,
     up: Math.min(1, su, sv),
+    ...(t !== 0 ? { angle: t } : {}),
   };
 }
 

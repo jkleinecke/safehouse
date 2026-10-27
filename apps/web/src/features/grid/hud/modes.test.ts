@@ -17,7 +17,7 @@ import {
 
 const ALL_TOOLS: GridTool[] = [
   'select', 'ruler', 'aoe', 'pointer', 'fogbrush', 'focus', 'door', 'zone', 'pin', 'camera', 'light', 'note',
-  'tile', 'tile-area', 'tile-room', 'tile-erase', 'arc', 'token',
+  'tile', 'tile-area', 'tile-room', 'line', 'tile-erase', 'arc', 'token',
 ];
 
 describe('the three modes', () => {
@@ -31,7 +31,8 @@ describe('the three modes', () => {
 
   it('keep every mode under Miller’s seven, tools and tabs alike', () => {
     for (const m of ['build', 'prep', 'play'] as const) {
-      expect(MODE_TOOLS[m].length).toBeLessThanOrEqual(9);
+      // Build holds ten since the Line tool (2026-10-26): Select, Erase and eight ways to lay things down.
+      expect(MODE_TOOLS[m].length).toBeLessThanOrEqual(10);
       expect(MODE_TABS[m].length).toBeLessThanOrEqual(7);
     }
   });
@@ -82,6 +83,8 @@ describe('single-key tools', () => {
     expect(shortcutFor('arc')).toBe('W');
     expect(shortcutFor('tile-room')).toBe('R');
     expect(shortcutFor('select')).toBe('V');
+    expect(shortcutFor('line')).toBe('I');
+    expect(modeOfTool('line')).toBe('build');
   });
 
   it('turn a key into a tool, a floor, or nothing — and never for a player’s GM tool', () => {

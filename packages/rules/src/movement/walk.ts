@@ -575,3 +575,137 @@ export function walkToward(scene: WalkSceneInput, level: number, from: Point, ta
   if (start.col === goal.col && start.row === goal.row) return start;
   return walkLine(walkMapFor(scene, level), start, goal);
 }
+
+/** One square a walk reaches, and how far it is along the walk, in squares. */
+export interface WalkReachSquare {
+  col: number;
+  row: number;
+  /** Squares walked to get here from the start square's centre. */
+  distance: number;
+}
+
+/**
+ * The most an octile path (straight steps 1, diagonals √2) is longer than
+ * the straight line to the same square: at 22.5°, √(4 − 2√2). The search
+ * runs this much past the asked-for distance so a square a straight line
+ * reaches in range is not lost to the octile detour that found it.
+ */
+const OCTILE_OVER_STRAIGHT = Math.sqrt(4 - 2 * Math.SQRT2);
+
+/**
+ * How far a runner standing at `from` on floor `level` walks to each square
+ * within `maxSquares` of it, going round walls and closed doors as `canWalk`
+ * does (the same steps, `walkStep`, on the same ground, `walkBounds`).
+ *
+ * DISPLAY ONLY. This is for drawing a token's walk and run range on the
+ * map; nothing may use it to refuse, shorten or clamp a move. The header's
+ * rule stands: there is no movement budget, and the GM allows what the GM
+ * allows.
+ *
+ * A distance agrees with the ruler (`gridDist`, straight-line between
+ * centres) wherever the straight line from the start square is walkable;
+ * where it is not, it is the shortest walk of straight steps (1) and
+ * diagonal steps (√2) round the wall — a little longer than a runner
+ * cutting the corners at any angle would go, which errs on the side of
+ * showing less. The start square is in the list at 0. A `from` that is not
+ * a number, or a `maxSquares` that is not a positive number, reaches
+ * nothing.
+ */
+export function walkReach(
+  scene: WalkSceneInput,
+  level: number,
+  from: Point,
+  maxSquares: number,
+): WalkReachSquare[] {
+  const start = squareOf(from);
+  if (!judgeable(start) || !Number.isFinite(maxSquares) || maxSquares < 0) return [];
+  const map = walkMapFor(scene, level);
+  const ground = walkBounds(scene, from);
+  const searchTo = maxSquares * OCTILE_OVER_STRAIGHT + 1e-9;
+  const span = Math.ceil(searchTo);
+  const bounds = {
+    minCol: Math.max(ground.minCol, start.col - span),
+    minRow: Math.max(ground.minRow, start.row - span),
+    maxCol: Math.min(ground.maxCol, start.col + span),
+    maxRow: Math.min(ground.maxRow, start.row + span),
+  };
+  const width = bounds.maxCol - bounds.minCol + 1;
+  const height = bounds.maxRow - bounds.minRow + 1;
+  if (width <= 0 || height <= 0 || width * height > MAX_SEARCH_SQUARES) return [];
+  const size = width * height;
+  const index = (col: number, row: number) => (row - bounds.minRow) * width + (col - bounds.minCol);
+  const dist = new Float64Array(size).fill(Number.POSITIVE_INFINITY);
+  const done = new Uint8Array(size);
+
+  // Dijkstra over a binary heap of square indices, ordered by `dist`.
+  const heap: number[] = [];
+  const push = (i: number) => {
+    heap.push(i);
+    let k = heap.length - 1;
+    while (k > 0) {
+      const parent = (k - 1) >> 1;
+      if (dist[heap[parent]!]! <= dist[heap[k]!]!) break;
+      [heap[parent], heap[k]] = [heap[k]!, heap[parent]!];
+      k = parent;
+    }
+  };
+  const pop = (): number => {
+    const top = heap[0]!;
+    const last = heap.pop()!;
+    if (heap.length > 0) {
+      heap[0] = last;
+      let k = 0;
+      for (;;) {
+        const l = 2 * k + 1;
+        const r = l + 1;
+        let least = k;
+        if (l < heap.length && dist[heap[l]!]! < dist[heap[least]!]!) least = l;
+        if (r < heap.length && dist[heap[r]!]! < dist[heap[least]!]!) least = r;
+        if (least === k) break;
+        [heap[least], heap[k]] = [heap[k]!, heap[least]!];
+        k = least;
+      }
+    }
+    return top;
+  };
+
+  const first = index(start.col, start.row);
+  dist[first] = 0;
+  push(first);
+  while (heap.length > 0) {
+    const at = pop();
+    if (done[at] === 1) continue;
+    done[at] = 1;
+    const col = bounds.minCol + (at % width);
+    const row = bounds.minRow + Math.floor(at / width);
+    for (let dir = 0; dir < WALK_DIRECTIONS.length; dir += 1) {
+      const [dx, dy] = WALK_DIRECTIONS[dir]!;
+      const nc = col + dx;
+      const nr = row + dy;
+      if (nc < bounds.minCol || nc > bounds.maxCol || nr < bounds.minRow || nr > bounds.maxRow) continue;
+      const next = index(nc, nr);
+      if (done[next] === 1) continue;
+      const d = dist[at]! + (dx !== 0 && dy !== 0 ? Math.SQRT2 : 1);
+      if (d > searchTo || d >= dist[next]!) continue;
+      if (!walkStep(map, col, row, dir)) continue;
+      dist[next] = d;
+      push(next);
+    }
+  }
+
+  const out: WalkReachSquare[] = [];
+  for (let i = 0; i < size; i += 1) {
+    let d = dist[i]!;
+    if (d === Number.POSITIVE_INFINITY) continue;
+    const col = bounds.minCol + (i % width);
+    const row = bounds.minRow + Math.floor(i / width);
+    // The ruler's distance where the straight line is walkable.
+    const straight = Math.hypot(col - start.col, row - start.row);
+    if (straight < d - 1e-9) {
+      const end = walkLine(map, start, { col, row });
+      if (end.col === col && end.row === row) d = straight;
+    }
+    if (d <= maxSquares + 1e-9) out.push({ col, row, distance: d });
+  }
+  return out;
+}

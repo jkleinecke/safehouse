@@ -40,6 +40,8 @@ import {
   withTableVisibility,
   type EncounterRow,
 } from '../services/encounters.js';
+import type { CombatantRow } from '../services/encounters-model.js';
+import { entryThisTurn } from '../services/initiative-recipe.js';
 import { CombatDamageService } from '../services/encounters-damage.js';
 import { InitiativeCallService } from '../services/initiative-call.js';
 import { copiesFor, openExchanges } from '../services/exchanges-model.js';
@@ -164,6 +166,16 @@ const NewTurnBody = z.object({
  */
 const NextBody = z.object({
   expectedActorId: z.string().nullable().optional(),
+  /** The turn and pass the device saw: the same row can act at the end of one pass and the start of the next. */
+  expectedTurn: z.number().int().min(0).optional(),
+  expectedPass: z.number().int().min(0).optional(),
+});
+
+/** "Done": the row the device saw acting — required, it is whose turn ends. */
+const EndTurnBody = z.object({
+  expectedActorId: z.string().min(1),
+  expectedTurn: z.number().int().min(0).optional(),
+  expectedPass: z.number().int().min(0).optional(),
 });
 
 /** The GM's levers on the order: place only, never a score (SR5 p.159-161). */
@@ -286,6 +298,22 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
     return { row, encounter, auth };
   }
 
+  /**
+   * When a runner may put their own initiative in: while the GM is gathering
+   * it, or while their row has no score yet this Combat Turn (a late joiner,
+   * p.160). Once it is in and the turn runs, a fresh roll from a phone would
+   * be a second chance at the dice — any change after that is the GM's.
+   */
+  function assertPlayerMayEnter(row: CombatantRow, encounter: EncounterRow): void {
+    if (encounter.gathering) return;
+    if (!entryThisTurn({ copilot: row.copilot as Record<string, unknown> }, encounter)) return;
+    throw httpError(
+      409,
+      'initiative_in',
+      `${row.name}'s initiative is already in for this Combat Turn; ask the GM to change it`,
+    );
+  }
+
   // --- encounters CRUD (FR4.1) -------------------------------------------
   // This domain owns the plain encounter/combatant paths below; the generator
   // domain (FR10.4–10.6) hangs its builder/readout routes off distinct paths
@@ -404,7 +432,10 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
       if (!body.combatantIds || body.combatantIds.length === 0) {
         throw httpError(403, 'forbidden', 'only the GM rolls initiative for the table');
       }
-      for (const combatantId of body.combatantIds) await ownRowScope(req, combatantId);
+      for (const combatantId of body.combatantIds) {
+        const own = await ownRowScope(req, combatantId);
+        assertPlayerMayEnter(own.row, own.encounter);
+      }
       // Their own dice, and nothing else: the full roster (hidden rows, NPC
       // sheets, the manual order) is the GM's. The table sees the result in
       // the public `encounter.updated` frame like everyone else (FR4.9).
@@ -417,11 +448,12 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
   app.post('/api/combatants/:id/initiative', async (req) => {
     const { id } = req.params as { id: string };
     const body = parse(SetInitiativeBody, req.body);
-    const { auth } = await ownRowScope(req, id);
+    const { auth, row, encounter } = await ownRowScope(req, id);
     // The line itself — base, dice, kind — stays the GM's; a player enters what they rolled.
     if (auth.role !== 'gm' && (body.base !== undefined || body.dice !== undefined || body.kind !== undefined)) {
       throw httpError(403, 'forbidden', 'only the GM changes an initiative line');
     }
+    if (auth.role !== 'gm') assertPlayerMayEnter(row, encounter);
     return { combatant: await service.setInitiative(id, { ...body, by: auth.role === 'gm' ? 'gm' : 'player' }) };
   });
 
@@ -448,7 +480,8 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
   app.post('/api/combatants/:id/initiative/enter', async (req) => {
     const { id } = req.params as { id: string };
     const body = parse(EnterInitiativeBody, req.body);
-    const { auth } = await ownRowScope(req, id);
+    const { auth, row, encounter } = await ownRowScope(req, id);
+    if (auth.role !== 'gm') assertPlayerMayEnter(row, encounter);
     return initiative.enter(id, body, auth.role === 'gm' ? 'gm' : 'player');
   });
 
@@ -481,6 +514,32 @@ export default async function encountersPlugin(app: FastifyInstance): Promise<vo
     const { id } = req.params as { id: string };
     await scope(req, id);
     return service.advance(id, parse(NextBody, req.body));
+  });
+
+  /**
+   * "Done" — the acting row's own end of its Action Phase: the GM, or the
+   * runner whose row is acting, from their phone. The same loop as "Next"
+   * in the same transaction, behind the same stale guard: `expectedActorId`
+   * must be the row acting now, so a double press ends one turn, and a
+   * runner can only ever end their own. A player gets back only the step
+   * (the full roster in the result is the GM's, FR4.9); the table follows
+   * the `encounter.updated` frames like everyone else.
+   */
+  app.post('/api/encounters/:id/end-turn', async (req) => {
+    const { id } = req.params as { id: string };
+    const body = parse(EndTurnBody, req.body);
+    const { encounter, auth } = await scope(req, id, false);
+    if (auth.role !== 'gm') {
+      if (encounter.state !== 'live') throw httpError(404, 'not_found', 'unknown encounter');
+      const row = await service.getCombatant(body.expectedActorId);
+      const mine = await app.authService.characterOwnedBy(encounter.campaignId, auth.userId);
+      if (row.encounterId !== id || row.source !== 'character' || row.sourceId === null || row.sourceId !== mine) {
+        throw httpError(403, 'forbidden', 'only the GM, or the runner whose turn it is, may end it');
+      }
+      const out = await service.advance(id, { ...body, actingOnly: true });
+      return { step: out.step };
+    }
+    return service.advance(id, { ...body, actingOnly: true });
   });
 
   /**

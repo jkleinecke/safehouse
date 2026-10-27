@@ -54,6 +54,7 @@ describe('<Toolbar>', () => {
   it('gives every tooltip the name and the key, and nothing longer', () => {
     expect(toolTitle('arc')).toBe('Arc wall (W)');
     expect(toolTitle('tile-room')).toBe('Room (R)');
+    expect(toolTitle('line')).toBe('Line (I)');
     const html = render(true, 'build', 'arc');
     // Nothing spelled out under the buttons (§3.7) — the tooltip carries it.
     expect(html).not.toContain('data-testid="tool-hint"');

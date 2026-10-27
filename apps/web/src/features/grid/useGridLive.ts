@@ -4,7 +4,9 @@
  * server's refusals of this screen's own commands.
  */
 import { useEffect, useMemo, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import type { Encounter } from '@safehouse/contracts';
+import { withViewerRows } from '../../live/merge.js';
 import { useLiveStore, type LiveErrorFrame } from '../../live/store.js';
 import { useCampaignEncounters, useEncounter } from './api.js';
 import { displayFromEvents, mergeEncounter, pickEncounterId, type DisplayState } from './hydration.js';
@@ -140,7 +142,23 @@ export function useHydratedEncounter(
   );
   // Once live events name a fight, follow that one — it is the fight in play.
   const detail = useEncounter(live?.id ?? restId);
-  return useMemo(() => mergeEncounter(live, detail.data), [live, detail.data]);
+  // A player's frames are the shared public ones: their own read's ownership
+  // and token links go back on by id, and a frame it cannot explain re-reads.
+  const scope = useLiveStore((s) => s.encounterScope);
+  const viewer = useMemo(
+    () => (live && scope !== 'gm' ? withViewerRows(live, detail.data) : null),
+    [live, detail.data, scope],
+  );
+  const qc = useQueryClient();
+  const rereadFor = useRef<string | null>(null);
+  const reread = viewer?.reread ?? null;
+  const liveId = live?.id ?? null;
+  useEffect(() => {
+    if (!liveId || !reread || rereadFor.current === reread) return;
+    rereadFor.current = reread;
+    void qc.invalidateQueries({ queryKey: ['encounter', liveId] });
+  }, [liveId, reread, qc]);
+  return useMemo(() => mergeEncounter(viewer?.encounter ?? live, detail.data), [viewer, live, detail.data]);
 }
 
 /** The campaign's currently active scene id, pushed by `scene.activated`. */

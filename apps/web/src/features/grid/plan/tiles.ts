@@ -10,7 +10,7 @@
  * draws each tile's picture from it.
  */
 import type { TileLayer } from '@safehouse/contracts';
-import { arcPoints, propCells, WALL_THICKNESS, type ArcLike, type TileCut } from '@safehouse/rules';
+import { arcPoints, normAngle, propCells, WALL_THICKNESS, type ArcLike, type TileCut } from '@safehouse/rules';
 import { cellDepth, type SceneMetrics } from '../geometry.js';
 import { tileDefKey, type TileDrawDef } from '../types.js';
 import { mapWater, waterSignature, type WaterEntry, type WaterMap } from './water.js';
@@ -35,6 +35,8 @@ export interface TileDrawInput {
   doors?: Record<string, { open: boolean; locked: boolean }> | undefined;
   /** Walls at any angle and curved walls (rules: arcs.ts). */
   arcs?: readonly ArcLike[] | undefined;
+  /** Degrees clockwise the props in `object` are turned, keyed by anchor. Absent is 0. */
+  angles?: Readonly<Record<string, number>> | undefined;
   defs: Record<string, TileDrawDef>;
 }
 
@@ -63,6 +65,7 @@ export function tileDrawInput(
     object: tiles.object,
     doors: tiles.doors,
     arcs: tiles.arcs,
+    angles: tiles.angles,
     defs,
   };
 }
@@ -175,6 +178,8 @@ export interface TileCell {
    * (rules: footprint.ts). Absent is one square.
    */
   span?: readonly [number, number];
+  /** Degrees clockwise a prop is turned (object layer only); absent is 0. `span` is already its turned bounding box. */
+  angle?: number;
   /**
    * A piece of a wall at any angle or a curved wall (an arc): the stretch of
    * its centre line, in grid units, that falls in this square. Drawn in the
@@ -326,8 +331,18 @@ export function planTiles(m: SceneMetrics, input: TileDrawInput): TilePlan {
       const def = input.defs[tileDefKey(input.tilesetId, tileId)];
       if (def === undefined) continue; // unknown id (tileset changed) — draw nothing, lose nothing
       // Furniture covers as many squares as it is big on this grid.
-      const span = layer === 2 && def.prop !== undefined && !m.designSize ? propCells(def.prop, m.unitM) : undefined;
-      cells.push({ col: at.col, row: at.row, id: tileId, def, layer, ...(span && (span[0] > 1 || span[1] > 1) ? { span } : {}) });
+      // A turned prop spans its turned bounding box (`propShape`).
+      const angle = layer === 2 ? normAngle(input.angles?.[key]) : 0;
+      const span = layer === 2 && def.prop !== undefined && !m.designSize ? propCells(def.prop, m.unitM, angle) : undefined;
+      cells.push({
+        col: at.col,
+        row: at.row,
+        id: tileId,
+        def,
+        layer,
+        ...(span && (span[0] > 1 || span[1] > 1) ? { span } : {}),
+        ...(angle !== 0 ? { angle } : {}),
+      });
       if (def.footprint === 'wall') walls.add(`${at.col},${at.row}`);
     }
   }
@@ -589,6 +604,10 @@ export function cellSignatures(input: TileDrawInput): Map<string, string> {
   add(input.ground, 'g');
   add(input.structure, 's');
   add(input.object, 'o');
+  // A prop turned is a change in its square, and its footprint with it.
+  for (const [key, t] of Object.entries(input.angles ?? {})) {
+    if (input.object?.[key] !== undefined) out.set(key, `${out.get(key) ?? ''}t=${t};`);
+  }
   // A split square reads its neighbours' ground: when they change, it does.
   for (const [key, split] of groundSplits(input)) {
     out.set(key, `${out.get(key) ?? ''}x=${split.sides.map((sd) => sd.id ?? '-').join('/')};`);

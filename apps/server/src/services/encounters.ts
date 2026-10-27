@@ -515,7 +515,8 @@ export class EncountersService {
             initScore: r.detail.score,
             initKind: r.detail.kind,
             ...(r.sheet ? { initBase: r.detail.base } : {}),
-            actedThisPass: false,
+            // A player's own roll never hands back an Action Phase their row already took.
+            ...(opts.by === 'player' ? {} : { actedThisPass: false }),
             // A roll settles a late entry.
             copilot: sql`(${combatants.copilot} - 'lateEntry'::text) || ${JSON.stringify({ ...line, initEntry: r.entry })}::jsonb`,
           })
@@ -586,7 +587,8 @@ export class EncountersService {
     return this.updateCombatant(
       combatantId,
       {
-        ...(score !== undefined ? { initScore: score, actedThisPass: false } : {}),
+        // A player's own entry never hands back an Action Phase their row already took.
+        ...(score !== undefined ? { initScore: score, ...(by === 'player' ? {} : { actedThisPass: false }) } : {}),
         ...(input.base !== undefined ? { initBase: input.base } : {}),
         ...(input.dice !== undefined ? { initDice: input.dice } : {}),
         ...(input.kind !== undefined ? { initKind: input.kind } : {}),
@@ -704,7 +706,22 @@ export class EncountersService {
    */
   async advance(
     encounterId: string,
-    opts: { expectedActorId?: string | null } = {},
+    /**
+     * `actingOnly`: "end my turn" (`POST …/end-turn`) — the same loop, but
+     * only while someone is acting: it never starts a turn that is still
+     * gathering initiative, nor moves a pass on while nobody acts.
+     */
+    opts: {
+      expectedActorId?: string | null;
+      actingOnly?: boolean;
+      /**
+       * Where the device saw the order: the same row can be acting at the end
+       * of one pass and the start of the next (a lone runner, a fast street
+       * samurai), so the id alone lets a double press take both phases.
+       */
+      expectedTurn?: number;
+      expectedPass?: number;
+    } = {},
   ): Promise<AdvanceResult> {
     const head = await this.getEncounter(encounterId);
     return this.hub.atomic(head.campaignId, async (tx) => {
@@ -713,6 +730,19 @@ export class EncountersService {
       const order = await this.orderOptions(encounter, list, tx);
       const acting = nextActorRules(list, order);
       this.assertExpectedActor(acting, opts.expectedActorId);
+      if (
+        (opts.expectedTurn !== undefined && opts.expectedTurn !== encounter.turn) ||
+        (opts.expectedPass !== undefined && opts.expectedPass !== encounter.pass)
+      ) {
+        throw httpError(
+          409,
+          'stale_actor',
+          'the order moved on to a new pass since this was pressed, and nobody was skipped',
+        );
+      }
+      if (opts.actingOnly && (encounter.gathering || encounter.state !== 'live' || !acting)) {
+        throw httpError(409, 'stale_actor', 'nobody is acting now, so there is no turn to end');
+      }
       if (encounter.gathering) {
         const started = await this.startTurn(encounterId, tx);
         return {

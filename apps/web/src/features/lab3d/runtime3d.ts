@@ -88,7 +88,7 @@ import {
   PROP_SIZE_M,
   lightPolygonsFor,
   lightSourcesFor,
-  propCells,
+  propShape,
   propStandsOnFootprint,
   sceneLevels,
   sightModelFor,
@@ -571,10 +571,12 @@ const propReaches = new Map<number, { across: number; down: number }>();
 
 /**
  * How many squares past its anchor, right and down, a piece of furniture can
- * stand on a grid of `unitM` metres a square — the biggest design's
- * footprint less its anchor (`propCells`) — so that every anchor whose
- * furniture can stand on a square lies within that far of it, left and up.
- * What hangs overhead stands on its anchor alone (`propStandsOnFootprint`).
+ * stand on a grid of `unitM` metres a square — the furthest square any
+ * design's shape reaches, at any angle (`propShape`: a turned prop spans its
+ * turned bounding box) — so that every anchor whose furniture can stand on a
+ * square lies within that far of it, left and up. What hangs overhead stands
+ * on its anchor alone (`propStandsOnFootprint`), or, turned on the diagonal,
+ * on the square under its centre.
  */
 function propReach(unitM: number): { across: number; down: number } {
   let reach = propReaches.get(unitM);
@@ -582,10 +584,19 @@ function propReach(unitM: number): { across: number; down: number } {
     let across = 0;
     let down = 0;
     for (const prop of Object.keys(PROP_SIZE_M) as TileProp[]) {
-      if (!propStandsOnFootprint(prop)) continue;
-      const [w, d] = propCells(prop, unitM);
-      across = Math.max(across, w - 1);
-      down = Math.max(down, d - 1);
+      const standing = propStandsOnFootprint(prop);
+      for (const angle of [0, 45, 90]) {
+        const shape = propShape(prop, unitM, angle);
+        const far: ReadonlyArray<readonly [number, number]> = standing
+          ? [[shape.across - 1, shape.down - 1]]
+          : angle === 45
+            ? [shape.centre]
+            : [];
+        for (const [dc, dr] of far) {
+          across = Math.max(across, dc);
+          down = Math.max(down, dr);
+        }
+      }
     }
     reach = { across, down };
     propReaches.set(unitM, reach);
@@ -605,6 +616,7 @@ function windowOf(tiles: LayeredTiles, c0: number, r0: number, c1: number, r1: n
   const structure: Record<string, string> = {};
   const object: Record<string, string> = {};
   const doors: NonNullable<LayeredTiles['doors']> = {};
+  const angles: Record<string, number> = {};
   for (let row = r0; row <= r1; row += 1) {
     for (let col = c0; col <= c1; col += 1) {
       const key = `${col},${row}`;
@@ -618,6 +630,8 @@ function windowOf(tiles: LayeredTiles, c0: number, r0: number, c1: number, r1: n
       if (o !== undefined) object[key] = o;
       const d = tiles.doors?.[key];
       if (d !== undefined) doors[key] = d;
+      const t = tiles.angles?.[key];
+      if (t !== undefined) angles[key] = t;
     }
   }
   return {
@@ -628,6 +642,7 @@ function windowOf(tiles: LayeredTiles, c0: number, r0: number, c1: number, r1: n
     object,
     ...(tiles.doors !== undefined ? { doors } : {}),
     ...(tiles.arcs !== undefined ? { arcs: tiles.arcs } : {}),
+    ...(tiles.angles !== undefined ? { angles } : {}),
   };
 }
 

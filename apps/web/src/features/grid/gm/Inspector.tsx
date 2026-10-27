@@ -20,7 +20,7 @@ import { useRef, useState, type ReactNode } from 'react';
 import type { Camera, Door, Note, Pin, Point, Scene, Wall, Zone } from '@safehouse/contracts';
 import { sceneLevels } from '@safehouse/rules';
 import { fileUrl, useDoorOp, usePaintTiles, usePatchGeometry, useUploadAttachment, useWikiPages } from '../api.js';
-import { objectForSelection, type PaintedRole } from '../paintedObjects.js';
+import { objectForSelection, rotateDelta, type PaintedRole } from '../paintedObjects.js';
 import {
   camerasOf,
   convertWallToDoor,
@@ -293,6 +293,13 @@ function PaintedInspector({ scene, selection, onCenter }: InspectorProps) {
       ? `${obj.max.col - obj.min.col + 1}×${obj.max.row - obj.min.row + 1} squares`
       : `${(n * scene.grid.unitM).toFixed(n * scene.grid.unitM < 10 ? 1 : 0).replace(/\.0$/, '')} m`;
   const centre = { x: (obj.min.col + obj.max.col + 1) / 2, y: (obj.min.row + obj.max.row + 1) / 2 };
+  // A designed piece of furniture turns 45° at a time, its anchor staying put.
+  const rotatable = rotateDelta(obj, 1) !== null;
+  const rotate = (dir: 1 | -1) => {
+    const d = rotateDelta(obj, dir);
+    if (d === null) return;
+    paint.mutate({ sceneId: scene.id, tilesetId: obj.tilesetId, level, ...d });
+  };
 
   return (
     <section
@@ -321,7 +328,18 @@ function PaintedInspector({ scene, selection, onCenter }: InspectorProps) {
         <p className="text-sm text-ink" data-testid="painted-name">
           {obj.label}
         </p>
-        <div className="flex justify-end">
+        <div className="flex items-center justify-end gap-2">
+          {rotatable && (
+            <>
+              <button type="button" className="btn px-2 py-0.5" title="Rotate left (Shift+R)" onClick={() => rotate(-1)}>
+                ↺
+              </button>
+              <button type="button" className="btn px-2 py-0.5" title="Rotate right (R)" onClick={() => rotate(1)}>
+                ↻
+              </button>
+              <span className="flex-1" />
+            </>
+          )}
           <DeleteButton
             onClick={() => {
               select(null);

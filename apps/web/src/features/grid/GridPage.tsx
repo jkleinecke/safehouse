@@ -66,9 +66,11 @@ import ContextMenu from './hud/ContextMenu.js';
 import LookEditor from './gm/LookEditor.js';
 import { contextMenuItems, type ContextMenuActions, type ContextMenuInput } from './hud/contextMenuItems.js';
 import MeasurePanel from './hud/MeasurePanel.js';
+import PaceChip from './hud/PaceChip.js';
 import OrderChip from './hud/OrderChip.js';
 import PlayRail from './hud/PlayRail.js';
 import CardFlow from '../combat/CardFlow.js';
+import YourTurn from '../combat/YourTurn.js';
 import { openGmCard } from '../combat/gmCard.js';
 import GmCardHost from '../combat/GmCardHost.js';
 import { MapIncoming } from '../combat/IncomingAttack.js';
@@ -94,6 +96,7 @@ import {
 import { autoTileFor, topLayerAt } from './autoPlace.js';
 import { roomPlan, roomTileIds } from './roomFill.js';
 import { useCameraCones } from './useCameraCones.js';
+import { useMovementRange } from './useMovementRange.js';
 import { useLightMap } from './useLightMap.js';
 import { PARTY_LENS, useShroud } from './useShroud.js';
 import { stairAdvice, useStairOffer } from './useStairs.js';
@@ -108,7 +111,7 @@ import {
   tilesetOf,
   toggleObject,
 } from './cellSelection.js';
-import { objectForSelection, parsePaintedId, pickPainted } from './paintedObjects.js';
+import { objectForSelection, parsePaintedId, pickPainted, rotateDelta } from './paintedObjects.js';
 import {
   type ContextMenuRequest,
   type RulerState,
@@ -431,6 +434,17 @@ export default function GridPage() {
     viewLevel,
     tokens,
   );
+  // In a live fight, how far the picked (or acting) fighter can still move
+  // this Combat Turn — drawn on the floor and read out. Display only.
+  const movement = useMovementRange({
+    scene,
+    tokens,
+    encounter,
+    selectedTokenId: store.selectedTokenId,
+    isGm,
+    myCharacterId: myCharacterId ?? null,
+    enabled: !(isGm && store.mode === 'build'),
+  });
   // Single-key tools and 1–9 for floors (docs/UX_MAP_BUILDER.md §3.3).
   const fogRemove = useCallback((sceneId: string, regionId: string) => commandsRef.current?.fogRemove(sceneId, regionId), []);
   useGridShortcuts(isGm, 1 + (scene?.levels?.length ?? 0), scene?.id ?? null, scene ?? null, fogRemove);
@@ -472,6 +486,7 @@ export default function GridPage() {
             ...composed,
             paintEdit: building,
             lightMap,
+            movementRange: movement.range,
             cellSelection: building ? store.cellSelection : null,
             pasting: building && store.pasting ? store.clipboard : null,
             // The fog brush in hand (the fog bar): the circle the pointer
@@ -501,6 +516,7 @@ export default function GridPage() {
       store.selected,
       cameraCones,
       lightMap,
+      movement.range,
       shroud,
       viewLevel,
     ],
@@ -700,7 +716,7 @@ export default function GridPage() {
         const floor = levelTiles(scene, st.activeLevel);
         const unitM = scene.grid.unitM ?? 1;
         const covering = floor
-          ? objectCoverage(floor.object, unitM, (v) => tileById(floor.tilesetId, v)?.prop).get(key)
+          ? objectCoverage(floor.object, unitM, (v) => tileById(floor.tilesetId, v)?.prop, false, floor.angles).get(key)
           : undefined;
         const prop = placing === null ? undefined : tileById(st.tilesetId, placing)?.prop;
         if (!erase && prop !== undefined) {
@@ -936,6 +952,7 @@ export default function GridPage() {
             paint: delta.paint,
             erase: delta.erase,
             layer: delta.layer,
+            ...(delta.angles !== undefined ? { angles: delta.angles } : {}),
             // Undo takes the ring back to the wall it moved back to.
             restore: {
               undo: () => useGridStore.getState().select(was),
@@ -1087,6 +1104,13 @@ export default function GridPage() {
       if (s.selected?.kind === 'painted') s.select(null);
       paintMutate({ sceneId: scene.id, tilesetId, level, paint: {}, erase: [cell], layer: 'structure' });
     },
+    // Turn a designed prop 45°, as R does: one request, one undo step.
+    rotateProp: (id, level, dir) => {
+      if (!scene) return;
+      const obj = objectForSelection(scene, level, id);
+      const delta = obj ? rotateDelta(obj, dir) : null;
+      if (obj && delta) paintMutate({ sceneId: scene.id, tilesetId: obj.tilesetId, level, ...delta });
+    },
   };
   // The canvas draws for the chosen eyes; a mode the sheet stops granting
   // falls back to normal rather than lingering as a thermal view.
@@ -1117,6 +1141,7 @@ export default function GridPage() {
     if (t.kind === 'token') return tokens.find((k) => k.id === t.id)?.name ?? 'token';
     if (t.kind === 'door' || t.kind === 'tileDoor') return 'the door';
     if (t.kind === 'wall') return 'the wall';
+    if (t.kind === 'paintedProp') return (scene && objectForSelection(scene, t.level, t.id)?.label) ?? 'the prop';
     return `square ${Math.floor(menu.grid.x)}, ${Math.floor(menu.grid.y)}`;
   })();
 
@@ -1504,6 +1529,14 @@ export default function GridPage() {
                 Act
               </button>
             )}
+            {/* The runner's turn: "Your turn" with Act and Done, else on deck or whose turn it is. */}
+            {campaignId && scene && viewer.role === 'player' && (
+              <YourTurn
+                campaignId={campaignId}
+                sceneId={scene.id}
+                {...(myToken ? { onAct: () => setActAs(myToken) } : {})}
+              />
+            )}
             {doorNotice && (
               <span data-testid="door-notice" className="chip bg-panel/90 text-warn">
                 {doorNotice}
@@ -1606,6 +1639,12 @@ export default function GridPage() {
             </div>
           );
         })()}
+
+        {/* The fighter's walk/run readout, out of the measure panel's way while it is up. */}
+        {movement.range &&
+          !(store.tool === 'ruler' && store.ruler) &&
+          store.tool !== 'aoe' &&
+          !store.pendingRollMod && <PaceChip range={movement.range} metatype={movement.metatype} />}
 
         <MeasurePanel
           tool={store.tool}

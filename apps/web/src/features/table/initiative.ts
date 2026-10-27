@@ -227,9 +227,10 @@ export function trackerRows(encounter: Encounter | null | undefined, viewer: Vie
   const sorted = [...ranked, ...all.filter((c) => c.initScore <= 0).sort(compareOrder)];
   // Nobody acts while initiative is gathered, nor (for this viewer) while a hidden row does.
   const running = encounter?.state === 'live' && !encounter.gathering && !encounter.gmTurn;
-  const due = (c: Combatant) => !c.actedThisPass && c.delayed !== true;
   const actingId = encounter?.activeCombatantId ?? (running ? ranked.find(due)?.id : null) ?? null;
-  const nextId = running || actingId ? (ranked.find((c) => c.id !== actingId && due(c))?.id ?? null) : null;
+  // Who is on deck, looking into the next pass when this one is ending.
+  const onDeck = running || actingId ? turnQueue(encounter, viewer).find((e) => e.state === 'next') : undefined;
+  const nextId = onDeck && onDeck.combatant.id !== actingId ? onDeck.combatant.id : null;
 
   let order = 0;
   return sorted.map((c) => {
@@ -243,12 +244,13 @@ export function trackerRows(encounter: Encounter | null | undefined, viewer: Vie
           ? 'blank'
           : !active
             ? 'out'
-            : c.actedThisPass
-              ? 'acted'
-              : c.delayed
-                ? 'delayed'
-                : c.id === nextId
-                  ? 'next'
+            : c.delayed && !c.actedThisPass
+              ? 'delayed'
+              : // On deck wins over "acted": at the end of a pass it is the next pass's first.
+                c.id === nextId
+                ? 'next'
+                : c.actedThisPass
+                  ? 'acted'
                   : 'waiting';
     return {
       combatant: c,
@@ -265,6 +267,69 @@ export function trackerRows(encounter: Encounter | null | undefined, viewer: Vie
       late: encounter ? isLateBlank(encounter, c) : false,
     };
   });
+}
+
+/** Still to act this pass: not done, not holding a Delayed Action (p.161). */
+const due = (c: Combatant): boolean => !c.actedThisPass && c.delayed !== true;
+
+/** Where an entry stands in the queue. */
+export type QueueState = 'acting' | 'next' | 'queued' | 'holding';
+
+/** One Action Phase still to come this Combat Turn. */
+export interface QueueEntry {
+  combatant: Combatant;
+  /** The Initiative Pass it comes in. */
+  pass: number;
+  /** The row's Initiative Score in that pass (−10 per pass, p.159). */
+  score: number;
+  state: QueueState;
+  own: boolean;
+}
+
+/**
+ * The rest of this Combat Turn, in the order the table will play it (SR5
+ * p.159-161): the acting row first, then everyone still to act this pass in
+ * the server's order, then rows holding a Delayed Action (they may step in
+ * any time before the pass ends), then each later pass — every row whose
+ * score minus 10 per pass is still above 0, in the same order (a manual
+ * arrangement and a seize last the whole turn, and −10 for everyone keeps the
+ * book's order). The first entry after the acting one is "next" — in the
+ * next pass when this one is ending. Empty while the fight is not running.
+ *
+ * Holding rows appear once, in the current pass; in later passes they are
+ * listed like everyone else, since a delay used or dropped puts them back.
+ */
+export function turnQueue(encounter: Encounter | null | undefined, viewer: Viewer): QueueEntry[] {
+  if (!encounter || encounter.state !== 'live' || encounter.gathering) return [];
+  const ranked = inServerOrder(
+    visibleCombatants(encounter.combatants ?? [], viewer).filter((c) => c.initScore > 0),
+    encounter.turnOrder,
+    compareOrder,
+  );
+  const pass = Math.max(1, encounter.pass);
+  const actingId = encounter.activeCombatantId ?? (encounter.gmTurn ? null : ranked.find(due)?.id) ?? null;
+  const entry = (c: Combatant, p: number, score: number, state: QueueState): QueueEntry => ({
+    combatant: c,
+    pass: p,
+    score,
+    state,
+    own: isOwnCombatant(c, viewer),
+  });
+  const out: QueueEntry[] = [];
+  const acting = ranked.find((c) => c.id === actingId);
+  if (acting) out.push(entry(acting, pass, acting.initScore, 'acting'));
+  for (const c of ranked) if (c.id !== actingId && due(c)) out.push(entry(c, pass, c.initScore, 'queued'));
+  for (const c of ranked) {
+    if (c.id !== actingId && c.delayed === true && !c.actedThisPass) out.push(entry(c, pass, c.initScore, 'holding'));
+  }
+  for (let k = 1; ; k += 1) {
+    const later = ranked.filter((c) => c.initScore - 10 * k > 0);
+    if (later.length === 0) break;
+    for (const c of later) out.push(entry(c, pass + k, c.initScore - 10 * k, 'queued'));
+  }
+  const next = out.find((e) => e.state === 'queued');
+  if (next) next.state = 'next';
+  return out;
 }
 
 /** The index a ▲ or ▼ sends to `POST /order` `move`; null at either end or off the order. */

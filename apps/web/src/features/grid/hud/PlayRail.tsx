@@ -15,6 +15,7 @@ import LogStream from '../../table/LogStream.js';
 import Tracker from '../../table/Tracker.js';
 import '../../table/table.css';
 import FightFromMap from './FightFromMap.js';
+import TurnStrip from './TurnStrip.js';
 
 export interface PlayRailProps {
   campaignId: string;
@@ -57,6 +58,7 @@ export default function PlayRail({ campaignId, sceneId = null, sceneName = 'Figh
       </div>
       <div className="flex min-h-0 flex-1 flex-col md:flex-row xl:flex-col">
         <div className="flex min-h-0 basis-1/2 flex-col overflow-y-auto">
+          <TurnStrip campaignId={campaignId} sceneId={sceneId} hotkey />
           <Tracker campaignId={campaignId} sceneId={sceneId} emptyAction={start} />
         </div>
         <div className="flex min-h-0 basis-1/2 flex-col border-edge md:border-l xl:border-l-0 xl:border-t">

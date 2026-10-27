@@ -138,8 +138,9 @@ describe('a running fight', () => {
     expect(html).toContain('aria-label="Remove Halo ganger from the fight"');
   });
 
-  it('lets a runner roll or type the dice for their own row and no other', () => {
-    const html = render('player', LIVE);
+  it('lets a runner roll or type the dice for their own blank row and no other', () => {
+    // Static joined late: no score yet this turn.
+    const html = render('player', { ...LIVE, combatants: [STATIC, { ...GANGER, initScore: 9 }] });
     expect(html).toContain('Dice total for Static');
     expect(html).not.toContain('Dice total for Halo ganger');
     expect((html.match(/>ROLL</g) ?? []).length).toBe(1);
@@ -147,6 +148,12 @@ describe('a running fight', () => {
     expect(html).not.toContain('Initiative score for');
     // Damage is the GM's to apply.
     expect(html).not.toContain('>DMG<');
+  });
+
+  it('takes the dice away from a runner once their score is in and the turn runs', () => {
+    const html = render('player', LIVE);
+    expect(html).not.toContain('Dice total for Static');
+    expect(html).not.toContain('>ROLL<');
   });
 
   it('offers the GM a picker only when there is more than one fight to pick from', () => {

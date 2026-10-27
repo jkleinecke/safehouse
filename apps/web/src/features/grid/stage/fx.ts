@@ -1,7 +1,7 @@
 /**
  * Ephemeral overlay effects, drawn: ruler, AoE template + scatter, zone
  * draft polygon, wall/door/arc rubber bands, room/area drafts, the fog
- * brush's ring — pure, no three.
+ * brush's ring, a fighter's walk and run range — pure, no three.
  *
  * Each function clears the `Ink` it is handed and draws its effect into it.
  * The 3D stage hands each effect a `FloorInk` of its own
@@ -13,6 +13,7 @@
 import { arcPoints, type BrushMark } from '@safehouse/rules';
 import type { Point } from '@safehouse/contracts';
 import {
+  cellCorners,
   groundRadius,
   rectCorners,
   rectPolygon,
@@ -23,6 +24,7 @@ import {
 import type {
   AoeTemplate,
   FogDraft,
+  MovementRange,
   MovementThresholds,
   ScatterResult,
   TileRectMode,
@@ -199,4 +201,77 @@ export function drawRectDraft(
     color: C.cyan,
     alpha: 0.9,
   });
+}
+
+/**
+ * A token's walk and run range this Combat Turn (`MovementRange`): the
+ * squares within its walk washed green, the further ones within its run
+ * washed a fainter amber, a thin green line where walking ends and a thin
+ * red one where running does (past it is a Sprint, which the dice decide).
+ * The pace colours are the ruler's (`PACE_COLORS`), so the two read alike.
+ *
+ * Display only: it says how far, never where a token may not go.
+ *
+ * The lines are drawn along the edge of each band, but not round a square
+ * that is out of it only because a wall stands there or the walk to it goes
+ * the long way round: a line that close in would read as the edge of the
+ * range. An outside square is an edge only when it is nearly as far as the
+ * band reaches in a straight line.
+ */
+export function drawMovementRange(g: Ink, m: SceneMetrics, range: MovementRange | null): void {
+  g.clear();
+  if (!range || range.cells.length === 0) return;
+  const unitM = Math.max(0.01, m.unitM);
+  const walkSq = range.walkM / unitM + 1e-9;
+  const runSq = Math.max(range.walkM, range.runM) / unitM + 1e-9;
+  const key = (col: number, row: number) => `${col},${row}`;
+  const walk = new Set<string>();
+  const run = new Set<string>();
+  for (const c of range.cells) {
+    if (c.distance > runSq) continue;
+    run.add(key(c.col, c.row));
+    if (c.distance <= walkSq) walk.add(key(c.col, c.row));
+  }
+
+  for (const c of range.cells) {
+    const k = key(c.col, c.row);
+    if (!run.has(k)) continue;
+    const [n, e, s, w] = cellCorners(m, c.col, c.row);
+    const inWalk = walk.has(k);
+    g.poly([n.x, n.y, e.x, e.y, s.x, s.y, w.x, w.y]).fill({
+      color: inWalk ? PACE_COLORS.walk : PACE_COLORS.run,
+      alpha: inWalk ? 0.16 : 0.09,
+    });
+  }
+
+  const start = { col: Math.floor(range.origin.x), row: Math.floor(range.origin.y) };
+  const straight = (col: number, row: number) => Math.hypot(col - start.col, row - start.row);
+  // The four sides of a square, as the neighbour across it and the side's two ends.
+  const SIDES: ReadonlyArray<readonly [number, number, number, number, number, number]> = [
+    [1, 0, 1, 0, 1, 1],
+    [-1, 0, 0, 0, 0, 1],
+    [0, 1, 0, 1, 1, 1],
+    [0, -1, 0, 0, 1, 0],
+  ];
+  const edges = (band: ReadonlySet<string>, reachSq: number, color: number) => {
+    let any = false;
+    for (const k of band) {
+      const [col, row] = k.split(',').map(Number) as [number, number];
+      for (const [dx, dy, x0, y0, x1, y1] of SIDES) {
+        const nc = col + dx;
+        const nr = row + dy;
+        if (band.has(key(nc, nr))) continue;
+        // Out of this band but in the run band (the walk's edge), or far enough out to be the range's edge.
+        const outer = band === walk && run.has(key(nc, nr));
+        if (!outer && straight(nc, nr) < reachSq - 1.5) continue;
+        const a = worldFromGrid(m, { x: col + x0, y: row + y0 });
+        const b = worldFromGrid(m, { x: col + x1, y: row + y1 });
+        g.moveTo(a.x, a.y).lineTo(b.x, b.y);
+        any = true;
+      }
+    }
+    if (any) g.stroke({ width: 1.5, color, alpha: 0.7 });
+  };
+  edges(walk, walkSq, PACE_COLORS.walk);
+  edges(run, runSq, PACE_COLORS.sprint);
 }

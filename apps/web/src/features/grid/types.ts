@@ -6,7 +6,7 @@
 import type { Point, Role, Scene, Token } from '@safehouse/contracts';
 import type { PaintDelta } from './paintedObjects.js';
 import type { CellSet, Clipboard } from './cellSelection.js';
-import type { BrushMark, LightMap, TileCut, TileLiquid, TilePattern, TileProp, TileShore, VisionMode } from '@safehouse/rules';
+import type { BrushMark, LightMap, TileCut, TileLiquid, TilePattern, TileProp, TileShore, VisionMode, WalkReachSquare } from '@safehouse/rules';
 import { slotOf, slotUniverse, tileBySlot } from '@safehouse/rules';
 
 /** Active pointer tool on the canvas. */
@@ -26,6 +26,7 @@ export type GridTool =
   | 'tile' // GM: paint tiles from a tileset (FR9.2 "assemble")
   | 'tile-area' // GM: drag a rectangle, fill it with the chosen ground
   | 'tile-room' // GM: drag a rectangle, floor inside and walls around it
+  | 'line' // GM: drag a straight run of squares (8 directions; Shift any angle), painted with the brush's tile on release
   | 'arc' // GM: drag a wall's two ends, then pull it into a curve (any angle, straight or curved)
   | 'token' // GM: click to place the token picked in Prep's Token menu
   | 'tile-erase'; // GM: clear painted cells
@@ -40,7 +41,7 @@ export const GEOMETRY_TOOLS: readonly GridTool[] = ['arc', 'door', 'zone', 'pin'
  */
 // The arc wall is one of them: picking which wall it is built of must not
 // swap it for the brush.
-export const TILE_TOOLS: readonly GridTool[] = ['tile', 'tile-area', 'tile-room', 'arc'];
+export const TILE_TOOLS: readonly GridTool[] = ['tile', 'tile-area', 'tile-room', 'line', 'arc'];
 
 /**
  * How a rectangle drag lays tiles. `area` fills the ground; `room` fills the
@@ -250,6 +251,8 @@ export type ContextTarget =
   | { kind: 'wall'; id: string }
   /** One square of a painted wall, while building (the menu can break it). */
   | { kind: 'paintedWall'; cell: string; level: number }
+  /** A designed piece of furniture, while building (the menu can turn it); `id` is its painted selection id. */
+  | { kind: 'paintedProp'; id: string; level: number }
   | { kind: 'floor' };
 
 export interface ContextMenuRequest {
@@ -274,6 +277,21 @@ export interface RulerState {
 export interface MovementThresholds {
   walkM: number;
   runM: number;
+}
+
+/**
+ * A token's walk and run range this Combat Turn (display only, never a
+ * limit): every square its walk reaches within its run distance, with how
+ * far each is from `origin` in squares (`walkReach`, round the walls).
+ */
+export interface MovementRange {
+  tokenId: string;
+  /** Where its turn started, in grid units (a token's centre). */
+  origin: Point;
+  level: number;
+  walkM: number;
+  runM: number;
+  cells: readonly WalkReachSquare[];
 }
 
 /** AoE circle template (FR9.12). Position in grid units, radius in meters. */
@@ -403,6 +421,14 @@ export interface StageSceneState {
    * player's state never carries one.
    */
   lightMap?: LightMap | null;
+  /**
+   * How far one token in a live fight can still move this Combat Turn, from
+   * where its turn started: its walk and run range, drawn on the floor in
+   * view. DISPLAY ONLY — nothing reads it to stop a move. Null or absent
+   * draws nothing. The stage redraws it when the object changes, so the
+   * page hands over the same one until something it was built from changes.
+   */
+  movementRange?: MovementRange | null;
   /**
    * Tokens on a HIDDEN token layer (FR9.26), drawn ghosted for the GM the
    * way a hidden token is. A player's state never has any: the server

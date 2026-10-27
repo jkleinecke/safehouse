@@ -450,6 +450,78 @@ export function mergeEncounter(prev: Encounter | null, next: Encounter | null): 
   };
 }
 
+/** The server's public condition word for a monitor set (its `conditionOf`, FR4.9). */
+function conditionWord(m: CombatantMonitors): string {
+  if (m.physical.max > 0 && m.physical.filled >= m.physical.max) return 'down';
+  if (m.stun.max > 0 && m.stun.filled >= m.stun.max) return 'down';
+  const cap = m.physical.max + m.stun.max;
+  const filled = m.physical.filled + m.stun.filled;
+  if (filled === 0) return 'unharmed';
+  return cap > 0 && filled * 2 >= cap ? 'bloodied' : 'wounded';
+}
+
+const sameMonitors = (a: CombatantMonitors, b: CombatantMonitors): boolean =>
+  a.physical.max === b.physical.max &&
+  a.physical.filled === b.physical.filled &&
+  a.stun.max === b.stun.max &&
+  a.stun.filled === b.stun.filled &&
+  a.overflow.max === b.overflow.max &&
+  a.overflow.filled === b.overflow.filled;
+
+/** The server said this row is the viewer's: normalised (`copilot.ownedByViewer`) or raw (`own`). */
+function ownedByViewer(c: Combatant): boolean {
+  return c.copilot?.[OWNED_BY_VIEWER] === true || (c as unknown as Record<string, unknown>)['own'] === true;
+}
+
+/**
+ * A player's phone gets the fight two ways: its own REST read (`GET
+ * /api/encounters/:id`, which says which row is theirs, their exact boxes and
+ * the token links) and the ONE public `encounter.updated` frame every phone
+ * shares, which carries none of that, by design (FR4.9). The frame is newer
+ * and replaces the roster, so on its own it took the runner's row away from
+ * them: no "you", no dice, no "your turn".
+ *
+ * This lays what only the read knew back onto the frame's rows, by id:
+ * ownership, the token and source links, Edge, and — for the viewer's own row,
+ * while the frame's condition still agrees with them — the exact monitors.
+ * `reread` says when the read itself is out of date (a row it has never seen,
+ * or the viewer's own condition moved): the caller asks the server again, so
+ * the per-viewer data comes from where it belongs, never from the shared frame.
+ * A GM-scoped live encounter is complete and passes through untouched.
+ */
+export function withViewerRows(
+  live: Encounter,
+  rest: Encounter | null | undefined,
+): { encounter: Encounter; reread: string | null } {
+  if (!rest || rest.id !== live.id || !live.combatants || !rest.combatants) {
+    return { encounter: live, reread: null };
+  }
+  const byId = new Map(rest.combatants.map((c) => [c.id, c] as const));
+  const unseen: string[] = [];
+  const moved: string[] = [];
+  const combatants = live.combatants.map((c) => {
+    const r = byId.get(c.id);
+    if (!r) {
+      unseen.push(c.id);
+      return c;
+    }
+    const own = ownedByViewer(r);
+    // The frame's monitors for the viewer's row are its condition word, drawn as boxes.
+    const agrees = own && sameMonitors(c.monitors, monitorsFromCondition(conditionWord(r.monitors)));
+    if (own && !agrees && !ownedByViewer(c)) moved.push(`${c.id}:${c.monitors.physical.filled}`);
+    return {
+      ...c,
+      ...(!c.tokenId && r.tokenId ? { tokenId: r.tokenId } : {}),
+      ...(!c.sourceId && r.sourceId ? { sourceId: r.sourceId } : {}),
+      ...(!c.edge && r.edge ? { edge: r.edge } : {}),
+      ...(agrees ? { monitors: r.monitors } : {}),
+      ...(own ? { copilot: { ...c.copilot, [OWNED_BY_VIEWER]: true } } : {}),
+    };
+  });
+  const reread = unseen.length > 0 || moved.length > 0 ? `${unseen.join(',')}|${moved.join(',')}` : null;
+  return { encounter: { ...live, combatants }, reread };
+}
+
 /** True when an `encounter.updated` payload announces a deletion. */
 export function isEncounterDeleted(raw: unknown): boolean {
   return rec(raw)['deleted'] === true;

@@ -52,7 +52,9 @@ export const MODE_TABS: Record<GridMode, readonly GmTab[]> = {
 export const MODE_TOOLS: Record<GridMode, readonly GridTool[]> = {
   // The arc wall took the old traced "wall line"'s place: the same drag, a real
   // wall on its own floor, straight at any angle or curved.
-  build: ['select', 'tile-room', 'tile-area', 'tile', 'arc', 'tile-erase', 'door', 'zone', 'pin'],
+  // The line lays a straight run of the brush's squares — the way to draw
+  // a diagonal wall square by square without a staircase.
+  build: ['select', 'tile-room', 'tile-area', 'tile', 'line', 'arc', 'tile-erase', 'door', 'zone', 'pin'],
   prep: ['select', 'token', 'camera', 'light', 'note'],
   play: ['select', 'ruler', 'aoe', 'pointer', 'focus'],
 };
@@ -100,6 +102,7 @@ export const BUILD_TOOLS: readonly GridTool[] = [
   'tile-room',
   'tile-area',
   'tile',
+  'line',
   'arc',
   'door',
   'zone',
@@ -142,6 +145,7 @@ export const SHORTCUTS: ReadonlyArray<{ key: string; tool: GridTool; gmOnly: boo
   { key: 'r', tool: 'tile-room', gmOnly: true },
   { key: 'a', tool: 'tile-area', gmOnly: true },
   { key: 'b', tool: 'tile', gmOnly: true },
+  { key: 'i', tool: 'line', gmOnly: true },
   { key: 'e', tool: 'tile-erase', gmOnly: true },
   { key: 'w', tool: 'arc', gmOnly: true },
   { key: 'd', tool: 'door', gmOnly: true },
